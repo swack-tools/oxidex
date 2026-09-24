@@ -1973,41 +1973,53 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
     serialize_exif(&plan)
 }
 
-/// Whether a write changes nothing in the block: every EXIF-family row of
-/// `desired` is its original value, no original row is gone, and no named
-/// removal names an entry the block holds. Such a write returns the payload
-/// unchanged -- before any structural refusal, so `remove_tag` of an absent
-/// tag stays the no-op success it promises on a block this writer would not
-/// re-lay out (an unmodelled SubIFDs pointer).
-fn is_no_op(
-    scan: &ExifScan,
-    original_map: &MetadataMap,
-    desired: &MetadataMap,
-    removed: &[String],
-) -> bool {
-    let planned = |key: &str| {
-        [
-            "IFD0:",
-            "ExifIFD:",
-            "GPS:",
-            "EXIF:",
-            "IFD1:",
-            "InteropIFD:",
-            "MakerNotes:",
-        ]
+/// Key prefixes the EXIF writers plan: IFD0/ExifIFD/GPS/IFD1/InteropIFD
+/// rows, the family spelling `EXIF:`, and `MakerNotes:`.
+fn is_planned_key(key: &str) -> bool {
+    [
+        "IFD0:",
+        "ExifIFD:",
+        "GPS:",
+        "EXIF:",
+        "IFD1:",
+        "InteropIFD:",
+        "MakerNotes:",
+    ]
+    .iter()
+    .any(|prefix| key.starts_with(prefix))
+}
+
+/// Every planned row of `desired` is its `baseline` value and no planned
+/// `baseline` row is gone.
+fn rows_unchanged(baseline: &MetadataMap, desired: &MetadataMap) -> bool {
+    desired
         .iter()
-        .any(|prefix| key.starts_with(prefix))
-    };
-    let unchanged = desired
-        .iter()
-        .filter(|(key, _)| planned(key))
-        .all(|(key, value)| original_map.get(key.as_str()) == Some(value))
-        && original_map
+        .filter(|(key, _)| is_planned_key(key))
+        .all(|(key, value)| baseline.get(key.as_str()) == Some(value))
+        && baseline
             .iter()
-            .filter(|(key, _)| planned(key))
-            .all(|(key, _)| desired.contains_key(key.as_str()));
-    let names_nothing = removed.iter().all(|key| {
-        !original_map.contains_key(key.as_str())
+            .filter(|(key, _)| is_planned_key(key))
+            .all(|(key, _)| desired.contains_key(key.as_str()))
+}
+
+/// Whether none of the named `removed` keys names an entry of `scan`: not a
+/// reader row, not an entry by tag id (`removal_names_rowless_entry`), not a
+/// raw-carried entry (`removal_names_carried_entry`), not an entry by its
+/// family-0 `EXIF:` name, and no `<group>:All` over a group with entries.
+fn removals_name_nothing(scan: &ExifScan, original_map: &MetadataMap, removed: &[String]) -> bool {
+    removed.iter().filter(|key| is_planned_key(key)).all(|key| {
+        let group_all = key.split_once(':').is_some_and(|(group, name)| {
+            name.eq_ignore_ascii_case("all")
+                && scan.entries.iter().any(|entry| {
+                    group == "EXIF"
+                        || group == entry.ifd.prefix()
+                        || (group == "MakerNotes"
+                            && entry.ifd == IfdKind::ExifIfd
+                            && entry.tag_id == MAKERNOTE)
+                })
+        });
+        !group_all
+            && !original_map.contains_key(key.as_str())
             && !removal_names_carried_entry(key, scan, original_map)
             && !scan.entries.iter().any(|entry| {
                 removal_names_rowless_entry(key, entry.ifd, entry.tag_id, original_map)
@@ -2017,8 +2029,66 @@ fn is_no_op(
                             .is_some_and(|(_, n)| n == name)
                     })
             })
-    });
-    unchanged && names_nothing
+    })
+}
+
+/// Whether a write changes nothing in the block (see
+/// [`exif_request_is_no_op`]): the payload is then returned unchanged.
+fn is_no_op(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> bool {
+    rows_unchanged(original_map, desired) && removals_name_nothing(scan, original_map, removed)
+}
+
+/// Whether a write request is a no-op for a carrier whose EXIF payloads are
+/// `blocks` (JPEG APP1s, PNG eXIf chunks, decoded raw EXIF profiles, a
+/// TIFF-structured file): every planned row of `desired` is its `baseline`
+/// value, no planned row is gone, and no named removal names an entry of a
+/// block -- a block no scanner reading `magics` can parse holds nothing a
+/// removal could name (the reader surfaced nothing from it either).
+///
+/// Decided once, up front, before any refusal guard (the raw-profile and
+/// multiple-eXIf guards, the unmodelled-pointer guard, the raw-carried
+/// guards, the post-write check): `remove_tag` of a tag that is not there
+/// succeeds with the file untouched, as it promises and as pinned ExifTool
+/// 13.59 leaves it ("not defined" / "unchanged"). A whole-carrier clear is
+/// not a no-op question and is decided before this.
+pub(crate) fn exif_request_is_no_op(
+    blocks: &[&[u8]],
+    magics: &[u16],
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> bool {
+    if !rows_unchanged(baseline, desired) {
+        return false;
+    }
+    if removed
+        .iter()
+        .any(|key| is_planned_key(key) && baseline.contains_key(key.as_str()))
+    {
+        return false;
+    }
+    blocks
+        .iter()
+        .all(|block| match scan_entries_with_magics(block, magics) {
+            Ok(scan) => removals_name_nothing(&scan, baseline, removed),
+            Err(_) => true,
+        })
+}
+
+/// The TIFF payloads of every `Exif\0\0` APP1 block of a JPEG.
+pub(crate) fn jpeg_exif_payloads(file_bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader)?;
+    Ok(segments
+        .iter()
+        .filter(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+        .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec())
+        .collect())
 }
 
 /// [`rewrite_tiff_exif_with_removals`] for the legacy half of a transaction

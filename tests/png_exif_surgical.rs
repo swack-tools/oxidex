@@ -1331,3 +1331,114 @@ fn a_no_op_removal_on_a_block_with_an_unmodelled_pointer_succeeds() {
         }
     }
 }
+
+/// Malformed EXIF payloads: shorter than a TIFF header, a bad byte-order
+/// mark, a bad magic number.
+fn malformed_exif_payloads() -> [(&'static str, Vec<u8>); 3] {
+    [
+        ("short", b"II*".to_vec()),
+        ("byte-order", b"XX*\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+        ("magic", b"II\x2b\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+    ]
+}
+
+/// The clear-all contract never parses what it discards: `-all=` on a JPEG
+/// whose `Exif\0\0` APP1 is malformed drops the segment, as tip 707c7565 and
+/// pinned ExifTool 13.59 do. The post-write check scanned the discarded
+/// payload and refused the clear. A PNG eXIf clear likewise.
+#[test]
+fn clear_all_drops_a_malformed_exif_carrier() {
+    let dir = tempfile::tempdir().unwrap();
+    for (label, payload) in malformed_exif_payloads() {
+        let path = write(dir.path(), "bad.jpg", &jpeg_with(&payload));
+        clear_all_metadata(&path).unwrap_or_else(|e| panic!("{label} jpg: {e}"));
+        let out = std::fs::read(&path).unwrap();
+        assert!(
+            !out.windows(6).any(|w| w == b"Exif\0\0"),
+            "{label}: EXIF APP1 left"
+        );
+
+        let path = write(
+            dir.path(),
+            "bad.png",
+            &png(&[(b"eXIf", payload.clone())], &[]),
+        );
+        clear_all_metadata(&path).unwrap_or_else(|e| panic!("{label} png: {e}"));
+        assert_eq!(
+            kinds(&std::fs::read(&path).unwrap()),
+            ["IHDR", "IDAT", "IEND"]
+        );
+    }
+}
+
+/// A PNG `Raw profile type exif` text chunk, hex-encoding `Exif\0\0` + `tiff`.
+fn raw_exif_profile(kind: &[u8; 4], tiff: &[u8]) -> ([u8; 4], Vec<u8>) {
+    let body = [b"Exif\0\0".as_slice(), tiff].concat();
+    let hex: String = body.iter().map(|b| format!("{b:02x}")).collect();
+    let text = format!("\nexif\n{:8}\n{hex}\n", body.len());
+    let data = if kind == b"zTXt" {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(text.as_bytes()).unwrap();
+        [
+            b"Raw profile type exif\0\0".as_slice(),
+            &z.finish().unwrap(),
+        ]
+        .concat()
+    } else {
+        [b"Raw profile type exif\0".as_slice(), text.as_bytes()].concat()
+    };
+    (*kind, data)
+}
+
+/// Whether a request is a no-op is decided once, before any refusal: a
+/// removal that names nothing in any EXIF carrier -- an unmapped name, a
+/// registered tag the carrier does not hold, or anything in a carrier no
+/// reader can parse -- succeeds with the file untouched. Before, such a
+/// removal on a PNG with a raw EXIF profile hit the raw-profile refusal, and
+/// on a malformed eXIf/APP1 the scan error. A removal of a tag the raw
+/// profile does hold is still refused (this writer cannot edit a profile;
+/// pinned ExifTool 13.59 deletes it).
+#[test]
+fn absent_removals_are_no_ops_before_any_carrier_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let tiff = Tiff {
+        ifd0: vec![
+            (0x010F, 2, 5, b"Acme\0".to_vec()),
+            (0x013B, 2, 3, b"me\0".to_vec()),
+        ],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: None,
+    }
+    .build(Order::Ii);
+    for kind in [b"zTXt", b"tEXt"] {
+        let (k, data) = raw_exif_profile(kind, &tiff);
+        let original = png(&[(&k, data)], &[]);
+        for key in ["EXIF:BogusTag", "IFD0:Software"] {
+            let path = write(dir.path(), "profile.png", &original);
+            remove_tag(&path, key).unwrap_or_else(|e| panic!("{kind:?} {key}: {e}"));
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{kind:?} {key}");
+        }
+        let path = write(dir.path(), "profile.png", &original);
+        assert!(remove_tag(&path, "IFD0:Artist").is_err(), "{kind:?} Artist");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{kind:?} Artist");
+    }
+    for (label, payload) in malformed_exif_payloads() {
+        for (name, original) in [
+            ("bad.png", png(&[(b"eXIf", payload.clone())], &[])),
+            ("bad.jpg", jpeg_with(&payload)),
+        ] {
+            for key in ["EXIF:BogusTag", "IFD0:Artist"] {
+                let path = write(dir.path(), name, &original);
+                remove_tag(&path, key).unwrap_or_else(|e| panic!("{label} {name} {key}: {e}"));
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    original,
+                    "{label} {name} {key}"
+                );
+            }
+        }
+    }
+}
