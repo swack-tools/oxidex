@@ -1493,3 +1493,72 @@ fn deleting_the_last_row_keeps_a_thumbnail_only_ifd1() {
         }
     }
 }
+
+/// Mandatory IFD0 seeding follows `WriteExif`'s `$numEntries` of the IFD0
+/// being written (WriteExif.pl 13.59:714-719), per write. On the pointer-only
+/// isothumb block (IFD0 = {ExifOffset}, ExifIFD = {ISO}, IFD1 = thumbnail
+/// pair), pinned ExifTool 13.59:
+///
+/// - one pass, `-ExifIFD:ISO= -IFD0:Artist=you`: IFD0 = {Artist} (IFD0 had
+///   an entry, so nothing is seeded) -- one `write_metadata` here;
+/// - two passes, `-ExifIFD:ISO=` then `-IFD0:Artist=you`: IFD0 = {Artist,
+///   YCbCrPositioning} (the second pass finds IFD0 with no entries) -- the
+///   same two writes here, which is also what the oxidex CLI does with both
+///   flags, as it applies each `-TAG=` as its own write;
+/// - no EXIF at all, `-IFD0:Artist=you`: MM, IFD0 = {Artist,
+///   YCbCrPositioning} (see `a_new_exif_chunk_goes_immediately_before_idat`).
+#[test]
+fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
+    let dir = tempfile::tempdir().unwrap();
+    let thumb = vec![0xFF, 0xD8, 0xFF, 0xD9];
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(100).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: Some((vec![], thumb.clone())),
+        }
+        .build(order);
+        let ifd0 = |tiff: &[u8]| -> Vec<(String, (u16, u32, Vec<u8>))> {
+            dump(tiff)
+                .into_iter()
+                .filter(|(key, _)| key.starts_with("IFD0:"))
+                .collect()
+        };
+        let artist = ("IFD0:0x013b".to_string(), (2, 4, b"you\0".to_vec()));
+        let ycbcr = ("IFD0:0x0213".to_string(), (3, 1, order.u16(1).to_vec()));
+        for (name, original) in [
+            ("seed.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("seed.jpg", jpeg_with(&tiff)),
+        ] {
+            // one pass
+            let path = write(dir.path(), name, &original);
+            let mut map = read_metadata(&path).unwrap();
+            map.remove("ExifIFD:ISO");
+            map.insert("IFD0:Artist", TagValue::new_string("you"));
+            write_metadata(&path, &map).unwrap();
+            let out = tiff_of(name, &std::fs::read(&path).unwrap());
+            assert_eq!(
+                ifd0(&out),
+                vec![artist.clone()],
+                "{order:?} {name} one pass"
+            );
+
+            // two passes
+            let path = write(dir.path(), name, &original);
+            remove_tag(&path, "ExifIFD:ISO").unwrap();
+            modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
+            let out = tiff_of(name, &std::fs::read(&path).unwrap());
+            assert_eq!(
+                ifd0(&out),
+                vec![artist.clone(), ycbcr.clone()],
+                "{order:?} {name} two passes"
+            );
+            assert_eq!(
+                dump(&out).get("IFD1:thumbnail").map(|t| t.2.clone()),
+                Some(thumb.clone())
+            );
+        }
+    }
+}
