@@ -10,7 +10,13 @@
 #     which this complements: that one guards MEASUREMENT, this guards EDITING).
 #   * Work started against a stale base, so a "fix" raced an upstream that
 #     already had it.
-# Exit non-zero and say why, rather than letting either proceed silently.
+#   * A compiler other than the pin, resolved implicitly: rust-toolchain.toml
+#     is honoured only by rustup's proxies, so with /opt/homebrew/bin ahead of
+#     ~/.cargo/bin on PATH, `rustc` and `cargo` are Homebrew's and every build
+#     silently uses that release (all local builds and corpus measurements on
+#     2026-09-23 were 1.98.1-built while CI used the pinned 1.97.1). Even
+#     rustup's own cargo then runs whichever `rustc` PATH finds first.
+# Exit non-zero and say why, rather than letting any of them proceed silently.
 #
 # USAGE
 #   tools/preflight.sh                     # worktree + branch + cleanliness
@@ -20,8 +26,18 @@
 #   tools/preflight.sh --k8s               # ... plus current kube context
 #   tools/preflight.sh --all --host X
 #
+# Always checked when the checkout has a rust-toolchain.toml: the compiler
+# cargo would use here ($RUSTC, else `rustc` on PATH, run from the worktree
+# root so a rustup proxy honours the pin) and `cargo` itself must be the
+# pinned channel, and rustc's commit-hash must equal the one rustup reports
+# for the pin (a release string alone is not an identity; a pin rustup cannot
+# resolve is not proven). A mismatch fails with exit 6; set
+# OXIDEX_ALLOW_TOOLCHAIN_SKEW=1 to downgrade it to a printed warning (for work
+# that builds nothing -- every binary built under the override is off-pin).
+#
 # Exit codes: 0 ok | 2 protected branch | 3 dirty tree | 4 stale base
-#             5 remote unreachable | 64 usage
+#             5 remote unreachable | 6 toolchain differs from the pin
+#             64 usage
 set -uo pipefail
 
 # Branches only the maintainer lands. An agent that finds itself on one has
@@ -37,7 +53,7 @@ while [ $# -gt 0 ]; do
     --k8s)      CHECK_K8S=1 ;;
     --host)     shift; [ $# -gt 0 ] || { echo "preflight: --host needs a value" >&2; exit 64; }; HOSTS+=("$1") ;;
     --all)      CHECK_UPSTREAM=1; CHECK_GH=1; CHECK_K8S=1 ;;
-    -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "preflight: unknown argument '$1'" >&2; exit 64 ;;
   esac
   shift
@@ -73,6 +89,112 @@ if [ "$DIRTY" != "0" ]; then
   fail "$DIRTY uncommitted file(s) -- another agent may share this tree, or a prior run left residue."
   fail "  inspect with: git -C $ROOT status --short"
   [ "$RC" = "0" ] && RC=3
+fi
+
+# --- compiler: the pin, not whatever PATH finds first ---------------------
+# rustup honours rust-toolchain.toml only through its proxies; any other
+# `rustc` on PATH (Homebrew's, a distro's) ignores it without a word. Ask the
+# same question cargo will: $RUSTC if set, else `rustc` from PATH, run from
+# the worktree root. `cargo -V` is checked too: cargo X.Y.Z ships with rustc
+# X.Y.Z, and a Homebrew cargo first on PATH is the same hazard.
+TOOLCHAIN_FILE=""
+for f in rust-toolchain.toml rust-toolchain; do
+  [ -f "$ROOT/$f" ] && { TOOLCHAIN_FILE="$ROOT/$f"; break; }
+done
+if [ -n "$TOOLCHAIN_FILE" ]; then
+  PIN_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOOLCHAIN_FILE" | head -n 1)
+  if [ -z "$PIN_CHANNEL" ] && [ "${TOOLCHAIN_FILE##*/}" = "rust-toolchain" ]; then
+    PIN_CHANNEL=$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$TOOLCHAIN_FILE")
+  fi
+  # Does release $2 satisfy channel $1? 0 yes, 1 no, 2 symbolic (unverifiable).
+  release_matches() {
+    case "$1" in
+      *[!0-9.]*|"") return 2 ;;
+    esac
+    case "$1" in
+      *.*.*) [ "$2" = "$1" ] ;;
+      *.*)   case "$2" in "$1".*) return 0 ;; *) return 1 ;; esac ;;
+      *)     return 2 ;;
+    esac
+  }
+  RUSTC_CMD="${RUSTC:-rustc}"
+  RUSTC_PATH=$(command -v "$RUSTC_CMD" 2>/dev/null || true)
+  RUSTC_VV=$(cd "$ROOT" && "$RUSTC_CMD" -vV 2>/dev/null) || RUSTC_VV=""
+  RUSTC_RELEASE=$(printf '%s\n' "$RUSTC_VV" | sed -n 's/^release: *//p')
+  RUSTC_SYSROOT=$(cd "$ROOT" && "$RUSTC_CMD" --print sysroot 2>/dev/null) || RUSTC_SYSROOT="?"
+  CARGO_PATH=$(command -v cargo 2>/dev/null || true)
+  CARGO_V=$(cd "$ROOT" && cargo -V 2>/dev/null) || CARGO_V=""
+  CARGO_RELEASE=$(printf '%s\n' "$CARGO_V" | awk '$1 == "cargo" {print $2; exit}')
+  say "toolchain: pin ${PIN_CHANNEL:-?} (${TOOLCHAIN_FILE##*/})"
+  say "rustc    : ${RUSTC_PATH:-$RUSTC_CMD (not found)} -> $(printf '%s\n' "$RUSTC_VV" | head -n 1)${RUSTC:+  [\$RUSTC]}"
+  say "sysroot  : $RUSTC_SYSROOT"
+  say "cargo    : ${CARGO_PATH:-cargo (not found)} -> ${CARGO_V:-?}"
+  # A release string is not an identity: a non-rustup rustc (distro,
+  # Homebrew) can report the pinned release too. Ask rustup -- never PATH --
+  # which commit the pin is: `rustup which` (run that executable), then
+  # `rustup run`, with auto-install off and no RUSTUP_TOOLCHAIN override.
+  RUSTC_COMMIT=$(printf '%s\n' "$RUSTC_VV" | sed -n 's/^commit-hash: *//p')
+  PIN_RUSTC="" PIN_VV="" PIN_COMMIT=""
+  RUSTUP_BIN=$(command -v rustup 2>/dev/null || true)
+  if [ -z "$RUSTUP_BIN" ] && [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/rustup" ]; then
+    RUSTUP_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/rustup"
+  fi
+  if [ -n "$PIN_CHANNEL" ] && [ -n "$RUSTUP_BIN" ]; then
+    PIN_RUSTC=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 \
+                "$RUSTUP_BIN" which --toolchain "$PIN_CHANNEL" rustc 2>/dev/null) || PIN_RUSTC=""
+    if [ -n "$PIN_RUSTC" ] && [ -x "$PIN_RUSTC" ]; then
+      PIN_VV=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 "$PIN_RUSTC" -vV 2>/dev/null) || PIN_VV=""
+    fi
+    if [ -z "$PIN_VV" ]; then
+      PIN_RUSTC="rustup run $PIN_CHANNEL rustc"
+      PIN_VV=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 \
+               "$RUSTUP_BIN" run "$PIN_CHANNEL" rustc -vV 2>/dev/null) || PIN_VV=""
+    fi
+    PIN_COMMIT=$(printf '%s\n' "$PIN_VV" | sed -n 's/^commit-hash: *//p')
+    release_matches "$PIN_CHANNEL" "$(printf '%s\n' "$PIN_VV" | sed -n 's/^release: *//p')"
+    [ "$?" = "1" ] && PIN_COMMIT=""  # rustup answered with another release: not the pin
+  fi
+  if [ -n "$PIN_COMMIT" ]; then
+    say "pin rustc: $PIN_RUSTC -> $(printf '%s\n' "$PIN_VV" | head -n 1), commit $(printf '%.12s' "$PIN_COMMIT")"
+  else
+    say "pin rustc: UNRESOLVED (${RUSTUP_BIN:-no rustup} could not resolve toolchain '${PIN_CHANNEL:-?}')"
+  fi
+  SKEW=()
+  if [ -z "$PIN_CHANNEL" ]; then
+    SKEW+=("cannot read the channel from ${TOOLCHAIN_FILE##*/}")
+  else
+    for pair in "rustc:$RUSTC_RELEASE" "cargo:$CARGO_RELEASE"; do
+      tool=${pair%%:*} rel=${pair#*:}
+      release_matches "$PIN_CHANNEL" "$rel"; m=$?
+      if [ "$m" = "2" ]; then
+        say "toolchain: channel '$PIN_CHANNEL' is symbolic -- $tool ${rel:-?} not checked against it"
+      elif [ "$m" != "0" ]; then
+        SKEW+=("$tool is ${rel:-UNRESOLVABLE}, pin is $PIN_CHANNEL")
+      elif [ "$tool" = "rustc" ]; then
+        # The release matches; now the identity must too.
+        if [ -z "$PIN_COMMIT" ]; then
+          SKEW+=("rustup cannot resolve the pinned toolchain $PIN_CHANNEL, so rustc ${RUSTC_PATH:-$RUSTC_CMD} cannot be proven to be the pin (rustup toolchain install $PIN_CHANNEL)")
+        elif [ "$RUSTC_COMMIT" != "$PIN_COMMIT" ]; then
+          SKEW+=("rustc ${RUSTC_PATH:-$RUSTC_CMD} reports $rel but is commit $(printf '%.12s' "${RUSTC_COMMIT:-?}"), not the rustup-resolved pin (commit $(printf '%.12s' "$PIN_COMMIT"))")
+        fi
+      fi
+    done
+  fi
+  if [ "${#SKEW[@]}" -gt 0 ]; then
+    for s in "${SKEW[@]}"; do fail "TOOLCHAIN MISMATCH: $s"; done
+    fail "  builds here would silently bypass ${TOOLCHAIN_FILE##*/}. Put rustup's proxies first:"
+    fail "    export PATH=\"\$HOME/.cargo/bin:\$PATH\"     (see AGENTS.md 'Rust toolchain pin')"
+    fail "  \`rustup run $PIN_CHANNEL cargo ...\` is NOT enough: that cargo still runs the first \`rustc\` on PATH."
+    case "$(printf '%s' "${OXIDEX_ALLOW_TOOLCHAIN_SKEW:-}" | tr '[:upper:]' '[:lower:]')" in
+      1|true)
+        say "toolchain: MISMATCH OVERRIDDEN (OXIDEX_ALLOW_TOOLCHAIN_SKEW=1) -- anything built here is off-pin" ;;
+      *)
+        fail "  or set OXIDEX_ALLOW_TOOLCHAIN_SKEW=1 to proceed without building anything you will measure."
+        [ "$RC" = "0" ] && RC=6 ;;
+    esac
+  fi
+else
+  say "toolchain: no rust-toolchain.toml (skipped)"
 fi
 
 # --- base freshness ------------------------------------------------------
