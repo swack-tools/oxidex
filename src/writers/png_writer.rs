@@ -10,7 +10,7 @@ use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::png::chunk_parser::{
-    PNG_SIGNATURE, PngChunk, PngTextRecord, parse_chunk, parse_text_record,
+    PNG_SIGNATURE, PngChunk, PngTextRecord, TextPayload, parse_chunk, parse_text_record,
 };
 use crate::parsers::png::parse_png_metadata;
 use crate::parsers::png::text_names::{
@@ -330,9 +330,37 @@ fn rewrite_exif_payload(
     };
     // Every removal gone, every set present, before anything is written.
     crate::writers::exif_surgical::verify_exif_write(
-        original, &payload, &baseline, &desired, &removed,
+        original,
+        &payload,
+        &baseline,
+        &desired,
+        &removed,
+        crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
     Ok(payload)
+}
+
+/// The payload of a raw-profile text chunk (`Raw profile type exif`/`APP1`):
+/// `\n<type>\n<length>\n<hex>` hex-decoded, as `ProcessProfile` reads it
+/// (PNG.pm 13.59:1166-1170). `None` when the chunk is not a profile ExifTool
+/// could decode either.
+fn decode_raw_profile(record: &PngTextRecord) -> Option<Vec<u8>> {
+    let TextPayload::Bytes(bytes) = &record.payload else {
+        return None;
+    };
+    let text = std::str::from_utf8(bytes).ok()?;
+    let rest = text.strip_prefix('\n')?;
+    let (_, rest) = rest.split_once('\n')?;
+    let (length, hex) = rest.split_once('\n')?;
+    length.trim().parse::<usize>().ok()?;
+    let digits: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if digits.len() % 2 == 1 {
+        return None;
+    }
+    digits
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
 }
 
 /// What the writer does with the EXIF block.
@@ -372,38 +400,73 @@ fn plan_exif(
     if metadata.is_empty() && removed.is_empty() {
         return Ok(ExifFate::Replace(Vec::new()));
     }
-    if !exif_changed(metadata, baseline, removed) {
-        return Ok(ExifFate::Carry);
-    }
     let exif_chunks: Vec<&PngChunk> = chunks
         .iter()
         .filter(|chunk| chunk.chunk_type == *b"eXIf")
         .collect();
-    if exif_chunks.len() > 1 {
-        return Err(ExifToolError::unsupported_format(
-            "Cannot edit EXIF in a PNG with more than one eXIf chunk \
-             (ExifTool also refuses: IFD0 pointer references previous IFD0 directory)",
-        ));
-    }
     // Keywords resolve exactly as the reader and ExifTool resolve them
     // (`TextTagNamer`, with `FoundPNG`'s `ucfirst` fallback, PNG.pm
     // 13.59:919-921): the oracle reads EXIF from a `raw profile type exif`
     // chunk too, and refuses a set with one present, so a byte-exact match
     // left a second, competing EXIF carrier beside the new eXIf chunk.
     let mut namer = TextTagNamer::new();
-    let raw_profile = chunks.iter().find_map(|chunk| {
-        if !chunk.is_text_chunk() {
-            return None;
-        }
-        let record = parse_text_record(&chunk.chunk_type, &chunk.data)?;
-        let keyword = decode_latin(&record.keyword);
-        let lang = record.lang.as_deref().map(decode_latin);
-        match namer.resolve(&keyword, lang.as_deref()) {
-            TextTagRoute::Profile(name) if RAW_EXIF_PROFILE_NAMES.contains(&name) => Some(keyword),
-            _ => None,
-        }
-    });
-    if let Some(keyword) = raw_profile {
+    let raw_profiles: Vec<(String, PngTextRecord)> = chunks
+        .iter()
+        .filter(|chunk| chunk.is_text_chunk())
+        .filter_map(|chunk| {
+            let record = parse_text_record(&chunk.chunk_type, &chunk.data)?;
+            let keyword = decode_latin(&record.keyword);
+            let lang = record.lang.as_deref().map(decode_latin);
+            match namer.resolve(&keyword, lang.as_deref()) {
+                TextTagRoute::Profile(name) if RAW_EXIF_PROFILE_NAMES.contains(&name) => {
+                    Some((keyword, record))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+
+    // Is the request a no-op for every EXIF carrier of the file? Decided once,
+    // before any refusal below (multiple eXIf, raw profile) and before the
+    // writer's own guards and post-write check: a removal naming nothing --
+    // an unmapped name, a tag no carrier holds, anything in a carrier no
+    // scanner can parse -- succeeds with the chunks carried byte-for-byte.
+    let decoded: Vec<Vec<u8>> = raw_profiles
+        .iter()
+        .filter_map(|(_, record)| decode_raw_profile(record))
+        .collect();
+    let mut blocks: Vec<&[u8]> = exif_chunks
+        .iter()
+        .map(|chunk| {
+            chunk
+                .data
+                .strip_prefix(b"Exif\0\0".as_slice())
+                .unwrap_or(&chunk.data)
+        })
+        .collect();
+    blocks.extend(
+        decoded
+            .iter()
+            .map(|block| block.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(block)),
+    );
+    if !exif_changed(metadata, baseline, removed)
+        || crate::writers::exif_surgical::exif_request_is_no_op(
+            &blocks,
+            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+            baseline,
+            metadata,
+            removed,
+        )
+    {
+        return Ok(ExifFate::Carry);
+    }
+    if exif_chunks.len() > 1 {
+        return Err(ExifToolError::unsupported_format(
+            "Cannot edit EXIF in a PNG with more than one eXIf chunk \
+             (ExifTool also refuses: IFD0 pointer references previous IFD0 directory)",
+        ));
+    }
+    if let Some((keyword, _)) = raw_profiles.first() {
         return Err(ExifToolError::unsupported_format(format!(
             "Cannot edit EXIF stored in a PNG '{keyword}' text chunk: this writer \
              edits only the eXIf chunk (ExifTool also refuses to set tags there)"
