@@ -37,13 +37,14 @@ candidate. Run the entry point from that checkout itself: `--repository` must
 be the checkout containing the entry point, `--matrix` must be its canonical
 `tools/exiftool-tables/version_transition_matrix.json` (its SHA-256 is bound
 into the result and instrument header), and the output root and every input
-bundle location must lie beneath the ops root (`$OXIDEX_OPS_DIR`); only the
-Cargo target root may live elsewhere. The lease is a pre-created regular file directly beneath the output
+bundle location must lie beneath the ops root (`$OXIDEX_OPS_DIR`, default
+`$HOME/oxidex-ops`, as `scripts/ops_paths.py` resolves it); only the Cargo
+target root may live elsewhere. The lease is a pre-created regular file directly beneath the output
 root, shared by every run; each run ID is new and its receipt paths must not
 exist yet:
 
 ```bash
-OUT="$OXIDEX_OPS_DIR/evidence/<date>/version-transition-qualification"
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/<date>/version-transition-qualification"
 RUN=same-pin-r1        # then e.g. forward-r1 with --only 11.78-to-12.64, reverse-r1 with --only 12.64-to-11.78
 mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 python3 tools/exiftool-tables/version_transition_qualification.py \

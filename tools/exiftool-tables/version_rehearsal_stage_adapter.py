@@ -55,6 +55,13 @@ TEST_ENVIRONMENT_PASSTHROUGH = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LA
                                 "CARGO_HOME", "RUSTUP_HOME", "SDKROOT", "DEVELOPER_DIR")
 TEST_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR", "EXIFTOOL_CACHE_DIR", "EXIFTOOL_PERL",
                         "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES")
+# The build that produces the qualified CLI and writer driver runs from the
+# same allowlist and the same cargo-configuration refusal, so an ambient
+# RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, RUSTC, RUSTC_WRAPPER,
+# RUSTC_WORKSPACE_WRAPPER or CARGO_BUILD_* cannot alter binaries the result
+# attributes only to the source commit. Build scripts read only OUT_DIR.
+BUILD_ENVIRONMENT_PASSTHROUGH = TEST_ENVIRONMENT_PASSTHROUGH
+BUILD_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
 TEST_ORACLE_DIRECTORY = "exiftool-oracle"
 TEST_ORACLE_MODULES = ("strict", "warnings", "Archive::Zip", "Compress::Zlib")
 _TEST_RESULT = re.compile(
@@ -239,7 +246,7 @@ def _validate_artifacts(checkout: Path, rows: Any) -> list[dict[str, Any]]:
 
 
 def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
-    """Count one canonical refusal/omission population per ledger and family.
+    """Count one canonical refusal/omission/unsupported population per ledger and family.
 
     This is evidence that a historical generation refused source behavior
     explicitly; it is not permission to reinterpret a refusal as coverage.
@@ -250,6 +257,10 @@ def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
     """
     candidates: list[dict[str, Any]] = []
     key_pattern = re.compile(r"(?:refus|omitt|withheld)", re.IGNORECASE)
+    # A canonical unsupported population is a snake_case field name such as
+    # `unsupported_branches`; free-text reason keys that merely mention
+    # "unsupported" (e.g. under omissions_by_reason) are breakdowns, not fields.
+    unsupported_field = re.compile(r"(?:[a-z0-9]+_)*unsupported(?:_[a-z0-9]+)*")
 
     def walk(value: Any, location: str, artifact_path: str, depth: int = 0) -> None:
         if isinstance(value, dict):
@@ -257,8 +268,10 @@ def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
                 child = value[key]
                 child_location = f"{location}.{key}" if location else key
                 lowered = key.casefold()
-                if key_pattern.search(key) and not lowered.startswith("top_"):
-                    family = "omitted" if "omitt" in lowered else "refused"
+                unsupported = unsupported_field.fullmatch(key) is not None
+                if (key_pattern.search(key) or unsupported) and not lowered.startswith("top_"):
+                    family = ("unsupported" if unsupported
+                              else "omitted" if "omitt" in lowered else "refused")
                     if type(child) is int and child >= 0:
                         candidates.append({"artifact": artifact_path, "json_path": child_location,
                                            "kind": "integer", "count": child,
@@ -428,11 +441,21 @@ def _cargo_executable(record: dict[str, Any], checkout: Path, target: Path,
 
 
 def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
-    checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
+    checkout, target, report, _perl, _source, _native_lib, identity = _common(args, run)
     if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("build checkout is not pinned to selected release")
     generated = _validate_artifacts(checkout, _prior(report, "generate", args, identity, checkout).get("generated_artifacts"))
-    env = _environment(perl, native_lib, target)
+    env = _build_environment(target)
+    cargo_config = _ambient_cargo_configuration(checkout, env)
+    if cargo_config["outside_checkout"]:
+        raise Refused("build refuses cargo configuration outside the checkout: "
+                      + ", ".join(cargo_config["outside_checkout"]))
+    toolchain = {}
+    for name, command in (("rustc", ["rustc", "-vV"]), ("cargo", ["cargo", "-V"])):
+        record = _run(command, cwd=checkout, env=env, run=run)
+        if record["state"] != "ok" or not record["stdout"].strip().startswith(name + " "):
+            raise Refused(f"build toolchain cannot be identified: {' '.join(command)}")
+        toolchain[name] = record["stdout"].strip()
     records = []
     for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
                     ["cargo", "test", "--lib", "--all-features", "--no-run", "--message-format=json"]):
@@ -450,7 +473,8 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     _validate_artifacts(checkout, generated)
     result = {**_base("build", args, checkout, identity), "state": "passed", "denominator": 2,
               "generated_artifacts": generated, "binary": executable,
-              "writer_binary": writer, "raw_report": raw}
+              "writer_binary": writer, "raw_report": raw,
+              "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config}}
     _atomic(report, result); return result
 
 
@@ -657,8 +681,19 @@ def _ambient_cargo_configuration(checkout: Path, env: dict[str, str]) -> dict[st
     return {"checked": checked, "outside_checkout": outside}
 
 
+def _allowlisted_environment() -> dict[str, str]:
+    """Only the allowlisted caller variables: never RUSTFLAGS, wrappers or ExifTool overrides."""
+    return {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
+
+
+def _build_environment(target: Path) -> dict[str, str]:
+    env = _allowlisted_environment()
+    env.update(CARGO_TARGET_DIR=str(target), CARGO_TERM_COLOR="never")
+    return env
+
+
 def _release_test_environment(perl: Path, suite_target: Path, cache: Path, shim_directory: Path) -> dict[str, str]:
-    env = {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
+    env = _allowlisted_environment()
     env["PATH"] = str(shim_directory) + os.pathsep + env.get("PATH", os.defpath)
     env.update(CARGO_TARGET_DIR=str(suite_target), CARGO_TERM_COLOR="never", EXIFTOOL_CACHE_DIR=str(cache),
                EXIFTOOL_PERL=str(perl), OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES="1")

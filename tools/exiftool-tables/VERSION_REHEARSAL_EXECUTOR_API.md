@@ -43,6 +43,19 @@ checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`
 `OXIDEX_REHEARSAL_READ_FIXTURE_MANIFEST`. `{native_probe_sha256}`, `{source_commit}` and
 `OXIDEX_REHEARSAL_SOURCE_COMMIT` bind wrappers to the immutable OxiDex source.
 
+The stage adapter's `build` produces the qualified CLI and writer driver from
+the same allowlisted environment described below (only `CARGO_TARGET_DIR` and
+`CARGO_TERM_COLOR` are set), refuses cargo configuration outside the
+checkout, and records the environment, `rustc -vV`, `cargo -V` and the checked
+config paths as `build_environment`; qualification requires that record. An
+ambient `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTC`, `RUSTC_WRAPPER`,
+`RUSTC_WORKSPACE_WRAPPER` or `CARGO_BUILD_*` therefore cannot alter them.
+
+A journal interrupted between stages (after `checkout_completed` or
+`stage_passed`, before the next stage starts) is `running` with no active
+stage; `recover` marks it `interrupted` (event
+`interrupted_between_stages`) without touching any stage state.
+
 The stage adapter's `test` subcommand runs, in the owned checkout with its
 own `CARGO_TARGET_DIR` (`<target>/test-suite`, so the build's proven CLI and
 writer driver are never replaced), exactly one invocation:

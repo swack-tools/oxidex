@@ -545,6 +545,7 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
         raise Refused(f"{release} native capability probe is not the ready probe used by read")
     release_tests = _release_test_receipt(run_dir, journal, release)
+    build_environment = _build_environment_receipt(_report_for(run_dir, journal, release, "build"), release)
     checkout = run_dir / "checkouts" / executor._safe_name(release)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
@@ -566,6 +567,7 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
                                  "perl_modules_available": True},
         },
         "release_tests": release_tests,
+        "build_environment": build_environment,
         "generated_artifacts": generate.get("generated_artifacts"),
         "classification_counts": classification,
         "generated_refusals": refusals,
@@ -694,6 +696,28 @@ def _release_test_oracle(report: Mapping[str, Any], release: str) -> dict[str, A
         raise Refused(f"{release} release test suite was not graded by the selected capable ExifTool "
                       "under the allowlisted environment")
     return oracle
+
+
+def _build_environment_receipt(build: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """The qualified binaries must come from the allowlisted build environment."""
+    recorded = build.get("build_environment")
+    allowed = set(stage_adapter.BUILD_ENVIRONMENT_PASSTHROUGH) | set(stage_adapter.BUILD_ENVIRONMENT_SET)
+    try:
+        env, toolchain, cargo_config = recorded["environment"], recorded["toolchain"], recorded["cargo_config"]
+        binary = Path(build["binary"]["path"])
+        valid = (
+            isinstance(env, dict) and set(env) <= allowed and set(stage_adapter.BUILD_ENVIRONMENT_SET) <= set(env)
+            and isinstance(toolchain, dict) and set(toolchain) == {"rustc", "cargo"}
+            and toolchain["rustc"].startswith("rustc ") and toolchain["cargo"].startswith("cargo ")
+            and isinstance(cargo_config, dict) and cargo_config.get("outside_checkout") == []
+            and isinstance(cargo_config.get("checked"), list) and cargo_config["checked"]
+            and binary.is_relative_to(Path(env["CARGO_TARGET_DIR"]))
+        )
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise Refused(f"{release} build environment is not recorded") from exc
+    if not valid:
+        raise Refused(f"{release} build environment is not the allowlisted, identified toolchain build")
+    return recorded
 
 
 def _regular_receipt(path: Path) -> Path:
@@ -977,7 +1001,9 @@ def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path, *
     if not journal_path.is_file() or journal_path.is_symlink():
         return
     journal = _read_object(journal_path, "execution journal")
-    if journal.get("phase") == "running" and isinstance(journal.get("active"), dict):
+    # A running journal is recoverable mid-stage (active object) and between
+    # stages (active null); both must be marked terminal, never left running.
+    if journal.get("phase") == "running" and (journal.get("active") is None or isinstance(journal.get("active"), dict)):
         executor.recover(run_dir, archive_cache, source_root, host_lock_fd=host_lock_fd)
 
 

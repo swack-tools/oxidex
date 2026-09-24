@@ -478,8 +478,16 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
             or any(totals[key] != sum(row[key] for row in commands) for key in keys)):
         raise Refused("test result lacks a counted zero-failure release test suite")
     oracle = suite.get("exiftool_oracle")
+    native = result.get("native_identity")
+    try:
+        same_native = (oracle["tree_realpath"] == native["source"]["path"]
+                       and oracle["lib"]["exiftool_pm_sha256"] == native["lib"]["exiftool_pm_sha256"]
+                       and oracle["perl"] == native["perl"])
+    except (KeyError, TypeError):
+        same_native = False
     if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
-            or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True):
+            or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True
+            or not same_native):
         raise Refused("test result was not graded by the selected release's capable ExifTool")
     corpus = suite.get("fixture_corpus")
     manifest = corpus.get("manifest") if isinstance(corpus, dict) else None
@@ -1429,8 +1437,18 @@ def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
         run_dir, archive_cache, source_root, allow_legacy_recovery=True,
     )
     with _external_host_lock(config, host_lock_fd):
-        if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
+        if journal.get("phase") != "running":
             raise Refused("only a running execution can be recovered as interrupted")
+        if journal.get("active") is None:
+            # Interrupted between stages (after checkout_completed or
+            # stage_passed, before the next stage started): nothing was in
+            # flight and no child was spawned, so only the phase changes.
+            journal["phase"] = "interrupted"
+            _event(journal, "interrupted_between_stages")
+            _store_journal(run_dir, journal)
+            return journal
+        if not isinstance(journal.get("active"), dict):
+            raise Refused("running execution journal has a malformed active stage")
         active = journal["active"]
         child = active.get("child")
         if isinstance(child, dict) and type(child.get("pid")) is int and child["pid"] > 0:

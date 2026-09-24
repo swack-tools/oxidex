@@ -379,8 +379,17 @@ class SideAndRecoveryTests(unittest.TestCase):
                                "totals": {"passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                                           "filtered_out": 0, "targets": 4}},
             }
+            build_environment = {
+                "environment": {"PATH": "/usr/bin", "HOME": "/Users/test", "CARGO_TARGET_DIR": "/isolated/target",
+                                "CARGO_TERM_COLOR": "never"},
+                "toolchain": {"rustc": "rustc 1.97.1 (x 2026-01-01)\nhost: aarch64-apple-darwin",
+                              "cargo": "cargo 1.97.1 (x 2026-01-01)"},
+                "cargo_config": {"checked": ["/Users/test/.cargo/config.toml"], "outside_checkout": []},
+            }
+            build = {"binary": {"path": "/isolated/target/debug/oxidex", "sha256": "b" * 64, "bytes": 123},
+                     "build_environment": build_environment}
             reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}, "native": native,
-                       "test": release_tests}
+                       "test": release_tests, "build": build}
             identity = {name: "identity" for name in (
                 "release", "tag_object", "peeled_commit", "source_directory",
                 "source_tree_sha256", "materialization_sha256",
@@ -397,6 +406,30 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "target_directory": "/isolated/target/test-suite", "log": log_binding,
                 "exiftool_oracle": exiftool_oracle, "fixture_corpus": fixture_corpus,
             })
+            self.assertEqual(side.get("build_environment"), build_environment)
+
+            def build_refused(label, mutate):
+                broken = json.loads(json.dumps(build))
+                mutate(broken)
+                reports["build"] = broken
+                with self.subTest(label=label), \
+                     patch.object(qualification, "_report_for",
+                                  side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                     patch.object(qualification.stage_adapter, "generated_refusal_counts",
+                                  return_value={"total": 0, "counters": []}):
+                    with self.assertRaisesRegex(qualification.Refused, "build environment"):
+                        qualification._side_receipt(run_dir, journal, "13.59", identity)
+                reports["build"] = build
+
+            for key in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER",
+                        "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_TARGET"):
+                build_refused(f"ambient {key}", lambda r, key=key: r["build_environment"]["environment"].update({key: "x"}))
+            build_refused("environment absent", lambda r: r.pop("build_environment"))
+            build_refused("toolchain absent", lambda r: r["build_environment"].pop("toolchain"))
+            build_refused("rustc unidentified", lambda r: r["build_environment"]["toolchain"].update(rustc=""))
+            build_refused("cargo config found", lambda r: r["build_environment"]["cargo_config"].update(
+                outside_checkout=["/Users/test/.cargo/config.toml"]))
+            build_refused("binary outside the build target", lambda r: r["binary"].update(path="/elsewhere/oxidex"))
 
             def refused(label, mutate, pattern="release test suite"):
                 broken = json.loads(json.dumps(release_tests))
@@ -535,6 +568,22 @@ class SideAndRecoveryTests(unittest.TestCase):
                     with self.assertRaisesRegex(qualification.Refused, "archive cache"):
                         qualification._evidence_location(value, "archive cache")
 
+    def test_documented_commands_default_the_ops_root_like_ops_paths(self) -> None:
+        import re
+        documents = (qualification.REPOSITORY_ROOT / "docs/UPGRADE-NEXT-STEPS.md",
+                     qualification.REPOSITORY_ROOT
+                     / "docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md")
+        for document in documents:
+            text = document.read_text(encoding="utf-8")
+            blocks = [block for block in re.findall(r"```bash\n(.*?)```", text, re.S)
+                      if re.search(r"python3 \S*tools/exiftool-tables/version_transition_qualification\.py", block)]
+            with self.subTest(document=document.name):
+                self.assertTrue(blocks)
+                for block in blocks:
+                    self.assertNotRegex(block, r"\$OXIDEX_OPS_DIR\b|\$\{OXIDEX_OPS_DIR\}",
+                                        "an unset OXIDEX_OPS_DIR must fall back to $HOME/oxidex-ops")
+                    self.assertIn("${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}", block)
+
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -596,6 +645,11 @@ class SideAndRecoveryTests(unittest.TestCase):
             with patch.object(qualification.executor, "recover") as recover:
                 qualification._recover_if_running(run_dir, Path("cache"), Path("sources"))
             recover.assert_not_called()
+            # Interrupted between stages: still running, nothing active.
+            (run_dir / "execution-status.json").write_text(json.dumps({"phase": "running", "active": None}))
+            with patch.object(qualification.executor, "recover") as recover:
+                qualification._recover_if_running(run_dir, Path("cache"), Path("sources"), host_lock_fd=17)
+            recover.assert_called_once_with(run_dir, Path("cache"), Path("sources"), host_lock_fd=17)
 
     def test_real_recovery_reuses_the_validated_external_lease(self) -> None:
         temporary, capture, catalog, plan, resolution, materialization, cache, sources, release = native_fixture.make_state()

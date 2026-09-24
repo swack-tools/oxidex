@@ -168,7 +168,10 @@ class ExecutorTests(unittest.TestCase):
                            "filtered_out": 0, "targets": 2},
                 "log": body["raw_report"], "target_directory": env["CARGO_TARGET_DIR"] + "/test-suite",
                 "exiftool_oracle": {"version": env["OXIDEX_REHEARSAL_RELEASE"], "docx_filetype": "DOCX",
-                                    "perl_modules_available": True},
+                                    "perl_modules_available": True,
+                                    "tree_realpath": body["native_identity"]["source"]["path"],
+                                    "lib": {"exiftool_pm_sha256": body["native_identity"]["lib"]["exiftool_pm_sha256"]},
+                                    "perl": body["native_identity"]["perl"]},
                 "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 4249},
                                    "verified_before_run": True, "verified_after_run": True},
             }
@@ -304,10 +307,15 @@ class ExecutorTests(unittest.TestCase):
                 self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
 
     def test_test_suite_totals_must_be_the_sum_of_counted_commands(self):
+        native = {"release": "13.59", "perl": {"path": "/perl", "sha256": "c" * 64},
+                  "source": {"path": "/exiftool"}, "lib": {"path": "/exiftool/lib", "exiftool_pm_sha256": "d" * 64}}
         base = {"release": "13.59", "denominator": 1, "raw_report": {"path": "raw", "sha256": "a" * 64},
+                "native_identity": native,
                 "test_suite": {"log": {"path": "raw", "sha256": "a" * 64},
                                "exiftool_oracle": {"version": "13.59", "docx_filetype": "DOCX",
-                                                   "perl_modules_available": True},
+                                                   "perl_modules_available": True, "tree_realpath": "/exiftool",
+                                                   "lib": {"exiftool_pm_sha256": "d" * 64},
+                                                   "perl": {"path": "/perl", "sha256": "c" * 64}},
                                "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 1},
                                                   "verified_before_run": True, "verified_after_run": True},
                                "totals": {"passed": 1, "failed": 0, "ignored": 0, "measured": 0,
@@ -323,6 +331,37 @@ class ExecutorTests(unittest.TestCase):
                 forged = json.loads(json.dumps(base)); forged["test_suite"]["commands"] = commands
                 with self.assertRaisesRegex(executor.Refused, "counted zero-failure"):
                     executor._require_test_suite_proof(forged)
+
+    def test_test_oracle_must_be_the_validated_native_identity(self):
+        """A custom wrapper cannot self-report an oracle other than the selected native tree."""
+        for label, mutate in (
+                ("foreign tree", lambda oracle, native: oracle.update(tree_realpath="/opt/homebrew/exiftool")),
+                ("foreign library", lambda oracle, native: oracle["lib"].update(exiftool_pm_sha256="0" * 64)),
+                ("foreign perl", lambda oracle, native: oracle.update(perl={"path": "/opt/homebrew/bin/perl",
+                                                                           "sha256": "0" * 64})),
+                ("identity missing", lambda oracle, native: oracle.pop("perl"))):
+            with self.subTest(label=label):
+                self.run_dir = self.root / f"oracle-{label.replace(' ', '-')}"
+                self.calls.clear()
+                self.initialize(self.config())
+                original = self.command
+                def forged(argv, **kwargs):
+                    result = original(argv, **kwargs)
+                    if argv[0] == "test":
+                        report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                        body = json.loads(report.read_text())
+                        mutate(body["test_suite"]["exiftool_oracle"], body["native_identity"])
+                        report.write_text(json.dumps(body))
+                    return result
+                with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+                    journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                               run=forged, checkout=self.checkout)
+                self.assertEqual(journal["phase"], "failed")
+                self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+        # The honest wrapper, whose oracle matches the native identity, still passes.
+        self.run_dir = self.root / "oracle-honest"
+        self.initialize(self.config())
+        self.assertEqual(self.execute()["phase"], "complete")
 
     def test_absent_test_command_is_visible_as_unsupported(self):
         self.initialize(self.config(tests=False))
@@ -544,6 +583,30 @@ class ExecutorTests(unittest.TestCase):
                     child.wait(10)
             self.assertEqual(executor.release_retained_locks(), [])
         self.assertEqual(contend(), "acquired")
+
+    def test_between_stage_interruption_is_recoverable(self):
+        """Interrupted after stage_passed/checkout_completed: running with nothing active."""
+        for boundary in ("checkout_completed", "stage_passed"):
+            with self.subTest(boundary=boundary):
+                self.run_dir = self.root / f"between-{boundary}"
+                self.initialize(self.config())
+                status = self.run_dir / "execution-status.json"
+                journal = json.loads(status.read_text())
+                release = self.releases[0]
+                journal["phase"], journal["active"] = "running", None
+                if boundary == "stage_passed":
+                    journal["releases"][release]["stages"]["native"] = "passed"
+                journal["events"].append({"event": boundary, "release": release})
+                status.write_text(json.dumps(journal))
+                before = json.loads(status.read_text())["releases"]
+                recovered = executor.recover(self.run_dir, self.cache, self.sources)
+                self.assertEqual(recovered["phase"], "interrupted")
+                self.assertIsNone(recovered["active"])
+                self.assertEqual(recovered["releases"], before)  # no stage was in flight
+                self.assertEqual(recovered["events"][-1]["event"], "interrupted_between_stages")
+                with self.assertRaisesRegex(executor.Refused, "terminal"):
+                    executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                     run=self.command, checkout=self.checkout)
 
     def test_live_child_cannot_be_recovered_as_interrupted(self):
         self.initialize(self.config())

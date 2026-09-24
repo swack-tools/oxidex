@@ -168,6 +168,10 @@ class AdapterTests(unittest.TestCase):
             if argv[-2:] == ["status", "--porcelain=v1"]: return subprocess.CompletedProcess(argv, 0, "", "")
             if argv[-2:] == ["diff", "--name-only"]: return subprocess.CompletedProcess(argv, 0, self.diff_output, "")
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
+        if argv == ["rustc", "-vV"]:
+            return subprocess.CompletedProcess(argv, 0, "rustc 1.97.1 (fixture 2026-01-01)\nhost: aarch64-apple-darwin\n", "")
+        if argv == ["cargo", "-V"]:
+            return subprocess.CompletedProcess(argv, 0, "cargo 1.97.1 (fixture 2026-01-01)\n", "")
         if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
             self.suite_calls.append((argv, kwargs["env"]))
             if kwargs.get("stderr") is not subprocess.STDOUT:
@@ -615,6 +619,41 @@ class AdapterTests(unittest.TestCase):
             adapter.run_release_tests(self.args("test"), run=self.fake_run)
         self.assertEqual(self.suite_calls, [])
 
+    def test_build_uses_the_allowlisted_environment_and_records_its_toolchain(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        hostile = {
+            "RUSTFLAGS": "--cfg forged", "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fforged", "RUSTC": "/tmp/rustc",
+            "RUSTC_WRAPPER": "/tmp/wrap", "RUSTC_WORKSPACE_WRAPPER": "/tmp/wrap", "CARGO_BUILD_TARGET": "x86_64",
+            "CARGO_BUILD_RUSTFLAGS": "--cfg forged", "CARGO_TARGET_DIR": "/tmp/elsewhere", "RUSTDOCFLAGS": "-x",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "3", "EXIFTOOL": "/opt/homebrew/bin/exiftool",
+        }
+        first = len(self.seen)
+        with patch.dict(os.environ, hostile):
+            built = adapter.build(self.args("build"), run=self.fake_run)
+        calls = [(argv, env) for argv, env in self.seen[first:] if argv[0] in {"cargo", "rustc"}]
+        self.assertEqual([argv for argv, _env in calls][:2], [["rustc", "-vV"], ["cargo", "-V"]])
+        allowed = set(adapter.BUILD_ENVIRONMENT_PASSTHROUGH) | set(adapter.BUILD_ENVIRONMENT_SET)
+        for argv, env in calls:
+            self.assertFalse((set(hostile) - {"CARGO_TARGET_DIR"}) & set(env), argv)
+            self.assertLessEqual(set(env), allowed, argv)
+            self.assertEqual(env["CARGO_TARGET_DIR"], str(self.target.resolve()))
+        build_env = built["build_environment"]
+        self.assertEqual(build_env["environment"], calls[-1][1])
+        self.assertEqual(build_env["toolchain"], {
+            "rustc": "rustc 1.97.1 (fixture 2026-01-01)\nhost: aarch64-apple-darwin",
+            "cargo": "cargo 1.97.1 (fixture 2026-01-01)"})
+        self.assertEqual(build_env["cargo_config"]["outside_checkout"], [])
+
+    def test_build_refuses_cargo_configuration_outside_the_checkout(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        config = self.root / ".cargo" / "config.toml"
+        config.parent.mkdir(); config.write_text("[build]\nrustflags = ['--cfg', 'forged']\n")
+        first = len(self.seen)
+        with self.assertRaisesRegex(adapter.Refused, "cargo configuration outside the checkout"):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse(any(argv[:2] in (["cargo", "build"], ["cargo", "test"]) for argv, _env in self.seen[first:]))
+        self.assertFalse((self.reports / "build.json").exists())
+
     def test_build_records_distinct_cli_and_writer_driver(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         built = adapter.build(self.args("build"), run=self.fake_run)
@@ -641,7 +680,7 @@ class AdapterTests(unittest.TestCase):
         adapter.generate(self.args("generate"), run=self.fake_run)
         def foreign_package(argv, **kwargs):
             result = self.fake_run(argv, **kwargs)
-            if argv[0] == "cargo":
+            if argv[0] == "cargo" and argv[1] in {"build", "test"}:
                 row = json.loads(result.stdout); row["manifest_path"] = str(self.root / "other/Cargo.toml")
                 return subprocess.CompletedProcess(argv, 0, json.dumps(row), "")
             return result
@@ -1014,6 +1053,44 @@ class LiveInventoryProofTests(unittest.TestCase):
                 {("stats.refused", 2), ("stats.rows_omitted", 3)},
             )
 
+
+    def test_canonical_unsupported_populations_are_counted_once(self):
+        """sanitize/convinv ledgers declare top-level unsupported_branches; count each once."""
+        with TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            (checkout / "sanitize.json").write_text(json.dumps({
+                "omissions": [],
+                "unsupported_branches": [f"branch-{index}" for index in range(6)],
+                "primitive_contract": {"final": {"unsupported_domains": ["a", "b", "c"]},
+                                       "pristine": {"unsupported_domains": ["a", "b", "c"]}},
+            }))
+            (checkout / "convinv.json").write_text(json.dumps({
+                "unsupported_branches": [f"branch-{index}" for index in range(5)],
+            }))
+            (checkout / "rows.json").write_text(json.dumps({
+                "rows_omitted": 9,
+                "omissions_by_reason": {"row has unsupported source properties: Shift": 7,
+                                        "CHECK_PROC: CHECK_PROC format selector set is unsupported": 2},
+            }))
+            inventory = [SimpleNamespace(path=name) for name in ("sanitize.json", "convinv.json", "rows.json")]
+            with patch.object(adapter.artifacts, "inventory", return_value=inventory):
+                result = adapter.generated_refusal_counts(checkout)
+            self.assertEqual(
+                {(row["artifact"], row["json_path"], row["count"]) for row in result["counters"]},
+                {("sanitize.json", "unsupported_branches", 6), ("convinv.json", "unsupported_branches", 5),
+                 ("rows.json", "rows_omitted", 9)},
+            )
+            self.assertEqual(result["total"], 20)
+
+    def test_real_unsupported_ledgers_are_counted(self):
+        real = adapter.generated_refusal_counts(HERE.parents[1])
+        counted = {(row["artifact"], row["json_path"]): row["count"] for row in real["counters"]}
+        for name in ("sanitize_ledger.json", "convinv_ledger.json"):
+            path = HERE / name
+            branches = json.loads(path.read_text())["unsupported_branches"]
+            self.assertEqual(counted[(f"tools/exiftool-tables/{name}", "unsupported_branches")], len(branches))
+        self.assertFalse(any("unsupported_domains" in path or "omissions_by_reason" in path
+                             for _artifact, path in counted))
 
 class CurrentGeneratedMatrixContractTests(unittest.TestCase):
     def test_actual_committed_operands_define_complete_matrix_and_family_counts(self):

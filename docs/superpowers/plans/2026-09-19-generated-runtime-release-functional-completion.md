@@ -2762,7 +2762,7 @@ target directory, and durable result path.
 `version_transition_qualification.py` is the single non-promoting entry point:
 
 ```bash
-OUT="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification"
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
 RUN=same-pin-r1
 mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 python3 tools/exiftool-tables/version_transition_qualification.py \
@@ -2810,12 +2810,12 @@ git add tools/exiftool-tables/version_transition_qualification.py \
   docs/reference/upgrade-rehearsal-11.78-12.64.md
 git commit -S -m "test: prove reversible ExifTool version regeneration"
 test -z "$(git status --short)"
-python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
-  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log" -- \
+python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
+  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
     --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
+    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
     --only "same-pin-$OXIDEX_EXIFTOOL_VERSION"
 ```
 
@@ -2829,12 +2829,12 @@ manifest delta, and recovery controls. No code or fixture edit is allowed after
 the run starts. Invoke the same entry point with `--only 11.78-to-12.64`.
 
 ```bash
-python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
-  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log" -- \
+python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
+  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
     --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
+    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
     --only 11.78-to-12.64
 ```
 
@@ -2844,12 +2844,12 @@ Apply the same gates and prove removed artifacts are handled only by manifest
 delta. Invoke the same entry point with `--only 12.64-to-11.78`.
 
 ```bash
-python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
-  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log" -- \
+python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
+  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
     --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
+    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
     --only 12.64-to-11.78
 ```
 
