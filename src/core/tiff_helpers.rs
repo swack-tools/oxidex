@@ -3391,42 +3391,34 @@ pub(crate) fn parse_ifd1_with_session(
     // `enabled()` re-checks Gate A and the allowlist at runtime. Without the
     // `("Exif", "Main")` line in `enabled_ifd.rs` this is `None` and IFD1 is
     // read by the hand collector alone, as before the slice.
-    let Some(table) = find_ifd_table("Exif", "Main").filter(|table| table.enabled()) else {
-        let mut collected = MetadataMap::new();
-        collect_ifd1_thumbnail(
-            reader,
-            ifd1_offset,
-            byte_order,
-            tiff_base,
-            Ifd1Hand::Thumbnail,
-            None,
-            None,
-            metadata,
-            &mut collected,
-        );
-        metadata.merge(collected);
-        return;
-    };
+    let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
 
     // The engine reads `tiff_data`, the residual reads `reader`: for one
     // APP1 payload they are the same bytes at the same offsets.
     debug_assert!(
-        match (
-            usize::try_from(ifd1_offset)
-                .ok()
-                .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
-            reader.read(ifd1_offset, 2).ok(),
-        ) {
-            (Some(slice), Some(read)) => slice == read,
-            _ => true,
-        },
+        table.is_none()
+            || match (
+                usize::try_from(ifd1_offset)
+                    .ok()
+                    .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
+                reader.read(ifd1_offset, 2).ok(),
+            ) {
+                (Some(slice), Some(read)) => slice == read,
+                _ => true,
+            },
         "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
     );
 
-    let Some(physical_indices) = parse_ifd(reader, ifd1_offset, byte_order)
-        .ok()
-        .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries))
-    else {
+    // The table off, or an IFD1 whose entries do not parse or whose physical
+    // entry slots cannot be mapped: the hand collector alone reads IFD1
+    // ([`Ifd1Hand::Thumbnail`]). The entries are parsed only when the table
+    // is in force.
+    let (Some(table), Some(physical_indices)) = (
+        table,
+        table
+            .and_then(|_| parse_ifd(reader, ifd1_offset, byte_order).ok())
+            .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries)),
+    ) else {
         let mut collected = MetadataMap::new();
         collect_ifd1_thumbnail(
             reader,
