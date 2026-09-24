@@ -441,6 +441,12 @@ pub(crate) fn tag_value_to_field_for_key(
     value: &TagValue,
     hint: Option<u16>,
 ) -> Result<(u16, u32, Vec<u8>)> {
+    // Exif.pm 13.59 0x9c9b-0x9c9f: the map holds the decoded text, and
+    // ExifTool stores `ValueConvInv` of it -- UCS-2LE plus a NUL pair, as
+    // `int8u`, or as `undef` over an existing `undef` entry (`hint`).
+    if crate::writers::xp_strings::is_xp_tag_key(key) {
+        return crate::writers::xp_strings::xp_field(value, hint);
+    }
     if key.rsplit(':').next() == Some("GPSVersionID")
         && !matches!(value, TagValue::Binary(bytes) if bytes.len() == 4)
     {

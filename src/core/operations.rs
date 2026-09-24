@@ -1325,6 +1325,13 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
             // placeholder, `TagOccurrence::stored`); the writer serializes
             // stored forms, never printed ones.
             let value = occurrence.project(ValueChannel::Stored).into_owned();
+            // An XP string copies as its stored bytes re-packed, which keeps
+            // a stored surrogate pair (ExifTool's `-TagsFromFile`). Text
+            // standing in for those bytes cannot say whether a code point
+            // above U+FFFF was a pair; refuse it rather than guess.
+            if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
+                crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
+            }
             // Insert tag into destination (merges with existing, preserving others)
             dest_metadata.insert(tag_name.clone(), value);
         }
