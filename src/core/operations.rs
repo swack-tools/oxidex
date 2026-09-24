@@ -968,10 +968,19 @@ pub(crate) fn write_metadata_with_removals(
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
+        // Group-wide `<group>:All` removals pinned ExifTool 13.59 makes no
+        // change for here (IFD0 of any TIFF; ExifIFD and MakerNotes of a raw
+        // type) are no-ops; the rest are refused
+        // (`exif_surgical::resolve_tiff_group_removals`).
+        let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
+            file_bytes, &original, removed,
+        )?;
         if !whole_clear
             && crate::writers::exif_surgical::exif_request_is_no_op(
                 &[file_bytes],
+                &[file_bytes],
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                false,
                 &original,
                 metadata,
                 removed,
@@ -1011,17 +1020,40 @@ pub(crate) fn write_metadata_with_removals(
         FileFormat::JPEG => {
             let original = baseline.unwrap_or_default();
             let file_bytes = reader.read(0, reader.size() as usize)?;
+            // `MakerNotes:All` also drops a Canon CIFF APP0 segment, as pinned
+            // ExifTool 13.59 does (`exif_surgical::jpeg_without_ciff`); the
+            // EXIF half of the write then runs on the file without it.
+            let without_ciff = removed
+                .iter()
+                .any(|key| {
+                    crate::writers::exif_surgical::group_removal(key)
+                        == Some(crate::writers::exif_surgical::GroupRemoval::MakerNotes)
+                })
+                .then(|| crate::writers::exif_surgical::jpeg_without_ciff(file_bytes))
+                .flatten();
+            let stripped = without_ciff
+                .as_deref()
+                .map(crate::writers::exif_surgical::SliceReader);
+            let (reader, file_bytes): (&dyn FileReader, &[u8]) = match &stripped {
+                Some(stripped) => (stripped, stripped.0),
+                None => (&reader, file_bytes),
+            };
             if !whole_clear
                 && let Ok(payloads) = crate::writers::exif_surgical::jpeg_exif_payloads(file_bytes)
             {
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
                 if crate::writers::exif_surgical::exif_request_is_no_op(
                     &blocks,
+                    &blocks,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                    true,
                     &original,
                     metadata,
                     removed,
                 ) {
+                    if without_ciff.is_some() {
+                        write_atomic(path, file_bytes)?;
+                    }
                     return Ok(());
                 }
             }
@@ -1029,11 +1061,15 @@ pub(crate) fn write_metadata_with_removals(
                 &original, metadata, removed,
             )?;
             let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
-                &reader, &original, plan,
+                reader, &original, plan,
             )?;
             let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
-            if whole_clear {
-                // The clear's only post-condition: no EXIF APP1 is left.
+            if whole_clear
+                || (crate::writers::exif_surgical::removes_carrier(removed) && after.len() > 1)
+            {
+                // The clear's only post-condition, and one of `IFD0:All` /
+                // `EXIF:All` (every EXIF APP1 goes): no second EXIF APP1 is
+                // left, nor any after a clear.
                 if !after.is_empty() {
                     return Err(ExifToolError::unsupported_format(
                         "EXIF write verification failed: the EXIF block was to be \
@@ -1076,6 +1112,14 @@ pub(crate) fn write_metadata_with_removals(
                         },
                     )?;
                 }
+            }
+            if without_ciff.is_some()
+                && crate::writers::exif_surgical::jpeg_without_ciff(&serialized_bytes).is_some()
+            {
+                return Err(ExifToolError::unsupported_format(
+                    "EXIF write verification failed: the CIFF segment was to be \
+                     deleted but is still present; nothing was written",
+                ));
             }
             write_atomic(path, &serialized_bytes)?;
         }

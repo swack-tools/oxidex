@@ -632,3 +632,31 @@ fn a_maker_note_value_spanning_ifd1_keeps_its_unused_value_bytes() {
         }
     }
 }
+
+/// Deleting the maker note (or a group that holds it, or the whole block)
+/// is what the caller asked for: "maker note preserved" no longer applies,
+/// and the guard must not refuse it. `MakerNotes:All` and `ExifIFD:All`
+/// drop the note; `EXIF:All` and `IFD0:All` drop the block (pinned ExifTool
+/// 13.59 behaviour, as `png_exif_surgical::group_wide_removals_match_the_oracle`
+/// pins it for a note without out-of-note data).
+#[test]
+fn deleting_the_maker_note_or_its_block_is_never_refused_by_the_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Mm, Order::Ii] {
+        let (tiff, _) = casio_block(order, Target::Hole);
+        for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
+            for group in ["MakerNotes:All", "ExifIFD:All", "EXIF:All", "IFD0:All"] {
+                let path = write(dir.path(), &format!("del.{carrier}"), &file);
+                remove_tag(&path, group).unwrap_or_else(|e| {
+                    panic!("{order:?} {carrier} {group}: deletion refused: {e}")
+                });
+                let out = std::fs::read(&path).unwrap();
+                assert_ne!(out, file, "{order:?} {carrier} {group}: nothing deleted");
+                assert!(
+                    reader_previews(&path).is_empty(),
+                    "{order:?} {carrier} {group}: the maker note's preview is still read"
+                );
+            }
+        }
+    }
+}
