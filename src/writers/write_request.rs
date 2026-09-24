@@ -113,6 +113,14 @@ pub fn exiftool_tag_exists(name: &str) -> bool {
 /// `exiftool -NoSuchTag=v a.jpg` (13.59): `Warning: Tag 'NoSuchTag' is not
 /// defined`, then `Nothing to do.` and exit 1 when no other tag was set.
 pub fn undefined_tag_warning(tag: &str) -> Option<String> {
+    // `-GROUP:All=` is a group-wide deletion (Writer.pl:400-484 rewrites
+    // `all` to `*`), not a tag named `All`: `-GPS:All=` is defined wherever
+    // GPS is a deletable group, and an unknown group is ExifTool's `Not a
+    // deletable group: Foo` / `Nothing to do.`.
+    if let Some(group) = group_deletion(tag) {
+        return (!deletable_group(group) && !is_family2_group(group))
+            .then(|| format!("Not a deletable group: {group}"));
+    }
     // `CreationDate` and `ModDate` are the PDF Info dictionary's keys, not
     // ExifTool tag names: PDF.pm's Info table names them `CreateDate` and
     // `ModifyDate` (PDF.pm:126-143), so pinned 13.59 answers `-PDF:CreationDate=` with `Sorry,
@@ -130,6 +138,112 @@ pub fn undefined_tag_warning(tag: &str) -> Option<String> {
     }
     let spelled = tag.strip_suffix('#').unwrap_or(tag);
     Some(format!("Tag '{spelled}' is not defined"))
+}
+
+/// ExifTool 13.59's `@delGroups` (Writer.pl:141-149): the groups a
+/// `-GROUP:All=` may delete, besides any `XMP-*`/`XML-*` family-1 group and
+/// `MIE<n>` (Writer.pl:426).
+const DELETABLE_GROUPS: &[&str] = &[
+    "Adobe",
+    "AFCP",
+    "APP0",
+    "APP1",
+    "APP2",
+    "APP3",
+    "APP4",
+    "APP5",
+    "APP6",
+    "APP7",
+    "APP8",
+    "APP9",
+    "APP10",
+    "APP11",
+    "APP12",
+    "APP13",
+    "APP14",
+    "APP15",
+    "AROT",
+    "AudioKeys",
+    "CanonVRD",
+    "CIFF",
+    "Ducky",
+    "EXIF",
+    "ExifIFD",
+    "File",
+    "FlashPix",
+    "FotoStation",
+    "GlobParamIFD",
+    "GPS",
+    "ICC_Profile",
+    "IFD0",
+    "IFD1",
+    "Insta360",
+    "InteropIFD",
+    "IPTC",
+    "ItemList",
+    "iTunes",
+    "JFIF",
+    "Jpeg2000",
+    "JUMBF",
+    "Keys",
+    "MakerNotes",
+    "Meta",
+    "MetaIFD",
+    "Microsoft",
+    "MIE",
+    "MPF",
+    "Nextbase",
+    "NikonApp",
+    "NikonCapture",
+    "PDF",
+    "PDF-update",
+    "PhotoMechanic",
+    "Photoshop",
+    "PNG",
+    "PNG-pHYs",
+    "PrintIM",
+    "QuickTime",
+    "RMETA",
+    "RSRC",
+    "SEAL",
+    "SubIFD",
+    "Trailer",
+    "UserData",
+    "VideoKeys",
+    "Vivo",
+    "XML",
+    "XMP",
+];
+
+/// ExifTool 13.59's `@delGroup2` (Writer.pl:151-154): family-2 names a
+/// group deletion also accepts.
+const FAMILY2_GROUPS: &[&str] = &[
+    "Audio", "Author", "Camera", "Document", "ExifTool", "Image", "Location", "Other", "Preview",
+    "Printing", "Time", "Video",
+];
+
+/// The group of a `-GROUP:All=` (or `GROUP:*`) group deletion.
+pub fn group_deletion(tag: &str) -> Option<&str> {
+    let (group, name) = tag.rsplit_once(':')?;
+    (name.eq_ignore_ascii_case("all") || name == "*").then_some(group)
+}
+
+/// Whether ExifTool deletes `group` by `-GROUP:All=` (see [`DELETABLE_GROUPS`]).
+pub fn deletable_group(group: &str) -> bool {
+    let lower = group.to_ascii_lowercase();
+    DELETABLE_GROUPS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+        || ((lower.starts_with("xmp-") || lower.starts_with("xml-")) && group.len() > 4)
+        || (lower.starts_with("mie")
+            && lower.len() > 3
+            && lower[3..].bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn is_family2_group(group: &str) -> bool {
+    FAMILY2_GROUPS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
 }
 
 /// A typed refusal of `tag` ([`ExifToolError::TagsNotWritten`]); it displays

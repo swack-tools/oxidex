@@ -9,7 +9,11 @@
 //! `Ok` means every requested change is in the file. Anything less is an
 //! error and the file is byte-identical to before the call:
 //!
-//! 1. **Resolution before writing.** An EXIF-group request in a PDF is
+//! 1. **Resolution before writing.** A `<group>:All` deletion is planned by
+//!    #945's `plan_group_deletion` and handed to #943's group-wide
+//!    expansion (whose verifier is its post-condition), or proven a no-op,
+//!    or refused by name; a `<group>:All` set is refused. An EXIF-group
+//!    request in a PDF is
 //!    ExifTool's "unchanged" and a deletion that names nothing is a no-op
 //!    (#945's `exif_group_in_pdf` / `removal_is_no_op`). Every other request
 //!    is resolved to the address
@@ -39,12 +43,13 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, metadata_holds, read_metadata, removal_is_no_op,
-    remove_field, resolve_write_key_for, write_metadata_with_removals,
+    exif_group_in_pdf, field_spellings, metadata_holds, plan_group_deletion, read_metadata,
+    removal_is_no_op, remove_field, resolve_write_key_for, write_metadata_with_removals,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::writers::atomic_writer::write_atomic;
+use crate::writers::write_request::group_deletion;
 use std::fs;
 use std::path::Path;
 
@@ -223,7 +228,31 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
     let baseline = read_metadata(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     let mut resolved: Vec<Resolved<'_>> = Vec::new();
+    // `<group>:All` removals handed to the writers' group-wide expansion
+    // (#943), as `operations::plan_group_deletion` (#945) decides them.
+    let mut group_removals: Vec<String> = Vec::new();
     for change in changes {
+        // `-GROUP:All=` is a group deletion, never a tag named `All`
+        // (`write_request::group_deletion`): it only deletes.
+        if let Some(group) = group_deletion(change.tag()) {
+            if change.value().is_some() {
+                refused.push(TagNotWritten::new(
+                    change.tag(),
+                    format!(
+                        "{group}:All names every tag of the group; it can only be \
+                         deleted (-{group}:All=)"
+                    ),
+                ));
+                continue;
+            }
+            match plan_group_deletion(path, change.tag(), group) {
+                Ok(Some(key)) => group_removals.push(key),
+                Ok(None) => {} // provably nothing to delete
+                Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
+                Err(other) => return Err(other),
+            }
+            continue;
+        }
         // #945: an EXIF-group request in a PDF is ExifTool's "unchanged"
         // (a PDF carries no EXIF block), a set or a deletion alike.
         if exif_group_in_pdf(path, change.tag())? {
@@ -270,7 +299,7 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
         })
         .map(|(_, request)| request)
         .collect();
-    if effective.is_empty() {
+    if effective.is_empty() && group_removals.is_empty() {
         return Ok(0); // every request was a no-op: nothing to write
     }
 
@@ -293,6 +322,11 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
             None => removed.push(request.key.clone()),
         }
     }
+    // A group removal's post-condition is the writer's: #943's expansion
+    // decides which blocks the group names (and whether the request is a
+    // no-op for this file), and its verifier refuses a write that leaves any
+    // of them. It is not re-derived here.
+    removed.extend(group_removals);
     write_metadata_with_removals(path, &desired, &removed).map_err(typed_refusal)?;
     prove_in_effect(path, &effective)?;
     Ok(effective

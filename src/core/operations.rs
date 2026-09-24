@@ -950,8 +950,26 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// [`ExifToolError::TagsNotWritten`] naming every key that would not be
 /// written, and the file is byte-identical to before the call.
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
+    write_metadata_and_delete_groups(path, metadata, &[])
+}
+
+/// [`write_metadata`] plus `-GROUP:All=` group deletions (`"EXIF:All"`,
+/// `"GPS:All"`), all in the one transaction. The C ABI's
+/// `exiftool_write_file` uses it for the groups `exiftool_remove_tag`
+/// recorded: a group deletion names no row of the map, so the map alone
+/// cannot carry it.
+pub(crate) fn write_metadata_and_delete_groups(
+    path: &Path,
+    metadata: &MetadataMap,
+    groups: &[String],
+) -> Result<()> {
     let baseline = read_metadata(path)?;
-    let changes = crate::core::write_transaction::changes_between(&baseline, metadata);
+    let mut changes = crate::core::write_transaction::changes_between(&baseline, metadata);
+    changes.extend(
+        groups
+            .iter()
+            .map(|group| crate::core::write_transaction::TagChange::delete(group.clone())),
+    );
     if changes.is_empty() {
         return Ok(()); // the file already holds this map: nothing to write
     }
@@ -994,10 +1012,19 @@ pub(crate) fn write_metadata_with_removals(
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
+        // Group-wide `<group>:All` removals pinned ExifTool 13.59 makes no
+        // change for here (IFD0 of any TIFF; ExifIFD and MakerNotes of a raw
+        // type) are no-ops; the rest are refused
+        // (`exif_surgical::resolve_tiff_group_removals`).
+        let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
+            file_bytes, &original, removed,
+        )?;
         if !whole_clear
             && crate::writers::exif_surgical::exif_request_is_no_op(
                 &[file_bytes],
+                &[file_bytes],
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                false,
                 &original,
                 metadata,
                 removed,
@@ -1030,17 +1057,40 @@ pub(crate) fn write_metadata_with_removals(
         FileFormat::JPEG => {
             let original = baseline.unwrap_or_default();
             let file_bytes = reader.read(0, reader.size() as usize)?;
+            // `MakerNotes:All` also drops a Canon CIFF APP0 segment, as pinned
+            // ExifTool 13.59 does (`exif_surgical::jpeg_without_ciff`); the
+            // EXIF half of the write then runs on the file without it.
+            let without_ciff = removed
+                .iter()
+                .any(|key| {
+                    crate::writers::exif_surgical::group_removal(key)
+                        == Some(crate::writers::exif_surgical::GroupRemoval::MakerNotes)
+                })
+                .then(|| crate::writers::exif_surgical::jpeg_without_ciff(file_bytes))
+                .flatten();
+            let stripped = without_ciff
+                .as_deref()
+                .map(crate::writers::exif_surgical::SliceReader);
+            let (reader, file_bytes): (&dyn FileReader, &[u8]) = match &stripped {
+                Some(stripped) => (stripped, stripped.0),
+                None => (&reader, file_bytes),
+            };
             if !whole_clear
                 && let Ok(payloads) = crate::writers::exif_surgical::jpeg_exif_payloads(file_bytes)
             {
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
                 if crate::writers::exif_surgical::exif_request_is_no_op(
                     &blocks,
+                    &blocks,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                    true,
                     &original,
                     metadata,
                     removed,
                 ) {
+                    if without_ciff.is_some() {
+                        write_atomic(path, file_bytes)?;
+                    }
                     return Ok(());
                 }
             }
@@ -1048,11 +1098,15 @@ pub(crate) fn write_metadata_with_removals(
                 &original, metadata, removed,
             )?;
             let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
-                &reader, &original, plan,
+                reader, &original, plan,
             )?;
             let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
-            if whole_clear {
-                // The clear's only post-condition: no EXIF APP1 is left.
+            if whole_clear
+                || (crate::writers::exif_surgical::removes_carrier(removed) && after.len() > 1)
+            {
+                // The clear's only post-condition, and one of `IFD0:All` /
+                // `EXIF:All` (every EXIF APP1 goes): no second EXIF APP1 is
+                // left, nor any after a clear.
                 if !after.is_empty() {
                     return Err(ExifToolError::unsupported_format(
                         "EXIF write verification failed: the EXIF block was to be \
@@ -1071,6 +1125,14 @@ pub(crate) fn write_metadata_with_removals(
                     removed,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
+            }
+            if without_ciff.is_some()
+                && crate::writers::exif_surgical::jpeg_without_ciff(&serialized_bytes).is_some()
+            {
+                return Err(ExifToolError::unsupported_format(
+                    "EXIF write verification failed: the CIFF segment was to be \
+                     deleted but is still present; nothing was written",
+                ));
             }
             write_atomic(path, &serialized_bytes)?;
         }
@@ -1328,13 +1390,19 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     let file_bytes = reader.read(0, reader.size() as usize)?;
-    let no_op = |blocks: &[&[u8]], magics: &[u16]| {
-        exif_request_is_no_op(blocks, magics, metadata, metadata, &removed)
+    // A single-tag removal acts on every block alike (only a group-wide
+    // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
+    // JPEG's APP1s, whose empty carrier a rewrite drops.
+    let no_op = |blocks: &[&[u8]], magics: &[u16], embedded: bool| {
+        exif_request_is_no_op(
+            blocks, blocks, magics, embedded, metadata, metadata, &removed,
+        )
     };
     Ok(if is_surgical_tiff_target(format, &reader) {
         no_op(
             &[file_bytes],
             crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            false,
         )
     } else {
         match format {
@@ -1344,12 +1412,12 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
             FileFormat::JPEG => {
                 let payloads = jpeg_exif_payloads(file_bytes)?;
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-                no_op(&blocks, EXIF_BLOCK_MAGICS)
+                no_op(&blocks, EXIF_BLOCK_MAGICS, true)
             }
             FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(&reader)? {
                 Some(payloads) => {
                     let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-                    no_op(&blocks, EXIF_BLOCK_MAGICS)
+                    no_op(&blocks, EXIF_BLOCK_MAGICS, false)
                 }
                 None => false,
             },
@@ -1393,6 +1461,89 @@ pub(crate) fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
     }
     let reader = MMapReader::new(path)?;
     Ok(matches!(detect_format(&reader)?, FileFormat::PDF))
+}
+
+/// `-GROUP:All=` (`remove_tag(path, "GPS:All")`): a group-wide deletion,
+/// decided for the library's write transaction (`core::write_transaction`).
+///
+/// An EXIF-family group (`exif_surgical::group_removal`) in a JPEG, PNG or
+/// TIFF-structured file goes to the writers' group-wide expansion (#943):
+/// `Some(key)` is the `<group>:All` removal to hand to
+/// [`write_metadata_with_removals`], whose up-front no-op check leaves a file
+/// holding nothing in the group byte-identical -- ExifTool's `0 image files
+/// updated` / `1 image files unchanged` (pinned 13.59 on t/images/PNG.png:
+/// `-GPS:All=`, `-ExifIFD:All=`, `-IFD1:All=`, `-InteropIFD:All=`,
+/// `-MakerNotes:All=`, `-IFD0:All=`, `-EXIF:All=`), and whose verifier
+/// checks the group is gone. A PDF keeps no EXIF (13.59: unchanged): `None`.
+/// Any other group is a no-op (`None`) only where [`group_is_empty`] proves
+/// the file holds none of it; otherwise the deletion is refused by name
+/// ([`ExifToolError::TagsNotWritten`]) -- never reported as an update that
+/// stripped nothing.
+pub(crate) fn plan_group_deletion(
+    path: &Path,
+    tag_name: &str,
+    group: &str,
+) -> Result<Option<String>> {
+    let key = format!("{group}:All");
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    if crate::writers::exif_surgical::group_removal(&key).is_some() {
+        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
+            || is_surgical_tiff_target(format, &reader);
+        if expanded {
+            return Ok(Some(key));
+        }
+        if matches!(format, FileFormat::PDF) {
+            return Ok(None);
+        }
+    } else {
+        drop(reader);
+        if group_is_empty(group, &read_metadata(path)?) {
+            return Ok(None);
+        }
+    }
+    Err(ExifToolError::tag_not_written(
+        tag_name,
+        format!(
+            "oxidex does not delete a whole {group} group from this file yet, and \
+             cannot prove it holds no {group} tags; delete the tags by name"
+        ),
+    ))
+}
+
+/// Whether the reader's map proves the file holds nothing in `group`.
+///
+/// Only for groups whose rows the map keys under the group's own name: XMP
+/// and XML (with every `XMP-*`/`XML-*` group), IPTC and PNG. A family-2
+/// group (`Time`, `Camera`) is no map key at all, and some family-0 groups
+/// are keyed under another spelling (`Adobe` rows as `APP14`, `MPF` as
+/// `MPF0`), so for those an absent key proves nothing: pinned 13.59 rewrites
+/// synthetic_text_001.png for `-Time:All=` although the map holds no `Time:`
+/// key.
+fn group_is_empty(group: &str, metadata: &MetadataMap) -> bool {
+    let lower = group.to_ascii_lowercase();
+    let key_group_matches = |pred: &dyn Fn(&str) -> bool| {
+        metadata.keys().any(|key| {
+            key.split_once(':')
+                .is_some_and(|(key_group, _)| pred(&key_group.to_ascii_lowercase()))
+        })
+    };
+    let family = lower.split('-').next().unwrap_or_default();
+    match family {
+        // Every XMP-* (XML-*) row is keyed under an `XMP` (`XML`) spelling:
+        // any such row makes every XMP-* group suspect.
+        "xmp" | "xml" => !key_group_matches(&|g| g.starts_with(family)),
+        // IPTC rides in a Photoshop IRB or a PNG raw profile: a row for
+        // either proves nothing about its absence.
+        "iptc" if lower == "iptc" => {
+            !key_group_matches(&|g| g == "iptc" || g == "photoshop")
+                && !metadata
+                    .keys()
+                    .any(|key| key.to_ascii_lowercase().contains("iptc"))
+        }
+        "png" if lower == "png" => !key_group_matches(&|g| g == "png"),
+        _ => false,
+    }
 }
 
 /// Every spelling under which the reader surfaces the PDF Info field `key`
