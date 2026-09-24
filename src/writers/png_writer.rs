@@ -268,7 +268,10 @@ fn rewrite_exif_payload(
         );
     }
     // A PNG has no JFIF segment, so `WriteExif` seeds no resolution defaults
-    // from one (`$$et{JFIFYResolution}` is undefined).
+    // from one (`$$et{JFIFYResolution}` is undefined). A new block takes the
+    // same source-derived fresh byte order as a JPEG's: `ProcessPNG` sets
+    // `MM` exactly as `ProcessJPEG` does (PNG.pm 13.59:1441), and the oracle
+    // creates a big-endian eXIf.
     crate::writers::jpeg_writer::rewrite_generated_exif_payload(
         original,
         &|| Ok(std::collections::BTreeMap::new()),
