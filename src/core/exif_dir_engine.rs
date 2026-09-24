@@ -233,7 +233,7 @@ impl DirEngineRows {
     /// the next unconsumed row whose name `id` declares goes into `metadata`
     /// now, at this entry's position, under `key(name)`. When `keep(name,
     /// metadata)` is false the row is dropped (the yield-to-IFD0 rule), but
-    /// consumed either way, so [`Self::drain`] cannot resurrect it.
+    /// consumed either way, so [`Self::finish`] cannot resurrect it.
     ///
     /// Returns whether a row existed (recorded or dropped by `keep`). `false`
     /// means the engine reported nothing for the entry, and the caller
@@ -294,7 +294,7 @@ impl DirEngineRows {
     /// Keeps the engine-reported `ids` on the caller's hand arms, one
     /// landing at a time: [`Self::owner`] answers [`Owner::Hand`] for them,
     /// and their buffered rows are dropped so neither [`Self::replay`] nor
-    /// [`Self::drain`] records one beside the hand row. A row is matched by
+    /// [`Self::finish`] records one beside the hand row. A row is matched by
     /// the names the ids declare, so no id in `ids` may share a name with an
     /// id the engine keeps (the caller's pin checks it). Calls accumulate.
     pub(crate) fn keep_hand(mut self, ids: &[u16]) -> Self {
@@ -375,18 +375,6 @@ impl DirEngineRows {
         }
     }
 
-    /// Compatibility name for focused legacy tests. Standard Exif directory
-    /// callers use [`Self::route_entry`] plus [`Self::finish`].
-    #[cfg(test)]
-    pub(crate) fn drain(
-        self,
-        metadata: &mut MetadataMap,
-        key: impl Fn(&str) -> String,
-        keep: impl Fn(&str, &MetadataMap) -> bool,
-    ) {
-        self.finish(metadata, key, keep);
-    }
-
     /// Records every row at `priority`, including the rows
     /// [`Self::at_priority`] leaves at their own (`keeps_priority`): for a
     /// directory whose hand arm recorded every entry at one priority (IFD0's
@@ -434,7 +422,7 @@ impl DirEngineRows {
             && (self.replay(id, metadata, ifd0_key, |_, _| true) || !self.undecoded(id))
     }
 
-    /// [`Self::drain`] for IFD0: rows whose entry the hand walk never reached.
+    /// [`Self::finish`] for IFD0: rows whose entry the hand walk never reached.
     pub(crate) fn finish_ifd0(self, metadata: &mut MetadataMap) {
         self.finish(metadata, ifd0_key, |_, _| true);
     }
@@ -1277,7 +1265,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // walk / replay / drain on synthetic directories.
+    // walk / replay / finish on synthetic directories.
     // -----------------------------------------------------------------
 
     /// A little-endian TIFF block whose one IFD sits at offset 8 and holds
@@ -1344,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_inserts_at_the_entry_and_drain_only_the_unreached() {
+    fn replay_inserts_at_the_entry_and_finish_only_the_unreached() {
         let tiff = le_tiff(&[ascii(0x0001, b"R98\0"), short(0x1001, 640)]);
         let mut rows = interop_walk(&tiff);
         let mut metadata = MetadataMap::new();
@@ -1358,7 +1346,7 @@ mod tests {
         assert!(metadata.get("InteropIFD:RelatedImageWidth").is_none());
         // A second visit of the same id finds no unconsumed row, and says so.
         assert!(!rows.replay(0x0001, &mut metadata, key, keep));
-        rows.drain(&mut metadata, key, keep);
+        rows.finish(&mut metadata, key, keep);
         assert_eq!(
             metadata.get("InteropIFD:RelatedImageWidth"),
             Some(&TagValue::Integer(640))
@@ -1414,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_row_is_consumed_and_never_drained() {
+    fn a_dropped_row_is_consumed_and_never_finished() {
         let tiff = le_tiff(&[short(0x0128, 2)]);
         let mut rows = interop_walk(&tiff);
         let mut metadata = MetadataMap::new();
@@ -1423,7 +1411,7 @@ mod tests {
             rows.replay(0x0128, &mut metadata, key, |_, _| false),
             "a row dropped by `keep` still existed: no hand fallback"
         );
-        rows.drain(&mut metadata, key, |_, _| true);
+        rows.finish(&mut metadata, key, |_, _| true);
         assert!(metadata.get("InteropIFD:ResolutionUnit").is_none());
     }
 
@@ -1611,7 +1599,7 @@ mod tests {
     }
 
     /// `keep_hand`: the kept ids answer `Hand`, and their rows are gone for
-    /// both `replay` and `drain`.
+    /// both `replay` and `finish`.
     #[test]
     fn keep_hand_drops_the_rows_of_the_kept_ids() {
         let tiff = le_tiff(&[short(0xa001, 1), short(0x9207, 5)]);
@@ -1633,7 +1621,7 @@ mod tests {
         let mut metadata = MetadataMap::new();
         let key = |name: &str| format!("ExifIFD:{name}");
         assert!(!rows.replay(0x9207, &mut metadata, key, |_, _| true));
-        rows.drain(&mut metadata, key, |_, _| true);
+        rows.finish(&mut metadata, key, |_, _| true);
         assert!(metadata.get("ExifIFD:MeteringMode").is_none());
         assert_eq!(metadata.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
     }
