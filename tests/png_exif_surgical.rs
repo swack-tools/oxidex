@@ -1140,3 +1140,43 @@ fn a_block_with_an_unmodelled_pointer_is_never_re_laid_out() {
         }
     }
 }
+
+/// A named removal of an IFD1/InteropIFD/MakerNotes tag the block does not
+/// hold -- an unregistered name, or a registered one that is absent -- is a
+/// no-op success, as the `remove_tag` API promises and as oxidex treats an
+/// undefined name in any group. (Pinned ExifTool 13.59 prints "Tag ... is
+/// not defined" / "Nothing to do.", or "1 image files unchanged" for the
+/// absent registered name, and changes nothing.) A missing tag id is no
+/// wildcard: only a removal naming an entry actually present is refused.
+#[test]
+fn named_removals_of_absent_or_unmapped_carried_tags_are_no_ops() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let before = dump(&tiff);
+        for (name, original) in [
+            ("absent.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("absent.jpg", jpeg_with(&tiff)),
+        ] {
+            for key in [
+                "IFD1:BogusTag",
+                "IFD1:ImageDescription",
+                "InteropIFD:BogusTag",
+                "InteropIFD:RelatedImageWidth",
+                "MakerNotes:BogusTag",
+            ] {
+                let path = write(dir.path(), name, &original);
+                remove_tag(&path, key).unwrap_or_else(|e| panic!("{order:?} {name} {key}: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let tiff_out = if name.ends_with(".png") {
+                    exif_of(&out).unwrap()
+                } else {
+                    let at = out.windows(6).position(|w| w == b"Exif\0\0").unwrap() + 6;
+                    let len = u16::from_be_bytes([out[at - 8], out[at - 7]]) as usize - 8;
+                    out[at..at + len].to_vec()
+                };
+                assert_eq!(dump(&tiff_out), before, "{order:?} {name} {key}");
+            }
+        }
+    }
+}

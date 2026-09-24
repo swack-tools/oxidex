@@ -280,32 +280,53 @@ pub(crate) fn is_carried_only_key(key: &str) -> bool {
 }
 
 /// Whether a named removal `key` names an entry of a raw-carried class that
-/// `scan` holds: an IFD1 or InteropIFD entry with the key's tag id (any entry
-/// of the directory when the name has no id; IFD1's thumbnail pair when a
-/// thumbnail is present), or, for a `MakerNotes:` key, the MakerNote blob.
-fn removal_names_carried_entry(key: &str, scan: &ExifScan) -> bool {
-    let ifd = if key.starts_with("IFD1:") {
-        IfdKind::Ifd1
-    } else if key.starts_with("InteropIFD:") {
-        IfdKind::Interop
-    } else if key.starts_with("MakerNotes:") {
-        return scan
-            .entries
-            .iter()
-            .any(|entry| entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE);
-    } else {
+/// `scan` actually holds: the reader surfaced that exact key, or the key's
+/// tag id is that of an IFD1/InteropIFD entry present (IFD1's thumbnail
+/// pair when a thumbnail is present), or a `MakerNotes:` key names the
+/// MakerNote blob by one of the names the reader gives it. `<group>:All`
+/// names every entry of its class. A name with no tag id is not a wildcard:
+/// removing a tag the block does not hold is a no-op, as `remove_tag`
+/// promises and as ExifTool reports ("not defined" / "unchanged").
+fn removal_names_carried_entry(key: &str, scan: &ExifScan, original_map: &MetadataMap) -> bool {
+    if !is_carried_only_key(key) {
         return false;
-    };
-    let tag_id = get_tag_descriptor(key).and_then(descriptor_tag_id);
-    if ifd == IfdKind::Ifd1
-        && scan.thumbnail.is_some()
-        && matches!(tag_id, Some(THUMBNAIL_OFFSET | THUMBNAIL_LENGTH))
-    {
+    }
+    if original_map.contains_key(key) {
         return true;
     }
-    scan.entries
-        .iter()
-        .any(|entry| entry.ifd == ifd && tag_id.is_none_or(|id| id == entry.tag_id))
+    let Some((group, name)) = key.split_once(':') else {
+        return false;
+    };
+    let all = name.eq_ignore_ascii_case("all");
+    let ifd = match group {
+        "IFD1" => IfdKind::Ifd1,
+        "InteropIFD" => IfdKind::Interop,
+        "MakerNotes" => {
+            return scan.entries.iter().any(|entry| {
+                entry.ifd == IfdKind::ExifIfd
+                    && entry.tag_id == MAKERNOTE
+                    && (all
+                        || carried_class_reader_keys(entry).iter().any(|reader_key| {
+                            reader_key.split_once(':').map(|(_, n)| n) == Some(name)
+                        }))
+            });
+        }
+        _ => return false,
+    };
+    if all {
+        return scan.entries.iter().any(|entry| entry.ifd == ifd)
+            || (ifd == IfdKind::Ifd1 && scan.thumbnail.is_some());
+    }
+    let Some(tag_id) = get_tag_descriptor(key).and_then(descriptor_tag_id) else {
+        return false;
+    };
+    (ifd == IfdKind::Ifd1
+        && scan.thumbnail.is_some()
+        && matches!(tag_id, THUMBNAIL_OFFSET | THUMBNAIL_LENGTH))
+        || scan
+            .entries
+            .iter()
+            .any(|entry| entry.ifd == ifd && entry.tag_id == tag_id)
 }
 
 /// The refusal for an added or changed [`is_carried_only_key`] key.
@@ -809,7 +830,7 @@ fn plan_exif_write_inner(
     // it refuses instead of doing nothing.
     if let Some(key) = removed
         .iter()
-        .find(|key| removal_names_carried_entry(key, scan))
+        .find(|key| removal_names_carried_entry(key, scan, original_map))
     {
         return Err(ExifToolError::unsupported_format(format!(
             "Removing tag '{}' is not yet supported: it belongs to an \
