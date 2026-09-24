@@ -7,6 +7,7 @@
 
 pub mod args;
 pub mod batch_processor;
+pub mod non_utf8;
 pub mod output_formatter;
 pub mod rename;
 pub mod tag_resolution;

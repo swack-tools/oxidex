@@ -2,7 +2,9 @@
 //!
 //! This module defines the CLI argument structure for the oxidex application.
 
+use crate::cli::non_utf8::os_bytes;
 use lexopt::prelude::*;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 // Re-export DetectorMode from parsers module
@@ -122,7 +124,9 @@ pub struct CliArgs {
     /// Use with optional tag names to copy specific tags, or without to copy all tags.
     /// Example: oxidex -TagsFromFile src.jpg dest.jpg (copy all)
     /// Example: oxidex -TagsFromFile src.jpg -EXIF:Artist -EXIF:Copyright dest.jpg
-    pub tags_from_file: Option<String>,
+    ///
+    /// A path, so kept as the bytes it was given: it need not be UTF-8.
+    pub tags_from_file: Option<OsString>,
 
     /// Date format string for DateTime tags in filename patterns (using chrono format).
     /// Example: -d %Y%m%d_%H%M%S
@@ -149,14 +153,22 @@ pub struct CliArgs {
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
-    pub args: Vec<String>,
+    ///
+    /// Kept as `OsString`s because a path is bytes, not text. `parse`
+    /// guarantees that an entry which is not valid UTF-8 is either a plain
+    /// positional path (it does not start with `-`) or a `-TAG=VALUE`
+    /// modification whose `TAG` is valid UTF-8 and whose value is not; every
+    /// other non-UTF-8 argument is refused with an error there. The
+    /// accessors below rely on that: they read options and tag names as
+    /// UTF-8 and never see anything else.
+    pub args: Vec<OsString>,
 
     /// Every argument after `--`, in order. These are always file paths,
     /// however they are spelled: pinned 13.59 `exiftool -s2 -Make -- a.jpg -s`
     /// reads both `a.jpg` and a file named `-s`. They are kept apart from
     /// `args`, whose accessors classify by spelling (a leading `-` means an
     /// option or tag) and by position (the last argument is the file).
-    pub literal_paths: Vec<String>,
+    pub literal_paths: Vec<OsString>,
 }
 
 fn normalize_exiftool_option(arg: String) -> String {
@@ -175,6 +187,66 @@ fn normalize_exiftool_option(arg: String) -> String {
         "-TagsFromFile" => "--TagsFromFile".to_string(),
         _ => arg,
     }
+}
+
+/// Where an argument that is not valid UTF-8 goes.
+#[derive(Debug)]
+enum NonUtf8Arg {
+    /// A `-TAG=VALUE` whose tag name is UTF-8 and whose value oxidex can
+    /// write (`cli::non_utf8::tag_value`).
+    Modification(OsString),
+    /// A path, positional or `--TagsFromFile=PATH`, or the next argument's
+    /// value for lexopt.
+    Lexopt(OsString),
+}
+
+/// Classifies an argument that is not valid UTF-8, or refuses it.
+///
+/// A path is bytes, so a positional argument (no leading `-`) passes through
+/// untouched, as does the path in `-TagsFromFile=PATH`. A `-TAG=VALUE` is
+/// accepted when `TAG` is UTF-8 and the value is one oxidex can write as
+/// pinned ExifTool 13.59 does; its conversion is checked here, before any
+/// file is touched. Everything else -- an option or tag name that is not
+/// UTF-8, or a value oxidex would have to approximate -- is an error. The
+/// oracle refuses such names too (`Invalid tag name 'Art\xffist'`,
+/// `Unknown option -\xff`).
+fn non_utf8_arg(arg: OsString) -> Result<NonUtf8Arg, lexopt::Error> {
+    let bytes = os_bytes(&arg);
+    if bytes.starts_with(b"--TagsFromFile=") {
+        return Ok(NonUtf8Arg::Lexopt(arg));
+    }
+    if bytes.starts_with(b"-TagsFromFile=") {
+        // `normalize_exiftool_option`'s rewrite, byte-wise.
+        let mut long = OsString::from("-");
+        long.push(&arg);
+        return Ok(NonUtf8Arg::Lexopt(long));
+    }
+    if !bytes.starts_with(b"-") {
+        return Ok(NonUtf8Arg::Lexopt(arg));
+    }
+    let named = !bytes.starts_with(b"--")
+        && crate::cli::non_utf8::split_at_equals(&arg)
+            .is_some_and(|(name, _)| name.to_str().is_some());
+    if !named {
+        return Err(format!(
+            "invalid option or tag name {arg:?}: option and tag names must be valid UTF-8"
+        )
+        .into());
+    }
+    let Some((tag_name, value)) = CliArgs::parse_modification(&arg) else {
+        return Err(format!("invalid tag name in {arg:?}").into());
+    };
+    crate::cli::non_utf8::tag_value(&tag_name, os_bytes(&value))
+        .map_err(|error| lexopt::Error::Custom(Box::new(error)))?;
+    Ok(NonUtf8Arg::Modification(arg))
+}
+
+/// The value of an option that takes text (`-d`, `--detector`), refused
+/// with a clear error when it is not UTF-8.
+fn text_option_value(option: &str, value: OsString) -> Result<String, lexopt::Error> {
+    value
+        .into_string()
+        .map_err(|value| format!("the value of {option} must be valid UTF-8, got {value:?}").into())
 }
 
 /// One of ExifTool's short-output option spellings, as the `exiftool` script
@@ -321,6 +393,27 @@ impl CliArgs {
     /// - A required value for an option is missing
     /// - Help (`--help`, `-h`) or version (`--version`, `-V`) is requested (exits immediately)
     pub fn parse() -> Result<Self, lexopt::Error> {
+        // `args_os`, never `args`: `std::env::args()` panics on the first
+        // argument that is not valid UTF-8, and a path or a tag value is
+        // bytes (pinned ExifTool 13.59 reads `n\xff.jpg` and writes
+        // `-XPTitle=A\xed\xa0\x80B`).
+        Self::parse_from(std::env::args_os().skip(1))
+    }
+
+    /// [`CliArgs::parse`] over an explicit argument list (without the program
+    /// name).
+    ///
+    /// # Errors
+    ///
+    /// As [`CliArgs::parse`], and also for an argument that is not valid
+    /// UTF-8 where only text can appear: an option or tag name, a
+    /// `-TAG=VALUE` whose value oxidex cannot write as ExifTool would (see
+    /// `cli::non_utf8`), or the value of `-d`/`--detector`. A path may be any
+    /// bytes.
+    pub fn parse_from<I>(raw_args: I) -> Result<Self, lexopt::Error>
+    where
+        I: IntoIterator<Item = OsString>,
+    {
         // Initialize with default values
         let mut detector = DetectorMode::default();
         let mut json = false;
@@ -339,13 +432,12 @@ impl CliArgs {
         let mut date_format = None;
         let mut dry_run = false;
         let mut strict = false;
-        let mut args = Vec::new();
+        let mut args: Vec<OsString> = Vec::new();
 
         // Pre-process arguments to handle tag modifications that look like flags
         // e.g., "-EXIF:Artist=value" starts with '-' but isn't a regular flag
-        let raw_args: Vec<String> = std::env::args().skip(1).collect();
-        let mut lexopt_args = Vec::new();
-        let mut tag_modifications = Vec::new();
+        let mut lexopt_args: Vec<OsString> = Vec::new();
+        let mut tag_modifications: Vec<OsString> = Vec::new();
         let mut next_arg_is_lexopt_value = false;
 
         let mut options_ended = false;
@@ -371,6 +463,19 @@ impl CliArgs {
                 options_ended = true;
                 continue;
             }
+
+            // An argument that is not valid UTF-8 can only be a path or the
+            // value of a `-TAG=VALUE`; see `non_utf8_arg`.
+            let raw_arg = match raw_arg.into_string() {
+                Ok(arg) => arg,
+                Err(raw_arg) => {
+                    match non_utf8_arg(raw_arg)? {
+                        NonUtf8Arg::Modification(arg) => tag_modifications.push(arg),
+                        NonUtf8Arg::Lexopt(arg) => lexopt_args.push(arg),
+                    }
+                    continue;
+                }
+            };
 
             let arg = normalize_exiftool_option(raw_arg);
 
@@ -418,11 +523,11 @@ impl CliArgs {
                     || arg.len() > 1)
             {
                 // This is a tag modification, date shift, or specific tag - don't pass to lexopt
-                tag_modifications.push(arg);
+                tag_modifications.push(arg.into());
             } else {
                 next_arg_is_lexopt_value = lexopt_arg_requires_next_value(&arg);
                 // Regular argument - pass to lexopt
-                lexopt_args.push(arg);
+                lexopt_args.push(arg.into());
             }
         }
 
@@ -443,25 +548,19 @@ impl CliArgs {
                     // that lexopt tries to parse as flags
                     let error_msg = e.to_string();
                     if let Some(arg_str) = extract_arg_from_error(&error_msg) {
-                        args.push(arg_str);
+                        args.push(arg_str.into());
                     } else {
                         // If we can't extract the argument, return the error
                         return Err(e);
                     }
-                    // Collect remaining arguments
-                    match parser.raw_args() {
-                        Ok(raw) => {
-                            for remaining_arg in raw {
-                                if let Ok(s) = remaining_arg.string() {
-                                    args.push(s);
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // raw_args() can fail, but we already collected the main arg
-                            // so we can continue
-                        }
+                    // Collect remaining arguments. They are kept as given:
+                    // a path need not be UTF-8, and dropping one that is
+                    // not would silently process a different file list.
+                    if let Ok(raw) = parser.raw_args() {
+                        args.extend(raw);
                     }
+                    // (raw_args() can fail, but we already collected the
+                    // main arg, so we can continue.)
                     break;
                 }
             };
@@ -535,13 +634,14 @@ impl CliArgs {
                 Long("no-print-conv") => {
                     exiftool_compat = false;
                 }
-                // TagsFromFile (copy metadata from source file)
+                // TagsFromFile (copy metadata from source file). A path: any
+                // bytes.
                 Long("TagsFromFile") => {
-                    tags_from_file = Some(parser.value()?.string()?);
+                    tags_from_file = Some(parser.value()?);
                 }
                 // Date format
                 Short('d') => {
-                    date_format = Some(parser.value()?.string()?);
+                    date_format = Some(text_option_value("-d", parser.value()?)?);
                 }
                 // Dry-run
                 Short('n') => {
@@ -549,7 +649,7 @@ impl CliArgs {
                 }
                 // Detector mode (signature or magika)
                 Long("detector") => {
-                    let value_str = parser.value()?.string()?;
+                    let value_str = text_option_value("--detector", parser.value()?)?;
                     detector = value_str.parse().map_err(|e| {
                         lexopt::Error::Custom(Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
@@ -557,9 +657,10 @@ impl CliArgs {
                         )))
                     })?;
                 }
-                // Value argument (file path or positional argument)
+                // Value argument (file path or positional argument): kept as
+                // given, since a path need not be UTF-8.
                 Value(val) => {
-                    args.push(val.string()?);
+                    args.push(val);
                 }
                 // Unknown short or long option
                 // This could be a tag modification like -EXIF:Artist=value
@@ -587,13 +688,12 @@ impl CliArgs {
                     // Error format is typically "unexpected argument '--option'"
                     // or "unexpected option '-o'"
                     if let Some(arg_str) = extract_arg_from_error(&current_arg) {
-                        args.push(arg_str);
+                        args.push(arg_str.into());
                     }
 
-                    // Collect all remaining arguments
-                    for remaining_arg in parser.raw_args()? {
-                        args.push(remaining_arg.string()?);
-                    }
+                    // Collect all remaining arguments, as given (paths need
+                    // not be UTF-8).
+                    args.extend(parser.raw_args()?);
 
                     // Break out of the loop since we've consumed all arguments
                     break;
@@ -626,7 +726,7 @@ impl CliArgs {
     /// The arguments that can be options, tags or modifications: all of
     /// `args` when `--` supplied the paths, otherwise every argument but the
     /// last, which is the file.
-    fn option_args(&self) -> &[String] {
+    fn option_args(&self) -> &[OsString] {
         if !self.literal_paths.is_empty() {
             &self.args
         } else if self.args.is_empty() {
@@ -666,7 +766,7 @@ impl CliArgs {
         let files: Vec<PathBuf> = self
             .args
             .iter()
-            .filter(|arg| !arg.starts_with('-'))
+            .filter(|arg| !os_bytes(arg).starts_with(b"-"))
             .chain(self.literal_paths.iter())
             .map(PathBuf::from)
             .collect();
@@ -679,8 +779,12 @@ impl CliArgs {
     }
 
     /// Parses tag modification arguments (all args except the last one)
-    /// Returns a vector of (tag_name, value) tuples
-    pub fn tag_modifications(&self) -> Vec<(String, String)> {
+    /// Returns a vector of (tag_name, value) tuples.
+    ///
+    /// The value is an `OsString` because it need not be UTF-8: `parse`
+    /// accepted it only if `cli::non_utf8::tag_value` can write it (an XP
+    /// string), and `value_parser::parse_cli_tag_value_os` converts it.
+    pub fn tag_modifications(&self) -> Vec<(String, OsString)> {
         let mut modifications = Vec::new();
         // Process every option argument (never the file, see `option_args`)
         for arg in self.option_args() {
@@ -691,8 +795,30 @@ impl CliArgs {
         modifications
     }
 
-    /// Parses a single modification argument in the form -TAG=VALUE
-    fn parse_modification(arg: &str) -> Option<(String, String)> {
+    /// Parses a single modification argument in the form -TAG=VALUE. A
+    /// value that is not UTF-8 goes through the same steps byte-wise
+    /// (`cli::non_utf8::unquote`); the tag name always is UTF-8 (`parse`).
+    fn parse_modification(arg: &OsStr) -> Option<(String, OsString)> {
+        let Some(arg) = arg.to_str() else {
+            let (name, value) = crate::cli::non_utf8::split_at_equals(arg)?;
+            let name = name.to_str()?;
+            if !name.starts_with('-') {
+                return None;
+            }
+            let tag_name = name.trim_start_matches('-').trim();
+            if tag_name.is_empty() {
+                return None;
+            }
+            return Some((
+                tag_name.to_string(),
+                crate::cli::non_utf8::unquote(value).to_os_string(),
+            ));
+        };
+        Self::parse_text_modification(arg).map(|(tag, value)| (tag, value.into()))
+    }
+
+    /// [`CliArgs::parse_modification`] for an argument that is valid UTF-8.
+    fn parse_text_modification(arg: &str) -> Option<(String, String)> {
         // Check if it starts with '-' and contains '='
         if !arg.starts_with('-') || !arg.contains('=') {
             return None;
@@ -752,8 +878,10 @@ impl CliArgs {
 
         let mut tag_names = Vec::new();
 
-        // Process every option argument (never the destination file)
-        for arg in self.option_args() {
+        // Process every option argument (never the destination file). One
+        // that is not UTF-8 is a path or a modification (`parse`), neither
+        // of which is a tag name to copy.
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
                 // Extract tag name (remove leading '-')
@@ -789,15 +917,16 @@ impl CliArgs {
         }
 
         // Don't apply in write mode (has tag modifications with '=')
-        let has_modifications = self.args.iter().any(|arg| arg.contains('='));
+        let has_modifications = self.args.iter().any(|arg| os_bytes(arg).contains(&b'='));
         if has_modifications {
             return None;
         }
 
         let mut tag_names = Vec::new();
 
-        // Process every option argument (never a file path, see `option_args`)
-        for arg in self.option_args() {
+        // Process every option argument (never a file path, see `option_args`).
+        // One that is not UTF-8 is a path or a modification (`parse`).
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Tag extraction: starts with '-', does NOT contain '='
             if arg.starts_with('-') && !arg.contains('=') {
                 let tag_name = arg.trim_start_matches('-').to_string();
@@ -822,7 +951,7 @@ impl CliArgs {
     /// - `oxidex -all= photo.jpg` → clears all metadata
     /// - `oxidex -ALL= photo.jpg` → clears all metadata (case-insensitive)
     pub fn is_clear_all_metadata(&self) -> bool {
-        self.args.iter().any(|arg| {
+        self.args.iter().filter_map(|arg| arg.to_str()).any(|arg| {
             let lower = arg.to_lowercase();
             lower == "-all=" || lower == "--all="
         })
@@ -849,7 +978,7 @@ impl CliArgs {
     /// Example: '-FileName<DateTimeOriginal' -> Some("DateTimeOriginal")
     /// Example: '-FileName<${EXIF:Make}_${EXIF:Model}' -> Some("${EXIF:Make}_${EXIF:Model}")
     pub fn filename_pattern(&self) -> Option<String> {
-        for arg in &self.args {
+        for arg in self.args.iter().filter_map(|arg| arg.to_str()) {
             // Check if this is a -FileName argument
             if arg.starts_with("-FileName") || arg.starts_with("'FileName") {
                 // Find the '<' character that separates -FileName from the pattern
@@ -884,8 +1013,10 @@ impl CliArgs {
     pub fn date_shift_operations(&self) -> Vec<(String, String, String)> {
         let mut operations = Vec::new();
 
-        // Process every option argument (never the file, see `option_args`)
-        for arg in self.option_args() {
+        // Process every option argument (never the file, see `option_args`).
+        // A non-UTF-8 value is never a date (`parse` refuses one for every
+        // tag but the XP strings).
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             if let Some((tag, op, value)) = Self::parse_date_shift(arg) {
                 operations.push((tag, op, value));
             }
@@ -1154,8 +1285,97 @@ mod tests {
             date_format: None,
             dry_run: false,
             strict: false,
-            args: args.iter().map(|a| a.to_string()).collect(),
-            literal_paths: literal_paths.iter().map(|a| a.to_string()).collect(),
+            args: args.iter().map(OsString::from).collect(),
+            literal_paths: literal_paths.iter().map(OsString::from).collect(),
+        }
+    }
+
+    /// Arguments that are not valid UTF-8 used to panic inside
+    /// `std::env::args()`. A path is bytes and survives parsing untouched in
+    /// every position a path can take; an XP value is accepted; every other
+    /// non-UTF-8 name or value is an error, not a panic.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_survive_parsing_in_every_position() {
+        use std::os::unix::ffi::OsStrExt;
+        let os = |bytes: &[u8]| OsStr::from_bytes(bytes).to_os_string();
+        let parse = |argv: &[&[u8]]| CliArgs::parse_from(argv.iter().map(|a| os(a)));
+        let path = |bytes: &[u8]| PathBuf::from(os(bytes));
+
+        let args = parse(&[b"-s2", b"-Make", b"n\xff.jpg"]).unwrap();
+        assert_eq!(args.file(), Some(path(b"n\xff.jpg")));
+        assert_eq!(args.files(), [path(b"n\xff.jpg")]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        let args = parse(&[b"-j", b"a\xfe.jpg", b"b\xff.jpg"]).unwrap();
+        assert_eq!(args.files(), [path(b"a\xfe.jpg"), path(b"b\xff.jpg")]);
+
+        let args = parse(&[b"-Make", b"--", b"-\xff.jpg"]).unwrap();
+        assert_eq!(args.files(), [path(b"-\xff.jpg")]);
+
+        for argv in [
+            &[&b"-TagsFromFile"[..], b"s\xff.jpg", b"d.jpg"][..],
+            &[b"--TagsFromFile", b"s\xff.jpg", b"d.jpg"],
+            &[b"-TagsFromFile=s\xff.jpg", b"d.jpg"],
+            &[b"--TagsFromFile=s\xff.jpg", b"d.jpg"],
+        ] {
+            let args = parse(argv).unwrap();
+            assert_eq!(args.tags_from_file, Some(os(b"s\xff.jpg")), "{argv:?}");
+            assert_eq!(args.file(), Some(path(b"d.jpg")), "{argv:?}");
+        }
+
+        // An XP value is kept as bytes, and a modification that follows it is
+        // still one (it is not swallowed as a path).
+        let args = parse(&[
+            b"-IFD0:XPTitle=A\xed\xa0\x80B",
+            b"-IFD0:Model=X",
+            b"d\xff.jpg",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.tag_modifications(),
+            vec![
+                ("IFD0:XPTitle".to_string(), os(b"A\xed\xa0\x80B")),
+                ("IFD0:Model".to_string(), os(b"X")),
+            ]
+        );
+        assert_eq!(args.specific_tags(), None);
+        assert_eq!(args.file(), Some(path(b"d\xff.jpg")));
+
+        // Quotes come off a non-UTF-8 value as they do off a UTF-8 one.
+        let args = parse(&[b"-EXIF:XPTitle=\"A\xed\xa0\x80\"", b"d.jpg"]).unwrap();
+        assert_eq!(
+            args.tag_modifications(),
+            vec![("EXIF:XPTitle".to_string(), os(b"A\xed\xa0\x80"))]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_names_and_unwritable_values_are_errors() {
+        use std::os::unix::ffi::OsStrExt;
+        let os = |bytes: &[u8]| OsStr::from_bytes(bytes).to_os_string();
+        let parse = |argv: &[&[u8]]| CliArgs::parse_from(argv.iter().map(|a| os(a)));
+        for (argv, expected) in [
+            (
+                &[&b"-Art\xffist=x"[..], b"a.jpg"][..],
+                "must be valid UTF-8",
+            ),
+            (&[b"-\xff", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"--js\xffon", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"-Mak\xffe", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"-=\xff", b"a.jpg"], "invalid tag name"),
+            (&[b"-IFD0:Artist=A\xffB", b"a.jpg"], "not valid UTF-8"),
+            (&[b"-IFD0:XPTitle=A\xffB", b"a.jpg"], "Malformed UTF-8"),
+            (&[b"-XPTitle=A\xed\xa0\x80B", b"a.jpg"], "-IFD0:XPTitle="),
+            (&[b"-d", b"%Y\xff", b"a.jpg"], "-d must be valid UTF-8"),
+            (
+                &[b"--detector", b"\xff", b"a.jpg"],
+                "--detector must be valid UTF-8",
+            ),
+        ] {
+            let error = parse(argv).unwrap_err().to_string();
+            assert!(error.contains(expected), "{argv:?}: {error}");
         }
     }
 
@@ -1292,7 +1512,7 @@ mod tests {
         assert_eq!(CliArgs::unquote("'"), "'");
         assert_eq!(CliArgs::unquote(" \" "), " \" ");
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist=\""),
+            CliArgs::parse_text_modification("-EXIF:Artist=\""),
             Some(("EXIF:Artist".to_string(), "\"".to_string()))
         );
 
@@ -1313,21 +1533,21 @@ mod tests {
     /// file. ExifTool rejects these outright and leaves the file alone.
     #[test]
     fn empty_tag_name_is_not_a_modification() {
-        assert_eq!(CliArgs::parse_modification("-="), None);
-        assert_eq!(CliArgs::parse_modification("-=x"), None);
-        assert_eq!(CliArgs::parse_modification("-=\""), None);
-        assert_eq!(CliArgs::parse_modification("-  =  "), None);
-        assert_eq!(CliArgs::parse_modification("--="), None);
+        assert_eq!(CliArgs::parse_text_modification("-="), None);
+        assert_eq!(CliArgs::parse_text_modification("-=x"), None);
+        assert_eq!(CliArgs::parse_text_modification("-=\""), None);
+        assert_eq!(CliArgs::parse_text_modification("-  =  "), None);
+        assert_eq!(CliArgs::parse_text_modification("--="), None);
 
         // Real modifications are unaffected.
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist=Ansel Adams"),
+            CliArgs::parse_text_modification("-EXIF:Artist=Ansel Adams"),
             Some(("EXIF:Artist".to_string(), "Ansel Adams".to_string()))
         );
         // Clearing a tag with an empty value is still a modification: the tag
         // name is what has to be present, not the value.
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist="),
+            CliArgs::parse_text_modification("-EXIF:Artist="),
             Some(("EXIF:Artist".to_string(), String::new()))
         );
     }
