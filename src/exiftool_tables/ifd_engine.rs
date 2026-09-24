@@ -900,6 +900,11 @@ pub struct RootReads {
     /// their names belong to the child table, while the index supplies the
     /// parent-entry ordering a legacy carrier needs for a safe migration.
     pub serial_rows: Vec<(usize, usize)>,
+    /// Every root entry whose generated arm declined, in entry order: the
+    /// residual ran for it instead (or withheld it). A caller whose hand arm
+    /// was that field's producer before the generated arm can hand such an
+    /// entry back to it.
+    pub declined: Vec<usize>,
 }
 
 /// Why a decoded root walk did or did not produce per-entry reads.
@@ -1069,6 +1074,7 @@ fn walk_scoped(
         reads.rows.clear();
         reads.serial_subdirs.clear();
         reads.serial_rows.clear();
+        reads.declined.clear();
     }
     // Every entry from `from` on is one ExifTool never reaches.
     let refuse_rest = |decoded: &mut Option<&mut RootReads>, from: usize| {
@@ -1225,6 +1231,9 @@ fn walk_scoped(
             match resolve_generated_attempt(attempt, session, ctx) {
                 Arm::Decline(_) => {
                     declined = true;
+                    if let Some(reads) = decoded.as_deref_mut() {
+                        reads.declined.push(index);
+                    }
                 }
                 Arm::Suppress => continue,
                 Arm::Report(report) => {

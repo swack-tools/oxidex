@@ -120,6 +120,9 @@ pub(crate) struct DirEngineRows {
     /// Per entry of `ids`: what the walk did with it
     /// (`ifd_engine::process_exif_decoded`).
     reads: Vec<EntryRead>,
+    /// Entries (indices into `ids`) whose generated arm declined
+    /// (`RootReads::declined`); see [`Self::keep_hand_on_decline`].
+    declined: Vec<usize>,
     /// Engine-reported ids the caller keeps on its hand arms
     /// ([`Self::keep_hand`], every call's ids).
     hand_kept: Vec<u16>,
@@ -144,6 +147,7 @@ impl DirEngineRows {
             refused_as_exiftool: false,
             ids: Vec::new(),
             reads: Vec::new(),
+            declined: Vec::new(),
             hand_kept: Vec::new(),
             unrenderable: Vec::new(),
             stored_forms: false,
@@ -308,6 +312,26 @@ impl DirEngineRows {
         self
     }
 
+    /// [`Self::keep_hand`] for each of `ids` whose generated arm declined at
+    /// least one of its entries in this directory: every entry of that id
+    /// then goes to the caller's hand arm, as before the generated arm
+    /// owned it, and the residual row the declined entry produced is
+    /// dropped. Whole-id rather than per-entry, so the id/name replay of
+    /// [`Self::take_ifd0`] cannot pair a declined entry with a sibling's
+    /// row. An id whose arm reported every entry stays the engine's.
+    pub(crate) fn keep_hand_on_decline(self, ids: &[u16]) -> Self {
+        let declined: Vec<u16> = ids
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.declined
+                    .iter()
+                    .any(|&entry| self.ids.get(entry) == Some(&id))
+            })
+            .collect();
+        self.keep_hand(&declined)
+    }
+
     /// Whether the engine's absence for entry `id` is its own, one ExifTool
     /// does not share: it refused the whole directory on a bound ExifTool
     /// does not have (more than `MAX_IFD_ENTRIES` entries), never saw such
@@ -460,8 +484,21 @@ impl DirEngineRows {
 /// `Decode` UCS2 arms (`conv::exif_main`, #850) print ExifTool's value,
 /// including the leading-U+0000 `""` of FujiFilmFinePixZ100fd.jpg, and the
 /// Task 18 knockout measured `-j` and `-j --no-print-conv` byte-identical to
-/// the hand arm over the combined-samples and `t/images` corpora.
+/// the hand arm over the combined-samples and `t/images` corpora. Where their
+/// arm declines, see [`IFD0_HAND_ON_DECLINE`].
 pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb, 0x85d8, 0x87af, 0x87b0, 0x87b1, 0xc4a5];
+
+/// IFD0 ids the generated arm owns but whose hand arm takes the id back in
+/// a directory where that arm declined an entry
+/// ([`DirEngineRows::keep_hand_on_decline`]): the five Windows XP strings,
+/// 0x9c9b-0x9c9f. A UCS-2 surrogate code unit (an emoji's pair, or a lone
+/// one) decodes under ExifTool's `Decode($val,"UCS2","II")` to CESU-8 bytes
+/// that are not UTF-8, so the arm declines; the static residual that would
+/// follow (`exprs::decode_ucs2`) neither stops at the NUL terminator nor
+/// strips a byte-order mark (`🎌\0`, `🎌tail`, U+FEFF `🎌`). The hand
+/// decoder (`tag_conversion::decode_xp_ucs2_string`) prints what it printed
+/// before #850 moved the ids: `🎌`. Sorted.
+pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[0x9c9b, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f];
 
 /// The key an engine-produced IFD0 row is recorded under: ExifTool's family
 /// 1, as the hand walks key it (`lookup_tag_name(id, "IFD0")`).
@@ -517,6 +554,7 @@ pub(crate) fn ifd0_walk_with_session(
         )
         .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
         .keep_hand(IFD0_HAND_KEPT)
+        .keep_hand_on_decline(IFD0_HAND_ON_DECLINE)
         .with_stored_forms(),
     )
 }
@@ -608,6 +646,7 @@ pub(crate) fn walk_with_session(
         crate::exiftool_tables::ifd_engine::ProcessExifDecoded::Refused => Default::default(),
     };
     rows.reads = root.entries;
+    rows.declined = root.declined;
     // Which entry each root row came from, for its stored form.
     let row_entry: HashMap<usize, usize> = root.rows.into_iter().collect();
     for (index, row) in emitted.into_iter().enumerate() {
@@ -1332,6 +1371,43 @@ mod tests {
             assert!(rows.take_ifd0(id, &mut metadata), "{id:#06x}");
         }
         assert_eq!(metadata.get_string("IFD0:XPTitle"), Some(""));
+        assert_eq!(metadata.get_string("IFD0:XPComment"), Some("Hi"));
+    }
+
+    /// An XP string whose UCS-2 holds a surrogate pair decodes, under
+    /// ExifTool's `Decode($val,"UCS2","II")`, to CESU-8 bytes that are not
+    /// UTF-8, so the generated arm declines; the static residual
+    /// (`exprs::decode_ucs2`) neither stops at the NUL terminator nor strips
+    /// a byte-order mark. The IFD0 walk hands that entry back to the hand arm
+    /// (`IFD0_HAND_ON_DECLINE`), the pre-#850 producer, and keeps the
+    /// generated arm for an entry it reports.
+    #[test]
+    fn a_declined_xp_arm_falls_back_to_the_hand_arm() {
+        let mut emoji: Vec<u8> = "\u{1F38C}"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        emoji.extend([0, 0]);
+        let tiff = le_tiff(&[
+            (0x9c9b, 1, emoji.len() as u32, emoji),
+            (0x9c9c, 1, 6, b"H\0i\0\0\0".to_vec()),
+        ]);
+        let mut rows = ifd0_walk(&tiff, 8, ByteOrder::LittleEndian, &MetadataMap::new())
+            .expect("Exif::Main is in force");
+        assert_eq!(rows.owner(0x9c9b, false), Owner::Hand, "declined XPTitle");
+        assert_eq!(
+            rows.owner(0x9c9c, false),
+            Owner::Engine,
+            "reported XPComment"
+        );
+        let mut metadata = MetadataMap::new();
+        assert!(!rows.take_ifd0(0x9c9b, &mut metadata));
+        assert!(rows.take_ifd0(0x9c9c, &mut metadata));
+        rows.finish_ifd0(&mut metadata);
+        assert!(
+            metadata.get("IFD0:XPTitle").is_none(),
+            "no engine XPTitle row"
+        );
         assert_eq!(metadata.get_string("IFD0:XPComment"), Some("Hi"));
     }
 
