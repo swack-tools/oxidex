@@ -175,7 +175,12 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     let exif_position = head_segments.iter().position(|seg| is_exif_segment(seg));
 
     // Step 5: Reconstruct JPEG with modified EXIF
-    reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)
+    let output = reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)?;
+
+    // Step 6: the verbatim tail moved by the length change; re-base the
+    // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217).
+    let tail_start = file_size - raw_tail.len();
+    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, tail_start, tail_start, output)
 }
 
 /// Checks if a segment is an EXIF APP1 segment.
@@ -644,6 +649,18 @@ fn transform_exif<T>(
         out.extend_from_slice(&tiff);
     }
     out.extend_from_slice(&bytes[end..]);
+    // Everything from `end` moved by the length change, including any AFCP
+    // trailer and its absolute offsets (AFCP.pm 13.59:205-217). Its EOI is
+    // searched from the end of the SOS header, or is the EOI marker itself.
+    let boundary = &head[end_index];
+    let scan_from = usize::try_from(boundary.offset)
+        .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?
+        + if boundary.marker == SOS_MARKER {
+            4 + boundary.data.len()
+        } else {
+            0
+        };
+    let out = crate::writers::jpeg_trailer::rebase_trailer_offsets(bytes, end, scan_from, out)?;
     Ok((out, outcome))
 }
 
