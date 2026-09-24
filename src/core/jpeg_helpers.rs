@@ -7,7 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
-use crate::core::tag_conversion::{exif_entry_to_tag_value, time_codes_forms};
+use crate::core::tag_conversion::{exif_entry_to_tag_value, exif_main_entry_forms};
 use crate::core::tiff_helpers::{
     parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
     physical_entry_indices,
@@ -537,7 +537,7 @@ fn process_ifd0_tags(
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
-        if let Some(forms) = time_codes_forms(*tag_id, bytes) {
+        if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
             metadata.insert_occurrence_with_forms(
                 tag_name,
                 forms.print,
@@ -3255,10 +3255,11 @@ mod xp_string_tests {
     /// The five XP strings (0x9c9b-0x9c9f), through the JPEG APP1 IFD0 walk
     /// and the embedded-EXIF IFD0 walk (PNG `eXIf`, PSD, HEIF, WebP, JXL):
     /// one occurrence each, at the IFD0 walks' uniform priority, carrying
-    /// ExifTool's decoded text on the print, ValueConv and stored channels
-    /// -- the stored form is what the PNG `eXIf` rebuild and `copy_metadata`
-    /// serialize. A leading U+0000 ends the value: 13.59 prints `""` for
-    /// FujiFilmFinePixZ100fd.jpg's XPTitle.
+    /// ExifTool's decoded text on the print and ValueConv channels. A leading
+    /// U+0000 ends the value: 13.59 prints `""` for
+    /// FujiFilmFinePixZ100fd.jpg's XPTitle. The stored channel -- what the
+    /// PNG `eXIf` rebuild and `copy_metadata` serialize -- is the entry's
+    /// bytes, which `writers::xp_strings` re-packs as ExifTool's copy does.
     #[test]
     fn xp_strings_decode_to_exiftool_text_on_every_channel() {
         let tiff = xp_tiff();
@@ -3286,8 +3287,19 @@ mod xp_string_tests {
             ("XPKeywords", "a;b"),
             ("XPSubject", "Subject"),
         ];
+        let stored = {
+            let mut title = vec![0u8, 0];
+            title.extend(ucs2("   "));
+            [
+                title,
+                ucs2("Comment"),
+                ucs2("Author"),
+                ucs2("a;b"),
+                ucs2("Subject"),
+            ]
+        };
         for (label, metadata) in [("jpeg", &from_jpeg), ("embedded", &from_embedded)] {
-            for (name, text) in expected {
+            for ((name, text), stored) in expected.into_iter().zip(&stored) {
                 let key = format!("IFD0:{name}");
                 let occurrences = metadata.occurrences_for(&key);
                 assert_eq!(occurrences.len(), 1, "{label} {key}: one occurrence");
@@ -3295,17 +3307,18 @@ mod xp_string_tests {
                     occurrences[0].priority, SHIM_DEFAULT_PRIORITY,
                     "{label} {key}: priority"
                 );
-                for channel in [
-                    ValueChannel::PrintConv,
-                    ValueChannel::ValueConv,
-                    ValueChannel::Stored,
-                ] {
+                for channel in [ValueChannel::PrintConv, ValueChannel::ValueConv] {
                     assert_eq!(
                         occurrences[0].project(channel).as_ref(),
                         &TagValue::new_string(text),
                         "{label} {key} {channel:?}"
                     );
                 }
+                assert_eq!(
+                    occurrences[0].project(ValueChannel::Stored).as_ref(),
+                    &TagValue::Binary(stored.clone()),
+                    "{label} {key} Stored"
+                );
             }
         }
     }
@@ -3375,10 +3388,11 @@ mod xp_string_tests {
     /// embedded and leading NULs, inline values -- as int8u and undef, in
     /// II and MM files, through the JPEG and embedded IFD0 walks, gives
     /// exactly the hand decoder's value (`raw_bytes_to_tag_value`, the
-    /// pre-B2 producer) on every channel. A generated `Decode` arm that
-    /// declines (a surrogate pair decodes to non-UTF-8 CESU-8 under
-    /// ExifTool's UCS2) must not fall through to a residual that keeps the
-    /// terminator.
+    /// pre-B2 producer) on the print and ValueConv channels, and the entry's
+    /// bytes on the stored channel (the provenance a copy re-packs). A
+    /// generated `Decode` arm that declines (a surrogate pair decodes to
+    /// non-UTF-8 CESU-8 under ExifTool's UCS2) must not fall through to a
+    /// residual that keeps the terminator.
     #[test]
     fn xp_strings_match_the_hand_decoder_for_every_input_class() {
         fn utf16le(text: &str) -> Vec<u8> {
@@ -3465,17 +3479,18 @@ mod xp_string_tests {
                                     .push(format!("{label}: {} occurrences", occurrences.len()));
                                 continue;
                             }
-                            for channel in [
-                                ValueChannel::PrintConv,
-                                ValueChannel::ValueConv,
-                                ValueChannel::Stored,
-                            ] {
+                            for channel in [ValueChannel::PrintConv, ValueChannel::ValueConv] {
                                 let got = occurrences[0].project(channel);
                                 if got.as_ref() != &hand {
                                     failures.push(format!(
                                         "{label} {channel:?}: {got:?} != hand {hand:?}"
                                     ));
                                 }
+                            }
+                            let stored = occurrences[0].project(ValueChannel::Stored);
+                            let bytes = TagValue::Binary(payload.clone());
+                            if stored.as_ref() != &bytes {
+                                failures.push(format!("{label} Stored: {stored:?} != {bytes:?}"));
                             }
                         }
                     }

@@ -11,8 +11,9 @@ use crate::core::formatters::composite_image_exposure_times::format_composite_im
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_conversion::{
-    ExifMainResidualPort, apply_tile_offsets_value_conv, exif_main_residual_port,
-    exif_raw_conv_drops_entry, gps_coordinate_degrees, raw_bytes_to_tag_value, time_codes_forms,
+    ExifMainResidualPort, apply_tile_offsets_value_conv, exif_main_entry_forms,
+    exif_main_residual_port, exif_raw_conv_drops_entry, gps_coordinate_degrees,
+    raw_bytes_to_tag_value,
 };
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY, ValueChannel};
 #[cfg(test)]
@@ -948,7 +949,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
             (_, value) => value,
         };
         let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
-        if let Some(forms) = time_codes_forms(*tag_id, bytes) {
+        if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
             metadata.insert_occurrence_with_forms(
                 tag_name,
                 forms.print,
@@ -1472,7 +1473,7 @@ fn parse_exif_directory_with_session(
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            if let Some(forms) = time_codes_forms(*tag_id, bytes) {
+            if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
                 metadata.insert_occurrence_with_forms(
                     tag_name,
                     forms.print,

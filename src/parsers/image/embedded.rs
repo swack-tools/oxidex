@@ -186,6 +186,19 @@ pub fn parse_embedded_exif_at(
                 "",
                 crate::core::tag_occurrence::Instance::default(),
             );
+        } else if let Some(forms) = crate::core::tag_conversion::xp_string_forms(*tag_id, bytes) {
+            // The XP strings keep their stored bytes beside the text: the
+            // PNG `eXIf` rebuild and `copy_metadata` re-pack a copied value
+            // from them (`crate::writers::xp_strings`).
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                forms.print,
+                forms.value,
+                Some(forms.stored),
+                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
         } else {
             metadata.insert(tag_name, tag_value);
         }
