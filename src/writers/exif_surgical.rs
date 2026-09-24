@@ -39,6 +39,38 @@ const THUMBNAIL_LENGTH: u16 = 0x0202;
 /// ExifIFD MakerNote blob
 const MAKERNOTE: u16 = 0x927C;
 
+/// `%Image::ExifTool::Exif::Main` tags (the table of IFD0, ExifIFD,
+/// InteropIFD and IFD1) whose value locates bytes outside the entry itself,
+/// which [`serialize_exif`] does not model: it writes the value back while
+/// re-laying out everything else, so the bytes it pointed to are not copied
+/// and the pointer dangles. From the pinned Exif.pm 13.59 table:
+///
+/// - `SubDirectory` entries whose directory lives elsewhere (`Start =>
+///   '$val'`, `Flags => 'SubIFD'`): 0x014a SubIFDs, 0x0190
+///   GlobalParametersIFD, 0x8290 KodakIFD, 0x888a LeafSubIFD, 0xc634
+///   DNGPrivateData (SR2Private, and the maker-note variants whose IFDs sit
+///   at `$valuePtr + N` with absolute offsets), 0xc6f5 ProfileIFD, 0xfe00
+///   KDC_IFD, and 0xc51b HasselbladExif (an IFD at `$valuePtr`);
+/// - `IsOffset` tags: 0x0111 StripOffsets, 0x0120 FreeOffsets, 0x0144
+///   TileOffsets, 0x0201 (outside IFD1, where the thumbnail pair is
+///   modelled), 0x0207-0x0209 JPEG tables, 0x8781, 0xa010
+///   SamsungRawPointersOffset, 0xbcc0 and 0xbcc2.
+///
+/// The structural pointers the writer does model (0x8769, 0x8825, 0xa005,
+/// IFD1's 0x0201/0x0202) and the MakerNote, which it pins at its original
+/// offset, are not listed. GPS uses `GPS::Main`, which has none.
+const UNMODELLED_POINTER_TAGS: &[u16] = &[
+    0x0111, 0x0120, 0x0144, 0x014a, 0x0190, 0x0201, 0x0207, 0x0208, 0x0209, 0x8290, 0x8781, 0x888a,
+    0xa010, 0xbcc0, 0xbcc2, 0xc51b, 0xc634, 0xc6f5, 0xfe00,
+];
+
+/// The first entry of `scan` that [`UNMODELLED_POINTER_TAGS`] names.
+fn unmodelled_pointer(scan: &ExifScan) -> Option<&RawEntry> {
+    scan.entries
+        .iter()
+        .find(|entry| entry.ifd != IfdKind::Gps && UNMODELLED_POINTER_TAGS.contains(&entry.tag_id))
+}
+
 /// Reconstructs every metadata-map key the reader could plausibly have
 /// produced for one raw-carried entry in an always-carried IFD class
 /// (InteropIFD, IFD1, MakerNote — see the Design Rule table). These classes
@@ -790,6 +822,21 @@ fn plan_exif_write_inner(
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
     if drop_all_when_no_rows && exif_family_keys(desired).is_empty() {
         return Ok(plan);
+    }
+
+    // Everything past this point re-lays the block out. A pointer the
+    // serializer does not model would be written back with its old offset
+    // and the bytes it locates left behind -- a dangling SubIFDs pointer,
+    // reported as success -- so such a block is refused (fail closed). The
+    // in-place writers, which never move existing bytes, still edit it.
+    if let Some(entry) = unmodelled_pointer(scan) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot rewrite this EXIF block: {} tag 0x{:04X} locates data this \
+             writer does not relocate (a SubIFD or offset pointer), and \
+             re-laying the block out would leave it dangling",
+            entry.ifd.prefix(),
+            entry.tag_id
+        )));
     }
 
     // Normalize "EXIF:"-prefixed aliases onto their native per-entry key so

@@ -982,3 +982,161 @@ fn named_removals_of_raw_carried_entries_are_refused() {
         }
     }
 }
+
+/// A block whose IFD0 has a `SubIFDs` pointer (0x014a): IFD0 {Make, Artist,
+/// SubIFDs, ExifOffset}, ExifIFD {ISO}, and a SubIFD {NewSubfileType 1,
+/// ImageWidth 160, ImageDescription "sub-ifd-desc"} after them.
+fn subifd_block(order: Order) -> Vec<u8> {
+    let entry = |tag: u16, ty: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(ty),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    let pad2 = |v: u16| {
+        let b = order.u16(v);
+        [b[0], b[1], 0, 0]
+    };
+    let (ifd0, make_at, exif_at, sub_at, desc_at) = (8u32, 62u32, 68u32, 86u32, 128u32);
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(ifd0));
+    t.extend(order.u16(4));
+    t.extend(entry(0x010F, 2, 6, order.u32(make_at)));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(entry(0x014A, 4, 1, order.u32(sub_at)));
+    t.extend(entry(0x8769, 4, 1, order.u32(exif_at)));
+    t.extend(order.u32(0));
+    t.extend(b"Acme\0\0");
+    t.extend(order.u16(1));
+    t.extend(entry(0x8827, 3, 1, pad2(100)));
+    t.extend(order.u32(0));
+    t.extend(order.u16(3));
+    t.extend(entry(0x00FE, 4, 1, order.u32(1)));
+    t.extend(entry(0x0100, 3, 1, pad2(160)));
+    t.extend(entry(0x010E, 2, 14, order.u32(desc_at)));
+    t.extend(order.u32(0));
+    assert_eq!(t.len(), desc_at as usize);
+    t.extend(b"sub-ifd-desc\0\0");
+    t
+}
+
+/// The entries of the IFD that IFD0's SubIFDs pointer leads to, raw, or
+/// `None` when the pointer is gone or leads outside the block.
+fn subifd_entries(tiff: &[u8]) -> Option<Vec<(u16, u16, u32, Vec<u8>)>> {
+    let order = if &tiff[..2] == b"II" {
+        Order::Ii
+    } else {
+        Order::Mm
+    };
+    let ifd0 = order.read_u32(&tiff[4..8]) as usize;
+    let n = order.read_u16(&tiff[ifd0..]) as usize;
+    let at = (0..n)
+        .map(|i| ifd0 + 2 + 12 * i)
+        .find(|&p| order.read_u16(&tiff[p..]) == 0x014A)?;
+    let sub = order.read_u32(&tiff[at + 8..]) as usize;
+    if sub + 2 > tiff.len() {
+        return None;
+    }
+    let m = order.read_u16(&tiff[sub..]) as usize;
+    let mut out = Vec::new();
+    for i in 0..m {
+        let p = sub + 2 + 12 * i;
+        if p + 12 > tiff.len() {
+            return None;
+        }
+        let (tag, ty, count) = (
+            order.read_u16(&tiff[p..]),
+            order.read_u16(&tiff[p + 2..]),
+            order.read_u32(&tiff[p + 4..]),
+        );
+        let size = type_size(ty) * count as usize;
+        let value = if size <= 4 {
+            tiff[p + 8..p + 8 + size].to_vec()
+        } else {
+            let off = order.read_u32(&tiff[p + 8..]) as usize;
+            tiff.get(off..off + size)?.to_vec()
+        };
+        out.push((tag, ty, count, value));
+    }
+    Some(out)
+}
+
+fn tiff_of(name: &str, file: &[u8]) -> Vec<u8> {
+    if name.ends_with(".png") {
+        exif_of(file).unwrap()
+    } else {
+        let at = file
+            .windows(6)
+            .position(|w| w == b"Exif\0\0")
+            .expect("EXIF APP1")
+            + 6;
+        let len = u16::from_be_bytes([file[at - 8], file[at - 7]]) as usize - 8;
+        file[at..at + len].to_vec()
+    }
+}
+
+/// The reconstructing (re-laid-out) EXIF writer models IFD0, ExifIFD, GPS,
+/// InteropIFD, IFD1 and the MakerNote; a pointer it does not model --
+/// IFD0's SubIFDs here -- was written back holding its old offset while the
+/// IFD it pointed to was not copied: a dangling pointer, reported as
+/// success (JPEG at base cb1f5def and tip too; PNG from this branch). Pinned
+/// ExifTool 13.59 keeps the SubIFD intact for each of these writes. The
+/// reconstructing paths -- a legacy set, a legacy deletion, and a mixed
+/// generated set + legacy deletion -- now refuse such a block, file
+/// untouched; the in-place generated path, which never moves existing
+/// bytes, still writes and leaves the SubIFD reachable and unchanged.
+#[test]
+fn a_block_with_an_unmodelled_pointer_is_never_re_laid_out() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = subifd_block(order);
+        let sub = subifd_entries(&tiff).unwrap();
+        assert_eq!(sub.len(), 3);
+        for (name, original) in [
+            ("sub.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("sub.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            let error = modify_tag(&path, "ExifIFD:ISO", TagValue::new_integer(200)).unwrap_err();
+            assert!(
+                error.to_string().contains("0x014A"),
+                "{order:?} {name}: {error}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name} set");
+
+            assert!(
+                remove_tag(&path, "ExifIFD:ISO").is_err(),
+                "{order:?} {name} delete"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name} delete");
+
+            let mut map = read_metadata(&path).unwrap();
+            map.insert("IFD0:Artist", TagValue::new_string("you"));
+            map.remove("ExifIFD:ISO");
+            assert!(
+                write_metadata(&path, &map).is_err(),
+                "{order:?} {name} mixed"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name} mixed");
+
+            modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
+            let out = tiff_of(name, &std::fs::read(&path).unwrap());
+            assert_eq!(
+                subifd_entries(&out).as_ref(),
+                Some(&sub),
+                "{order:?} {name} generated"
+            );
+            assert_eq!(
+                dump(&out).get("IFD0:0x013b"),
+                Some(&(2, 4, b"you\0".to_vec()))
+            );
+        }
+    }
+}
