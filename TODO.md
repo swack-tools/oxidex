@@ -57,6 +57,9 @@ byte-order mark that the hand decoder drops. A review of #940 found this. On
 the IFD0 walks, an XP id whose arm declines an entry now goes back to the hand
 decoder for that directory (`IFD0_HAND_ON_DECLINE`,
 `DirEngineRows::keep_hand_on_decline`), which restores the pre-move output.
+The ownership inventory records that fallback as five `IFD0/0x9c9b`-`0x9c9f`
+residual rows with `residual_disposition: fallback-on-decline`, beside their
+generated rows.
 
 Still open: the same decline reaches the static fallback for XP tags in
 ExifIFD. This predates Task 18, because those ids were never hand-kept there.
@@ -65,13 +68,14 @@ Fixing `exprs::decode_ucs2` itself would also change `XP_DIP_XML`.
 The 0x9400 AmbientTemperature move was tried and abandoned. The generated arm
 prints `0 C` where ExifTool 13.59 prints `-0 C`, on 5 Olympus files.
 
-Evidence, including per-trial diffs:
-`~/oxidex-ops/evidence/20260919-beta1-functional/task18-proven-deletion/`.
+Evidence, including per-trial diffs, is under
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/task18-proven-deletion/`.
+`OXIDEX_OPS_DIR` defaults to `~/oxidex-ops` (`scripts/ops_paths.py`).
 
 ### What remains (49 KEEP)
 
 The candidate inventory is
-`~/oxidex-ops/evidence/20260919-beta1-functional/task18-proven-deletion/materialization.md`
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/task18-proven-deletion/materialization.md`
 §2, which has each candidate's call sites and reasons. It is counted at
 symbol, branch or id-group granularity. Of its 49 KEEP, D5 was deleted here.
 B1 joined KEEP when its knockout failed, so 49 remain:
