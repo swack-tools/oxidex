@@ -164,6 +164,14 @@ fn writes_oxidex_cannot_perform_are_refused_not_reported() {
         (PDF, "a.pdf", &["-Title=v"]),
         (PDF, "a.pdf", &["-XMP:Title=v"]),
         (PNG, "a.png", &["-XMP:Title=v"]),
+        // Family-1 XMP spellings (pinned 13.59 writes [XMP-dc] Title in all
+        // three formats, creating the XMP packet when there is none); oxidex
+        // has no XMP writer, so each must fail loudly.
+        (JPEG, "a.jpg", &["-XMP-dc:Title=v"]),
+        (JPEG_XMP, "a.jpg", &["-XMP-dc:Title=v"]),
+        (JPEG_XMP, "a.jpg", &["-XMP-dc:Title="]),
+        (PNG, "a.png", &["-XMP-dc:Title=v"]),
+        (TIFF, "a.tif", &["-XMP-dc:Title=v"]),
         // A refused request aborts the whole file: the XPTitle beside it is
         // not half-applied (ExifTool writes all of a file's tags or none).
         (JPEG, "a.jpg", &["-XPTitle=v", "-XMP:Title=v"]),
