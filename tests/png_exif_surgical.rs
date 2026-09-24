@@ -1520,7 +1520,7 @@ fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
             ifd1: Some((vec![], thumb.clone())),
         }
         .build(order);
-        let ifd0 = |tiff: &[u8]| -> Vec<(String, (u16, u32, Vec<u8>))> {
+        let ifd0 = |tiff: &[u8]| -> Vec<(String, Field)> {
             dump(tiff)
                 .into_iter()
                 .filter(|(key, _)| key.starts_with("IFD0:"))
