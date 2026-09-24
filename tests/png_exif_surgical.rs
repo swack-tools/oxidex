@@ -1962,8 +1962,9 @@ fn makernotes_removal_drops_a_ciff_segment() {
 /// empty IFD0 `-IFD0:Software=` and `-GPS:All=` drop the APP1 ("1 image
 /// files updated"; tip e4edc55c byte-identical to it). b83ec323's up-front
 /// no-op check kept it. An empty PNG eXIf chunk the oracle keeps ("1 image
-/// files unchanged"). A JPEG block whose only fault is its magic number the
-/// oracle reads anyway and drops when empty; the writer's scanner cannot
+/// files unchanged") -- but for `IFD0:All` / `EXIF:All`, which delete it.
+/// A JPEG block whose only fault is its magic number the oracle reads
+/// anyway and drops when empty; the writer's scanner cannot
 /// read it, so that write is refused, as at tip, not reported done. With
 /// an entry in it, a removal naming nothing is a no-op (oracle unchanged).
 #[test]
@@ -2009,6 +2010,17 @@ fn an_empty_exif_app1_is_dropped_by_an_exif_removal() {
                 std::fs::read(&path).unwrap(),
                 png_bytes,
                 "{order:?} {key} png"
+            );
+            let carrier = if key == "GPS:All" {
+                "EXIF:All"
+            } else {
+                "IFD0:All"
+            };
+            remove_tag(&path, carrier).unwrap_or_else(|e| panic!("{order:?} {carrier}: {e}"));
+            assert_eq!(
+                kinds(&std::fs::read(&path).unwrap()),
+                ["IHDR", "IDAT", "IEND"],
+                "{order:?} {carrier} png"
             );
 
             let jpeg = jpeg_with(&bad_magic);

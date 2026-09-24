@@ -131,7 +131,10 @@ pub(crate) fn group_has_content(
 ) -> bool {
     let any = |ifds: &[IfdKind]| scan.entries.iter().any(|entry| ifds.contains(&entry.ifd));
     match group {
-        GroupRemoval::Carrier => !scan.entries.is_empty() || scan.thumbnail.is_some(),
+        // The carrier itself goes, empty or not (an empty PNG eXIf chunk
+        // too: pinned ExifTool 13.59 drops it on `IFD0:All` / `EXIF:All`
+        // while keeping it on every other removal).
+        GroupRemoval::Carrier => true,
         GroupRemoval::ExifIfd => any(&[IfdKind::ExifIfd, IfdKind::Interop]),
         GroupRemoval::Gps => any(&[IfdKind::Gps]),
         GroupRemoval::Ifd1 => any(&[IfdKind::Ifd1]) || scan.thumbnail.is_some(),
