@@ -786,3 +786,177 @@ fn oracle_writes_the_same_xp_bytes() {
         assert_eq!(et_text(&ours), et_text(&reference), "copy of {label}");
     }
 }
+
+/// One stored XP shape for the explicit-set cases: (label, source type,
+/// stored bytes, the text oxidex reads from them, the bytes the oracle's
+/// `-XPTitle=<that text>` writes over them).
+type ExplicitCase = (&'static str, u16, Vec<u8>, &'static str, Vec<u8>);
+
+/// The stored shapes whose decoded text, assigned back unchanged, is NOT
+/// re-encoded to the same bytes -- plus a canonical control and an `undef`
+/// one. Expected bytes are the oracle's (13.59): a direct write always
+/// re-encodes the assigned text (`pack('v*')`), whatever the entry held.
+fn explicit_cases() -> Vec<ExplicitCase> {
+    vec![
+        // A stored surrogate pair reads as U+1F38C; typed, that keeps its
+        // low 16 bits.
+        (
+            "pair",
+            1,
+            hex("41003cd88cdf0000"),
+            "A🎌",
+            hex("41008cf30000"),
+        ),
+        // A lone surrogate reads as U+FFFD, which is what gets written.
+        (
+            "lone",
+            1,
+            hex("410000d842000000"),
+            "A\u{fffd}B",
+            hex("4100fdff42000000"),
+        ),
+        // A BOM is gone from the typed value.
+        (
+            "bom_be",
+            1,
+            hex("feff0042004f004d006200650000"),
+            "BOMbe",
+            hex("42004f004d00620065000000"),
+        ),
+        // Canonical BMP text: the same bytes either way.
+        (
+            "bmp",
+            1,
+            ucs2("é中文 café"),
+            "é中文 café",
+            ucs2("é中文 café"),
+        ),
+    ]
+}
+
+/// Codex review of #942 (P2, png_writer.rs:217): assigning an XP tag the very
+/// text the file already decodes to is a direct write, never a carry-over.
+/// The PNG rebuild inferred provenance from value equality and refused
+/// `A🎌`; the JPEG and TIFF writers carried the stored bytes (pair, lone
+/// surrogate, BOM) where ExifTool re-encodes the assigned text. Every
+/// container, both byte orders, and both spellings of the tag.
+#[test]
+fn an_explicit_set_of_the_stored_text_writes_exiftools_direct_bytes() {
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, text, oracle) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            for key in ["IFD0:XPTitle", "EXIF:XPTitle"] {
+                let dir = tempfile::tempdir().unwrap();
+                for (name, bytes) in [
+                    ("set.jpg", jpeg_with(&block)),
+                    ("set.tif", block.clone()),
+                    ("set.png", png_with(Some(&block))),
+                ] {
+                    let path = write(dir.path(), name, &bytes);
+                    assert_eq!(
+                        xp_text(&path, "XPTitle").as_deref(),
+                        Some(text),
+                        "{label} {name}: the text being assigned back"
+                    );
+                    modify_tag(&path, key, TagValue::new_string(text))
+                        .unwrap_or_else(|e| panic!("{label} {order:?} {key} {name}: {e}"));
+                    assert_eq!(
+                        xp_entries(&path).get(&XP_TITLE),
+                        Some(&(1, oracle.clone())),
+                        "{label} {order:?} {key} {name}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The other half of the contract: an XP entry nobody assigned keeps its
+/// stored bytes when another tag is written -- the JPEG and TIFF writers
+/// leave them verbatim, as ExifTool's `-IFD0:Artist=you` does.
+#[test]
+fn an_untouched_xp_entry_keeps_its_stored_bytes() {
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, _, _) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            let dir = tempfile::tempdir().unwrap();
+            for (name, bytes) in [
+                ("carry.jpg", jpeg_with(&block)),
+                ("carry.tif", block.clone()),
+            ] {
+                let path = write(dir.path(), name, &bytes);
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
+                assert_eq!(
+                    xp_entries(&path).get(&XP_TITLE),
+                    Some(&(typ, raw.clone())),
+                    "{label} {order:?} {name}"
+                );
+            }
+        }
+    }
+}
+
+/// The explicit-set cases graded live: the oracle's `-XPTitle=<text>` and
+/// oxidex's `modify_tag` over the same source, in each container and byte
+/// order, write identical XP entries.
+#[test]
+fn oracle_explicit_set_of_the_stored_text_matches() {
+    if !exiftool_oracle::available() {
+        eprintln!("skipping: no usable ExifTool oracle");
+        return;
+    }
+    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, text, _) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            let dir = tempfile::tempdir().unwrap();
+            for (ext, bytes) in [
+                ("jpg", jpeg_with(&block)),
+                ("tif", block.clone()),
+                ("png", png_with(Some(&block))),
+            ] {
+                let reference = write(dir.path(), &format!("ref.{ext}"), &bytes);
+                let arg = format!("-XPTitle={text}");
+                let out = oracle
+                    .command()
+                    .args([
+                        "-q".as_ref(),
+                        "-overwrite_original".as_ref(),
+                        std::ffi::OsStr::new(&arg),
+                        reference.as_os_str(),
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{label} {ext}: oracle write failed");
+                let ours = write(dir.path(), &format!("ours.{ext}"), &bytes);
+                modify_tag(&ours, "IFD0:XPTitle", TagValue::new_string(text)).unwrap();
+                assert_eq!(
+                    xp_entries(&ours).get(&XP_TITLE),
+                    xp_entries(&reference).get(&XP_TITLE),
+                    "{label} {order:?} {ext}"
+                );
+            }
+        }
+    }
+}

@@ -69,6 +69,11 @@ pub struct MetadataMap {
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
     raw_blocks: Vec<RawMetadataBlock>,
+    /// The file-order position one past the last occurrence a read recorded
+    /// ([`Self::mark_read_complete`]), or `None` for a map no read produced.
+    /// An occurrence at or past it was recorded after the read -- a caller's
+    /// assignment ([`Self::assigned_after_read`]).
+    read_end: Option<u32>,
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -108,6 +113,7 @@ impl MetadataMap {
         Self {
             sink: TagSink::new(),
             raw_blocks: Vec::new(),
+            read_end: None,
         }
     }
 
@@ -119,6 +125,31 @@ impl MetadataMap {
         Self {
             sink: TagSink::with_capacity(capacity),
             raw_blocks: Vec::new(),
+            read_end: None,
+        }
+    }
+
+    /// Marks every occurrence recorded so far as the file's own: the read
+    /// that produced this map is complete. `read_metadata` and its report
+    /// variants call it last, so an occurrence recorded afterwards -- by
+    /// `insert()` in `modify_tag`, the CLI's `-TAG=VALUE`, an FFI setter, a
+    /// library caller -- is an assignment ([`Self::assigned_after_read`]).
+    pub(crate) fn mark_read_complete(&mut self) {
+        self.read_end = Some(self.sink.next_order());
+    }
+
+    /// Whether the winning occurrence for `key` was assigned by a caller
+    /// rather than read from the file: recorded after
+    /// [`Self::mark_read_complete`], or in a map no read produced (every
+    /// value there is the caller's). A writer that must tell an explicit
+    /// assignment from a carried-over value asks this, never whether the
+    /// value happens to equal the file's (the XP strings, whose same text
+    /// can be two different byte strings: `writers::xp_strings`).
+    pub(crate) fn assigned_after_read(&self, key: &str) -> bool {
+        match (self.read_end, self.sink.winner_occurrence(key)) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(end), Some(occurrence)) => occurrence.order >= end,
         }
     }
 
@@ -792,6 +823,30 @@ impl IntoIterator for MetadataMap {
 mod tests {
     use super::super::tag_occurrence::{Instance, Provenance};
     use super::*;
+
+    /// A value is the caller's by when it was recorded, not by what it is:
+    /// re-inserting the read value after `mark_read_complete` is an
+    /// assignment, the untouched neighbour is not, and a map no read
+    /// produced is all assignments.
+    #[test]
+    fn assignment_is_recorded_after_the_read_not_inferred_from_the_value() {
+        let mut read = MetadataMap::new();
+        read.insert("IFD0:XPTitle", TagValue::new_string("A"));
+        read.insert("IFD0:Artist", TagValue::new_string("me"));
+        read.mark_read_complete();
+        assert!(!read.assigned_after_read("IFD0:XPTitle"));
+        read.insert("IFD0:XPTitle", TagValue::new_string("A"));
+        assert!(read.assigned_after_read("IFD0:XPTitle"), "same value, set");
+        assert!(!read.assigned_after_read("IFD0:Artist"), "untouched");
+        assert!(!read.assigned_after_read("IFD0:Missing"));
+        let clone = read.clone();
+        assert!(clone.assigned_after_read("IFD0:XPTitle"));
+        assert!(!clone.assigned_after_read("IFD0:Artist"));
+
+        let mut fresh = MetadataMap::new();
+        fresh.insert("IFD0:XPTitle", TagValue::new_string("A"));
+        assert!(fresh.assigned_after_read("IFD0:XPTitle"));
+    }
 
     fn source_occurrence(id: oxidex_tags::TagId, name: &str, raw: TagValue) -> TagOccurrence {
         use super::super::tag_occurrence::intern;

@@ -382,10 +382,18 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // The edit is whichever spelling the caller staged a *different* value
         // under. A value equal to its original is carried over, so an alias the
         // reader itself emitted never overwrites the entry it aliases.
+        // An XP string the caller assigned is an edit even at its original
+        // value: its text can stand for other bytes than the entry's
+        // (`xp_strings::is_explicit_xp_set`).
         let edit = keys
             .iter()
             .find_map(|k| match (desired.get(k), original.get(k)) {
-                (Some(new), orig) if Some(new) != orig => Some((k.clone(), new.clone())),
+                (Some(new), orig)
+                    if Some(new) != orig
+                        || crate::writers::xp_strings::is_explicit_xp_set(desired, k) =>
+                {
+                    Some((k.clone(), new.clone()))
+                }
                 _ => None,
             });
         consumed.extend(keys);
@@ -411,7 +419,9 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // IFD1, MakerNotes). Adding it to IFD0 would fabricate a duplicate
         // under a name the file already uses, so refuse the edit instead.
         if let Some(original_value) = original.get(key) {
-            if value == original_value {
+            if value == original_value
+                && !crate::writers::xp_strings::is_explicit_xp_set(desired, key)
+            {
                 continue; // untouched — carried by not touching its bytes
             }
             if !borrowed.iter().any(|k| k == key) {

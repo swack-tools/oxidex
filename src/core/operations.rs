@@ -372,6 +372,19 @@ pub fn read_metadata_with_detector_and_options(
     detector_mode: DetectorMode,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
+    // Everything recorded by the read is the file's own; what a caller
+    // inserts afterwards is an assignment (`MetadataMap::assigned_after_read`).
+    read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
+        metadata.mark_read_complete();
+        metadata
+    })
+}
+
+fn read_metadata_unmarked(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -621,6 +634,19 @@ pub fn read_metadata_report_with_detector(
 /// [`read_metadata_with_detector_and_options`]'s doc comment -- the same
 /// reasoning applies here.
 pub fn read_metadata_report_with_detector_and_options(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<ReadReport> {
+    // As `read_metadata_with_detector_and_options`: the read's occurrences
+    // are the file's, later insertions are assignments.
+    read_metadata_report_unmarked(path, detector_mode, options).map(|mut report| {
+        report.metadata.mark_read_complete();
+        report
+    })
+}
+
+fn read_metadata_report_unmarked(
     path: &Path,
     detector_mode: DetectorMode,
     options: &ReadOptions,

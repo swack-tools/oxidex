@@ -31,10 +31,17 @@
 //!   back unchanged: a surrogate pair `3c d8 8c df`, and even a lone
 //!   surrogate, survive `-TagsFromFile`.
 //!
-//! A path that holds the decoded text of a *stored* value without its bytes
-//! cannot tell which of the two ExifTool would write for a code point above
-//! U+FFFF, and refuses that value ([`refuse_unknown_provenance`]) rather
-//! than pick one.
+//! Whether a value is the caller's is recorded, never inferred from its
+//! value: an occurrence recorded after the read is an assignment
+//! (`MetadataMap::assigned_after_read`). An assigned XP string is always a
+//! direct write, even when its text is exactly what the file decodes to --
+//! a stored pair, lone surrogate or BOM decodes to text that does not
+//! encode back to the same bytes, and ExifTool re-encodes the assigned text
+//! ([`is_explicit_xp_set`]); an entry nobody assigned keeps its stored
+//! bytes. A path that holds the decoded text of a *read* value without its
+//! bytes cannot tell which of the two ExifTool would write for a code point
+//! above U+FFFF, and refuses that value ([`refuse_unknown_provenance`])
+//! rather than pick one.
 //!
 //! Verified against the pinned oracle (13.59, `-ver` and the `OOXML.docx`
 //! probe asserted): `-XPTitle=Title` writes `54 00 69 00 74 00 6c 00 65 00
@@ -53,6 +60,7 @@
 //! both in every case; the JPEG and TIFF writers carry untouched entries
 //! verbatim and are exact.
 
+use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_conversion::xp_ucs2_units;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
@@ -134,6 +142,24 @@ fn pack_v(text: &str) -> Vec<u16> {
     text.chars()
         .map(|c| (u32::from(c) & 0xFFFF) as u16)
         .collect()
+}
+
+/// Whether `key` in `desired` is an XP string the caller assigned
+/// ([`MetadataMap::assigned_after_read`]) -- a direct write, which ExifTool
+/// re-encodes from the assigned text even when that text equals what the
+/// file decodes to: a stored surrogate pair, lone surrogate or BOM reads as
+/// text that does not encode back to the same bytes. The writers rewrite
+/// such an entry instead of carrying it over by value equality.
+pub(crate) fn is_explicit_xp_set(desired: &MetadataMap, key: &str) -> bool {
+    is_xp_tag_key(key) && desired.assigned_after_read(key)
+}
+
+/// Whether `desired` holds any XP string the caller assigned
+/// ([`is_explicit_xp_set`]).
+pub(crate) fn has_explicit_xp_set(desired: &MetadataMap) -> bool {
+    desired
+        .iter()
+        .any(|(key, _)| is_explicit_xp_set(desired, key))
 }
 
 /// Refuses the decoded text of a *stored* XP value that arrived without the

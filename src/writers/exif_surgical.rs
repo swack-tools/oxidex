@@ -945,7 +945,12 @@ pub(crate) fn plan_exif_write_with_removals(
             value: Some(desired_value.clone()),
             rowless: None,
         });
-        if desired_value == original_value {
+        // An XP string the caller assigned is rewritten even at its original
+        // value: its text can stand for other bytes than the entry's
+        // (`xp_strings::is_explicit_xp_set`).
+        if desired_value == original_value
+            && !crate::writers::xp_strings::is_explicit_xp_set(desired, &key)
+        {
             bucket(&mut plan, carry);
             continue;
         }

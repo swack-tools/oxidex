@@ -185,13 +185,12 @@ fn serialize_itxt_chunk(keyword: &[u8], lang: &[u8], translated: &[u8], text: &s
 ///
 /// Serialized eXIf chunk data (TIFF format), or error if serialization fails
 ///
-/// `baseline` is the reader's map of the original file, when known: an XP
-/// string whose occurrence carries no stored bytes but still holds the
-/// baseline's value is a stored value that lost its provenance, and one
-/// with a code point above U+FFFF is refused
-/// (`xp_strings::refuse_unknown_provenance`). A changed XP string is the
-/// caller's, and encodes as ExifTool's direct write.
-fn serialize_exif_chunk(metadata: &MetadataMap, baseline: Option<&MetadataMap>) -> Result<Vec<u8>> {
+/// An XP string the caller assigned ([`MetadataMap::assigned_after_read`])
+/// encodes as ExifTool's direct write, whatever the file held -- even the
+/// very text it decodes to. One the read produced carries its stored bytes;
+/// a read XP string without them lost its provenance, and one with a code
+/// point above U+FFFF is refused (`xp_strings::refuse_unknown_provenance`).
+fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>> {
     // Filter only TIFF-writable EXIF tags. Each takes the value as the file
     // stores it where the reader keeps one beside a printed value
     // (`TagOccurrence::stored`: the ExifIFD engine rows, whose map value is
@@ -212,7 +211,7 @@ fn serialize_exif_chunk(metadata: &MetadataMap, baseline: Option<&MetadataMap>) 
         if is_tiff_writable {
             if occurrence.stored.is_none()
                 && crate::writers::xp_strings::is_xp_tag_key(tag_name)
-                && baseline.is_some_and(|baseline| baseline.get(tag_name) == Some(tag_value))
+                && !metadata.assigned_after_read(tag_name)
             {
                 crate::writers::xp_strings::refuse_unknown_provenance(tag_name, tag_value)?;
             }
@@ -596,7 +595,7 @@ pub fn write_png_metadata_with_baseline(
     }
 
     // Process eXIf chunk
-    let exif_data = serialize_exif_chunk(modified_metadata, Some(baseline))?;
+    let exif_data = serialize_exif_chunk(modified_metadata)?;
     if !exif_data.is_empty() {
         metadata_chunks.push((*b"eXIf", exif_data));
     }
