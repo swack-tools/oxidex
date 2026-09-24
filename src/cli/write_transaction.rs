@@ -18,7 +18,7 @@
 //! read-back of every requested address proves it (see `already_satisfied`).
 
 use crate::cli::args::CliArgs;
-use crate::cli::value_parser::parse_cli_tag_value;
+use crate::cli::value_parser::parse_cli_tag_value_os;
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{
     CopyReport, clear_all_metadata, copy_metadata_report, modify_tag, read_metadata, remove_tag,
@@ -27,6 +27,7 @@ use crate::core::operations::{
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::exif_surgical::stored_entry_matches;
 use crate::writers::write_request::undefined_tag_warning;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,8 +47,8 @@ pub enum WriteOutcome {
 /// rest are returned in order. When nothing remains the caller prints
 /// `Nothing to do.` and exits 1 (exiftool:1810-1813).
 pub fn partition_defined(
-    modifications: &[(String, String)],
-) -> (Vec<String>, Vec<(String, String)>) {
+    modifications: &[(String, OsString)],
+) -> (Vec<String>, Vec<(String, OsString)>) {
     let mut warnings = Vec::new();
     let mut defined = Vec::new();
     for (tag, value) in modifications {
@@ -77,7 +78,7 @@ pub struct WritePlan {
     /// Date shifts (`-AllDates+=1:0:0 0:0:0`, an absolute `-ModifyDate=...`).
     pub shifts: Vec<(String, ShiftOperation, String)>,
     /// Plain `-TAG=VALUE` requests whose names ExifTool defines.
-    pub sets: Vec<(String, String)>,
+    pub sets: Vec<(String, OsString)>,
     /// ExifTool's warnings for the `-TAG=VALUE` names it does not define.
     pub warnings: Vec<String>,
     /// Whether any `-TAG=VALUE` was given, defined or not.
@@ -248,7 +249,7 @@ pub fn write_plan_file(
 /// rewrites to the same bytes and still counts as an update there).
 pub fn write_file(
     path: &Path,
-    modifications: &[(String, String)],
+    modifications: &[(String, OsString)],
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
     let plan = WritePlan {
@@ -259,7 +260,7 @@ pub fn write_file(
     write_plan_file(path, &plan, on_commit).map(|done| done.outcome)
 }
 
-fn apply_sets(scratch: &Path, sets: &[(String, String)]) -> Result<(), String> {
+fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<(), String> {
     for (tag_name, value) in sets {
         if value.is_empty() {
             // Empty value = delete tag (ExifTool -TAG= syntax)
@@ -269,7 +270,7 @@ fn apply_sets(scratch: &Path, sets: &[(String, String)]) -> Result<(), String> {
             // Typed as the tag's registry entry declares; wrapping every value
             // as a String made Integer/Rational/DateTime tags unsettable from
             // the CLI.
-            let tag_value = parse_cli_tag_value(tag_name, value)
+            let tag_value = parse_cli_tag_value_os(tag_name, value)
                 .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
             modify_tag(scratch, tag_name, tag_value).map_err(|e| {
                 let text = e.to_string();
@@ -295,7 +296,7 @@ fn apply_sets(scratch: &Path, sets: &[(String, String)]) -> Result<(), String> {
 /// `0 image files updated` / `1 image files unchanged`) all leave the answer
 /// `unchanged`. A dropped or refused request never reaches here: refusals are
 /// errors, and the resolved address is the one the writer was handed.
-fn already_satisfied(path: &Path, modifications: &[(String, String)]) -> bool {
+fn already_satisfied(path: &Path, modifications: &[(String, OsString)]) -> bool {
     if !modifications.iter().any(|(_, value)| !value.is_empty()) {
         return false;
     }
@@ -312,7 +313,7 @@ fn already_satisfied(path: &Path, modifications: &[(String, String)]) -> bool {
         if value.is_empty() {
             return !stored.contains_key(&key);
         }
-        let Ok(requested) = parse_cli_tag_value(tag_name, value) else {
+        let Ok(requested) = parse_cli_tag_value_os(tag_name, value) else {
             return false;
         };
         // An EXIF entry must hold exactly the bytes the writer would emit: the
@@ -323,9 +324,12 @@ fn already_satisfied(path: &Path, modifications: &[(String, String)]) -> bool {
                 .as_deref()
                 .is_some_and(|bytes| stored_entry_matches(bytes, &key, &requested) == Some(true));
         }
-        stored
-            .get(&key)
-            .is_some_and(|held| *held == requested || held.as_string() == Some(value.as_str()))
+        stored.get(&key).is_some_and(|held| {
+            *held == requested
+                || value
+                    .to_str()
+                    .is_some_and(|text| held.as_string() == Some(text))
+        })
     })
 }
 

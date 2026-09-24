@@ -5,6 +5,7 @@
 //! metadata operations on large file collections.
 
 use crate::cli::args::CliArgs;
+use crate::cli::non_utf8::{PathLine, json_path, os_bytes};
 use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
@@ -16,7 +17,9 @@ use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
@@ -159,10 +162,9 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     let (files, unidentified) = collect_files(path, args.recursive)?;
 
     if files.is_empty() {
-        eprintln!(
-            "Warning: No supported image files found in {}",
-            path.display()
-        );
+        PathLine::new("Warning: No supported image files found in ")
+            .path(path)
+            .eprint();
         let mut stats = BatchStats::new();
         stats.unidentified = unidentified;
         return Ok(stats);
@@ -214,7 +216,9 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
         if is_supported_file(path) {
             files.push(path.to_path_buf());
         } else {
-            eprintln!("Warning: File type not supported: {}", path.display());
+            PathLine::new("Warning: File type not supported: ")
+                .path(path)
+                .eprint();
             unidentified += 1;
         }
     } else if path.is_dir() {
@@ -340,7 +344,10 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
                 }
                 Err(e) => {
                     error_count.fetch_add(1, Ordering::Relaxed);
-                    eprintln!("Error reading {}: {}", path.display(), e);
+                    PathLine::new("Error reading ")
+                        .path(path)
+                        .text(&format!(": {e}"))
+                        .eprint();
                 }
             }
 
@@ -396,7 +403,7 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
 /// BatchStats with counts of successful updates and errors
 pub fn batch_write(
     files: Vec<PathBuf>,
-    modifications: &[(String, String)],
+    modifications: &[(String, OsString)],
     args: &CliArgs,
 ) -> Result<BatchStats> {
     let file_count = files.len();
@@ -423,7 +430,10 @@ pub fn batch_write(
             }
             Err(e) => {
                 error_count.fetch_add(1, Ordering::Relaxed);
-                eprintln!("Error writing {}: {}", path.display(), e);
+                PathLine::new("Error writing ")
+                    .path(path)
+                    .text(&format!(": {e}"))
+                    .eprint();
             }
         }
 
@@ -451,7 +461,7 @@ pub fn batch_write(
 /// timestamps) around an actual update only.
 fn apply_modifications(
     path: &Path,
-    modifications: &[(String, String)],
+    modifications: &[(String, OsString)],
     args: &CliArgs,
 ) -> std::result::Result<WriteOutcome, String> {
     // Preserve original file times if requested
@@ -461,13 +471,13 @@ fn apply_modifications(
         None
     };
 
-    // Create backup if requested, once the write is known to change the file
+    // Create backup if requested, once the write is known to change the file.
+    // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file
+    // spelling, built on the `OsStr`; `with_extension` made `a..bak`).
     let backup = || {
         if !args.backup {
             return Ok(());
         }
-        // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file
-        // spelling; `with_extension("{ext}.bak")` made `a..bak`).
         let mut backup_path = path.as_os_str().to_owned();
         backup_path.push(".bak");
         fs::copy(path, PathBuf::from(backup_path))
@@ -538,7 +548,8 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
         if let Ok(metadata) = result {
             let metadata = resolved_metadata_for_structured_output(metadata, args);
             let rendered = formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
-            let source_file = path.display().to_string();
+            // The path's own bytes, as ExifTool's `-csv` prints them.
+            let source_file = os_bytes(path.as_os_str());
             // Parse without implicit header handling and skip the formatter's
             // "Tag,Value" header row explicitly, so a formatter change cannot
             // silently swallow each file's first data row.
@@ -554,9 +565,9 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
                 }
                 writer
                     .write_record([
-                        source_file.as_str(),
-                        record.get(0).unwrap_or_default(),
-                        record.get(1).unwrap_or_default(),
+                        source_file,
+                        record.get(0).unwrap_or_default().as_bytes(),
+                        record.get(1).unwrap_or_default().as_bytes(),
                     ])
                     .map_err(|e| {
                         ExifToolError::parse_error(format!("CSV formatting failed: {e}"))
@@ -571,9 +582,11 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
     let bytes = writer
         .into_inner()
         .map_err(|e| ExifToolError::parse_error(format!("CSV formatting failed: {e}")))?;
-    let output = String::from_utf8(bytes)
-        .map_err(|e| ExifToolError::parse_error(format!("CSV formatting failed: {e}")))?;
-    print!("{}", output);
+    // Bytes, not a `String`: a path need not be UTF-8.
+    std::io::stdout()
+        .lock()
+        .write_all(&bytes)
+        .map_err(ExifToolError::from)?;
 
     Ok(())
 }
@@ -589,7 +602,7 @@ fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliAr
 
     for (path, result) in results {
         if let Ok(metadata) = result {
-            println!("======== {}", path.display());
+            PathLine::new("======== ").path(path).print();
             match resolve_file_output(metadata, args) {
                 ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                 ResolvedFileOutput::Metadata(metadata) => {
@@ -627,7 +640,9 @@ fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArg
             };
             map.insert(
                 "SourceFile".to_string(),
-                JsonNode::String(path.display().to_string()),
+                // ExifTool's `-j` replaces each malformed byte of a path with
+                // `?` (`FixUTF8`), keeping the output valid JSON.
+                JsonNode::String(json_path(path)),
             );
             map
         })
@@ -735,7 +750,7 @@ fn output_human_readable_results(results: &[(PathBuf, Result<MetadataMap>)], arg
     for (path, result) in results {
         match result {
             Ok(metadata) => {
-                println!("File: {}", path.display());
+                PathLine::new("File: ").path(path).print();
                 match resolve_file_output(metadata, args) {
                     ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                     ResolvedFileOutput::Metadata(metadata) => {

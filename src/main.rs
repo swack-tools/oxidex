@@ -4,6 +4,7 @@
 
 use oxidex::cli::args::CliArgs;
 use oxidex::cli::batch_processor;
+use oxidex::cli::non_utf8::PathLine;
 use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
@@ -98,7 +99,9 @@ fn main() {
         if let Some((src, _)) = &plan.copy_from
             && !src.exists()
         {
-            eprintln!("Error: Source file not found: {}", src.display());
+            PathLine::new("Error: Source file not found: ")
+                .path(src)
+                .eprint();
             process::exit(1);
         }
         if files.len() == 1 && !files[0].is_dir() {
@@ -204,7 +207,9 @@ fn report_copy(
     copy: &oxidex::core::operations::CopyReport,
 ) {
     if !filters.is_empty() && copy.copied == 0 {
-        eprintln!("Warning: No writable tags set from {}", src.display());
+        PathLine::new("Warning: No writable tags set from ")
+            .path(src)
+            .eprint();
     }
     if !copy.uncopied_groups.is_empty() {
         eprintln!(
@@ -253,7 +258,10 @@ fn handle_multi_write(files: &[std::path::PathBuf], plan: &WritePlan, args: &Cli
             }
             Err(message) => {
                 stats.errors += 1;
-                eprintln!("Error writing {}: {}", file.display(), message);
+                PathLine::new("Error writing ")
+                    .path(file)
+                    .text(&format!(": {message}"))
+                    .eprint();
             }
         }
     }
@@ -276,7 +284,9 @@ fn prepare_write_target(
 ) -> Option<std::time::SystemTime> {
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: {} not found: {}", label, file.display());
+        PathLine::new(&format!("Error: {label} not found: "))
+            .path(file)
+            .eprint();
         process::exit(1);
     }
 
@@ -284,13 +294,18 @@ fn prepare_write_target(
     let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: {} is read-only: {}", label, file.display());
+                PathLine::new(&format!("Error: {label} is read-only: "))
+                    .path(file)
+                    .eprint();
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!("Error: Cannot access {} '{}': {}", noun, file.display(), e);
+            PathLine::new(&format!("Error: Cannot access {noun} '"))
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     };
@@ -396,12 +411,10 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
                     .first()
                     .map(|d| d.message.clone())
                     .unwrap_or_else(|| report.status.to_string());
-                eprintln!(
-                    "Error: Failed to read metadata from '{}': {} (status: {})",
-                    file.display(),
-                    reason,
-                    report.status
-                );
+                PathLine::new("Error: Failed to read metadata from '")
+                    .path(file)
+                    .text(&format!("': {reason} (status: {})", report.status))
+                    .eprint();
                 process::exit(1);
             }
 
@@ -410,7 +423,9 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
 
             // Check if any metadata was found
             if raw_metadata.is_empty() {
-                println!("No metadata found in file: {}", file.display());
+                PathLine::new("No metadata found in file: ")
+                    .path(file)
+                    .print();
                 return;
             }
 
@@ -440,11 +455,10 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             }
         }
         Err(e) => {
-            eprintln!(
-                "Error: Failed to read metadata from '{}': {}",
-                file.display(),
-                e
-            );
+            PathLine::new("Error: Failed to read metadata from '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -486,7 +500,7 @@ fn print_resolved_metadata(
         print!("{}", output);
     } else {
         if show_header {
-            println!("File: {}", file.display());
+            PathLine::new("File: ").path(file).print();
             println!("Found {} metadata tag(s):", metadata.len());
             println!();
         }
@@ -523,7 +537,7 @@ fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
 fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs) {
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        PathLine::new("Error: File not found: ").path(file).eprint();
         process::exit(1);
     }
 
@@ -547,7 +561,10 @@ fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs
             }
         }
         Err(e) => {
-            eprintln!("Error: Failed to rename file '{}': {}", file.display(), e);
+            PathLine::new("Error: Failed to rename file '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }

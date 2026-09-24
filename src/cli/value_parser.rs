@@ -100,6 +100,17 @@ fn inverse_offset_time(value: &str) -> Option<String> {
     None
 }
 
+/// [`parse_cli_tag_value`] for a value as the command line delivered it,
+/// which need not be UTF-8. Text goes through [`parse_cli_tag_value`]; any
+/// other bytes through `cli::non_utf8::tag_value`, which encodes them as
+/// ExifTool does for an XP string and refuses them for every other tag.
+pub fn parse_cli_tag_value_os(tag_name: &str, raw: &std::ffi::OsStr) -> Result<TagValue> {
+    match raw.to_str() {
+        Some(text) => parse_cli_tag_value(tag_name, text),
+        None => crate::cli::non_utf8::tag_value(tag_name, crate::cli::non_utf8::os_bytes(raw)),
+    }
+}
+
 /// Parses `raw` into the value type `tag_name` declares in the tag registry.
 ///
 /// Tags with no registry entry — or whose registry type metadata is flagged
