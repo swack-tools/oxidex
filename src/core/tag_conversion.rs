@@ -658,6 +658,38 @@ fn time_codes_forms_for_admission(
     })
 }
 
+/// The three forms of one of the Windows XP strings, 0x9c9b-0x9c9f
+/// (Exif.pm 13.59:2629-2676, `Format => 'undef'`): the decoded text on the
+/// print and ValueConv channels, and the entry's bytes as the stored form --
+/// "an `undef` run as its bytes" (`TagOccurrence::stored`).
+///
+/// The bytes are the provenance a copy needs: ExifTool's UCS2 decode keeps
+/// every unit as a code point, so its `-TagsFromFile` packs a surrogate pair
+/// (or a lone surrogate) back exactly, while a *typed* code point above
+/// U+FFFF is written as its low 16 bits. The decoded text cannot tell those
+/// apart; `crate::writers::xp_strings` serializes the stored bytes for a
+/// copy and the text only for a value the caller supplied.
+#[must_use]
+pub(crate) fn xp_string_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    if !(0x9C9B..=0x9C9F).contains(&tag_id) {
+        return None;
+    }
+    let text = TagValue::new_string(decode_xp_ucs2_string(bytes));
+    Some(TimeCodesForms {
+        stored: TagValue::Binary(bytes.to_vec()),
+        value: text.clone(),
+        print: text,
+    })
+}
+
+/// The print / ValueConv / stored forms of an Exif::Main entry whose hand
+/// arm keeps a stored form beside its printed value: TimeCodes
+/// ([`time_codes_forms`]) and the XP strings ([`xp_string_forms`]).
+#[must_use]
+pub(crate) fn exif_main_entry_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    time_codes_forms(tag_id, bytes).or_else(|| xp_string_forms(tag_id, bytes))
+}
+
 /// Returns TimeCodes forms only while the tag's exact pinned source hash is
 /// admitted. All adapters use this seam, so registry drift disables the hand
 /// conversion instead of publishing behavior proved against an older body.
@@ -986,6 +1018,20 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
 /// so [`String::from_utf16_lossy`] folds the pair into U+1F38C instead. There
 /// is no rendering of that input this function could make match.
 fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
+    String::from_utf16_lossy(&xp_ucs2_units(bytes))
+}
+
+/// The UCS-2 code units an XP* value holds, as [`decode_xp_ucs2_string`]
+/// reads them: a leading byte-order mark consumed (and honoured), an odd
+/// trailing byte dropped, and the value ended at the first zero unit.
+///
+/// These are exactly the code points `Decode($val,"UCS2","II")` produces --
+/// UCS2 combines no surrogate pairs, so each unit is one code point, a lone
+/// surrogate included -- and so exactly what `ValueConvInv`'s
+/// `Encode($val,"UCS2","II")` packs back (`pack('v*')`, Charset.pm:387-390).
+/// The writers use them to reproduce what ExifTool stores for a value copied
+/// from these bytes (`crate::writers::xp_strings`).
+pub(crate) fn xp_ucs2_units(bytes: &[u8]) -> Vec<u16> {
     // Honour a leading BOM over the declared "II", as Charset.pm does.
     let (bytes, big_endian) = match bytes {
         [0xFE, 0xFF, rest @ ..] => (rest, true),
@@ -1005,7 +1051,7 @@ fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
         }
         units.push(unit);
     }
-    String::from_utf16_lossy(&units)
+    units
 }
 
 // ============================================================================
