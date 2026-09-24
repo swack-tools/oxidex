@@ -796,8 +796,7 @@ class _Reaped:
 class ZombieGroupTests(unittest.TestCase):
     """A zombie holds no descriptors, so a zombie-only group cannot hold the flock."""
 
-    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"),
-                         "needs a supported process-group enumeration primitive")
+    @unittest.skipUnless(sys.platform == "darwin", "the zombie-only relaxation is macOS-only")
     def test_zombie_only_group_is_gone_but_a_live_member_is_not(self):
         helper = subprocess.Popen([sys.executable, "-c", ZOMBIE_GROUP_HELPER], stdout=subprocess.PIPE,
                                   text=True, start_new_session=True)
@@ -838,20 +837,46 @@ class ZombieGroupTests(unittest.TestCase):
         with patch.object(executor.sys, "platform", "freebsd14"):
             self.assertIsNone(executor._group_member_states(7))
 
-    def test_linux_proc_scan_reads_state_and_pgrp_strictly(self):
-        with TemporaryDirectory() as temporary:
-            proc = Path(temporary)
-            rows = {"100": "100 (worker) Z 1 555 555 0", "101": "101 (we)ird) na me) Z 100 555 555 0",
-                    "102": "102 (other) S 1 777 777 0", "104": "104 (live) R 1 555 555 0"}
-            for pid, text in rows.items():
-                (proc / pid).mkdir(); (proc / pid / "stat").write_text(text + "\n")
-            (proc / "self").mkdir(); (proc / "103").mkdir()  # 103 vanished mid-scan
-            self.assertEqual(sorted(executor._linux_group_members(555, proc)),
-                             [(100, "zombie"), (101, "zombie"), (104, "live")])
-            self.assertEqual(executor._linux_group_members(777, proc), [(102, "live")])
-            (proc / "105").mkdir(); (proc / "105" / "stat").write_text("105 no-parens Z 1 555\n")
-            self.assertIsNone(executor._linux_group_members(555, proc))
-        self.assertIsNone(executor._linux_group_members(555, Path("/nonexistent-proc-root")))
+    def test_non_darwin_platforms_are_always_unproven(self):
+        """/proc shows only a main thread's state and is not a snapshot: never trust it."""
+        self.assertFalse(hasattr(executor, "_linux_group_members"), "no re-enableable /proc scan")
+        for platform in ("linux", "linux2", "freebsd14", "win32", "cygwin"):
+            with self.subTest(platform=platform), patch.object(executor.sys, "platform", platform), \
+                 patch.object(executor.os, "killpg", return_value=None):
+                self.assertIsNone(executor._group_member_states(7))
+                self.assertFalse(executor._zombie_only_group(7))
+                self.assertIn("live members", executor._unproven_state(_Reaped(7)))
+            with self.subTest(platform=platform, killpg="EPERM"), \
+                 patch.object(executor.sys, "platform", platform), \
+                 patch.object(executor.os, "killpg", side_effect=PermissionError(1, "Operation not permitted")):
+                self.assertIn("cannot be inspected", executor._unproven_state(_Reaped(7)))
+
+    def test_darwin_rescan_must_confirm_the_same_zombie_members(self):
+        zombie = [(10, "zombie")]
+        for label, rescan, gone in (("membership grew", [(10, "zombie"), (11, "zombie")], False),
+                                    ("member revived state", [(10, "live")], False),
+                                    ("rescan failed", None, False),
+                                    ("member replaced", [(12, "zombie")], False),
+                                    ("identical", [(10, "zombie")], True)):
+            with self.subTest(label=label), patch.object(executor.sys, "platform", "darwin"), \
+                 patch.object(executor, "_group_member_states", side_effect=[zombie, rescan]) as states:
+                self.assertIs(executor._zombie_only_group(10), gone)
+                self.assertEqual(states.call_count, 2)
+        with patch.object(executor.sys, "platform", "darwin"), \
+             patch.object(executor, "_group_member_states", side_effect=[[(10, "live")]]) as states:
+            self.assertFalse(executor._zombie_only_group(10))
+            self.assertEqual(states.call_count, 1)  # no re-scan once a live member is seen
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS libproc/sysctl prototypes")
+    def test_darwin_ctypes_prototypes_are_declared(self):
+        import ctypes
+        libc, libproc = executor._darwin_libraries()
+        self.assertEqual(libc.sysctl.argtypes, [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t])
+        self.assertIs(libc.sysctl.restype, ctypes.c_int)
+        self.assertEqual(libproc.proc_listpids.argtypes,
+                         [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int])
+        self.assertIs(libproc.proc_listpids.restype, ctypes.c_int)
 
     def test_darwin_views_must_agree_and_layout_must_check(self):
         me = os.getpid()

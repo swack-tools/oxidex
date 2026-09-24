@@ -17,7 +17,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -626,23 +625,44 @@ def _spawn(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
 
 # Process-group membership is read from the kernel, never from `ps` columns
 # (a `ps` column silently wrong on one platform is AGENTS.md incident #9).
+# Only macOS offers a trustworthy view here. On Linux /proc/<pid>/stat shows
+# only a main thread's state (a worker thread sharing the lock descriptor can
+# outlive a `Z` main thread) and a /proc walk is not a snapshot, so every
+# other platform stays fail closed: a group that still answers is unproven.
 _DARWIN_PROC_PGRP_ONLY = 2          # proc_listpids(PROC_PGRP_ONLY, pgid, ...)
 _DARWIN_KERN_PROC = (1, 14)         # CTL_KERN, KERN_PROC
 _DARWIN_KERN_PROC_PID, _DARWIN_KERN_PROC_PGRP = 1, 2
 _DARWIN_KINFO_PROC_SIZE = 648       # sizeof(struct kinfo_proc), 64-bit
 _DARWIN_P_STAT_OFFSET, _DARWIN_P_PID_OFFSET = 36, 40  # extern_proc.p_stat / p_pid
 _DARWIN_SRUN, _DARWIN_SZOMB = 2, 5
+_DARWIN_LIBRARIES: tuple[Any, Any] | None = None
+
+
+def _darwin_libraries() -> tuple[Any, Any]:
+    """libc and libproc with explicit prototypes (no default int conversions)."""
+    global _DARWIN_LIBRARIES
+    if _DARWIN_LIBRARIES is None:
+        import ctypes
+        import ctypes.util
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        libc.sysctl.restype = ctypes.c_int
+        library = ctypes.util.find_library("proc")
+        if library is None:
+            raise OSError("libproc is unavailable")
+        libproc = ctypes.CDLL(library, use_errno=True)
+        libproc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        libproc.proc_listpids.restype = ctypes.c_int
+        _DARWIN_LIBRARIES = (libc, libproc)
+    return _DARWIN_LIBRARIES
 
 
 def _darwin_pgrp_listpids(pgid: int) -> list[int] | None:
     """libproc's view of a group's members; None when it cannot be read."""
     try:
         import ctypes
-        import ctypes.util
-        library = ctypes.util.find_library("proc")
-        if library is None:
-            return None
-        libproc = ctypes.CDLL(library, use_errno=True)
+        _libc, libproc = _darwin_libraries()
         needed = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, None, 0)
         if needed < 0:
             return None
@@ -651,7 +671,7 @@ def _darwin_pgrp_listpids(pgid: int) -> list[int] | None:
         if filled < 0 or filled >= ctypes.sizeof(buffer):
             return None  # an error, or possibly truncated: never guess
         return [pid for pid in buffer[: filled // ctypes.sizeof(ctypes.c_int)] if pid > 0]
-    except (OSError, AttributeError):
+    except (OSError, AttributeError, ctypes.ArgumentError):
         return None
 
 
@@ -659,7 +679,7 @@ def _darwin_kinfo(mib: list[int]) -> list[tuple[int, int]] | None:
     """(pid, p_stat) for each kinfo_proc a KERN_PROC sysctl returns."""
     try:
         import ctypes
-        libc = ctypes.CDLL(None, use_errno=True)
+        libc, _libproc = _darwin_libraries()
         names = (ctypes.c_int * len(mib))(*mib)
         size = ctypes.c_size_t(0)
         if libc.sysctl(names, len(mib), None, ctypes.byref(size), None, 0) != 0:
@@ -668,7 +688,7 @@ def _darwin_kinfo(mib: list[int]) -> list[tuple[int, int]] | None:
         buffer = ctypes.create_string_buffer(size.value)
         if libc.sysctl(names, len(mib), buffer, ctypes.byref(size), None, 0) != 0:
             return None
-    except (OSError, AttributeError):
+    except (OSError, AttributeError, ctypes.ArgumentError):
         return None
     raw = buffer.raw[: size.value]
     if len(raw) % _DARWIN_KINFO_PROC_SIZE:
@@ -691,48 +711,33 @@ def _darwin_group_members(pgid: int) -> list[tuple[int, str]] | None:
     return [(pid, "zombie" if stat == _DARWIN_SZOMB else "live") for pid, stat in kinfo]
 
 
-def _linux_group_members(pgid: int, proc_root: Path = Path("/proc")) -> list[tuple[int, str]] | None:
-    """Scan /proc/<pid>/stat: state is field 3, pgrp field 5 (after the last ')')."""
-    members: list[tuple[int, str]] = []
-    try:
-        entries = [entry for entry in proc_root.iterdir() if entry.name.isdigit()]
-    except OSError:
-        return None
-    for entry in entries:
-        try:
-            text = (entry / "stat").read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
-            continue  # reaped during the scan: gone, holds nothing
-        except OSError:
-            return None
-        _comm, closing, tail = text.rpartition(")")
-        fields = tail.split()
-        if not closing or len(fields) < 3 or re.fullmatch(r"-?[0-9]+", fields[2]) is None:
-            return None
-        if int(fields[2]) == pgid:
-            members.append((int(entry.name), "zombie" if fields[0] == "Z" else "live"))
-    return members
-
-
 def _group_member_states(pgid: int) -> list[tuple[int, str]] | None:
-    """Every member of a process group as (pid, zombie|live); None if unknowable here."""
+    """Every member of a process group as (pid, zombie|live); None if unknowable here.
+
+    macOS only. Every other platform returns None, which keeps the group
+    unproven and the host lock held.
+    """
     if sys.platform == "darwin":
         return _darwin_group_members(pgid)
-    if sys.platform.startswith("linux"):
-        return _linux_group_members(pgid)
     return None
 
 
 def _zombie_only_group(pgid: int) -> bool:
-    """True only when every member is verified to be a zombie.
+    """True only when every member is verified to be a zombie, twice over.
 
     A zombie has already closed every descriptor, so a group holding only
-    zombies cannot keep the host lock's file description referenced. Any
-    enumeration failure, an empty answer, a live member or an unsupported
-    platform leaves the group unproven.
+    zombies cannot keep the host lock's file description referenced. The
+    enumeration is repeated and must return the identical all-zombie member
+    set, closing the window in which a member forks a live child into the
+    group between the two kernel views. Any enumeration failure, an empty
+    answer, a live member, a changed membership or a non-macOS platform
+    leaves the group unproven.
     """
-    members = _group_member_states(pgid)
-    return bool(members) and all(state == "zombie" for _pid, state in members)
+    first = _group_member_states(pgid)
+    if not first or any(state != "zombie" for _pid, state in first):
+        return False
+    second = _group_member_states(pgid)
+    return second is not None and sorted(second) == sorted(first)
 
 
 def _unproven_state(child: subprocess.Popen[Any]) -> str | None:

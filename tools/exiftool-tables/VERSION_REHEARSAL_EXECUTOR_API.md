@@ -169,15 +169,18 @@ probing it with `flock` could acquire a previously unlocked descriptor.
 Stage children inherit the lock's open file description (`close_fds=False`).
 Because `flock` is per description, an owner's `LOCK_UN` would release the lock
 for a still-live child as well, so the owner unlocks only after every child it
-spawned has been reaped and its process group is empty. A group that still
-answers (or, on macOS, refuses `killpg` with EPERM) counts as gone only when
-every member is verified to be a zombie, which holds no descriptors: on macOS
-libproc's `proc_listpids(PROC_PGRP_ONLY)` and `sysctl(KERN_PROC_PGRP)` must
-list the same members and each `kinfo_proc.p_stat` must be `SZOMB`; on Linux
-every `/proc/<pid>/stat` in the group must show state `Z`. Any enumeration
-failure, live member or other platform leaves it unproven, and a reaped
-child's group gets a bounded grace of a few seconds to clear. Otherwise the
-lock fails closed: no unlock, the descriptor is retained, and the owner exits
+spawned has been reaped and its process group is empty. On macOS only, a
+group that still answers (or refuses `killpg` with EPERM, as macOS does for a
+zombie-only group) counts as gone when every member is verified to be a
+zombie, which holds no descriptors: libproc's
+`proc_listpids(PROC_PGRP_ONLY)` and `sysctl(KERN_PROC_PGRP)` must list the
+same members, the `kinfo_proc` layout must check against this process, each
+`p_stat` must be `SZOMB`, and a second enumeration must return the identical
+all-zombie set. Every other platform keeps such a group unproven: Linux
+`/proc/<pid>/stat` reports only a main thread's state and a `/proc` walk is
+not a snapshot. Any enumeration failure or live member also leaves it
+unproven, and a reaped child's group gets a bounded grace of a few seconds to
+clear. Otherwise the lock fails closed: no unlock, the descriptor is retained, and the owner exits
 non-zero naming each surviving PID (`LockRetained`; the transition wrapper
 reports it as `LeaseRetained`, exit 5). The lock then frees only when the last
 holder of the description exits. Descendants that leave their process group
