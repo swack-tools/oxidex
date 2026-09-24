@@ -909,9 +909,9 @@ mod tests {
     ) -> CliArgs {
         let mut args = requested
             .iter()
-            .map(|name| format!("-{name}"))
+            .map(|name| std::ffi::OsString::from(format!("-{name}")))
             .collect::<Vec<_>>();
-        args.push("fixture.orf".to_owned());
+        args.push("fixture.orf".into());
         CliArgs {
             detector: crate::cli::args::DetectorMode::Signature,
             json: true,

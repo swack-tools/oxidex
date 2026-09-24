@@ -879,8 +879,9 @@ fn an_explicit_set_of_the_stored_text_writes_exiftools_direct_bytes() {
 }
 
 /// The other half of the contract: an XP entry nobody assigned keeps its
-/// stored bytes when another tag is written -- the JPEG and TIFF writers
-/// leave them verbatim, as ExifTool's `-IFD0:Artist=you` does.
+/// stored bytes when another tag is written -- the JPEG, TIFF and PNG
+/// `eXIf` writers leave them verbatim, as ExifTool's `-IFD0:Artist=you`
+/// does.
 #[test]
 fn an_untouched_xp_entry_keeps_its_stored_bytes() {
     let artist = (0x013b, 2, 3, b"me\0".to_vec());
@@ -897,6 +898,7 @@ fn an_untouched_xp_entry_keeps_its_stored_bytes() {
             for (name, bytes) in [
                 ("carry.jpg", jpeg_with(&block)),
                 ("carry.tif", block.clone()),
+                ("carry.png", png_with(Some(&block))),
             ] {
                 let path = write(dir.path(), name, &bytes);
                 modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();

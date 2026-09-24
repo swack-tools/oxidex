@@ -26,7 +26,7 @@
 //!   U+FFFF: `-XPTitle=A🎌` writes `41 00 8c f3 00 00`.
 //! * [`TagValue::Binary`] is the entry's bytes as a file stored them -- the
 //!   readers keep them as `TagOccurrence::stored`, which `copy_metadata`
-//!   and the PNG `eXIf` rebuild serialize. ExifTool's UCS2 decode keeps
+//!   serializes. ExifTool's UCS2 decode keeps
 //!   every unit as its own code point, so its copy packs the stored units
 //!   back unchanged: a surrogate pair `3c d8 8c df`, and even a lone
 //!   surrogate, survive `-TagsFromFile`.
@@ -51,14 +51,9 @@
 //! all gone from the copy, and an `undef` or `int16u` source entry lands as
 //! `int8u`. `tests/xp_string_write.rs` pins each case.
 //!
-//! One case is not exact. When an unrelated edit rebuilds a PNG's `eXIf`
-//! chunk, ExifTool leaves an untouched XP entry byte for byte (type, BOM,
-//! text after a NUL and all), while the rebuild -- which re-serializes every
-//! tag from the map, always II -- writes the copy form above. The two agree
-//! whenever the stored value is canonical (UCS-2LE text, one NUL pair,
-//! `int8u`), surrogates included, and ExifTool reads the same text from
-//! both in every case; the JPEG and TIFF writers carry untouched entries
-//! verbatim and are exact.
+//! An entry nobody assigned is carried byte for byte by every writer -- the
+//! JPEG APP1, TIFF and PNG `eXIf` writers all edit in place -- as ExifTool
+//! leaves it on an unrelated edit (type, BOM, text after a NUL and all).
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_conversion::xp_ucs2_units;

@@ -4,11 +4,12 @@
 
 use oxidex::cli::args::CliArgs;
 use oxidex::cli::batch_processor;
+use oxidex::cli::non_utf8::PathLine;
 use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
 use oxidex::cli::rename;
-use oxidex::cli::value_parser::parse_cli_tag_value;
+use oxidex::cli::value_parser::parse_cli_tag_value_os;
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::operations::{
     clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector_and_options,
@@ -136,7 +137,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        PathLine::new("Error: File not found: ").path(file).eprint();
         process::exit(1);
     }
 
@@ -144,13 +145,18 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
+                PathLine::new("Error: File is read-only: ")
+                    .path(file)
+                    .eprint();
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
+            PathLine::new("Error: Cannot access file '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     };
@@ -177,11 +183,10 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
         let backup_path = std::path::PathBuf::from(backup_path);
 
         if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
+            PathLine::new("Error: Failed to create backup file '")
+                .path(&backup_path)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -198,7 +203,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
             // Non-empty value = modify tag, typed as the tag's registry entry
             // declares. Wrapping every value as a String here is what made
             // Integer/Rational/DateTime tags unsettable from the CLI.
-            let tag_value = match parse_cli_tag_value(tag_name, value) {
+            let tag_value = match parse_cli_tag_value_os(tag_name, value) {
                 Ok(tag_value) => tag_value,
                 Err(e) => {
                     eprintln!("Error: Invalid value for {}: {}", tag_name, e);
@@ -265,12 +270,10 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
                     .first()
                     .map(|d| d.message.clone())
                     .unwrap_or_else(|| report.status.to_string());
-                eprintln!(
-                    "Error: Failed to read metadata from '{}': {} (status: {})",
-                    file.display(),
-                    reason,
-                    report.status
-                );
+                PathLine::new("Error: Failed to read metadata from '")
+                    .path(file)
+                    .text(&format!("': {reason} (status: {})", report.status))
+                    .eprint();
                 process::exit(1);
             }
 
@@ -279,7 +282,9 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
 
             // Check if any metadata was found
             if raw_metadata.is_empty() {
-                println!("No metadata found in file: {}", file.display());
+                PathLine::new("No metadata found in file: ")
+                    .path(file)
+                    .print();
                 return;
             }
 
@@ -309,11 +314,10 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             }
         }
         Err(e) => {
-            eprintln!(
-                "Error: Failed to read metadata from '{}': {}",
-                file.display(),
-                e
-            );
+            PathLine::new("Error: Failed to read metadata from '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -355,7 +359,7 @@ fn print_resolved_metadata(
         print!("{}", output);
     } else {
         if show_header {
-            println!("File: {}", file.display());
+            PathLine::new("File: ").path(file).print();
             println!("Found {} metadata tag(s):", metadata.len());
             println!();
         }
@@ -392,6 +396,7 @@ fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
 fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
     // Extract source file path from tags_from_file option
     let src_file = match &args.tags_from_file {
+        // A path, so it need not be UTF-8.
         Some(path) => std::path::PathBuf::from(path),
         None => {
             eprintln!("Error: No source file specified for -TagsFromFile");
@@ -407,13 +412,17 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
 
     // Verify source file exists
     if !src_file.exists() {
-        eprintln!("Error: Source file not found: {}", src_file.display());
+        PathLine::new("Error: Source file not found: ")
+            .path(&src_file)
+            .eprint();
         process::exit(1);
     }
 
     // Verify destination file exists
     if !dest_file.exists() {
-        eprintln!("Error: Destination file not found: {}", dest_file.display());
+        PathLine::new("Error: Destination file not found: ")
+            .path(dest_file)
+            .eprint();
         process::exit(1);
     }
 
@@ -421,20 +430,18 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(dest_file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!(
-                    "Error: Destination file is read-only: {}",
-                    dest_file.display()
-                );
+                PathLine::new("Error: Destination file is read-only: ")
+                    .path(dest_file)
+                    .eprint();
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!(
-                "Error: Cannot access destination file '{}': {}",
-                dest_file.display(),
-                e
-            );
+            PathLine::new("Error: Cannot access destination file '")
+                .path(dest_file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     };
@@ -460,11 +467,10 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
         let backup_path = std::path::PathBuf::from(backup_path);
 
         if let Err(e) = std::fs::copy(dest_file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
+            PathLine::new("Error: Failed to create backup file '")
+                .path(&backup_path)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -478,12 +484,12 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
 
     // Perform the copy operation
     if let Err(e) = copy_metadata(&src_file, dest_file, tags_to_copy.as_deref()) {
-        eprintln!(
-            "Error: Failed to copy metadata from '{}' to '{}': {}",
-            src_file.display(),
-            dest_file.display(),
-            e
-        );
+        PathLine::new("Error: Failed to copy metadata from '")
+            .path(&src_file)
+            .text("' to '")
+            .path(dest_file)
+            .text(&format!("': {e}"))
+            .eprint();
         process::exit(1);
     }
 
@@ -511,7 +517,7 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
 fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs) {
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        PathLine::new("Error: File not found: ").path(file).eprint();
         process::exit(1);
     }
 
@@ -535,7 +541,10 @@ fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs
             }
         }
         Err(e) => {
-            eprintln!("Error: Failed to rename file '{}': {}", file.display(), e);
+            PathLine::new("Error: Failed to rename file '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -554,7 +563,7 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
 
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        PathLine::new("Error: File not found: ").path(file).eprint();
         process::exit(1);
     }
 
@@ -562,13 +571,18 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
+                PathLine::new("Error: File is read-only: ")
+                    .path(file)
+                    .eprint();
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
+            PathLine::new("Error: Cannot access file '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     };
@@ -593,11 +607,10 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
         let backup_path = std::path::PathBuf::from(backup_path);
 
         if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
+            PathLine::new("Error: Failed to create backup file '")
+                .path(&backup_path)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
@@ -649,7 +662,7 @@ fn handle_clear_all_operation(file: &std::path::Path, args: &CliArgs) {
 
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        PathLine::new("Error: File not found: ").path(file).eprint();
         process::exit(1);
     }
 
@@ -657,13 +670,18 @@ fn handle_clear_all_operation(file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
+                PathLine::new("Error: File is read-only: ")
+                    .path(file)
+                    .eprint();
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
+            PathLine::new("Error: Cannot access file '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     };
@@ -688,22 +706,20 @@ fn handle_clear_all_operation(file: &std::path::Path, args: &CliArgs) {
         let backup_path = std::path::PathBuf::from(backup_path);
 
         if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
+            PathLine::new("Error: Failed to create backup file '")
+                .path(&backup_path)
+                .text(&format!("': {e}"))
+                .eprint();
             process::exit(1);
         }
     }
 
     // Clear all metadata
     if let Err(e) = clear_all_metadata(file) {
-        eprintln!(
-            "Error: Failed to clear metadata from '{}': {}",
-            file.display(),
-            e
-        );
+        PathLine::new("Error: Failed to clear metadata from '")
+            .path(file)
+            .text(&format!("': {e}"))
+            .eprint();
         process::exit(1);
     }
 

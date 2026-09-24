@@ -244,8 +244,17 @@ fn substitute_pattern(
             PatternToken::Extension => {
                 // Get original file extension
                 if let Some(ext) = original_path.extension() {
+                    // The new name is built as text, so an extension that is
+                    // not UTF-8 cannot be carried into it. It used to be
+                    // dropped silently (`n.\xff` renamed to `NAME.`); refuse
+                    // instead of renaming to a name the user did not ask for.
+                    let ext = ext.to_str().ok_or_else(|| {
+                        ExifToolError::parse_error(format!(
+                            "cannot rename: the file extension {ext:?} is not valid UTF-8"
+                        ))
+                    })?;
                     result.push('.');
-                    result.push_str(ext.to_str().unwrap_or(""));
+                    result.push_str(ext);
                 }
             }
             PatternToken::Counter => {
@@ -327,7 +336,11 @@ pub fn rename_file(
 
     if dry_run {
         // Dry-run mode: just print what would happen
-        println!("{} -> {}", path.display(), new_path.display());
+        crate::cli::non_utf8::PathLine::new("")
+            .path(path)
+            .text(" -> ")
+            .path(&new_path)
+            .print();
     } else {
         // Actually rename the file
         std::fs::rename(path, &new_path)?;
@@ -355,7 +368,10 @@ pub fn process_rename_operation(
                 success_count += 1;
             }
             Err(e) => {
-                eprintln!("Error renaming '{}': {}", file.display(), e);
+                crate::cli::non_utf8::PathLine::new("Error renaming '")
+                    .path(file)
+                    .text(&format!("': {e}"))
+                    .eprint();
                 error_count += 1;
             }
         }
