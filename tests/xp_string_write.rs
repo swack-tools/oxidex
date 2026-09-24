@@ -26,10 +26,19 @@
 //! (type 2) entry, which ExifTool then decodes as UCS-2 into mojibake
 //! (`Title` came back `楔汴e`).
 //!
+//! A value's provenance decides its bytes, as it does in ExifTool. A value
+//! the caller supplies (`-IFD0:XPTitle=V`, `modify_tag`) is encoded from its
+//! code points with `pack('v*')`, which keeps only the low 16 bits of one
+//! above U+FFFF (`A🎌` -> 41 00 8c f3 00 00). A value copied from a file
+//! (`-TagsFromFile`, `copy_metadata`, the PNG `eXIf` rebuild) is the
+//! source's stored code units re-packed, so a surrogate pair -- or a lone
+//! surrogate -- survives the copy exactly as ExifTool's copy keeps it.
+//!
 //! The last test re-derives the expectations from the oracle itself when one
 //! is available.
 
 use oxidex::core::operations::{copy_metadata, modify_tag, read_metadata};
+use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::core::tag_value::TagValue;
 use oxidex::exiftool_oracle;
 use std::collections::BTreeMap;
@@ -320,7 +329,7 @@ type CopyCase = (&'static str, Order, u16, u32, Vec<u8>, Vec<u8>);
 /// `-TagsFromFile` output for that source.
 #[test]
 fn copy_writes_exiftool_copy_bytes_for_every_source_shape() {
-    let cases: [CopyCase; 11] = [
+    let cases: [CopyCase; 13] = [
         // BMP, non-ASCII: e9 00 2d 4e 87 65 ...
         (
             "non_ascii",
@@ -338,6 +347,24 @@ fn copy_writes_exiftool_copy_bytes_for_every_source_shape() {
             8,
             hex("41003cd88cdf0000"),
             hex("41003cd88cdf0000"),
+        ),
+        // Lone surrogates survive too: ExifTool's UCS2 decode keeps each
+        // unit as a code point, and its copy packs the same units back.
+        (
+            "lone_high_surrogate",
+            Order::Ii,
+            1,
+            8,
+            hex("410000d842000000"),
+            hex("410000d842000000"),
+        ),
+        (
+            "lone_low_surrogate",
+            Order::Mm,
+            1,
+            8,
+            hex("410000dc42000000"),
+            hex("410000dc42000000"),
         ),
         // Two NULs: the empty value, written back as the NUL pair.
         ("empty", Order::Ii, 1, 2, hex("0000"), hex("0000")),
@@ -461,6 +488,66 @@ fn png_exif_rebuild_keeps_xp_strings_ucs2() {
     }
 }
 
+/// The PNG rebuild re-serializes an existing XP entry from the bytes the
+/// file stored, not from its text: a surrogate pair and a lone surrogate
+/// come back unit for unit, exactly the bytes the oracle's `-EXIF:Artist=me`
+/// leaves in place (41 00 3c d8 8c df 00 00, 41 00 00 d8 42 00 00 00).
+#[test]
+fn png_exif_rebuild_keeps_stored_surrogates() {
+    for raw in [hex("41003cd88cdf0000"), hex("410000d842000000")] {
+        let dir = tempfile::tempdir().unwrap();
+        let png = write(
+            dir.path(),
+            "rebuild.png",
+            &png_with(Some(&tiff(
+                Order::Ii,
+                &[(XP_TITLE, 1, raw.len() as u32, raw.clone())],
+            ))),
+        );
+        modify_tag(&png, "IFD0:Artist", TagValue::new_string("me")).unwrap();
+        assert_eq!(xp_entries(&png).get(&XP_TITLE), Some(&(1, raw)));
+    }
+}
+
+/// Every reader of the five tags keeps the entry's bytes as the stored
+/// form (`TagOccurrence::stored`, "an `undef` run as its bytes") beside the
+/// decoded text on the print and ValueConv channels: that is the provenance
+/// a copy serializes from. A JPEG APP1, a standalone TIFF and a PNG `eXIf`
+/// (the embedded-EXIF walk) each read one.
+#[test]
+fn readers_keep_the_stored_bytes_beside_the_text() {
+    let raw = hex("41003cd88cdf0000");
+    let block = tiff(Order::Mm, &[(XP_TITLE, 1, raw.len() as u32, raw.clone())]);
+    let dir = tempfile::tempdir().unwrap();
+    for (name, bytes) in [
+        ("src.jpg", jpeg_with(&block)),
+        ("src.tif", block.clone()),
+        ("src.png", png_with(Some(&block))),
+    ] {
+        let path = write(dir.path(), name, &bytes);
+        let metadata = read_metadata(&path).unwrap();
+        let project = |channel| {
+            metadata
+                .project_occurrences(channel)
+                .filter(|(key, _, _)| *key == "IFD0:XPTitle")
+                .map(|(_, _, value)| value.into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            project(ValueChannel::Stored),
+            vec![TagValue::Binary(raw.clone())],
+            "{name}"
+        );
+        for channel in [ValueChannel::ValueConv, ValueChannel::PrintConv] {
+            assert_eq!(
+                project(channel),
+                vec![TagValue::new_string("A🎌")],
+                "{name} {channel:?}"
+            );
+        }
+    }
+}
+
 /// `-IFD0:XPTitle=V` on a JPEG (no EXIF yet), a TIFF and a PNG. Oracle:
 /// `Title` -> 54 00 69 00 74 00 6c 00 65 00 00 00, `é中文 café` -> e9 00 2d
 /// 4e ..., `123` (an integer-looking value) -> 31 00 32 00 33 00 00 00, all
@@ -516,26 +603,44 @@ fn rewriting_an_existing_xp_entry_keeps_undef_and_otherwise_writes_byte() {
     }
 }
 
-/// A code point above U+FFFF is written as its UTF-16 surrogate pair, which
-/// is what a copy of such a value writes (see the surrogate-pair copy case).
-/// This one input is NOT ExifTool's bytes for a typed value: 13.59 packs the
-/// code point with `pack('v*')` (Charset.pm:387-390), keeping only its low 16
-/// bits, and writes `-XPTitle=A🎌` as 41 00 8c f3 00 00 (U+F38C). oxidex's
-/// reader folds a stored pair into the same one `char` a typed value holds,
-/// so the writer cannot tell the two apart, and truncating would corrupt
-/// every copy of a file whose XP string holds a pair.
+/// A typed code point above U+FFFF keeps only its low 16 bits, as ExifTool
+/// 13.59 writes it: `Encode($val,"UCS2","II")` packs each code point with
+/// `pack('v*')` (Charset.pm:387-390). Oracle `-XPTitle=V` bytes: `A🎌` ->
+/// 41 00 8c f3 00 00; `x😀y中𝄞z` -> 78 00 00 f6 79 00 2d 4e 1e d1 7a 00 00 00;
+/// U+10000 -> 00 00 00 00 (its low unit is U+0000); U+10FFFF -> ff ff 00 00;
+/// U+FFFD (a replacement character typed as such) -> 41 00 fd ff 42 00 00 00.
+/// Each reads back, in ExifTool and in oxidex, as the truncated text.
 #[test]
-fn a_code_point_above_the_bmp_is_written_as_its_surrogate_pair() {
-    let dir = tempfile::tempdir().unwrap();
-    for dest in destinations(dir.path(), Order::Ii) {
-        modify_tag(&dest, "IFD0:XPTitle", TagValue::new_string("A🎌")).unwrap();
-        assert_eq!(
-            xp_entries(&dest).get(&XP_TITLE),
-            Some(&(1, hex("41003cd88cdf0000"))),
-            "{}",
-            dest.display()
-        );
-        assert_eq!(xp_text(&dest, "XPTitle").as_deref(), Some("A🎌"));
+fn direct_write_of_a_code_point_above_the_bmp_keeps_its_low_16_bits() {
+    let cases = [
+        ("A🎌", "41008cf30000", "A\u{f38c}"),
+        (
+            "x😀y中𝄞z",
+            "780000f679002d4e1ed17a000000",
+            "x\u{f600}y中\u{d11e}z",
+        ),
+        ("\u{10000}", "00000000", ""),
+        ("\u{10ffff}", "ffff0000", "\u{ffff}"),
+        ("A\u{fffd}B", "4100fdff42000000", "A\u{fffd}B"),
+    ];
+    for order in [Order::Ii, Order::Mm] {
+        for (value, oracle, text) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            for dest in destinations(dir.path(), order) {
+                modify_tag(&dest, "IFD0:XPTitle", TagValue::new_string(value)).unwrap();
+                assert_eq!(
+                    xp_entries(&dest).get(&XP_TITLE),
+                    Some(&(1, hex(oracle))),
+                    "{order:?} {value:?} -> {}",
+                    dest.display()
+                );
+                assert_eq!(
+                    xp_text(&dest, "XPTitle").as_deref(),
+                    Some(text),
+                    "{value:?}"
+                );
+            }
+        }
     }
 }
 
@@ -564,7 +669,16 @@ fn oracle_writes_the_same_xp_bytes() {
     let et_text = |path: &Path| et(&["-b".as_ref(), "-IFD0:XPTitle".as_ref(), path.as_os_str()]);
 
     // Direct writes.
-    for value in ["Title", "é中文 café", "123", "Key;Words; more"] {
+    for value in [
+        "Title",
+        "é中文 café",
+        "123",
+        "Key;Words; more",
+        "A🎌",
+        "x😀y中𝄞z",
+        "\u{10ffff}",
+        "A\u{fffd}B",
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let reference = write(dir.path(), "ref.jpg", &hex(BASE_JPEG_HEX));
         let arg = format!("-XPTitle={value}");
@@ -581,16 +695,23 @@ fn oracle_writes_the_same_xp_bytes() {
             xp_entries(&reference).get(&XP_TITLE),
             "-XPTitle={value}"
         );
-        assert_eq!(et_text(&ours), et_text(&reference), "-XPTitle={value}");
-        assert_eq!(xp_text(&ours, "XPTitle").as_deref(), Some(value));
+        let oracle_text = et_text(&reference);
+        assert_eq!(et_text(&ours), oracle_text, "-XPTitle={value}");
+        assert_eq!(
+            xp_text(&ours, "XPTitle").map(String::into_bytes),
+            Some(oracle_text),
+            "-XPTitle={value}"
+        );
     }
 
     // Copies, from both byte orders and every source shape above.
-    let sources: [(Order, u16, Vec<u8>); 9] = [
+    let sources: [(Order, u16, Vec<u8>); 11] = [
         (Order::Ii, 1, ucs2("Hello")),
         (Order::Mm, 1, ucs2("Hello")),
         (Order::Ii, 1, ucs2("é中文 café")),
         (Order::Ii, 1, hex("41003cd88cdf0000")),
+        (Order::Ii, 1, hex("410000d842000000")),
+        (Order::Mm, 1, hex("410000dc42000000")),
         (Order::Ii, 1, hex("0000")),
         (Order::Ii, 1, hex("feff0042004f004d006200650000")),
         (
