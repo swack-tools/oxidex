@@ -3,10 +3,10 @@
     "generated": 563,
     "not-applicable": 29,
     "refused": 18,
-    "residual": 64,
+    "residual": 59,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "39c5843ce5d6009e8bc24f4344f1dbcc85eacac430dcc982d9f6e278ebbc2518",
+  "fragment_inputs_sha256": "8647d2b3354a70a189dbfdfc7d5d8e345df835f43ea767c4e81cc70e8674d94d",
   "rows": [
     {
       "field": {
@@ -242,7 +242,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -256,7 +256,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -270,7 +270,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -284,7 +284,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -298,77 +298,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-      "table": "Main"
-    },
-    {
-      "field": {
-        "kind": "index",
-        "value": "IFD0/0x9c9b"
-      },
-      "fixture": "src/core/exif_dir_engine.rs",
-      "module": "Exif",
-      "owner": "residual",
-      "refusal": null,
-      "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-      "table": "Main"
-    },
-    {
-      "field": {
-        "kind": "index",
-        "value": "IFD0/0x9c9c"
-      },
-      "fixture": "src/core/exif_dir_engine.rs",
-      "module": "Exif",
-      "owner": "residual",
-      "refusal": null,
-      "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-      "table": "Main"
-    },
-    {
-      "field": {
-        "kind": "index",
-        "value": "IFD0/0x9c9d"
-      },
-      "fixture": "src/core/exif_dir_engine.rs",
-      "module": "Exif",
-      "owner": "residual",
-      "refusal": null,
-      "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-      "table": "Main"
-    },
-    {
-      "field": {
-        "kind": "index",
-        "value": "IFD0/0x9c9e"
-      },
-      "fixture": "src/core/exif_dir_engine.rs",
-      "module": "Exif",
-      "owner": "residual",
-      "refusal": null,
-      "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-      "table": "Main"
-    },
-    {
-      "field": {
-        "kind": "index",
-        "value": "IFD0/0x9c9f"
-      },
-      "fixture": "src/core/exif_dir_engine.rs",
-      "module": "Exif",
-      "owner": "residual",
-      "refusal": null,
-      "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -382,7 +312,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+      "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },

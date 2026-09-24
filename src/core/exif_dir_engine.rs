@@ -454,20 +454,14 @@ impl DirEngineRows {
 /// and its parameter blocks (0x87af, 0x87b0, 0x87b1, parsed into GeoTIFF
 /// keys) and ModelTransform (0x85d8, printed as `EXIF:ModelTransform`), and
 /// PrintIM (0xc4a5, `PrintIM:PrintIMVersion`). Their hand treatment is not a
-/// conversion of the entry and stays as it is.
+/// conversion of the entry and stays as it is. Sorted.
 ///
-/// And the five Windows XP strings, 0x9c9b-0x9c9f XPTitle, XPComment,
-/// XPAuthor, XPKeywords, XPSubject (`ValueConv =>
-/// '$self->Decode($val,"UCS2","II")'`, Exif.pm): the generated backend
-/// refuses them (`Decode` has no proven port, `conv::exif_main::REFUSED`), and
-/// the static table's `exprs::decode_ucs2` keeps a leading U+0000 as a
-/// character where ExifTool's value ends at it -- FujiFilmFinePixZ100fd.jpg
-/// (and Z200fd, Z250fd), whose XPTitle is `00 00` then fifteen UCS-2 spaces,
-/// prints `""` under the pinned 13.59 (`-j`, `-b` empty) and fifteen spaces
-/// from the engine. The hand arm prints ExifTool's value. Sorted.
-pub(crate) const IFD0_HAND_KEPT: &[u16] = &[
-    0x83bb, 0x85d8, 0x87af, 0x87b0, 0x87b1, 0x9c9b, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f, 0xc4a5,
-];
+/// The five Windows XP strings (0x9c9b-0x9c9f) are not here: their generated
+/// `Decode` UCS2 arms (`conv::exif_main`, #850) print ExifTool's value,
+/// including the leading-U+0000 `""` of FujiFilmFinePixZ100fd.jpg, and the
+/// Task 18 knockout measured `-j` and `-j --no-print-conv` byte-identical to
+/// the hand arm over the combined-samples and `t/images` corpora.
+pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb, 0x85d8, 0x87af, 0x87b0, 0x87b1, 0xc4a5];
 
 /// The key an engine-produced IFD0 row is recorded under: ExifTool's family
 /// 1, as the hand walks key it (`lookup_tag_name(id, "IFD0")`).
@@ -1305,6 +1299,40 @@ mod tests {
             "InteropIFD",
             &MetadataMap::new(),
         )
+    }
+
+    /// The five Windows XP strings (0x9c9b-0x9c9f) are the generated
+    /// `Exif::Main` arms' on the IFD0 walks (`Decode` UCS2, #850): none is in
+    /// [`IFD0_HAND_KEPT`], the engine owns the entry, and a leading U+0000
+    /// ends the value as ExifTool's does (FujiFilmFinePixZ100fd.jpg's XPTitle
+    /// prints `""` under 13.59).
+    #[test]
+    fn ifd0_xp_strings_are_engine_owned() {
+        for id in 0x9c9bu16..=0x9c9f {
+            assert!(!IFD0_HAND_KEPT.contains(&id), "{id:#06x} is hand-kept");
+        }
+        let mut fuji = vec![0u8, 0];
+        fuji.extend(" ".repeat(15).encode_utf16().flat_map(u16::to_le_bytes));
+        let tiff = le_tiff(&[
+            (0x9c9b, 1, fuji.len() as u32, fuji),
+            (0x9c9c, 1, 6, b"H\0i\0\0\0".to_vec()),
+        ]);
+        let mut rows = walk(
+            &IFD_EXIF_MAIN,
+            &tiff,
+            8,
+            ByteOrder::LittleEndian,
+            "IFD0",
+            &MetadataMap::new(),
+        )
+        .keep_hand(IFD0_HAND_KEPT);
+        let mut metadata = MetadataMap::new();
+        for id in [0x9c9b, 0x9c9c] {
+            assert_eq!(rows.owner(id, false), Owner::Engine, "{id:#06x}");
+            assert!(rows.take_ifd0(id, &mut metadata), "{id:#06x}");
+        }
+        assert_eq!(metadata.get_string("IFD0:XPTitle"), Some(""));
+        assert_eq!(metadata.get_string("IFD0:XPComment"), Some("Hi"));
     }
 
     #[test]

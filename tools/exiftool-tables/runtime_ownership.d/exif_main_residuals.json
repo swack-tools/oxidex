@@ -9,7 +9,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -23,7 +23,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -37,7 +37,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -51,7 +51,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -65,77 +65,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-    "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-    "table": "Main"
-  },
-  {
-    "field": {
-      "kind": "index",
-      "value": "IFD0/0x9c9b"
-    },
-    "fixture": "src/core/exif_dir_engine.rs",
-    "module": "Exif",
-    "owner": "residual",
-    "refusal": null,
-    "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-    "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-    "table": "Main"
-  },
-  {
-    "field": {
-      "kind": "index",
-      "value": "IFD0/0x9c9c"
-    },
-    "fixture": "src/core/exif_dir_engine.rs",
-    "module": "Exif",
-    "owner": "residual",
-    "refusal": null,
-    "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-    "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-    "table": "Main"
-  },
-  {
-    "field": {
-      "kind": "index",
-      "value": "IFD0/0x9c9d"
-    },
-    "fixture": "src/core/exif_dir_engine.rs",
-    "module": "Exif",
-    "owner": "residual",
-    "refusal": null,
-    "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-    "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-    "table": "Main"
-  },
-  {
-    "field": {
-      "kind": "index",
-      "value": "IFD0/0x9c9e"
-    },
-    "fixture": "src/core/exif_dir_engine.rs",
-    "module": "Exif",
-    "owner": "residual",
-    "refusal": null,
-    "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
-    "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
-    "table": "Main"
-  },
-  {
-    "field": {
-      "kind": "index",
-      "value": "IFD0/0x9c9f"
-    },
-    "fixture": "src/core/exif_dir_engine.rs",
-    "module": "Exif",
-    "owner": "residual",
-    "refusal": null,
-    "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -149,7 +79,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "50167e669706c775181f993ce46a1e1d1f357935d0cf2de86ce2f32ce411ec32",
+    "source_sha256": "62d05ab5a2d66090c400828b68362be06ca7afb50d180d4ef16ca6bf9192db33",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
