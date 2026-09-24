@@ -71,6 +71,75 @@ fn unmodelled_pointer(scan: &ExifScan) -> Option<&RawEntry> {
         .find(|entry| entry.ifd != IfdKind::Gps && UNMODELLED_POINTER_TAGS.contains(&entry.tag_id))
 }
 
+/// A group-wide removal `<group>:All`, as pinned ExifTool 13.59 applies it to
+/// an EXIF block in a JPEG APP1 or PNG eXIf (measured on both byte orders):
+/// `IFD0:All` and `EXIF:All` remove the whole block; `ExifIFD:All` removes
+/// ExifIFD with the InteropIFD and MakerNote inside it; `GPS:All`, `IFD1:All`
+/// (with the thumbnail) and `InteropIFD:All` remove that directory;
+/// `MakerNotes:All` removes a MakerNote ExifTool files under MakerNotes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GroupRemoval {
+    Carrier,
+    ExifIfd,
+    Gps,
+    Ifd1,
+    Interop,
+    MakerNotes,
+}
+
+/// The group-wide removal `key` names, if it is `<group>:All`.
+pub(crate) fn group_removal(key: &str) -> Option<GroupRemoval> {
+    let (group, name) = key.split_once(':')?;
+    if !name.eq_ignore_ascii_case("all") {
+        return None;
+    }
+    Some(match group.to_ascii_lowercase().as_str() {
+        "ifd0" | "exif" => GroupRemoval::Carrier,
+        "exififd" => GroupRemoval::ExifIfd,
+        "gps" => GroupRemoval::Gps,
+        "ifd1" => GroupRemoval::Ifd1,
+        "interopifd" => GroupRemoval::Interop,
+        "makernotes" => GroupRemoval::MakerNotes,
+        _ => return None,
+    })
+}
+
+/// Whether `-MakerNotes:All=` deletes the block's MakerNote: pinned
+/// ExifTool 13.59 files a note no maker parser claims under EXIF, not
+/// MakerNotes, when a `%MakerNotes::Main` fallback names it
+/// (MakerNoteUnknownText / MakerNoteUnknownBinary / MakerNoteSamsung1a:
+/// "1 image files unchanged"), and deletes any other note (a recognized
+/// maker's, an unknown IFD, a preview).
+fn makernote_in_makernotes_group(scan: &ExifScan, original_map: &MetadataMap) -> bool {
+    scan.entries
+        .iter()
+        .any(|entry| entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE)
+        && ![
+            "ExifIFD:MakerNoteUnknownText",
+            "ExifIFD:MakerNoteUnknownBinary",
+            "ExifIFD:MakerNoteSamsung1a",
+        ]
+        .iter()
+        .any(|key| original_map.contains_key(*key))
+}
+
+/// Whether `scan` holds anything the group-wide removal `group` deletes.
+pub(crate) fn group_has_content(
+    group: GroupRemoval,
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+) -> bool {
+    let any = |ifds: &[IfdKind]| scan.entries.iter().any(|entry| ifds.contains(&entry.ifd));
+    match group {
+        GroupRemoval::Carrier => !scan.entries.is_empty() || scan.thumbnail.is_some(),
+        GroupRemoval::ExifIfd => any(&[IfdKind::ExifIfd, IfdKind::Interop]),
+        GroupRemoval::Gps => any(&[IfdKind::Gps]),
+        GroupRemoval::Ifd1 => any(&[IfdKind::Ifd1]) || scan.thumbnail.is_some(),
+        GroupRemoval::Interop => any(&[IfdKind::Interop]),
+        GroupRemoval::MakerNotes => makernote_in_makernotes_group(scan, original_map),
+    }
+}
+
 /// Reconstructs every metadata-map key the reader could plausibly have
 /// produced for one raw-carried entry in an always-carried IFD class
 /// (InteropIFD, IFD1, MakerNote — see the Design Rule table). These classes
@@ -834,6 +903,18 @@ fn plan_exif_write_inner(
         return Err(carried_only_edit_refused(key));
     }
 
+    // Group-wide removals (`<group>:All`) expand to that group's entries
+    // (see [`GroupRemoval`]); `IFD0:All`/`EXIF:All` remove the whole block.
+    // Before, none was expanded: every one was reported as success and the
+    // block left as it was.
+    let groups: Vec<GroupRemoval> = removed
+        .iter()
+        .filter_map(|key| group_removal(key))
+        .collect();
+    if groups.contains(&GroupRemoval::Carrier) {
+        return Ok(plan);
+    }
+
     // A named removal of a raw-carried entry is refused too. The PNG reader
     // surfaces no IFD1 row, so `remove_tag("IFD1:Compression")` reaches the
     // planner only through `removed`: neither the check above nor the
@@ -842,10 +923,9 @@ fn plan_exif_write_inner(
     // ExifTool 13.59 deletes IFD1 and Interop entries (pruning directories
     // left empty or holding only mandatory entries); this writer cannot, so
     // it refuses instead of doing nothing.
-    if let Some(key) = removed
-        .iter()
-        .find(|key| removal_names_carried_entry(key, scan, original_map))
-    {
+    if let Some(key) = removed.iter().find(|key| {
+        group_removal(key).is_none() && removal_names_carried_entry(key, scan, original_map)
+    }) {
         return Err(ExifToolError::unsupported_format(format!(
             "Removing tag '{}' is not yet supported: it belongs to an \
              unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
@@ -887,6 +967,26 @@ fn plan_exif_write_inner(
     // wins and the alias is left for the pre-existing duplicate-tag-id guard
     // in the Added loop below to reconcile (skip if equal, once serialized).
     let mut desired = desired.clone();
+    // A named removal by the family-0 alias `EXIF:<name>` deletes the entry
+    // of that name in whichever IFD0/ExifIFD/GPS holds it, as pinned ExifTool
+    // 13.59 does (`-EXIF:Make=` deletes IFD0:Make): the per-entry loop below
+    // deletes an entry whose reader key is gone from `desired`, so the native
+    // key is taken out of it. (An IFD1/InteropIFD entry of that name was
+    // refused above.)
+    for name in removed.iter().filter_map(|key| key.strip_prefix("EXIF:")) {
+        if name.eq_ignore_ascii_case("all") {
+            continue;
+        }
+        for entry in &scan.entries {
+            if !matches!(entry.ifd, IfdKind::Ifd0 | IfdKind::ExifIfd | IfdKind::Gps) {
+                continue;
+            }
+            let native = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+            if native.split_once(':').is_some_and(|(_, n)| n == name) {
+                desired.remove(&native);
+            }
+        }
+    }
     // Exif.pm 0x8298 PrintConvInv stores photographer/editor notices with an
     // internal NUL; the generic string serializer supplies the final NUL.
     for key in ["IFD0:Copyright", "EXIF:Copyright"] {
@@ -1064,8 +1164,20 @@ fn plan_exif_write_inner(
         // saw.
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
             let reader_keys = carried_class_reader_keys(entry);
+            let group_deleted = match entry.ifd {
+                IfdKind::Interop => groups
+                    .iter()
+                    .any(|g| matches!(g, GroupRemoval::Interop | GroupRemoval::ExifIfd)),
+                IfdKind::Ifd1 => groups.contains(&GroupRemoval::Ifd1),
+                _ => groups
+                    .iter()
+                    .any(|g| matches!(g, GroupRemoval::MakerNotes | GroupRemoval::ExifIfd)),
+            };
             for reader_key in &reader_keys {
-                if original_map.contains_key(reader_key) && !desired.contains_key(reader_key) {
+                if !group_deleted
+                    && original_map.contains_key(reader_key)
+                    && !desired.contains_key(reader_key)
+                {
                     return Err(ExifToolError::unsupported_format(format!(
                         "Removing tag '{}' is not yet supported: it belongs to an \
                          unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
@@ -1372,6 +1484,31 @@ fn plan_exif_write_inner(
             value: vec![2, 3, 0, 0],
             native_endian: false,
         });
+    }
+
+    // Group-wide removals: drop the named directories wholesale (the
+    // serializer omits an empty directory and its pointer).
+    for group in &groups {
+        match group {
+            GroupRemoval::Carrier => unreachable!("returned above"),
+            GroupRemoval::ExifIfd => {
+                plan.exif_ifd.clear();
+                plan.interop.clear();
+                plan.makernote_pin = None;
+            }
+            GroupRemoval::Gps => plan.gps.clear(),
+            GroupRemoval::Ifd1 => {
+                plan.ifd1.clear();
+                plan.thumbnail = None;
+            }
+            GroupRemoval::Interop => plan.interop.clear(),
+            GroupRemoval::MakerNotes => {
+                if makernote_in_makernotes_group(scan, original_map) {
+                    plan.exif_ifd.retain(|entry| entry.tag_id != MAKERNOTE);
+                    plan.makernote_pin = None;
+                }
+            }
+        }
     }
 
     Ok(plan)
@@ -2012,21 +2149,20 @@ fn rows_unchanged(baseline: &MetadataMap, desired: &MetadataMap) -> bool {
 /// Whether none of the named `removed` keys names an entry of `scan`: not a
 /// reader row, not an entry by tag id (`removal_names_rowless_entry`), not a
 /// raw-carried entry (`removal_names_carried_entry`), not an entry by its
-/// family-0 `EXIF:` name, and no `<group>:All` over a group with entries.
-fn removals_name_nothing(scan: &ExifScan, original_map: &MetadataMap, removed: &[String]) -> bool {
+/// family-0 `EXIF:` name. A group-wide `<group>:All` names something exactly
+/// when the group has content ([`group_has_content`]); with `groups` false
+/// group removals are left to another block's judgement.
+fn removals_name_nothing(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    removed: &[String],
+    groups: bool,
+) -> bool {
     removed.iter().filter(|key| is_planned_key(key)).all(|key| {
-        let group_all = key.split_once(':').is_some_and(|(group, name)| {
-            name.eq_ignore_ascii_case("all")
-                && scan.entries.iter().any(|entry| {
-                    group == "EXIF"
-                        || group == entry.ifd.prefix()
-                        || (group == "MakerNotes"
-                            && entry.ifd == IfdKind::ExifIfd
-                            && entry.tag_id == MAKERNOTE)
-                })
-        });
-        !group_all
-            && !original_map.contains_key(key.as_str())
+        if let Some(group) = group_removal(key) {
+            return !groups || !group_has_content(group, scan, original_map);
+        }
+        !original_map.contains_key(key.as_str())
             && !removal_names_carried_entry(key, scan, original_map)
             && !scan.entries.iter().any(|entry| {
                 removal_names_rowless_entry(key, entry.ifd, entry.tag_id, original_map)
@@ -2047,7 +2183,8 @@ fn is_no_op(
     desired: &MetadataMap,
     removed: &[String],
 ) -> bool {
-    rows_unchanged(original_map, desired) && removals_name_nothing(scan, original_map, removed)
+    rows_unchanged(original_map, desired)
+        && removals_name_nothing(scan, original_map, removed, true)
 }
 
 /// Whether a write request is a no-op for a carrier whose EXIF payloads are
@@ -2063,8 +2200,14 @@ fn is_no_op(
 /// succeeds with the file untouched, as it promises and as pinned ExifTool
 /// 13.59 leaves it ("not defined" / "unchanged"). A whole-carrier clear is
 /// not a no-op question and is decided before this.
+///
+/// `group_blocks` are the payloads a group-wide `<group>:All` acts on: the
+/// EXIF carriers proper. A PNG's raw EXIF profile is not one -- pinned
+/// ExifTool 13.59 leaves it under `-EXIF:All=` ("1 image files unchanged")
+/// -- so it is in `blocks` only.
 pub(crate) fn exif_request_is_no_op(
     blocks: &[&[u8]],
+    group_blocks: &[&[u8]],
     magics: &[u16],
     baseline: &MetadataMap,
     desired: &MetadataMap,
@@ -2082,9 +2225,18 @@ pub(crate) fn exif_request_is_no_op(
     blocks
         .iter()
         .all(|block| match scan_entries_with_magics(block, magics) {
-            Ok(scan) => removals_name_nothing(&scan, baseline, removed),
+            Ok(scan) => removals_name_nothing(&scan, baseline, removed, false),
             Err(_) => true,
         })
+        && group_blocks
+            .iter()
+            .all(|block| match scan_entries_with_magics(block, magics) {
+                Ok(scan) => removed
+                    .iter()
+                    .filter_map(|key| group_removal(key))
+                    .all(|group| !group_has_content(group, &scan, baseline)),
+                Err(_) => true,
+            })
 }
 
 /// The TIFF payloads of every `Exif\0\0` APP1 block of a JPEG.
@@ -2259,6 +2411,41 @@ pub(crate) fn verify_exif_write(
         }
     }
 
+    // (a'') group-wide removals: after `<group>:All` nothing the group
+    // holds may remain, unless a key being set addresses it (as for (a)).
+    for key in removed {
+        let Some(group) = group_removal(key) else {
+            continue;
+        };
+        if !group_has_content(group, &before, baseline) {
+            continue;
+        }
+        let in_group = |entry: &RawEntry| match group {
+            GroupRemoval::Carrier => true,
+            GroupRemoval::ExifIfd => matches!(entry.ifd, IfdKind::ExifIfd | IfdKind::Interop),
+            GroupRemoval::Gps => entry.ifd == IfdKind::Gps,
+            GroupRemoval::Ifd1 => entry.ifd == IfdKind::Ifd1,
+            GroupRemoval::Interop => entry.ifd == IfdKind::Interop,
+            GroupRemoval::MakerNotes => entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE,
+        };
+        let still = after
+            .entries
+            .iter()
+            .find(|entry| in_group(entry) && !kept.contains(&(entry.ifd, entry.tag_id)));
+        let thumbnail_left = matches!(group, GroupRemoval::Carrier | GroupRemoval::Ifd1)
+            && after.thumbnail.is_some();
+        if still.is_some() || thumbnail_left {
+            return Err(refused(format!(
+                "'{key}' was to delete the group but {} is still present",
+                still.map_or("the IFD1 thumbnail".to_string(), |entry| format!(
+                    "{} tag 0x{:04X}",
+                    entry.ifd.prefix(),
+                    entry.tag_id
+                ))
+            )));
+        }
+    }
+
     // (a') the thumbnail: the IFD1 JPEGInterchangeFormat/Length pair is
     // structural (never a scanned entry), so (a) cannot see it go. Any
     // thumbnail the original carries must still be there, byte-identical and
@@ -2269,7 +2456,8 @@ pub(crate) fn verify_exif_write(
             let Some((group, name)) = key.split_once(':') else {
                 return false;
             };
-            matches!(group, "IFD1" | "EXIF")
+            (matches!(group, "IFD1" | "EXIF")
+                || (group == "IFD0" && name.eq_ignore_ascii_case("all")))
                 && (name.eq_ignore_ascii_case("all")
                     || matches!(
                         name,

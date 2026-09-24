@@ -971,6 +971,7 @@ pub(crate) fn write_metadata_with_removals(
         if !whole_clear
             && crate::writers::exif_surgical::exif_request_is_no_op(
                 &[file_bytes],
+                &[file_bytes],
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
                 &original,
                 metadata,
@@ -1009,6 +1010,7 @@ pub(crate) fn write_metadata_with_removals(
             {
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
                 if crate::writers::exif_surgical::exif_request_is_no_op(
+                    &blocks,
                     &blocks,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                     &original,

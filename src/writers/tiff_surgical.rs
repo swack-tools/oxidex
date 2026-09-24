@@ -311,6 +311,20 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     let scan = scan_tiff(file_bytes)?;
     let bo = scan.byte_order;
 
+    // A group-wide `<group>:All` that is not a no-op (the no-op test runs
+    // first) would delete whole directories, which this in-place writer
+    // cannot do; pinned ExifTool 13.59 itself cannot delete IFD0 from a
+    // TIFF. Refused rather than reported as done.
+    if let Some(key) = removed
+        .iter()
+        .find(|key| crate::writers::exif_surgical::group_removal(key).is_some())
+    {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Removing '{key}' from a TIFF-structured file is not supported: this \
+             writer edits entries in place and cannot delete a directory"
+        )));
+    }
+
     if !embedded_exif && !desired.iter().any(|(k, _)| is_exif_family(k)) {
         return Err(ExifToolError::unsupported_format(
             "Clearing all metadata from a TIFF-structured file is not supported: \

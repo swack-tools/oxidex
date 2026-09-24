@@ -1562,3 +1562,219 @@ fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
         }
     }
 }
+
+/// What pinned ExifTool 13.59 leaves of a block after `-<group>:All=`
+/// (measured on the "full" fixture, both byte orders, PNG eXIf and JPEG
+/// APP1 alike): `IFD0:All` and `EXIF:All` remove the whole EXIF block;
+/// `ExifIFD:All` removes ExifIFD with its InteropIFD and MakerNote;
+/// `GPS:All`, `IFD1:All` (with the thumbnail) and `InteropIFD:All` remove
+/// that directory; `MakerNotes:All` leaves a SilverFast/unknown-text/
+/// Samsung1a note (ExifTool files those under EXIF, not MakerNotes) and
+/// deletes any other MakerNote. `None` = no EXIF left.
+fn after_group_removal(
+    group: &str,
+    before: &BTreeMap<String, Field>,
+    note_is_fallback: bool,
+) -> Option<BTreeMap<String, Field>> {
+    let keep = |prefixes: &[&str]| {
+        before
+            .iter()
+            .filter(|(k, _)| !prefixes.iter().any(|p| k.starts_with(p)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    match group {
+        "IFD0:All" | "EXIF:All" => None,
+        "ExifIFD:All" => Some(keep(&["ExifIFD:", "InteropIFD:"])),
+        "GPS:All" => Some(keep(&["GPS:"])),
+        "IFD1:All" => Some(keep(&["IFD1:"])),
+        "InteropIFD:All" => Some(keep(&["InteropIFD:"])),
+        "MakerNotes:All" if note_is_fallback => Some(before.clone()),
+        "MakerNotes:All" => Some(keep(&["ExifIFD:0x927c"])),
+        _ => unreachable!(),
+    }
+}
+
+const GROUP_REMOVALS: [&str; 7] = [
+    "IFD0:All",
+    "ExifIFD:All",
+    "GPS:All",
+    "IFD1:All",
+    "InteropIFD:All",
+    "MakerNotes:All",
+    "EXIF:All",
+];
+
+fn exif_payload(name: &str, file: &[u8]) -> Option<Vec<u8>> {
+    if name.ends_with(".png") {
+        exif_of(file)
+    } else {
+        file.windows(6)
+            .position(|w| w == b"Exif\0\0")
+            .map(|_| tiff_of(name, file))
+    }
+}
+
+/// `-<group>:All=` expands to that group's entries, exactly as the oracle
+/// (see [`after_group_removal`]). Before, no group removal was expanded: on
+/// a JPEG every one reported success and left the block as it was
+/// (Canon.jpg's IFD0 kept all 8 rows under `-IFD0:All=`/`-EXIF:All=`).
+#[test]
+fn group_wide_removals_match_the_oracle() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        // A MakerNote ExifTool recognizes as a directory (an unknown IFD):
+        // `MakerNotes:All` deletes it.
+        let mut known = full(order);
+        let note = [
+            order.u16(1).as_slice(),
+            &order.u16(0x0001),
+            &order.u16(3),
+            &order.u32(1),
+            &order.u16(5),
+            &[0, 0],
+            &order.u32(0),
+        ]
+        .concat();
+        for entry in known.exif.as_mut().unwrap().iter_mut() {
+            if entry.0 == 0x927C {
+                *entry = (0x927C, 7, note.len() as u32, note.clone());
+            }
+        }
+        for (label, tiff, fallback) in [
+            ("full", full(order).build(order), true),
+            ("known-note", known.build(order), false),
+        ] {
+            let before = dump(&tiff);
+            for (name, original) in [
+                ("group.png", png(&[(b"eXIf", tiff.clone())], &[])),
+                ("group.jpg", jpeg_with(&tiff)),
+            ] {
+                for group in GROUP_REMOVALS {
+                    let path = write(dir.path(), name, &original);
+                    remove_tag(&path, group)
+                        .unwrap_or_else(|e| panic!("{order:?} {label} {name} {group}: {e}"));
+                    let out = std::fs::read(&path).unwrap();
+                    let got = exif_payload(name, &out).map(|t| dump(&t));
+                    assert_eq!(
+                        got,
+                        after_group_removal(group, &before, fallback),
+                        "{order:?} {label} {name} {group}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A group removal of a group the block does not hold is a no-op; one of a
+/// group it does hold is not (a pointer-only IFD0 still holds the block:
+/// the oracle removes it all under `-IFD0:All=`).
+#[test]
+fn group_wide_removals_on_a_pointer_only_ifd0() {
+    let dir = tempfile::tempdir().unwrap();
+    let thumb = vec![0xFF, 0xD8, 0xFF, 0xD9];
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(100).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: Some((vec![], thumb.clone())),
+        }
+        .build(order);
+        let before = dump(&tiff);
+        for (name, original) in [
+            ("ptr.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("ptr.jpg", jpeg_with(&tiff)),
+        ] {
+            for group in GROUP_REMOVALS {
+                let path = write(dir.path(), name, &original);
+                remove_tag(&path, group)
+                    .unwrap_or_else(|e| panic!("{order:?} {name} {group}: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let got = exif_payload(name, &out).map(|t| dump(&t));
+                let want = match group {
+                    "IFD0:All" | "EXIF:All" => None,
+                    "ExifIFD:All" => Some(
+                        before
+                            .iter()
+                            .filter(|(k, _)| !k.starts_with("ExifIFD:"))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    ),
+                    "IFD1:All" => Some(
+                        before
+                            .iter()
+                            .filter(|(k, _)| !k.starts_with("IFD1:"))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    ),
+                    _ => Some(before.clone()),
+                };
+                assert_eq!(got, want, "{order:?} {name} {group}");
+                if want.as_ref() == Some(&before) {
+                    assert_eq!(
+                        out, original,
+                        "{order:?} {name} {group}: a no-op writes nothing"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `remove_tag("EXIF:Make")` names IFD0:Make by its family-0 alias; pinned
+/// ExifTool 13.59 deletes it. The removal was matched only literally, so
+/// IFD0:Make stayed in the map and the write was refused (tip 707c7565
+/// reported success with Make still there).
+#[test]
+fn a_family_alias_removal_of_a_surfaced_entry_deletes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let mut want = dump(&tiff);
+        want.remove("IFD0:0x010f");
+        for (name, original) in [
+            ("alias.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("alias.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            remove_tag(&path, "EXIF:Make").unwrap_or_else(|e| panic!("{order:?} {name}: {e}"));
+            let out = tiff_of(name, &std::fs::read(&path).unwrap());
+            assert_eq!(dump(&out), want, "{order:?} {name}");
+        }
+    }
+}
+
+/// A TIFF-structured file: a group removal of a group the file does not
+/// hold is a no-op; one that would delete a directory is refused, file
+/// untouched (the in-place TIFF writer cannot delete directories; pinned
+/// ExifTool 13.59 cannot delete IFD0 from a TIFF either).
+#[test]
+fn group_wide_removals_on_a_tiff_file() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![
+                (0x010F, 2, 5, b"Acme\0".to_vec()),
+                (0x013B, 2, 3, b"me\0".to_vec()),
+            ],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(100).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        for group in ["GPS:All", "IFD1:All", "InteropIFD:All", "MakerNotes:All"] {
+            let path = write(dir.path(), "g.tif", &tiff);
+            remove_tag(&path, group).unwrap_or_else(|e| panic!("{order:?} {group}: {e}"));
+            assert_eq!(std::fs::read(&path).unwrap(), tiff, "{order:?} {group}");
+        }
+        for group in ["IFD0:All", "EXIF:All", "ExifIFD:All"] {
+            let path = write(dir.path(), "g.tif", &tiff);
+            assert!(remove_tag(&path, group).is_err(), "{order:?} {group}");
+            assert_eq!(std::fs::read(&path).unwrap(), tiff, "{order:?} {group}");
+        }
+    }
+}

@@ -388,7 +388,7 @@ fn plan_exif(
         .iter()
         .filter_map(|(_, record)| decode_raw_profile(record))
         .collect();
-    let mut blocks: Vec<&[u8]> = exif_chunks
+    let exif_blocks: Vec<&[u8]> = exif_chunks
         .iter()
         .map(|chunk| {
             chunk
@@ -397,6 +397,7 @@ fn plan_exif(
                 .unwrap_or(&chunk.data)
         })
         .collect();
+    let mut blocks = exif_blocks.clone();
     blocks.extend(
         decoded
             .iter()
@@ -405,6 +406,7 @@ fn plan_exif(
     if !exif_changed(metadata, baseline, removed)
         || crate::writers::exif_surgical::exif_request_is_no_op(
             &blocks,
+            &exif_blocks,
             crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
             baseline,
             metadata,
