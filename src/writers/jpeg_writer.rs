@@ -145,14 +145,6 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     // original byte order, MakerNotes preserved) — issue #20
     let file_size = reader.size() as usize;
     let file_bytes = reader.read(0, file_size)?;
-    // A plan that changes no tag -- a deletion that names nothing in the file,
-    // a `-TagsFromFile` that found nothing to copy, a value equal to the one
-    // stored -- hands back the original bytes rather than a re-laid-out copy,
-    // so the caller reports the file unchanged instead of updated (see
-    // `exif_surgical::jpeg_exif_plan_is_identity`).
-    if crate::writers::exif_surgical::jpeg_exif_plan_is_identity(file_bytes, metadata, removed)? {
-        return Ok(file_bytes.to_vec());
-    }
     let new_exif_segment = crate::writers::exif_surgical::rewrite_jpeg_exif_with_removals(
         file_bytes, metadata, removed,
     )?;
@@ -274,8 +266,6 @@ pub(crate) fn write_public_exif_transaction(
     baseline: &MetadataMap,
     plan: crate::writers::generated_public_write::PublicWritePlan,
 ) -> Result<Vec<u8>> {
-    use crate::writers::mandatory_defaults_runtime as mandatory;
-    use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
     if plan.whole_exif_clear {
         return transform_exif(reader, |_, _| Ok((Vec::new(), ()))).map(|(bytes, ())| bytes);
     }
@@ -287,123 +277,218 @@ pub(crate) fn write_public_exif_transaction(
         );
     }
     transform_exif(reader, |original, head| {
-        let empty;
-        let tiff = match original {
-            Some(tiff) => tiff,
-            None => {
-                let order = source_fresh_byte_order()?;
-                empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
-                    .map_err(ExifToolError::unsupported_format)?;
-                &empty
-            }
-        };
-        let scan = crate::writers::exif_surgical::scan_exif_entries(tiff)?;
-        let (original_count, _) = tiff_surgical::ifd0_state(tiff)?;
-        let order = match scan.byte_order {
-            crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
-                mandatory::TiffByteOrder::Little
-            }
-            crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
-        };
-        let prepare_legacy = |bytes: &[u8]| {
-            if plan.has_legacy_changes {
-                tiff_surgical::rewrite_tiff_payload_with_removals(
-                    bytes,
-                    baseline,
-                    &plan.legacy_metadata,
-                    &plan.legacy_removed,
-                    true,
-                )
-            } else {
-                Ok(bytes.to_vec())
-            }
-        };
-        let legacy = prepare_legacy(tiff)?;
-        // Resolve conversions first. A defined input can still be rejected or
-        // become NoEdit; only an actual set can trigger directory creation.
-        let generated = generated_scalar::plan_resolved_generated_scalars(
-            &legacy,
-            plan.generated,
-            &generated_scalar::generated_rules(),
-        )?;
-        let ifd1_entries_before = entry_edits::ifd1_entry_count(&legacy)?;
-        let needs_ifd1_defaults = ifd1_entries_before.unwrap_or(0) == 0
-            && generated.edits.iter().any(|edit| {
-                edit.ifd == crate::writers::exif_surgical::IfdKind::Ifd1
-                    && matches!(edit.mutation, entry_edits::EntryMutation::Set { .. })
-            });
-        let has_ifd1_delete = generated.edits.iter().any(|edit| {
-            edit.ifd == crate::writers::exif_surgical::IfdKind::Ifd1
-                && matches!(edit.mutation, entry_edits::EntryMutation::Delete)
-        });
-        let ifd1_mandatory = if needs_ifd1_defaults || has_ifd1_delete {
-            validate_creation_sources()?;
-            let properties = source_raw_properties(head)?;
-            let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
-            mandatory::require_ifd1_mandatory_cleanup(recipe)
-                .map_err(ExifToolError::unsupported_format)?;
-            Some(mandatory_default_edits(recipe, "IFD1", order, &properties)?)
-        } else {
-            None
-        };
-        let legacy = if original_count == 0
-            && (generated.has_set() || tiff_surgical::ifd0_state(&legacy)?.0 != 0)
-        {
-            validate_creation_sources()?;
-            let properties = source_raw_properties(head)?;
-            let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
-            let mut edits = mandatory_default_edits(recipe, "IFD0", order, &properties)?;
-            edits.extend(ifd1_defaults_for_creation(
-                needs_ifd1_defaults,
-                ifd1_mandatory.as_deref(),
-            )?);
-            let seeded = entry_edits::apply_entry_edits(tiff, &edits)?;
-            // Reapply the authored legacy delta against the original baseline:
-            // explicit user overrides/removals take precedence over defaults.
-            prepare_legacy(&seeded)?
-        } else if needs_ifd1_defaults {
-            let edits = ifd1_defaults_for_creation(needs_ifd1_defaults, ifd1_mandatory.as_deref())?;
-            prepare_legacy(&entry_edits::apply_entry_edits(&legacy, &edits)?)?
-        } else {
-            legacy
-        };
-        let output = generated.apply(&legacy)?.bytes;
-        let ifd1_entries_after = entry_edits::ifd1_entry_count(&output)?;
-        let ifd1_shrank =
-            has_ifd1_delete && ifd1_entries_after.unwrap_or(0) < ifd1_entries_before.unwrap_or(0);
-        let output = if ifd1_shrank {
-            // Existing IFD1 cleanup must compare the survivor's physical
-            // type/count/value exactly as WriteExif does. Reuse the guarded
-            // generated predicate used for TIFF rather than the creation
-            // operands, which describe only new-directory encodings.
-            let properties = source_raw_properties(head)?;
-            let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
-            let defaults =
-                mandatory::defaults_with_properties(recipe, "IFD1", false, 0, &properties)
-                    .map_err(ExifToolError::unsupported_format)?;
-            super::generated_public_write::cleanup_source_mandatory_ifd1_with_defaults(
-                &output, recipe, &defaults,
-            )?
-        } else if needs_ifd1_defaults && ifd1_mandatory.is_some() {
-            entry_edits::remove_ifd1_if_only_mandatory(
-                &output,
-                ifd1_mandatory.as_ref().unwrap(),
-                true,
-            )?
-        } else {
-            output
-        };
-        let (count, next) = tiff_surgical::ifd0_state(&output)?;
-        Ok((
-            if count == 0 && !next {
-                Vec::new()
-            } else {
-                output
-            },
-            (),
-        ))
+        rewrite_generated_exif_payload(original, &|| source_raw_properties(head), baseline, plan)
+            .map(|bytes| (bytes, ()))
     })
     .map(|(bytes, ())| bytes)
+}
+
+/// The EXIF TIFF payload (header onward) a public transaction with a
+/// non-empty generated part leaves in a carrier whose original payload is
+/// `original` (`None`: the carrier has no EXIF yet, which is then created
+/// with the source-derived fresh byte order and mandatory entries). An empty
+/// result means the carrier should drop its EXIF block.
+///
+/// Carrier-neutral: the JPEG APP1 writer and the PNG `eXIf` writer both call
+/// it. `raw_properties` supplies the carrier's raw JFIF properties that
+/// `WriteExif` seeds mandatory resolution defaults from (`JFIFXResolution`
+/// etc., WriteExif.pl 13.59:705-711); a carrier with no JFIF segment
+/// supplies none, as `$$et{JFIFYResolution}` is then undefined.
+pub(crate) fn rewrite_generated_exif_payload(
+    original: Option<&[u8]>,
+    raw_properties: &dyn Fn() -> Result<std::collections::BTreeMap<String, i64>>,
+    baseline: &MetadataMap,
+    plan: crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<Vec<u8>> {
+    use crate::writers::mandatory_defaults_runtime as mandatory;
+    use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
+    // The legacy delta is normally applied by the in-place TIFF payload
+    // writer, which cannot shrink an IFD and refuses a deletion. A plan that
+    // deletes a legacy tag (a key gone from the map, or named) therefore
+    // applies its legacy delta first through the reconstructing surgical
+    // writer -- the one a legacy-only plan uses -- and the generated edits
+    // on top of that. Before, one write setting IFD0:Artist and deleting
+    // ExifIFD:ISO failed "cannot shrink an IFD table".
+    //
+    // That legacy half is not a clear even when it leaves no IFD0/ExifIFD/
+    // GPS row, so the writer's drop-all shortcut is off: an IFD1 thumbnail
+    // or a MakerNote beside the last deleted tag is carried. When no entry
+    // at all is left, the generated edits start from an empty IFD0 in the
+    // original byte order; whether `WriteExif` seeds mandatory entries is
+    // still decided by the original IFD0 (`$numEntries`, WriteExif.pl
+    // 13.59:714-719), which existed. Oracle, `-ExifIFD:ISO= -IFD0:Artist=you`
+    // on a block holding only ISO: byte order kept, IFD0 = {Artist}.
+    let creation_count = match original {
+        Some(tiff) => Some(tiff_surgical::ifd0_state(tiff)?.0),
+        None => None,
+    };
+    let mut plan = plan;
+    let staged;
+    let original = match original {
+        Some(tiff) if plan.has_legacy_changes && legacy_deletes(baseline, &plan) => {
+            let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
+                tiff,
+                baseline,
+                &plan.legacy_metadata,
+                &plan.legacy_removed,
+            )?;
+            staged = if kept.is_empty() {
+                let order = match crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
+                {
+                    crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                        mandatory::TiffByteOrder::Little
+                    }
+                    crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                        mandatory::TiffByteOrder::Big
+                    }
+                };
+                mandatory::serialize_ifd0_defaults(Vec::new(), order)
+                    .map_err(ExifToolError::unsupported_format)?
+            } else {
+                kept
+            };
+            plan.has_legacy_changes = false;
+            Some(staged.as_slice())
+        }
+        other => other,
+    };
+    let empty;
+    let tiff = match original {
+        Some(tiff) => tiff,
+        None => {
+            let order = source_fresh_byte_order()?;
+            empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
+                .map_err(ExifToolError::unsupported_format)?;
+            &empty
+        }
+    };
+    let scan = crate::writers::exif_surgical::scan_exif_entries(tiff)?;
+    let original_count = match creation_count {
+        Some(count) => count,
+        None => tiff_surgical::ifd0_state(tiff)?.0,
+    };
+    let order = match scan.byte_order {
+        crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+            mandatory::TiffByteOrder::Little
+        }
+        crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
+    };
+    let prepare_legacy = |bytes: &[u8]| {
+        if plan.has_legacy_changes {
+            tiff_surgical::rewrite_tiff_payload_with_removals(
+                bytes,
+                baseline,
+                &plan.legacy_metadata,
+                &plan.legacy_removed,
+                true,
+            )
+        } else {
+            Ok(bytes.to_vec())
+        }
+    };
+    let legacy = prepare_legacy(tiff)?;
+    // Resolve conversions first. A defined input can still be rejected or
+    // become NoEdit; only an actual set can trigger directory creation.
+    let generated = generated_scalar::plan_resolved_generated_scalars(
+        &legacy,
+        plan.generated,
+        &generated_scalar::generated_rules(),
+    )?;
+    let ifd1_entries_before = entry_edits::ifd1_entry_count(&legacy)?;
+    let needs_ifd1_defaults = ifd1_entries_before.unwrap_or(0) == 0
+        && generated.edits.iter().any(|edit| {
+            edit.ifd == crate::writers::exif_surgical::IfdKind::Ifd1
+                && matches!(edit.mutation, entry_edits::EntryMutation::Set { .. })
+        });
+    let has_ifd1_delete = generated.edits.iter().any(|edit| {
+        edit.ifd == crate::writers::exif_surgical::IfdKind::Ifd1
+            && matches!(edit.mutation, entry_edits::EntryMutation::Delete)
+    });
+    let ifd1_mandatory = if needs_ifd1_defaults || has_ifd1_delete {
+        validate_creation_sources()?;
+        let properties = raw_properties()?;
+        let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+        mandatory::require_ifd1_mandatory_cleanup(recipe)
+            .map_err(ExifToolError::unsupported_format)?;
+        Some(mandatory_default_edits(recipe, "IFD1", order, &properties)?)
+    } else {
+        None
+    };
+    let legacy = if original_count == 0
+        && (generated.has_set() || tiff_surgical::ifd0_state(&legacy)?.0 != 0)
+    {
+        validate_creation_sources()?;
+        let properties = raw_properties()?;
+        let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+        let mut edits = mandatory_default_edits(recipe, "IFD0", order, &properties)?;
+        edits.extend(ifd1_defaults_for_creation(
+            needs_ifd1_defaults,
+            ifd1_mandatory.as_deref(),
+        )?);
+        let seeded = entry_edits::apply_entry_edits(tiff, &edits)?;
+        // Reapply the authored legacy delta against the original baseline:
+        // explicit user overrides/removals take precedence over defaults.
+        prepare_legacy(&seeded)?
+    } else if needs_ifd1_defaults {
+        let edits = ifd1_defaults_for_creation(needs_ifd1_defaults, ifd1_mandatory.as_deref())?;
+        prepare_legacy(&entry_edits::apply_entry_edits(&legacy, &edits)?)?
+    } else {
+        legacy
+    };
+    let output = generated.apply(&legacy)?.bytes;
+    let ifd1_entries_after = entry_edits::ifd1_entry_count(&output)?;
+    let ifd1_shrank =
+        has_ifd1_delete && ifd1_entries_after.unwrap_or(0) < ifd1_entries_before.unwrap_or(0);
+    let output = if ifd1_shrank {
+        // Existing IFD1 cleanup must compare the survivor's physical
+        // type/count/value exactly as WriteExif does. Reuse the guarded
+        // generated predicate used for TIFF rather than the creation
+        // operands, which describe only new-directory encodings.
+        let properties = raw_properties()?;
+        let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+        let defaults = mandatory::defaults_with_properties(recipe, "IFD1", false, 0, &properties)
+            .map_err(ExifToolError::unsupported_format)?;
+        super::generated_public_write::cleanup_source_mandatory_ifd1_with_defaults(
+            &output, recipe, &defaults,
+        )?
+    } else if needs_ifd1_defaults && ifd1_mandatory.is_some() {
+        entry_edits::remove_ifd1_if_only_mandatory(&output, ifd1_mandatory.as_ref().unwrap(), true)?
+    } else {
+        output
+    };
+    let (count, next) = tiff_surgical::ifd0_state(&output)?;
+    Ok(if count == 0 && !next {
+        Vec::new()
+    } else {
+        output
+    })
+}
+
+/// Whether a public plan's legacy delta deletes a tag: an EXIF-family key of
+/// `baseline` that `legacy_metadata` no longer holds, or a named removal.
+/// The raw-carried directories count too: a surfaced InteropIFD, IFD1 or
+/// MakerNotes row dropped from the map must reach the reconstructing
+/// writer, which refuses it, not the in-place payload writer, which never
+/// walks those directories and would report success with the row kept.
+fn legacy_deletes(
+    baseline: &MetadataMap,
+    plan: &crate::writers::generated_public_write::PublicWritePlan,
+) -> bool {
+    !plan.legacy_removed.is_empty()
+        || baseline.iter().any(|(key, _)| {
+            [
+                "IFD0:",
+                "ExifIFD:",
+                "GPS:",
+                "EXIF:",
+                "IFD1:",
+                "InteropIFD:",
+                "MakerNotes:",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+                && !plan.legacy_metadata.contains_key(key)
+        })
 }
 
 /// `WriteExif` adds mandatory entries only when creating an empty directory.

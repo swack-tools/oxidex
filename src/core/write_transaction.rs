@@ -9,7 +9,10 @@
 //! `Ok` means every requested change is in the file. Anything less is an
 //! error and the file is byte-identical to before the call:
 //!
-//! 1. **Resolution before writing.** Each request is resolved to the address
+//! 1. **Resolution before writing.** An EXIF-group request in a PDF is
+//!    ExifTool's "unchanged" and a deletion that names nothing is a no-op
+//!    (#945's `exif_group_in_pdf` / `removal_is_no_op`). Every other request
+//!    is resolved to the address
 //!    pinned ExifTool 13.59 writes it at, or refused (#945's
 //!    `resolve_write_address` / `writers::write_request`): an ungrouped name
 //!    is resolved (`XPTitle` -> `IFD0:XPTitle`) or refused, and a key the
@@ -19,10 +22,11 @@
 //!    request is applied.
 //! 2. **The format writer's own post-condition.** The request is applied to
 //!    a private copy with the format writer, which checks its own payload
-//!    (the EXIF writers' `exif_surgical::verify_exif_write` once #943 lands).
+//!    (#943's `exif_surgical::exif_request_is_no_op` and
+//!    `verify_exif_write`, inside `operations::write_metadata_with_removals`).
 //! 3. **A read-back proof.** The copy is re-read and every resolved address
 //!    must hold its requested value -- the exact field bytes for an
-//!    IFD0/ExifIFD/GPS entry (`exif_surgical::stored_entry_matches`, #945's
+//!    IFD0/ExifIFD/GPS/IFD1 entry (`exif_surgical::stored_entry_matches`, #945's
 //!    proof), the reader's value otherwise -- and every deleted address must
 //!    be gone. A change the read-back cannot find refuses the write.
 //! 4. **Commit.** The original is replaced atomically, and only when the
@@ -33,16 +37,13 @@
 //! skips every group it does not write: `write_metadata` with an `XMP:Title`
 //! in a JPEG returned `Ok(())` and wrote nothing.
 
-use crate::core::FileFormat;
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    field_spellings, metadata_holds, read_metadata, refuse_png_exif_flattening, remove_field,
-    resolve_write_address, write_metadata_with_removals,
+    exif_group_in_pdf, field_spellings, metadata_holds, read_metadata, removal_is_no_op,
+    remove_field, resolve_write_key_for, write_metadata_with_removals,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
-use crate::io::MMapReader;
-use crate::parsers::detection::detect_format;
 use crate::writers::atomic_writer::write_atomic;
 use std::fs;
 use std::path::Path;
@@ -113,7 +114,24 @@ pub enum WriteOutcome {
 /// [`ExifToolError::TagsNotWritten`] naming every key that would not be
 /// written; any read, validation or I/O error. The file is untouched then.
 pub fn apply_tag_changes(path: &Path, changes: &[TagChange]) -> Result<WriteOutcome> {
-    transact(path, |scratch| apply_on(scratch, changes))
+    apply_tag_changes_counted(path, changes).map(|(outcome, _)| outcome)
+}
+
+/// [`apply_tag_changes`], also returning how many sets were applied and
+/// proven -- as opposed to requests decided no-ops up front (an EXIF-group
+/// request in a PDF, a deletion that names nothing). The CLI needs it: a
+/// byte-identical result is ExifTool's `updated` only when a set was proven
+/// in effect, never when every request was a no-op.
+pub(crate) fn apply_tag_changes_counted(
+    path: &Path,
+    changes: &[TagChange],
+) -> Result<(WriteOutcome, usize)> {
+    let mut proven_sets = 0;
+    let outcome = transact(path, |scratch| {
+        proven_sets = apply_on(scratch, changes)?;
+        Ok(())
+    })?;
+    Ok((outcome, proven_sets))
 }
 
 /// Groups whose rows describe the file (or the read) rather than being
@@ -200,13 +218,34 @@ fn same_field(a: &str, b: &str) -> bool {
 }
 
 /// The transaction body, run on the private copy at `path`.
-fn apply_on(path: &Path, changes: &[TagChange]) -> Result<()> {
+/// Returns the number of sets applied and proven.
+fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
     let baseline = read_metadata(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     let mut resolved: Vec<Resolved<'_>> = Vec::new();
     for change in changes {
-        match resolve_write_address(path, change.tag(), &baseline) {
-            Ok(key) => resolved.push(Resolved {
+        // #945: an EXIF-group request in a PDF is ExifTool's "unchanged"
+        // (a PDF carries no EXIF block), a set or a deletion alike.
+        if exif_group_in_pdf(path, change.tag())? {
+            continue;
+        }
+        let (key, addressed) = match resolve_write_key_for(path, change.tag(), &baseline) {
+            Ok(resolution) => resolution,
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                refused.extend(tags);
+                continue;
+            }
+            Err(other) => return Err(other),
+        };
+        // #945 / #943: a deletion that names nothing -- no row under any
+        // spelling, and no entry of any EXIF block (`exif_surgical::
+        // exif_request_is_no_op`) -- is a no-op, decided before the writer's
+        // address guard (ExifTool 13.59: `1 image files unchanged`).
+        if change.value().is_none() && removal_is_no_op(path, &key, &baseline)? {
+            continue;
+        }
+        match addressed {
+            Ok(()) => resolved.push(Resolved {
                 requested: change.tag(),
                 key,
                 value: change.value(),
@@ -231,55 +270,35 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<()> {
         })
         .map(|(_, request)| request)
         .collect();
+    if effective.is_empty() {
+        return Ok(0); // every request was a no-op: nothing to write
+    }
 
-    // The PNG and PDF writers rebuild what they write from the map (PNG text
-    // chunks and its `eXIf`; a PDF incremental update), so for them a
-    // deletion of a key the map lacks names nothing, and writing anyway
-    // only re-lays-out the file (PNG) or appends an empty revision (PDF:
-    // `-PDF:Author=` on PDF.pdf grew it 8907 -> 9185 bytes). Pinned ExifTool
-    // 13.59 answers the same deletions `1 image files unchanged` with the
-    // bytes untouched.
-    let rebuilds_from_map = {
-        let reader = MMapReader::new(path)?;
-        matches!(detect_format(&reader)?, FileFormat::PNG | FileFormat::PDF)
-    };
+    // All requests in one writer pass, as ExifTool applies all of a file's
+    // tags at once (a mandatory-tag seeding decision, for instance, sees
+    // the whole request). The writer's own no-op decision and post-write
+    // check (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`,
+    // #943) run inside `write_metadata_with_removals`.
     let mut desired = baseline.clone();
     let mut removed: Vec<String> = Vec::new();
-    let mut applied: Vec<&Resolved<'_>> = Vec::new();
     for request in &effective {
+        remove_field(&mut desired, &request.key);
         match request.value {
             Some(value) => {
-                remove_field(&mut desired, &request.key);
                 desired.insert(request.key.clone(), value.clone());
             }
-            None => {
-                if rebuilds_from_map && !metadata_holds(&baseline, &request.key) {
-                    continue; // already absent: nothing to write
-                }
-                remove_field(&mut desired, &request.key);
-                // The key goes along: an EXIF entry the reader surfaces no
-                // row for has no key to take out of the map, yet
-                // `-ExifIFD:ApplicationNotes=` still names it for deletion.
-                removed.push(request.key.clone());
-            }
-        }
-        applied.push(request);
-    }
-    for request in &applied {
-        if let Err(err) = refuse_png_exif_flattening(path, request.requested, &baseline) {
-            match err {
-                ExifToolError::TagsNotWritten { tags } => refused.extend(tags),
-                other => return Err(other),
-            }
+            // The key goes along: an EXIF entry the reader surfaces no row
+            // for has no key to take out of the map, yet
+            // `-ExifIFD:ApplicationNotes=` still names it for deletion.
+            None => removed.push(request.key.clone()),
         }
     }
-    if !refused.is_empty() {
-        return Err(ExifToolError::TagsNotWritten { tags: refused });
-    }
-    if !applied.is_empty() {
-        write_metadata_with_removals(path, &desired, &removed).map_err(typed_refusal)?;
-    }
-    prove_in_effect(path, &effective)
+    write_metadata_with_removals(path, &desired, &removed).map_err(typed_refusal)?;
+    prove_in_effect(path, &effective)?;
+    Ok(effective
+        .iter()
+        .filter(|request| request.value.is_some())
+        .count())
 }
 
 /// A format writer's own refusal of one key (`exif_surgical`,

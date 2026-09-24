@@ -1524,10 +1524,7 @@ fn read_metadata_routes_keynote_to_iwork_parser() {
 
 #[test]
 fn write_metadata_routes_png_and_pdf_writers() {
-    // A PNG without an `eXIf`: sample.png's carries ExifIFD entries, and any
-    // write to it is refused until the PNG writer edits `eXIf` in place
-    // (`operations::refuse_png_exif_flattening`).
-    let png = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
+    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
     let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
 
     // A read-modify-write: `write_metadata` treats every row the map lacks as
@@ -1691,9 +1688,8 @@ fn insert_png_chunk_before_iend(png: &mut Vec<u8>, chunk_type: &[u8; 4], data: &
 #[test]
 fn png_write_preserves_ztxt_on_unrelated_edit() {
     // The writer rebuilds text chunks from the map; a zTXt chunk the caller
-    // did not touch must survive an unrelated edit, still compressed. (A PNG
-    // without an `eXIf`: see `write_metadata_routes_png_and_pdf_writers`.)
-    let png = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
+    // did not touch must survive an unrelated edit, still compressed.
+    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
 
     // Seed a real zTXt 'Comment' chunk into the file.
     let mut bytes = fs::read(png.path()).expect("read fixture");
@@ -2217,8 +2213,7 @@ fn write_preserves_file_permissions() {
 /// must still be removed.
 #[test]
 fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
-    // A PNG without an `eXIf`: see `write_metadata_routes_png_and_pdf_writers`.
-    let temp = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
+    let temp = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
 
     let mut seed = read_metadata(temp.path()).expect("read png");
     seed.insert("PNG:Author", TagValue::new_string("OxiDex QA"));

@@ -22,7 +22,7 @@
 //! | `XMP:Title=v` (JPEG, TIFF, PNG)          | `[XMP-dc] Title: v`                | refused            |
 //! | `File:Comment=c` (synthetic_001.jpg)     | `[File] Comment: c` (COM segment)  | refused            |
 //! | `IFD1:ImageDescription=x` (synthetic_001)| `[IFD1] ImageDescription: x`       | refused            |
-//! | `IFD1:XResolution=300` (sample.png)      | `[IFD1] XResolution: 300`          | refused            |
+//! | `IFD1:XResolution=300` (sample.png)      | `[IFD1] XResolution: 300`          | writes IFD1 (#943) |
 //!
 //! Every refusal leaves the file byte-identical, and a refusal of one key
 //! refuses the whole request (ExifTool writes all of a file's tags or none).
@@ -224,26 +224,77 @@ fn write_metadata_refuses_file_group_keys() {
 }
 
 /// IFD1 keys the format's writer does not address. ExifTool 13.59 writes
-/// `[IFD1] ImageDescription` in synthetic_001.jpg and `[IFD1] XResolution`
-/// in sample.png.
+/// `[IFD1] ImageDescription` in synthetic_001.jpg; oxidex's JPEG writer does
+/// not, so it must refuse by name.
 #[test]
 fn write_metadata_refuses_ifd1_keys_the_writer_would_drop() {
-    for (fixture, key, value) in [
-        (JPEG, "IFD1:ImageDescription", "x"),
-        (PNG, "IFD1:XResolution", "300"),
-    ] {
-        let dir = TempDir::new().unwrap();
-        let file = copy_into(&dir, fixture);
-        let before = sha(&file);
-        let result = rmw(&file, |map| set(map, key, value));
-        assert_refused(
-            &format!("{fixture} {key}"),
-            result,
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, JPEG);
+    let before = sha(&file);
+    let key = "IFD1:ImageDescription";
+    let result = rmw(&file, |map| set(map, key, "x"));
+    assert_refused(
+        &format!("{JPEG} {key}"),
+        result,
+        &[key],
+        &[],
+        &file,
+        &before,
+    );
+}
+
+/// sample.png has an `eXIf` but no IFD1. ExifTool 13.59 creates `[IFD1]
+/// XResolution: 300` there (with Compression, YResolution, ResolutionUnit),
+/// and #943's in-place PNG writer does the same. oxidex's PNG *reader* does
+/// not surface an eXIf IFD1, so the proof reads the chunk's entry bytes, as
+/// the transaction's own read-back does.
+#[test]
+fn write_metadata_png_ifd1_is_written_or_refused_by_name() {
+    use oxidex::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, PNG);
+    let before = sha(&file);
+    let key = "IFD1:XResolution";
+    let result = rmw(&file, |map| {
+        map.insert(key, TagValue::new_rational(300, 1));
+    });
+    match result {
+        Ok(()) => {
+            let bytes = fs::read(&file).unwrap();
+            // the eXIf chunk: length, type, data
+            let at = bytes
+                .windows(4)
+                .position(|w| w == b"eXIf")
+                .expect("eXIf chunk");
+            let len = u32::from_be_bytes(bytes[at - 4..at].try_into().unwrap()) as usize;
+            let tiff = &bytes[at + 4..at + 4 + len];
+            let entry = scan_exif_entries(tiff)
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|e| e.ifd == IfdKind::Ifd1 && e.tag_id == 0x011a)
+                .expect("reported written: IFD1 0x011a must exist");
+            let (num, den) = if tiff.starts_with(b"II") {
+                (
+                    u32::from_le_bytes(entry.value[0..4].try_into().unwrap()),
+                    u32::from_le_bytes(entry.value[4..8].try_into().unwrap()),
+                )
+            } else {
+                (
+                    u32::from_be_bytes(entry.value[0..4].try_into().unwrap()),
+                    u32::from_be_bytes(entry.value[4..8].try_into().unwrap()),
+                )
+            };
+            assert_eq!((entry.field_type, num, den), (5, 300, 1));
+        }
+        Err(err) => assert_refused(
+            &format!("{PNG} {key}"),
+            Err(err),
             &[key],
             &[],
             &file,
             &before,
-        );
+        ),
     }
 }
 

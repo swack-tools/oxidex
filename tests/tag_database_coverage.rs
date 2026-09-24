@@ -38,14 +38,8 @@ fn test_core_tag_descriptors_are_reachable() {
 #[test]
 fn test_yaml_backed_descriptors_do_not_reject_parser_value_types() {
     let temp_dir = tempdir().expect("create temp directory");
-    // A PNG without an `eXIf` (any write to sample.png's is refused before
-    // validation is reached; see `operations::refuse_png_exif_flattening`).
-    let png_path = temp_dir.path().join("synthetic_text_001.png");
-    fs::copy(
-        "tests/fixtures/png/simple/synthetic_text_001.png",
-        &png_path,
-    )
-    .expect("copy PNG fixture");
+    let png_path = temp_dir.path().join("sample.png");
+    fs::copy("tests/fixtures/png/sample.png", &png_path).expect("copy PNG fixture");
     let before = fs::read(&png_path).expect("read PNG fixture");
 
     let descriptor =

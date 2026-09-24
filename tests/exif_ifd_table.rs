@@ -857,13 +857,6 @@ fn pdf_with_dct_image(jpeg: &[u8]) -> Vec<u8> {
 /// (MeteringMode int16u 1, FocalLength rational64u 34/1, ColorSpace int16u
 /// 1, SensingMethod int16u 2, FileSource undef 03, FNumber rational64u
 /// 14/1).
-///
-/// #945 review (P1-3): that rebuild also flattens every ExifIFD row into
-/// IFD0 (`-PNG:Title=t` on tests/fixtures/png/sample.png moved ExifVersion,
-/// DateTimeOriginal, ComponentsConfiguration and ColorSpace into IFD0), so a
-/// write to a PNG whose `eXIf` holds ExifIFD rows is refused, file untouched,
-/// until the in-place PNG writer (#943) replaces the rebuild; the stored-value
-/// expectations above (asserted here at 4f653243) then apply to that writer.
 #[test]
 fn a_png_exif_rebuild_writes_stored_values() {
     use oxidex::core::TagValue;
@@ -876,15 +869,55 @@ fn a_png_exif_rebuild_writes_stored_values() {
         .tempfile()
         .expect("temp file");
     std::fs::write(file.path(), png_with_exif(&tiff_block_of(&jpeg))).expect("write the PNG");
-    let before = std::fs::read(file.path()).expect("read the PNG");
-    let refusal = oxidex::core::operations::modify_tag(
-        file.path(),
-        "PNG:Comment",
-        TagValue::new_string("hello"),
-    )
-    .expect_err("a rebuild that would flatten ExifIFD into IFD0 is refused");
-    assert!(refusal.to_string().contains("move into IFD0"), "{refusal}");
-    assert_eq!(std::fs::read(file.path()).expect("read back"), before);
+    oxidex::core::operations::modify_tag(file.path(), "PNG:Comment", TagValue::new_string("hello"))
+        .expect("the PNG write succeeds");
+    let written = std::fs::read(file.path()).expect("read back");
+    let tiff = png_chunk(&written, b"eXIf").expect("the rebuilt eXIf chunk");
+    let entries = tiff_entries(&tiff);
+    let entry = |id: u16| {
+        entries
+            .iter()
+            .find(|(tag, ..)| *tag == id)
+            .unwrap_or_else(|| panic!("tag {id:#06x} written"))
+            .clone()
+    };
+    assert_eq!(entry(0x9207), (0x9207, 3, 1, vec![1, 0]), "MeteringMode");
+    assert_eq!(entry(0xa001), (0xa001, 3, 1, vec![1, 0]), "ColorSpace");
+    assert_eq!(entry(0xa217), (0xa217, 3, 1, vec![2, 0]), "SensingMethod");
+    assert_eq!(entry(0xa300), (0xa300, 7, 1, vec![3]), "FileSource");
+    assert_eq!(
+        entry(0x920a),
+        (
+            0x920a,
+            5,
+            1,
+            [34u32.to_le_bytes(), 1u32.to_le_bytes()].concat()
+        ),
+        "FocalLength"
+    );
+    assert_eq!(
+        entry(0x829d),
+        (
+            0x829d,
+            5,
+            1,
+            [14u32.to_le_bytes(), 1u32.to_le_bytes()].concat()
+        ),
+        "FNumber"
+    );
+}
+
+/// The data of the first `kind` chunk of a PNG.
+fn png_chunk(png: &[u8], kind: &[u8; 4]) -> Option<Vec<u8>> {
+    let mut at = 8;
+    while at + 8 <= png.len() {
+        let len = u32::from_be_bytes(png[at..at + 4].try_into().ok()?) as usize;
+        if &png[at + 4..at + 8] == kind {
+            return png.get(at + 8..at + 8 + len).map(<[u8]>::to_vec);
+        }
+        at += 12 + len;
+    }
+    None
 }
 
 /// `(tag, type, count, value bytes)` of every entry of a TIFF block's IFD0

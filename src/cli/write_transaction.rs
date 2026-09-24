@@ -25,7 +25,9 @@ use crate::cli::args::CliArgs;
 use crate::cli::value_parser::parse_cli_tag_value_os;
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report};
-use crate::core::write_transaction::{ScratchStep, TagChange, apply_tag_changes, transact_with};
+use crate::core::write_transaction::{
+    ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
+};
 use crate::error::ExifToolError;
 use crate::writers::write_request::undefined_tag_warning;
 use std::ffi::OsString;
@@ -193,6 +195,7 @@ pub fn write_plan_file(
 ) -> Result<PlanOutcome, String> {
     let mut on_commit = Some(on_commit);
     let mut copy = None;
+    let mut proven_sets = 0;
     let outcome = transact(
         path,
         || on_commit.take().map_or(Ok(()), |commit| commit()),
@@ -217,18 +220,17 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            apply_sets(scratch, &plan.sets)
+            proven_sets = apply_sets(scratch, &plan.sets)?;
+            Ok(())
         },
     )?;
-    if outcome == WriteOutcome::Unchanged
-        && plan.sets_only()
-        && plan.sets.iter().any(|(_, value)| !value.is_empty())
-    {
-        // Nothing was rewritten, yet the transaction's read-back proved every
-        // set is in effect and every deletion absent: the request is exactly
-        // what the file holds, which ExifTool reports as an update. A
-        // deletion-only request stays `unchanged` (13.59: `-XPTitle=` with
-        // no XPTitle). The `--backup` copy still accompanies an update.
+    if outcome == WriteOutcome::Unchanged && plan.sets_only() && proven_sets > 0 {
+        // Nothing was rewritten, yet the transaction's read-back proved a set
+        // in effect (and every other request in effect or a no-op): the
+        // request is what the file holds, which ExifTool reports as an
+        // update. A request made only of deletions and no-ops stays
+        // `unchanged` (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you`
+        // on a PDF). The `--backup` copy still accompanies an update.
         if let Some(commit) = on_commit.take() {
             commit()?;
         }
@@ -264,13 +266,14 @@ pub fn write_file(
 }
 
 /// Applies every `-TAG=VALUE` of one file through the library's write
-/// transaction ([`apply_tag_changes`]): each value is parsed first (typed as
-/// the tag's registry entry declares; wrapping every value as a String made
-/// Integer/Rational/DateTime tags unsettable), then all of them are resolved,
-/// written, and proven together -- or none is.
-fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<(), String> {
+/// transaction ([`apply_tag_changes_counted`]): each value is parsed first
+/// (typed as the tag's registry entry declares; wrapping every value as a
+/// String made Integer/Rational/DateTime tags unsettable), then all of them
+/// are resolved, written in one pass, and proven together -- or none is.
+/// Returns how many sets were proven in effect.
+fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<usize, String> {
     if sets.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let mut changes = Vec::with_capacity(sets.len());
     for (tag_name, value) in sets {
@@ -283,8 +286,8 @@ fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<(), String>
             changes.push(TagChange::set(tag_name.clone(), tag_value));
         }
     }
-    apply_tag_changes(scratch, &changes)
-        .map(|_| ())
+    apply_tag_changes_counted(scratch, &changes)
+        .map(|(_, proven_sets)| proven_sets)
         .map_err(|e| describe_set_failure(&e, sets))
 }
 
