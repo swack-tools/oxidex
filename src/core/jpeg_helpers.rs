@@ -3208,6 +3208,110 @@ mod print_im_tests {
 }
 
 #[cfg(test)]
+mod xp_string_tests {
+    use super::*;
+    use crate::core::tag_occurrence::{SHIM_DEFAULT_PRIORITY, ValueChannel};
+    use crate::parsers::jpeg::segment_parser::parse_segments;
+    use crate::test_support::TestReader;
+
+    fn ucs2(text: &str) -> Vec<u8> {
+        text.encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .chain([0, 0])
+            .collect()
+    }
+
+    /// A little-endian TIFF block whose IFD0 (at 8) holds the five Windows
+    /// XP strings as `int8u` entries, values after the directory.
+    fn xp_tiff() -> Vec<u8> {
+        // FujiFilmFinePixZ100fd.jpg's XPTitle: `00 00`, then UCS-2 spaces.
+        let mut title = vec![0u8, 0];
+        title.extend(ucs2("   "));
+        let entries = [
+            (0x9c9bu16, title),
+            (0x9c9c, ucs2("Comment")),
+            (0x9c9d, ucs2("Author")),
+            (0x9c9e, ucs2("a;b")),
+            (0x9c9f, ucs2("Subject")),
+        ];
+        let mut blob_at = 8 + 2 + 12 * entries.len() + 4;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let mut blobs = Vec::new();
+        for (id, bytes) in &entries {
+            tiff.extend_from_slice(&id.to_le_bytes());
+            tiff.extend_from_slice(&1u16.to_le_bytes());
+            tiff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            assert!(bytes.len() > 4, "every value is out of line");
+            tiff.extend_from_slice(&(blob_at as u32).to_le_bytes());
+            blob_at += bytes.len();
+            blobs.extend_from_slice(bytes);
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&blobs);
+        tiff
+    }
+
+    /// The five XP strings (0x9c9b-0x9c9f), through the JPEG APP1 IFD0 walk
+    /// and the embedded-EXIF IFD0 walk (PNG `eXIf`, PSD, HEIF, WebP, JXL):
+    /// one occurrence each, at the IFD0 walks' uniform priority, carrying
+    /// ExifTool's decoded text on the print, ValueConv and stored channels
+    /// -- the stored form is what the PNG `eXIf` rebuild and `copy_metadata`
+    /// serialize. A leading U+0000 ends the value: 13.59 prints `""` for
+    /// FujiFilmFinePixZ100fd.jpg's XPTitle.
+    #[test]
+    fn xp_strings_decode_to_exiftool_text_on_every_channel() {
+        let tiff = xp_tiff();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("one EXIF APP1 segment");
+        let mut from_jpeg = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut from_jpeg, &mut Vec::new());
+
+        let mut from_embedded = MetadataMap::new();
+        assert!(crate::parsers::image::embedded::parse_embedded_exif(
+            &tiff,
+            &mut from_embedded
+        ));
+
+        let expected = [
+            ("XPTitle", ""),
+            ("XPComment", "Comment"),
+            ("XPAuthor", "Author"),
+            ("XPKeywords", "a;b"),
+            ("XPSubject", "Subject"),
+        ];
+        for (label, metadata) in [("jpeg", &from_jpeg), ("embedded", &from_embedded)] {
+            for (name, text) in expected {
+                let key = format!("IFD0:{name}");
+                let occurrences = metadata.occurrences_for(&key);
+                assert_eq!(occurrences.len(), 1, "{label} {key}: one occurrence");
+                assert_eq!(
+                    occurrences[0].priority, SHIM_DEFAULT_PRIORITY,
+                    "{label} {key}: priority"
+                );
+                for channel in [
+                    ValueChannel::PrintConv,
+                    ValueChannel::ValueConv,
+                    ValueChannel::Stored,
+                ] {
+                    assert_eq!(
+                        occurrences[0].project(channel).as_ref(),
+                        &TagValue::new_string(text),
+                        "{label} {key} {channel:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod transfer_function_tests {
     use super::*;
     use std::borrow::Cow;
