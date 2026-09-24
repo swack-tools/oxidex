@@ -1,5 +1,78 @@
 # ExifTool upgrade execution plan
 
+## Task19 transition qualification: tooling ready, execution pending
+
+The early Task19 slice provides
+`tools/exiftool-tables/version_transition_qualification.py` and a checked
+three-row matrix for dynamic same-pin, 11.78 to 12.64, and 12.64 to 11.78.
+It wraps the existing catalog/materialization, planner, native oracle,
+executor, and stage adapter. Each side requires fresh generation, an isolated
+target, immutable read fixtures, mandatory native write/readback fixtures, a
+live generated-artifact manifest, zero silent EXTRA retention, explicit
+generated-refusal counts, interruption recovery, and caller restoration. Each
+side must also pass the regenerated checkout's own test suite
+(one `cargo test --workspace --all-features --no-fail-fast` in a dedicated
+target: a deliberate superset of CI's required `cargo test --all-features`,
+which covers only the root package, because the `oxidex-tags-*` crates are
+generated per release and must be tested too) with zero failures, graded by that side's selected
+ExifTool under an allowlisted environment with pinned fixtures required (the
+release's own `t/images` plus the bootstrap-verified, version-independent
+combined-samples corpus); a
+missing, failed or unparsable test receipt, or one graded by any other
+ExifTool, refuses the side. Until the plan's release-aware test rewrite
+lands, the historical 113 (11.78) and 79 (12.64) lib-test failures mean those
+rows will refuse at this stage, which is the intended outcome.
+
+This is not transition qualification. Canonical 11.78 and 12.64 source bundles
+and fixture manifests are not present, and the final runs must use the
+converged post-Task18 candidate. The wrapper therefore fails closed today.
+After those inputs are provisioned and independently reviewed, run same-pin,
+forward, then reverse through the entry point's single nonblocking
+`transition.host.lock`, with unique run IDs and complete owner, heartbeat,
+expiry, release, and handoff receipts. Do not use the old fleet-controller or
+outer `locked.py` Task19 examples.
+
+One row per invocation, from a clean caller checkout at the converged
+candidate. Run the entry point from that checkout itself: `--repository` must
+be the checkout containing the entry point, `--matrix` must be its canonical
+`tools/exiftool-tables/version_transition_matrix.json` (its SHA-256 is bound
+into the result and instrument header), and the output root and every input
+bundle location must lie beneath the ops root (`$OXIDEX_OPS_DIR`, default
+`$HOME/oxidex-ops`, as `scripts/ops_paths.py` resolves it); only the Cargo
+target root may live elsewhere. The lease is a pre-created regular file directly beneath the output
+root, shared by every run; each run ID is new and its receipt paths must not
+exist yet:
+
+```bash
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/<date>/version-transition-qualification"
+RUN=same-pin-r1        # then e.g. forward-r1 with --only 11.78-to-12.64, reverse-r1 with --only 12.64-to-11.78
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
+python3 tools/exiftool-tables/version_transition_qualification.py \
+  --matrix tools/exiftool-tables/version_transition_matrix.json \
+  --repository "$(git rev-parse --show-toplevel)" \
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only "same-pin-$(cat .exiftool-version)" \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
+```
+
+`--target-root` defaults to `$OXIDEX_TARGET_ROOT` (or
+`$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`); output and target roots must be
+durable, not temporary. Only `$OUT/$RUN/qualification-result.json`, validated by
+`load_committed_result`, is a success marker. Exit status: 0 committed, 2
+refused, 3 committed but stdout reporting failed, 4 outcome unknown (inspect
+the marker), 5 lease intentionally still held because an owned stage child
+could not be proven gone (the named PIDs keep it held until they exit), 130
+interrupted.
+
+Historical 11.78/12.64 Rust-test failures still identify release-specific facts
+outside the Task19 tooling lease. Exact current locations and correction
+proposals are recorded in
+[`reference/upgrade-rehearsal-11.78-12.64.md`](reference/upgrade-rehearsal-11.78-12.64.md#first-genuine-failures-and-root-causes).
+
 The [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md) owns the goals,
 work order and progress measures. This file retains technical execution detail for the PR #737–#764 tranche;
 the mechanism going forward is the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) and the

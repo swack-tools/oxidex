@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
-SCHEMA=2; KIND="oxidex_exiftool_version_rehearsal_native_capability"; TIMEOUT=20
+SCHEMA=2; KIND="oxidex_exiftool_version_rehearsal_native_capability"; TIMEOUT=20; EXPECTED_PERL_VERSION='v5.38.2'
 TAG=re.compile(r"^[A-Za-z][A-Za-z0-9:]*$"); NAME=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 # Native file relocation/link operations need their own containment contract.
 # These are transport actions, not metadata rules to carry across releases.
@@ -62,8 +62,8 @@ def _run(argv:list[str],run:Callable[...,subprocess.CompletedProcess[str]])->dic
  except OSError as e: return {'command':argv,'exit':None,'stdout':'','stderr':str(e),'state':'spawn_failed'}
 def _capability(perl:Path,run):
  rows=[]
- for m in ('Archive::Zip',): rows.append({'module':m,**_run([str(perl),f'-M{m}','-e','1'],run)})
- return {'required_modules':['Archive::Zip'],'modules':rows,'available':all(x['state']=='ok' for x in rows)}
+ for m in ('strict','warnings','Archive::Zip','Compress::Zlib'): rows.append({'module':m,**_run([str(perl),f'-M{m}','-e','1'],run)})
+ return {'required_modules':['strict','warnings','Archive::Zip','Compress::Zlib'],'modules':rows,'available':all(x['state']=='ok' for x in rows)}
 def _read(prefix,tag,target,run): return _run([*prefix,'-s','-s','-s',f'-{tag}',str(target)],run)
 def _matches(record,expect,value=None):
  if record['state']!='ok': return False
@@ -79,8 +79,13 @@ def probe_materialized_native(materialization,plan,catalog,capture,resolution,ar
  if not parsed or len({x['name'] for x in parsed})!=len(parsed): raise Refused('at least one uniquely named capability case is required')
  # Disable ambient user configuration before ExifTool loads its native tables.
  prefix=[str(pp),f'-I{lib}',str(prog),'-config','']; version=_run([*prefix,'-ver'],run); cap=_capability(pp,run)
+ perl_version=_run([str(pp),'-e','print $^V'],run)
+ docx=_regular(source/'t/images/OOXML.docx','materialized DOCX capability fixture')
+ docx_probe=_run([*prefix,'-s3','-FileType',str(docx)],run)
  identity={'release':release,'expected_version':release,'materialization_sha256':materialization['materialization_sha256'],'source_directory':row['source_directory'],'source_tree_sha256':row['tree']['tree_sha256'],'perl':{'path':str(pp),'sha256':_sha(pp)},'lib':{'path':str(lib)},'program':{'path':str(prog),'sha256':_sha(prog)}}
- ready=version['state']=='ok' and version['stdout'].strip()==release and cap['available']; records=[]
+ ready=(version['state']=='ok' and version['stdout'].strip()==release and cap['available']
+        and perl_version['state']=='ok' and perl_version['stdout'].strip()==EXPECTED_PERL_VERSION
+        and docx_probe['state']=='ok' and docx_probe['stdout'].strip()=='DOCX'); records=[]
  if ready:
   with tempfile.TemporaryDirectory(prefix='oxidex-native-capability-') as tmp:
    for case in parsed:
@@ -91,7 +96,7 @@ def probe_materialized_native(materialization,plan,catalog,capture,resolution,ar
     readback=_read(prefix,op['tag'],private,run); rec['readback']=readback; write_ok=write['state']=='ok' and (_matches(readback,'value',op['readback']) if op.get('readback') is not None else _matches(readback,'native_unsupported'))
     rec['state']='ready' if read_ok and write_ok else 'failed'; rec['copy_sha256_after']=_sha(private); records.append(rec)
  state='ready' if ready and all(x['state']=='ready' for x in records) else 'failed'
- payload={'schema':SCHEMA,'kind':KIND,'identity':identity,'version':version,'perl_capability':cap,'cases':records,'state':state,'execution':{'native_read':'probed' if records else 'failed','native_write':'probed' if records else 'failed','conformance':'unrun','limit':'matching-native readiness only; not OxiDex/native conformance'}}
+ payload={'schema':SCHEMA,'kind':KIND,'identity':identity,'version':version,'perl_version':perl_version,'perl_capability':cap,'docx_capability':docx_probe,'cases':records,'state':state,'execution':{'native_read':'probed' if records else 'failed','native_write':'probed' if records else 'failed','conformance':'unrun','limit':'matching-native readiness only; not OxiDex/native conformance'}}
  return {**payload,'probe_sha256':catalog_stage.sha256_json(payload)}
 def _unused_output(path: Path) -> None:
     if path.exists() or path.is_symlink():

@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "kind": "oxidex_exiftool_version_transition_matrix",
+  "source_identity_contract": "verified-catalog-resolution-materialization",
+  "rows": [
+    {
+      "id": "same-pin-{pinned_version}",
+      "before_version": "{pinned_version}",
+      "after_version": "{pinned_version}",
+      "immutable_source_identities": {
+        "before": {
+          "expected_release": "{pinned_version}",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/{pinned_version}"
+        },
+        "after": {
+          "expected_release": "{pinned_version}",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/{pinned_version}"
+        }
+      },
+      "fixtures": {
+        "before": {
+          "read_manifest": "{output_root}/provisioned/{pinned_version}/read-fixtures.json",
+          "write_manifest": "{output_root}/provisioned/{pinned_version}/write-fixtures.json",
+          "native_cases": "{output_root}/provisioned/{pinned_version}/native-cases.json"
+        },
+        "after": {
+          "read_manifest": "{output_root}/provisioned/{pinned_version}/read-fixtures.json",
+          "write_manifest": "{output_root}/provisioned/{pinned_version}/write-fixtures.json",
+          "native_cases": "{output_root}/provisioned/{pinned_version}/native-cases.json"
+        }
+      },
+      "artifact_manifest": {
+        "resolver": "live-generated-inventory",
+        "source": "tools/exiftool-tables/artifacts.py",
+        "comparison": "identical"
+      },
+      "target_directory": "{target_root}/transition-tooling/{run_id}/same-pin-{pinned_version}",
+      "durable_output_directory": "{output_root}/{run_id}/same-pin-{pinned_version}",
+      "fresh_generation": "both-sides",
+      "native_read": "mandatory",
+      "native_write_readback": "mandatory",
+      "promotion": "forbidden"
+    },
+    {
+      "id": "11.78-to-12.64",
+      "before_version": "11.78",
+      "after_version": "12.64",
+      "immutable_source_identities": {
+        "before": {
+          "expected_release": "11.78",
+          "expected_peeled_commit": "ca8685788f5763c547349f239764bd19cf1952da",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/11.78-12.64"
+        },
+        "after": {
+          "expected_release": "12.64",
+          "expected_peeled_commit": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/11.78-12.64"
+        }
+      },
+      "fixtures": {
+        "before": {
+          "read_manifest": "{output_root}/provisioned/11.78-12.64/read-fixtures-11.78.json",
+          "write_manifest": "{output_root}/provisioned/11.78-12.64/write-fixtures-11.78.json",
+          "native_cases": "{output_root}/provisioned/11.78-12.64/native-cases-11.78.json"
+        },
+        "after": {
+          "read_manifest": "{output_root}/provisioned/11.78-12.64/read-fixtures-12.64.json",
+          "write_manifest": "{output_root}/provisioned/11.78-12.64/write-fixtures-12.64.json",
+          "native_cases": "{output_root}/provisioned/11.78-12.64/native-cases-12.64.json"
+        }
+      },
+      "artifact_manifest": {
+        "resolver": "live-generated-inventory",
+        "source": "tools/exiftool-tables/artifacts.py",
+        "comparison": "manifest-delta"
+      },
+      "target_directory": "{target_root}/transition-tooling/{run_id}/11.78-to-12.64",
+      "durable_output_directory": "{output_root}/{run_id}/11.78-to-12.64",
+      "fresh_generation": "both-sides",
+      "native_read": "mandatory",
+      "native_write_readback": "mandatory",
+      "promotion": "forbidden"
+    },
+    {
+      "id": "12.64-to-11.78",
+      "before_version": "12.64",
+      "after_version": "11.78",
+      "immutable_source_identities": {
+        "before": {
+          "expected_release": "12.64",
+          "expected_peeled_commit": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/11.78-12.64"
+        },
+        "after": {
+          "expected_release": "11.78",
+          "expected_peeled_commit": "ca8685788f5763c547349f239764bd19cf1952da",
+          "resolver": "verified-input-bundle",
+          "input_bundle": "{output_root}/provisioned/11.78-12.64"
+        }
+      },
+      "fixtures": {
+        "before": {
+          "read_manifest": "{output_root}/provisioned/11.78-12.64/read-fixtures-12.64.json",
+          "write_manifest": "{output_root}/provisioned/11.78-12.64/write-fixtures-12.64.json",
+          "native_cases": "{output_root}/provisioned/11.78-12.64/native-cases-12.64.json"
+        },
+        "after": {
+          "read_manifest": "{output_root}/provisioned/11.78-12.64/read-fixtures-11.78.json",
+          "write_manifest": "{output_root}/provisioned/11.78-12.64/write-fixtures-11.78.json",
+          "native_cases": "{output_root}/provisioned/11.78-12.64/native-cases-11.78.json"
+        }
+      },
+      "artifact_manifest": {
+        "resolver": "live-generated-inventory",
+        "source": "tools/exiftool-tables/artifacts.py",
+        "comparison": "manifest-delta-with-removals"
+      },
+      "target_directory": "{target_root}/transition-tooling/{run_id}/12.64-to-11.78",
+      "durable_output_directory": "{output_root}/{run_id}/12.64-to-11.78",
+      "fresh_generation": "both-sides",
+      "native_read": "mandatory",
+      "native_write_readback": "mandatory",
+      "promotion": "forbidden"
+    }
+  ]
+}
