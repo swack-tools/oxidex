@@ -1535,7 +1535,15 @@ fn walk_ifd(
             }
         };
 
-        if which == IfdKind::ExifIfd && tag_id == MAKERNOTE && size > 4 {
+        // The first MakerNote is the one kept: `serialize_exif` keeps the
+        // first of duplicate tag ids, and ExifTool decodes the first
+        // (`t/images`-style Apple_iPhone6.jpg carries two 0x927C entries).
+        // Pinning the last one's offset moved the kept note onto it.
+        if which == IfdKind::ExifIfd
+            && tag_id == MAKERNOTE
+            && size > 4
+            && scan.makernote_offset.is_none()
+        {
             scan.makernote_offset = Some(value_or_offset);
         }
 
@@ -1669,6 +1677,13 @@ impl Allocator {
 /// Emits one IFD table: entries (sorted, with synthesized pointers merged in
 /// tag-id order), then next-IFD pointer, then oversized values (which are
 /// written directly at their pre-allocated offsets).
+///
+/// A row whose slot already holds the same tag, type, count and inline value
+/// -- a table kept in place over a copy of its original bytes, see
+/// [`serialize_exif_keeping`] -- keeps the slot's unused value bytes: a
+/// SHORT stored inline leaves two bytes of its four-byte field unused, and
+/// cameras fill them with bytes a maker note may cover (the Olympus FE
+/// series' `DataDump` runs through IFD1's table).
 #[allow(clippy::too_many_arguments)]
 fn emit_ifd(
     out: &mut [u8],
@@ -1679,32 +1694,41 @@ fn emit_ifd(
     pointers: &[(u16, u32)],
     next_ifd: u32,
 ) {
-    let mut rows: Vec<(u16, u16, u32, [u8; 4])> = Vec::new(); // tag, type, count, valfield
+    // tag, type, count, value field, bytes of the field in use
+    let mut rows: Vec<(u16, u16, u32, [u8; 4], usize)> = Vec::new();
     for (e, off) in entries.iter().zip(offsets) {
         let mut val = [0u8; 4];
+        let used;
         if e.value.len() > 4 {
             put_u32(&mut val, *off as u32, bo);
             let bytes = value_in_byte_order(e, bo);
             out[*off..*off + bytes.len()].copy_from_slice(&bytes);
+            used = 4;
         } else {
             let bytes = value_in_byte_order(e, bo);
             val[..bytes.len()].copy_from_slice(&bytes);
+            used = bytes.len();
         }
-        rows.push((e.tag_id, e.field_type, e.count, val));
+        rows.push((e.tag_id, e.field_type, e.count, val, used));
     }
     for (tag, target) in pointers {
         let mut val = [0u8; 4];
         put_u32(&mut val, *target, bo);
-        rows.push((*tag, 4, 1, val)); // LONG count 1
+        rows.push((*tag, 4, 1, val, 4)); // LONG count 1
     }
     rows.sort_by_key(|r| r.0);
     put_u16(&mut out[table_at..table_at + 2], rows.len() as u16, bo);
-    for (i, (tag, ft, count, val)) in rows.iter().enumerate() {
+    for (i, (tag, ft, count, val, used)) in rows.iter().enumerate() {
         let at = table_at + 2 + i * 12;
-        put_u16(&mut out[at..at + 2], *tag, bo);
-        put_u16(&mut out[at + 2..at + 4], *ft, bo);
-        put_u32(&mut out[at + 4..at + 8], *count, bo);
-        out[at + 8..at + 12].copy_from_slice(val);
+        let mut head = [0u8; 8];
+        put_u16(&mut head[0..2], *tag, bo);
+        put_u16(&mut head[2..4], *ft, bo);
+        put_u32(&mut head[4..8], *count, bo);
+        let same_row = out[at..at + 8] == head && out[at + 8..at + 8 + used] == val[..*used];
+        if !same_row {
+            out[at..at + 8].copy_from_slice(&head);
+            out[at + 8..at + 12].copy_from_slice(val);
+        }
     }
     let next_at = table_at + 2 + rows.len() * 12;
     put_u32(&mut out[next_at..next_at + 4], next_ifd, bo);
@@ -1820,6 +1844,7 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
                 && present[i]
                 && original_rows == rows[i]
                 && at >= 8
+                && at + table_size(rows[i]) <= tiff.len()
                 && alloc.reserve(at, table_size(rows[i]))
             {
                 table_pins[i] = Some(at);
@@ -1901,6 +1926,16 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
         total = total.max(alloc.reserved_end()).max(layout.len);
     }
     let mut out = vec![0u8; total];
+    if let Some((tiff, _)) = &keep {
+        // a table kept in place starts from its original bytes, so a row
+        // that does not change keeps its unused value bytes (`emit_ifd`)
+        for (i, at) in table_pins.iter().enumerate() {
+            if let Some(at) = at {
+                let end = at + table_size(rows[i]);
+                out[*at..end].copy_from_slice(&tiff[*at..end]);
+            }
+        }
+    }
 
     // Header
     out[0..2].copy_from_slice(match bo {
@@ -2475,6 +2510,40 @@ mod tests {
         assert!(!scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd));
         assert!(scan.entries.iter().any(|e| e.ifd == IfdKind::Gps));
         assert!(scan.entries.iter().any(|e| e.ifd == IfdKind::Ifd1));
+    }
+
+    /// Two MakerNote entries in one ExifIFD (Apple_iPhone6.jpg in the corpus
+    /// has them): the serializer keeps the first of a duplicated tag id and
+    /// ExifTool decodes the first, so the first is the one pinned. Pinning
+    /// the last moved the kept note onto the other's offset.
+    #[test]
+    fn scan_pins_the_first_of_duplicate_maker_notes() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut t = match bo {
+                ByteOrder::LittleEndian => b"II".to_vec(),
+                ByteOrder::BigEndian => b"MM".to_vec(),
+            };
+            t.extend(u16b(42, bo));
+            t.extend(u32b(8, bo));
+            // IFD0 @8: ExifIFD pointer -> 26
+            t.extend(u16b(1, bo));
+            t.extend([u16b(0x8769, bo), u16b(4, bo)].concat());
+            t.extend(u32b(1, bo));
+            t.extend(u32b(26, bo));
+            t.extend(u32b(0, bo));
+            // ExifIFD @26: two 0x927C, 8 bytes @56 and 6 bytes @64
+            t.extend(u16b(2, bo));
+            for (len, at) in [(8u32, 56u32), (6, 64)] {
+                t.extend([u16b(0x927C, bo), u16b(7, bo)].concat());
+                t.extend(u32b(len, bo));
+                t.extend(u32b(at, bo));
+            }
+            t.extend(u32b(0, bo));
+            assert_eq!(t.len(), 56);
+            t.extend(b"FIRSTMN!SECOND");
+            let scan = scan_exif_entries(&t).unwrap();
+            assert_eq!(scan.makernote_offset, Some(56), "{bo:?}");
+        }
     }
 
     #[test]

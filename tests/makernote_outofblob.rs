@@ -552,3 +552,83 @@ fn a_preview_in_the_jpeg_trailer_is_never_shifted_away() {
         }
     }
 }
+
+/// [`casio_block`]'s hole-resident preview, with an IFD1 appended after it
+/// whose Compression is an inline SHORT carrying two non-zero bytes in the
+/// unused half of its value field -- and the preview's count stretched over
+/// that IFD1 table. The corpus's Olympus FE-120 has this shape: its
+/// `DataDump` runs from inside the note over the UserComment and through
+/// IFD1's table. The table must come back byte for byte, padding included.
+fn casio_block_over_ifd1(order: Order) -> (Vec<u8>, usize, usize) {
+    let (mut tiff, preview_at) = casio_block(order, Target::Hole);
+    let ifd1_at = (tiff.len() + 1) & !1;
+    tiff.resize(ifd1_at, 0);
+    let mut compression = order.u16(6).to_vec();
+    compression.extend([0x20, 0x31]); // what the camera left in the field
+    let ifd1 = [
+        order.u16(2).to_vec(),
+        [order.u16(0x0103), order.u16(3)].concat(),
+        order.u32(1).to_vec(),
+        compression,
+        [order.u16(0x011A), order.u16(5)].concat(),
+        order.u32(1).to_vec(),
+        order.u32((ifd1_at + 2 + 24 + 4) as u32).to_vec(),
+        vec![0; 4],
+        [order.u32(72), order.u32(1)].concat(),
+    ]
+    .concat();
+    tiff.extend(&ifd1);
+    // IFD0's next-IFD field: IFD0 has 5 rows at 8
+    let next_at = 8 + 2 + 12 * 5;
+    tiff[next_at..next_at + 4].copy_from_slice(&order.u32(ifd1_at as u32));
+    // stretch the preview (and its length tag) to the end of the table
+    let preview_len = ifd1_at + 2 + 24 + 4 - preview_at;
+    let find = |tiff: &[u8], tag: u16| -> usize {
+        let ifd0 = 8;
+        let n = order.read_u16(&tiff[ifd0..]) as usize;
+        let exif = (0..n)
+            .map(|i| ifd0 + 2 + 12 * i)
+            .find(|at| order.read_u16(&tiff[*at..]) == 0x8769)
+            .map(|at| order.read_u32(&tiff[at + 8..]) as usize)
+            .unwrap();
+        let note = (0..2)
+            .map(|i| exif + 2 + 12 * i)
+            .find(|at| order.read_u16(&tiff[*at..]) == 0x927C)
+            .map(|at| order.read_u32(&tiff[at + 8..]) as usize)
+            .unwrap();
+        let rows = note + 6;
+        (0..5)
+            .map(|i| rows + 2 + 12 * i)
+            .find(|at| order.read_u16(&tiff[*at..]) == tag)
+            .unwrap()
+    };
+    let entry = find(&tiff, 0x2000);
+    tiff[entry + 4..entry + 8].copy_from_slice(&order.u32(preview_len as u32));
+    let entry = find(&tiff, 0x0003);
+    tiff[entry + 8..entry + 12].copy_from_slice(&order.u32(preview_len as u32));
+    (tiff, preview_at, preview_len)
+}
+
+#[test]
+fn a_maker_note_value_spanning_ifd1_keeps_its_unused_value_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Mm, Order::Ii] {
+        let (tiff, at, len) = casio_block_over_ifd1(order);
+        let expected = tiff[at..at + len].to_vec();
+        assert_eq!(casio_preview(&tiff), expected);
+        for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
+            for edit in [Edit::Grow, Edit::Same] {
+                let path = write(dir.path(), &format!("ifd1-{edit:?}.{carrier}"), &file);
+                apply(&path, edit).unwrap_or_else(|e| {
+                    panic!("{order:?} {carrier} {edit:?}: IFD1 is not edited, so it can stay: {e}")
+                });
+                let out = std::fs::read(&path).unwrap();
+                assert_eq!(
+                    casio_preview(&tiff_of(&out)),
+                    expected,
+                    "{order:?} {carrier} {edit:?}: bytes under the maker-note value changed"
+                );
+            }
+        }
+    }
+}

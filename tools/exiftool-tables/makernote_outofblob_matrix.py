@@ -170,8 +170,8 @@ def structure(tiff: bytes) -> tuple[list[tuple[str, int, int]], tuple[int, int] 
             size = TYPE_SIZE.get(typ, 1) * cnt
             if size > 4:
                 owned.append((f"{name}:0x{tag:04x}", val, val + size))
-                if name == "ExifIFD" and tag == 0x927C:
-                    note = (val, val + size)
+                if name == "ExifIFD" and tag == 0x927C and note is None:
+                    note = (val, val + size)  # the first: ExifTool decodes it
             if name == "IFD1" and tag in (0x201, 0x202):
                 ptrs[tag] = val
         nxt = u32(off + 2 + 12 * count) if off + 2 + 12 * count + 4 <= len(tiff) else None

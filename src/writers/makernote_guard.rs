@@ -18,8 +18,9 @@
 //! corpus (`tools/exiftool-tables/makernote_outofblob_matrix.py survey`):
 //! 549 of the 3,086 with a MakerNote have a named maker-note value or
 //! `IsOffset` target outside the note -- in bytes no standard structure
-//! owns (292 files), in another tag's value (46), straddling the note's end
-//! (57), or past the EXIF block entirely, in the JPEG trailer (231).
+//! owns (292 files), running on past the note's end (92), in another tag's
+//! value or table (21), or past the EXIF block, in the JPEG trailer (231;
+//! 3 more straddle its end). A file can have several.
 //!
 //! # What ExifTool does
 //!
