@@ -49,9 +49,11 @@ Every entry below was checked against the v1.2.1 tag and the code at the tip.
   - `oxidex::parsers::format_detector`: use `oxidex::parsers::detection`. `oxidex::parsers::detect_format` is still exported.
   - `oxidex::parsers::icc_parser`: use `oxidex::parsers::icc`. `parse_icc_profile_data` now returns `Vec<IccTag>`.
 - The crate uses Rust edition 2024 (`9bfc15bd`), and its dependencies need a recent compiler. `rust-toolchain.toml` pins 1.97.1 for development. No `rust-version` is declared.
+- **The write APIs refuse any change they would not make.** `write_metadata`, `Metadata::save`/`write_to`, `CopyBuilder::execute`, `modify_tag`, `remove_tag`, `copy_metadata` and `shift_metadata_dates` now resolve every requested tag the way the CLI's `-TAG=VALUE` does and return the new `ExifToolError::TagsNotWritten` (naming each key) for a key the file's writer would drop -- `XMP:Title` in a JPEG, TIFF or PNG, `File:Comment`, most `IFD1:` keys, an ungrouped name that does not resolve -- with the file byte-identical. They used to return `Ok(())` having written nothing for those keys. `Ok` now means every change was applied, proven by reading the file back. An exhaustive `match` on `ExifToolError` must handle the new variant. `write_metadata` treats rows the map lacks as deletions (derived `File:`/`Composite:` rows excepted); `copy_metadata(src, dest, None)` refuses when some source tags cannot be copied (`copy_metadata_report` still copies the rest and reports them).
 
 **C header**
 - `include/oxidex.h` now declares the symbols the library actually exports: `exiftool_*`, `ExifToolHandle` and `EXIFTOOL_*`. It used to declare `oxidex_*` names, which were never exported (`d7804ff4`). Source written against the old header no longer compiles, although it could never have linked. The Python binding was corrected at the same time. The 15 exported functions and their error codes are unchanged.
+- New, additive: `EXIFTOOL_ERR_TAG_NOT_WRITTEN` (7), returned by `exiftool_write_file` when a requested change would not be written (it used to return `EXIFTOOL_OK`), and `exiftool_get_last_error_tag_count()`, `exiftool_get_last_error_tag()` and `exiftool_get_last_error_tag_reason()` to name each such tag. No existing signature changed. The Python binding gains write methods and `OxidexTagsNotWrittenError`.
 
 
 ### Changed

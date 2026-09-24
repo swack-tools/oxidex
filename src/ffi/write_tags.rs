@@ -287,6 +287,19 @@ pub extern "C" fn exiftool_remove_tag(
 /// - `EXIFTOOL_ERR_IO`: File not writable, disk full, permission denied
 /// - `EXIFTOOL_ERR_UNSUPPORTED_FORMAT`: File format doesn't support writing
 /// - `EXIFTOOL_ERR_INVALID_TAG_VALUE`: Metadata validation failed
+/// - `EXIFTOOL_ERR_TAG_NOT_WRITTEN`: A requested change would not be written
+///   (a group the file's writer cannot write, such as XMP in a JPEG, an
+///   ungrouped name that does not resolve, or a change the read-back after
+///   writing does not find). `exiftool_get_last_error_tag_count()` and
+///   `exiftool_get_last_error_tag()` name every such tag.
+///
+/// # Requests and the guarantee
+/// The handle's tags are the metadata the file should end up with: a tag
+/// that is new or differs from the file is set, and a tag the file carries
+/// that the handle lacks is deleted (derived `File:`, `Composite:` and
+/// file-system rows excepted). `EXIFTOOL_OK` means every such change is in
+/// the file, proven by reading it back; on any error nothing was written and
+/// the file is byte-identical.
 ///
 /// # Thread Safety
 /// Not thread-safe with respect to the handle. Do not call concurrently with

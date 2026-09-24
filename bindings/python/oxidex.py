@@ -28,6 +28,7 @@ OXIDEX_ERR_TAG_NOT_FOUND = 3
 OXIDEX_ERR_INVALID_TAG_VALUE = 4
 OXIDEX_ERR_UNSUPPORTED_FORMAT = 5
 OXIDEX_ERR_NULL_POINTER = 6
+OXIDEX_ERR_TAG_NOT_WRITTEN = 7
 OXIDEX_ERR_INTERNAL = 99
 
 
@@ -41,7 +42,22 @@ class ValueChannel(IntEnum):
 
 class OxidexError(Exception):
     """Exception raised by Oxidex operations."""
-    pass
+
+    def __init__(self, message: str, code: Optional[int] = None):
+        super().__init__(message)
+        self.code = code
+
+
+class OxidexTagsNotWrittenError(OxidexError):
+    """A write named tags that would not be written; nothing was written.
+
+    ``tags`` lists ``(tag, reason)`` pairs, each tag spelled as the request
+    spelled it.
+    """
+
+    def __init__(self, message: str, tags):
+        super().__init__(message, OXIDEX_ERR_TAG_NOT_WRITTEN)
+        self.tags = list(tags)
 
 
 def _find_library() -> ctypes.CDLL:
@@ -182,6 +198,15 @@ _lib.exiftool_write_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 _lib.exiftool_get_last_error.restype = ctypes.c_char_p
 _lib.exiftool_get_last_error.argtypes = []
 
+_lib.exiftool_get_last_error_tag_count.restype = ctypes.c_size_t
+_lib.exiftool_get_last_error_tag_count.argtypes = []
+
+_lib.exiftool_get_last_error_tag.restype = ctypes.c_char_p
+_lib.exiftool_get_last_error_tag.argtypes = [ctypes.c_size_t]
+
+_lib.exiftool_get_last_error_tag_reason.restype = ctypes.c_char_p
+_lib.exiftool_get_last_error_tag_reason.argtypes = [ctypes.c_size_t]
+
 
 class Oxidex:
     """
@@ -238,7 +263,19 @@ class Oxidex:
                 msg = error_msg.decode('utf-8', errors='replace')
             else:
                 msg = f"Unknown error (code {result})"
-            raise OxidexError(msg)
+            if result == OXIDEX_ERR_TAG_NOT_WRITTEN:
+                tags = []
+                for index in range(_lib.exiftool_get_last_error_tag_count()):
+                    tag = _lib.exiftool_get_last_error_tag(index) or b""
+                    reason = _lib.exiftool_get_last_error_tag_reason(index) or b""
+                    tags.append(
+                        (
+                            tag.decode('utf-8', errors='replace'),
+                            reason.decode('utf-8', errors='replace'),
+                        )
+                    )
+                raise OxidexTagsNotWrittenError(msg, tags)
+            raise OxidexError(msg, result)
 
     def read_file(self, filepath: str) -> None:
         """
@@ -423,7 +460,9 @@ class Oxidex:
         longer does is deleted.
 
         Raises:
-            OxidexError: If the write fails. Nothing is written then.
+            OxidexTagsNotWrittenError: If a requested change would not be
+                written; ``.tags`` names each tag. Nothing is written then.
+            OxidexError: If the write fails otherwise. Nothing is written then.
         """
         if not self._handle:
             raise OxidexError("Oxidex handle has been destroyed")

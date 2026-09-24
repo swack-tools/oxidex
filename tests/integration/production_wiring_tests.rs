@@ -1524,13 +1524,17 @@ fn read_metadata_routes_keynote_to_iwork_parser() {
 
 #[test]
 fn write_metadata_routes_png_and_pdf_writers() {
-    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+    // A PNG without an `eXIf`: sample.png's carries ExifIFD entries, and any
+    // write to it is refused until the PNG writer edits `eXIf` in place
+    // (`operations::refuse_png_exif_flattening`).
+    let png = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
     let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
 
+    // A read-modify-write: `write_metadata` treats every row the map lacks as
+    // a deletion, so clearing the map would ask to delete the file's other
+    // metadata (and be refused for the rows no writer deletes). Only the
+    // changed row is validated, so the fixture's other rows are no obstacle.
     let mut png_metadata = read_metadata(png.path()).expect("read png");
-    // Keep the test focused on write routing; fixture metadata includes tags
-    // that can fail validation before dispatch is reached.
-    png_metadata.clear();
     png_metadata.insert("PNG:Author", TagValue::new_string("OxiDex QA"));
     write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
     let png_after = read_metadata(png.path()).expect("re-read png after write");
@@ -1545,7 +1549,6 @@ fn write_metadata_routes_png_and_pdf_writers() {
     );
 
     let mut pdf_metadata = read_metadata(pdf.path()).expect("read pdf");
-    pdf_metadata.clear();
     pdf_metadata.insert("PDF:Title", TagValue::new_string("OxiDex QA"));
     write_metadata(pdf.path(), &pdf_metadata).expect("write pdf through high-level API");
     let pdf_after = read_metadata(pdf.path()).expect("re-read pdf after write");
@@ -1688,8 +1691,9 @@ fn insert_png_chunk_before_iend(png: &mut Vec<u8>, chunk_type: &[u8; 4], data: &
 #[test]
 fn png_write_preserves_ztxt_on_unrelated_edit() {
     // The writer rebuilds text chunks from the map; a zTXt chunk the caller
-    // did not touch must survive an unrelated edit, still compressed.
-    let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+    // did not touch must survive an unrelated edit, still compressed. (A PNG
+    // without an `eXIf`: see `write_metadata_routes_png_and_pdf_writers`.)
+    let png = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
 
     // Seed a real zTXt 'Comment' chunk into the file.
     let mut bytes = fs::read(png.path()).expect("read fixture");
@@ -1772,7 +1776,9 @@ trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_x
     temp.flush().expect("flush pdf");
     let size_before = fs::metadata(temp.path()).expect("stat pdf").len();
 
-    let mut metadata = MetadataMap::new();
+    // A read-modify-write: a map holding only `PDF:Author` would ask to
+    // delete every other row (`PDF:Producer` among them).
+    let mut metadata = read_metadata(temp.path()).expect("read incremental pdf");
     metadata.insert("PDF:Author", TagValue::new_string("Ansel"));
     write_metadata(temp.path(), &metadata).expect("incremental PDF write must succeed");
 
@@ -2211,7 +2217,8 @@ fn write_preserves_file_permissions() {
 /// must still be removed.
 #[test]
 fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
-    let temp = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
+    // A PNG without an `eXIf`: see `write_metadata_routes_png_and_pdf_writers`.
+    let temp = copy_fixture_to_temp("tests/fixtures/png/simple/synthetic_text_001.png", ".png");
 
     let mut seed = read_metadata(temp.path()).expect("read png");
     seed.insert("PNG:Author", TagValue::new_string("OxiDex QA"));

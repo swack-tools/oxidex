@@ -94,6 +94,22 @@ fn assert_refused(
             "{what}: error names the writable {key}: {text}"
         );
     }
+    // Typed: every refused key, spelled as the request spelled it.
+    assert!(
+        matches!(err, ExifToolError::TagsNotWritten { .. }),
+        "{what}: expected TagsNotWritten, got {err:?}"
+    );
+    let named: Vec<&str> = err
+        .tags_not_written()
+        .iter()
+        .map(|tag| tag.tag.as_str())
+        .collect();
+    for key in keys {
+        assert!(named.contains(key), "{what}: {key} not in {named:?}");
+    }
+    for key in not_named {
+        assert!(!named.contains(key), "{what}: writable {key} in {named:?}");
+    }
     assert_eq!(
         sha(path),
         before,
@@ -302,17 +318,10 @@ fn copy_builder_refuses_rows_the_destination_cannot_hold() {
         .unwrap()
         .copy_to(&dest)
         .unwrap()
-        .with_tags(&["XMP-dc:Title"])
+        .with_tags(&["XMP:Title"])
         .unwrap()
         .execute();
-    assert_refused(
-        "CopyBuilder",
-        result,
-        &["XMP-dc:Title"],
-        &[],
-        &dest,
-        &before,
-    );
+    assert_refused("CopyBuilder", result, &["XMP:Title"], &[], &dest, &before);
 }
 
 /// `copy_metadata(src, dest, None)` copies "all"; the XMP it could not write
@@ -329,7 +338,7 @@ fn copy_metadata_all_refuses_when_it_cannot_copy_everything() {
     assert_refused(
         "copy_metadata all",
         result,
-        &["XMP-dc:Title"],
+        &["XMP:Title"],
         &[],
         &dest,
         &before,
@@ -366,7 +375,10 @@ fn shift_metadata_dates_refuses_dates_it_cannot_write() {
             );
         }
         Err(err) => {
-            assert!(err.to_string().contains(key), "{err}");
+            assert!(
+                err.tags_not_written().iter().any(|tag| tag.tag == key),
+                "{err:?}"
+            );
             assert_eq!(sha(&file), before, "a refused shift changed the file");
         }
     }

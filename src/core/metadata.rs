@@ -218,6 +218,14 @@ impl Metadata {
     /// meta.write_to("output.jpg")?;
     /// # Ok::<(), oxidex::error::ExifToolError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The map is the metadata `path` should end up with (see
+    /// [`write_metadata`] for what that requests): a tag the file's writer
+    /// cannot write, or a change the read-back does not find, is
+    /// [`crate::error::ExifToolError::TagsNotWritten`] naming each key, and
+    /// the file is untouched.
     pub fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         write_metadata(path.as_ref(), &self.map)
     }
@@ -229,8 +237,10 @@ impl Metadata {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - Successfully saved
-    /// * `Err` - No source path or I/O error
+    /// * `Ok(())` - Every change is in the file (see [`write_metadata`])
+    /// * `Err` - No source path, a tag that would not be written
+    ///   (`TagsNotWritten`, naming each key; the file is untouched), or I/O
+    ///   error
     ///
     /// # Examples
     ///
@@ -333,17 +343,27 @@ impl<'a> CopyBuilder<'a> {
     }
 
     /// Execute the copy operation
+    ///
+    /// The destination's map with the copied tags merged in is written with
+    /// [`write_metadata`], so `Ok(())` means every copied tag is in the
+    /// destination; a tag its writer cannot write refuses the whole copy
+    /// ([`crate::error::ExifToolError::TagsNotWritten`]) and the destination
+    /// is untouched. Without a tag filter the rows that describe the source
+    /// file rather than being stored in it (`File:`, `System:`,
+    /// `Composite:`, `ExifTool:`) are not copied.
     pub fn execute(self) -> Result<()> {
         // Read destination metadata
         let mut dest_map = read_metadata(&self.dest)?;
 
         // Copy tags from source
         for (tag_name, tag_value) in self.source.map.iter() {
-            let should_copy = self
-                .tags
-                .as_ref()
-                .map(|t| t.contains(tag_name))
-                .unwrap_or(true);
+            let should_copy = match self.tags.as_ref() {
+                Some(tags) => tags.contains(tag_name),
+                None => !matches!(
+                    tag_name.split_once(':').map(|(group, _)| group),
+                    Some("File" | "System" | "Composite" | "ExifTool")
+                ),
+            };
 
             if should_copy {
                 dest_map.insert(tag_name, tag_value.clone());

@@ -43,6 +43,47 @@ pub enum ExifToolError {
         /// Description of the unsupported format or reason
         message: String,
     },
+
+    /// A write request named tags that would not be written, so nothing was
+    /// written: the file is byte-identical to before the call.
+    ///
+    /// Every write API (`write_metadata`, `modify_tag`, `remove_tag`,
+    /// `copy_metadata`, the `Metadata` builder, the C ABI's
+    /// `exiftool_write_file`) returns this rather than `Ok` when any
+    /// requested change would be dropped -- a name no writer of the file's
+    /// format addresses (`XMP:Title` in a JPEG, `File:Comment`, most `IFD1:`
+    /// keys), an ungrouped name that cannot be resolved to one address, or a
+    /// change the read-back after writing could not find. Each entry names
+    /// the key as the caller spelled it.
+    TagsNotWritten {
+        /// One entry per key that would not be written, in request order.
+        tags: Vec<TagNotWritten>,
+    },
+}
+
+/// One key a write request named that would not be written, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagNotWritten {
+    /// The key as the caller spelled it (`XPTitle`, `XMP:Title`).
+    pub tag: String,
+    /// Why it would not be written.
+    pub reason: String,
+}
+
+impl TagNotWritten {
+    /// A key that would not be written, and why.
+    pub fn new<T: Into<String>, R: Into<String>>(tag: T, reason: R) -> Self {
+        TagNotWritten {
+            tag: tag.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+impl fmt::Display for TagNotWritten {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Cannot write tag '{}': {}", self.tag, self.reason)
+    }
 }
 
 impl ExifToolError {
@@ -83,6 +124,22 @@ impl ExifToolError {
             message: message.into(),
         }
     }
+
+    /// A refusal of the single key `tag`, for `reason`.
+    pub fn tag_not_written<T: Into<String>, R: Into<String>>(tag: T, reason: R) -> Self {
+        ExifToolError::TagsNotWritten {
+            tags: vec![TagNotWritten::new(tag, reason)],
+        }
+    }
+
+    /// The keys a [`ExifToolError::TagsNotWritten`] names; empty for any
+    /// other error.
+    pub fn tags_not_written(&self) -> &[TagNotWritten] {
+        match self {
+            ExifToolError::TagsNotWritten { tags } => tags,
+            _ => &[],
+        }
+    }
 }
 
 impl fmt::Display for ExifToolError {
@@ -104,6 +161,15 @@ impl fmt::Display for ExifToolError {
             }
             ExifToolError::UnsupportedFormat { message } => {
                 write!(f, "Unsupported format: {}", message)
+            }
+            ExifToolError::TagsNotWritten { tags } => {
+                for (index, tag) in tags.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "{tag}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -229,6 +295,36 @@ mod tests {
         let display = format!("{}", err);
         assert!(display.contains("Unsupported format"));
         assert!(display.contains("BMP files"));
+    }
+
+    #[test]
+    fn test_tags_not_written_variant_names_every_key() {
+        let err = ExifToolError::TagsNotWritten {
+            tags: vec![
+                TagNotWritten::new("XMP:Title", "no XMP writer"),
+                TagNotWritten::new("File:Comment", "no File writer"),
+            ],
+        };
+        assert_eq!(
+            err.to_string(),
+            "Cannot write tag 'XMP:Title': no XMP writer; \
+             Cannot write tag 'File:Comment': no File writer"
+        );
+        let names: Vec<&str> = err
+            .tags_not_written()
+            .iter()
+            .map(|tag| tag.tag.as_str())
+            .collect();
+        assert_eq!(names, ["XMP:Title", "File:Comment"]);
+        assert!(
+            ExifToolError::parse_error("x")
+                .tags_not_written()
+                .is_empty()
+        );
+        assert_eq!(
+            ExifToolError::tag_not_written("XPTitle", "why").to_string(),
+            "Cannot write tag 'XPTitle': why"
+        );
     }
 
     #[test]

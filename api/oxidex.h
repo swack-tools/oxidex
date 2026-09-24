@@ -44,6 +44,13 @@
 #define EXIFTOOL_ERR_NULL_POINTER 6
 
 /*
+ A write named tags that would not be written, so nothing was written (the
+ file is byte-identical). `exiftool_get_last_error_tag_count()` and
+ `exiftool_get_last_error_tag()` name each one.
+ */
+#define EXIFTOOL_ERR_TAG_NOT_WRITTEN 7
+
+/*
  Internal error (panic caught)
  */
 #define EXIFTOOL_ERR_INTERNAL 99
@@ -4201,6 +4208,56 @@ typedef int ExifToolValueChannel;
 
 
 /*
+ Number of tags the last error on this thread named as not written.
+
+ # Returns
+ The count for an `EXIFTOOL_ERR_TAG_NOT_WRITTEN` (at least 1); 0 after any
+ other error, or when no error occurred.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+uintptr_t exiftool_get_last_error_tag_count(void);
+
+/*
+ A tag the last error on this thread named as not written, spelled as the
+ write request spelled it (`XPTitle`, `XMP:Title`).
+
+ # Arguments
+ - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+
+ # Returns
+ Pointer to a null-terminated tag name, or NULL if `index` is out of range.
+
+ # String Lifetime
+ The returned string is valid until the next API call that sets an error
+ on the same thread, or thread termination.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+const char *exiftool_get_last_error_tag(uintptr_t index);
+
+/*
+ Why the tag at `index` of the last error on this thread would not be
+ written.
+
+ # Arguments
+ - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+
+ # Returns
+ Pointer to a null-terminated reason, or NULL if `index` is out of range.
+
+ # String Lifetime
+ The returned string is valid until the next API call that sets an error
+ on the same thread, or thread termination.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+const char *exiftool_get_last_error_tag_reason(uintptr_t index);
+
+/*
  Retrieves the last error message.
 
  # Returns
@@ -4484,6 +4541,19 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  - `EXIFTOOL_ERR_IO`: File not writable, disk full, permission denied
  - `EXIFTOOL_ERR_UNSUPPORTED_FORMAT`: File format doesn't support writing
  - `EXIFTOOL_ERR_INVALID_TAG_VALUE`: Metadata validation failed
+ - `EXIFTOOL_ERR_TAG_NOT_WRITTEN`: A requested change would not be written
+   (a group the file's writer cannot write, such as XMP in a JPEG, an
+   ungrouped name that does not resolve, or a change the read-back after
+   writing does not find). `exiftool_get_last_error_tag_count()` and
+   `exiftool_get_last_error_tag()` name every such tag.
+
+ # Requests and the guarantee
+ The handle's tags are the metadata the file should end up with: a tag
+ that is new or differs from the file is set, and a tag the file carries
+ that the handle lacks is deleted (derived `File:`, `Composite:` and
+ file-system rows excepted). `EXIFTOOL_OK` means every such change is in
+ the file, proven by reading it back; on any error nothing was written and
+ the file is byte-identical.
 
  # Thread Safety
  Not thread-safe with respect to the handle. Do not call concurrently with

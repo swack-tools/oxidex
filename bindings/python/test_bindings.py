@@ -4,7 +4,12 @@ import shutil
 import tempfile
 import unittest
 
-from oxidex import Oxidex, OxidexError
+from oxidex import (
+    OXIDEX_ERR_TAG_NOT_WRITTEN,
+    Oxidex,
+    OxidexError,
+    OxidexTagsNotWrittenError,
+)
 
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -67,6 +72,12 @@ class OxidexWriteTests(unittest.TestCase):
             self.assertIn(key, message)
         if writable:
             self.assertNotIn("'%s'" % writable, message)
+        # Typed: the error code, and each refused tag as the request spelled it.
+        self.assertIsInstance(caught.exception, OxidexTagsNotWrittenError)
+        self.assertEqual(caught.exception.code, OXIDEX_ERR_TAG_NOT_WRITTEN)
+        named = [tag for tag, _reason in caught.exception.tags]
+        self.assertEqual(sorted(named), sorted(keys))
+        self.assertTrue(all(reason for _tag, reason in caught.exception.tags))
         self.assertEqual(sha(path), before, "a refused write changed the file")
         return caught.exception
 

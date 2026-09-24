@@ -36,6 +36,7 @@ pub mod tag_value;
 pub mod tiff_helpers;
 pub mod validation;
 pub mod value_formatter;
+pub mod write_transaction;
 
 // Re-export tag descriptor types from exiftool-tags crate
 pub use oxidex_tags::{FormatFamily, TagDescriptor, TagId, ValueType};

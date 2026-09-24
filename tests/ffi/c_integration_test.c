@@ -332,11 +332,44 @@ static void expect_refused(const char* what, const char* fixture, const char* na
     result = exiftool_write_file(handle, path);
     snprintf(label, sizeof label, "%s: write is refused, not reported (code %d)", what, result);
     TEST_ASSERT(result != EXIFTOOL_OK, label);
+    snprintf(label, sizeof label, "%s: code is EXIFTOOL_ERR_TAG_NOT_WRITTEN (got %d)", what, result);
+    TEST_ASSERT(result == EXIFTOOL_ERR_TAG_NOT_WRITTEN, label);
     const char* message = exiftool_get_last_error();
     for (size_t i = 0; i < key_count; i++) {
         snprintf(label, sizeof label, "%s: message names %s", what, keys[i]);
         TEST_ASSERT(message && strstr(message, keys[i]) != NULL, label);
     }
+    /* The refused keys, one by one, as the request spelled them. */
+    size_t named = exiftool_get_last_error_tag_count();
+    snprintf(label, sizeof label, "%s: %zu tags named (got %zu)", what, key_count, named);
+    TEST_ASSERT(named == key_count, label);
+    for (size_t i = 0; i < key_count; i++) {
+        int found = 0;
+        for (size_t j = 0; j < named; j++) {
+            const char* tag = exiftool_get_last_error_tag(j);
+            const char* reason = exiftool_get_last_error_tag_reason(j);
+            if (tag && strcmp(tag, keys[i]) == 0 && reason && strlen(reason) > 0) {
+                found = 1;
+            }
+        }
+        snprintf(label, sizeof label, "%s: exiftool_get_last_error_tag names %s", what, keys[i]);
+        TEST_ASSERT(found, label);
+    }
+    if (writable_key) {
+        int named_writable = 0;
+        for (size_t j = 0; j < named; j++) {
+            const char* tag = exiftool_get_last_error_tag(j);
+            if (tag && strcmp(tag, writable_key) == 0) {
+                named_writable = 1;
+            }
+        }
+        snprintf(label, sizeof label, "%s: the writable %s is not named", what, writable_key);
+        TEST_ASSERT(!named_writable, label);
+    }
+    snprintf(label, sizeof label, "%s: out-of-range tag index is NULL", what);
+    TEST_ASSERT(exiftool_get_last_error_tag(named) == NULL
+                    && exiftool_get_last_error_tag_reason(named) == NULL,
+                label);
     snprintf(label, sizeof label, "%s: file is byte-identical", what);
     TEST_ASSERT(same_bytes(path, fixture), label);
     exiftool_destroy(handle);
@@ -360,6 +393,13 @@ void test_write_refusals() {
     /* Multi-key: the writable IFD0:XPTitle is not half-applied. */
     static const char* const several[] = {"XMP:Title", "File:Comment"};
     expect_refused("JPEG multi-key", JPEG_FIXTURE, "multi.jpg", several, 2, "IFD0:XPTitle");
+
+    /* Any other error clears the list of named tags. */
+    ExifToolHandle* other = exiftool_create();
+    exiftool_read_file(other, "/nonexistent/path/to/file.jpg");
+    TEST_ASSERT(exiftool_get_last_error_tag_count() == 0,
+                "a non-refusal error names no tags");
+    exiftool_destroy(other);
 
     /* An ungrouped XPTitle resolves to IFD0, as pinned ExifTool 13.59 writes it. */
     char path[4096];
