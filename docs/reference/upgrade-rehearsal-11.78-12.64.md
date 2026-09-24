@@ -1,5 +1,22 @@
 # Upgrade rehearsal: ExifTool 11.78 and 12.64 (AUTOGENERATION-PLAN step 5)
 
+> **2026-09-21 Task19 tooling status:** the non-promoting transition wrapper,
+> checked same-pin/forward/reverse matrix, isolated-side executor seam,
+> restoration/interruption controls, mandatory native write/readback contract,
+> and fake-only unit tests are implemented on the transition-tooling branch.
+> This is tooling readiness only. It does **not** qualify any transition or the
+> beta release. Canonical verified 11.78 and 12.64 source bundles, immutable
+> read/write fixture manifests, the converged post-Task18 candidate, and all
+> three real matrix runs remain prerequisites.
+>
+> The checked matrix deliberately contains verified-input resolvers rather than
+> invented historical hashes. A row refuses until the existing catalog,
+> source-resolution, materialization, explicit Perl 5.38.2, version/DOCX,
+> read-fixture, and mandatory write/readback verifiers all succeed. Real runs
+> must use the entry point's nonblocking `transition.host.lock`; old
+> fleet-controller and outer `locked.py` launch examples are not valid Task19
+> commands.
+
 Run on 2026-09-18 from `refactor/tag-machinery` at `66e48654` (#818 merged, all
 15 known generation blockers closed). The persisted random pair **11.78 / 12.64**
 was used as selected; it was not redrawn. The working pin (`.exiftool-version`,
@@ -97,14 +114,14 @@ I1 changes the gate to `not args.modules or MODULE in args.modules`. With it,
 both releases record `NOTE: Garmin module ABSENT ... the FIT reader extracts
 nothing` and `FIT source rows: 0`.
 
-**F2 — test compilation, both releases (worked around locally as I2).**
-The `#[cfg(test)]` module in `src/exiftool_tables/runtime.rs:1409` hard-codes
-the generated `ExprId::ValBpm49633A` (`"$val bpm"`). That variant is emitted
-only when Garmin FIT rows reference it; codegen emits no unreferenced arms. A
-release without Garmin removes the variant, and the lib test target no longer
-compiles. The CLI and release build are unaffected. I2 applies
-`#[cfg(any())]` to `BPM` and the two tests that use it. This removes test
-coverage for the rehearsal build and is recorded as such.
+**F2 — test compilation, both releases (historical; fixed by #846).**
+The original `#[cfg(test)]` module hard-coded generated
+`ExprId::ValBpm49633A` (`"$val bpm"`). The landed correction now resolves the
+conversion by its Garmin source identity and treats only a generated,
+source-proven `ModuleAbsent` result as inapplicable. It does not disable the
+test or freeze a generated Rust identifier. The remaining Task19 matrix must
+re-prove that behavior from fresh historical generation; this note is not a
+substitute for that run.
 
 **F3 — unit test suite, both releases.** The lib suite asserts 13.59 facts.
 Classification of every failure, by assertion text (not by per-test native
@@ -118,6 +135,34 @@ re-verification):
 | 13.59 census/snapshot constants (counts, allowlists, withholding snapshots) | 25 | 21 |
 | 13.59 value/label fixtures the release lacks or labels differently | 51 | 22 |
 | **Total** | **113** | **79** |
+
+These counts are historical observations from the named 2026-09-18 logs, not
+current qualification. Tests outside the Task19 tooling lease still need a
+parent-owned correction based on generated per-release facts rather than
+weakened assertions. Representative exact current locations are:
+
+- `src/exiftool_tables/mod.rs:579`, `:789`, `:820`, and `:1059`: replace the
+  fixed refusal/hook/subdirectory/offset census constants with a checked
+  generator-owned fact keyed by the active generated release, while retaining
+  the accounting identities.
+- `src/exiftool_tables/runtime.rs:1779`: source the decoded/refused fractional
+  census from that release's generated fact; retain the full per-table sum
+  equality at `:1793`.
+- `src/exiftool_tables/enabled.rs:285` and `:315`: bind allowlist presence and
+  enabled-count expectations to an explicit per-release availability fact;
+  do not silently drop absent tables.
+- `src/parsers/specialized/fits.rs:1055`,
+  `src/parsers/tiff/geotiff_parser.rs:543`, and
+  `src/composite/lens_id.rs:1362`: replace 13.59 dictionary/map cardinalities
+  with generator-produced per-release cardinalities, keeping uniqueness and
+  lookup assertions generic.
+- `src/parsers/jpeg/mpf_parser.rs:1162` and
+  `src/parsers/tiff/makernotes/canon.rs:9411`: make label expectations follow
+  the selected release's generated enum fact, including an explicit unknown
+  expectation when the historical release lacks the value.
+
+Those source files are outside this D2 edit lease and are intentionally not
+changed here. Parent lease ruling is required before assigning them.
 
 No failure is a production panic. Every panic is an `unwrap`, an index or a
 map lookup inside the test itself, over a table that is correctly empty for the
