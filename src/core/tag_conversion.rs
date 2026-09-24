@@ -986,6 +986,20 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
 /// so [`String::from_utf16_lossy`] folds the pair into U+1F38C instead. There
 /// is no rendering of that input this function could make match.
 fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
+    String::from_utf16_lossy(&xp_ucs2_units(bytes))
+}
+
+/// The UCS-2 code units an XP* value holds, as [`decode_xp_ucs2_string`]
+/// reads them: a leading byte-order mark consumed (and honoured), an odd
+/// trailing byte dropped, and the value ended at the first zero unit.
+///
+/// These are exactly the code points `Decode($val,"UCS2","II")` produces --
+/// UCS2 combines no surrogate pairs, so each unit is one code point, a lone
+/// surrogate included -- and so exactly what `ValueConvInv`'s
+/// `Encode($val,"UCS2","II")` packs back (`pack('v*')`, Charset.pm:387-390).
+/// The writers use them to reproduce what ExifTool stores for a value copied
+/// from these bytes (`crate::writers::xp_strings`).
+pub(crate) fn xp_ucs2_units(bytes: &[u8]) -> Vec<u16> {
     // Honour a leading BOM over the declared "II", as Charset.pm does.
     let (bytes, big_endian) = match bytes {
         [0xFE, 0xFF, rest @ ..] => (rest, true),
@@ -1005,7 +1019,7 @@ fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
         }
         units.push(unit);
     }
-    String::from_utf16_lossy(&units)
+    units
 }
 
 // ============================================================================

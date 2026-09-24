@@ -41,6 +41,8 @@ pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
 pub mod tiff_writer;
+// Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
+pub(crate) mod xp_strings;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {
