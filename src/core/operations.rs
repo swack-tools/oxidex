@@ -40,7 +40,7 @@ use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::pdf_writer::write_pdf_file;
-use crate::writers::png_writer::{write_png_metadata, write_png_metadata_with_baseline};
+use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
 
 // ============================================================================
@@ -985,13 +985,14 @@ pub(crate) fn write_metadata_with_removals(
         }
         FileFormat::PNG => {
             // The caller's map was derived from `read_metadata`, so judge
-            // which PNG: keys changed against that same map.
-            match baseline.as_ref() {
-                Some(baseline) => {
-                    write_png_metadata_with_baseline(path, &reader, metadata, baseline)?
-                }
-                None => write_png_metadata(path, &reader, metadata)?,
-            }
+            // which keys changed against that same map (the eXIf chunk goes
+            // through the JPEG writer's surgical EXIF transaction, which also
+            // needs the named removals).
+            let baseline = match baseline {
+                Some(baseline) => baseline,
+                None => crate::parsers::png::parse_png_metadata(&reader).unwrap_or_default(),
+            };
+            write_png_metadata_with_removals(path, &reader, metadata, &baseline, removed)?
         }
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;

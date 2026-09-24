@@ -14,11 +14,8 @@ use crate::parsers::png::chunk_parser::{
 };
 use crate::parsers::png::parse_png_metadata;
 use crate::parsers::png::text_names::{TextRow, TextTagNamer, encode_latin, writable_text_name};
-use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::writers::atomic_writer::write_atomic;
-use crate::writers::tiff_writer::serialize_ifd;
 use crc::{CRC_32_ISO_HDLC, Crc};
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -172,63 +169,181 @@ fn serialize_itxt_chunk(keyword: &[u8], lang: &[u8], translated: &[u8], text: &s
     data
 }
 
-/// Serializes EXIF metadata to eXIf chunk data.
-///
-/// The eXIf chunk contains raw TIFF-formatted EXIF data, starting with
-/// the byte order marker ("II" for little-endian or "MM" for big-endian).
-///
-/// # Parameters
-///
-/// - `metadata`: MetadataMap containing EXIF tags
-///
-/// # Returns
-///
-/// Serialized eXIf chunk data (TIFF format), or error if serialization fails
-fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>> {
-    // Filter only TIFF-writable EXIF tags. Each takes the value as the file
-    // stores it where the reader keeps one beside a printed value
-    // (`TagOccurrence::stored`: the ExifIFD engine rows, whose map value is
-    // ExifTool's print conversion -- `MeteringMode` `Average` over a SHORT
-    // 1); serializing the printed value wrote `Average` as ASCII.
-    let mut exif_metadata = MetadataMap::new();
-    for (tag_name, occurrence) in metadata.winner_occurrences() {
-        let tag_value = occurrence.stored.as_ref().unwrap_or(&occurrence.raw);
-        // Accept all TIFF-compatible prefixes
-        let is_tiff_writable = tag_name.starts_with("IFD0:")
-            || tag_name.starts_with("IFD1:")
-            || tag_name.starts_with("ExifIFD:")
-            || tag_name.starts_with("GPS:")
-            || tag_name.starts_with("EXIF:")
-            || tag_name.starts_with("InteropIFD:")
-            || tag_name.starts_with("MakerNotes:");
+/// Group prefixes of the metadata-map keys the EXIF TIFF block answers: the
+/// IFDs the reader files `eXIf` entries under, plus the family spellings
+/// (`EXIF:`, `MakerNotes:`) callers write through.
+const EXIF_KEY_PREFIXES: &[&str] = &[
+    "IFD0:",
+    "IFD1:",
+    "ExifIFD:",
+    "GPS:",
+    "InteropIFD:",
+    "EXIF:",
+    "MakerNotes:",
+];
 
-        if is_tiff_writable {
-            exif_metadata.insert(tag_name, tag_value.clone());
+/// Text keywords whose payload is a hex-encoded EXIF profile
+/// (`%PNG::TextualData`, PNG.pm 13.59:691-716; ImageMagick writes EXIF as
+/// `Raw profile type exif`, and `APP1` may hold an `Exif\0\0` block).
+const RAW_EXIF_PROFILE_KEYWORDS: &[&[u8]] = &[b"Raw profile type exif", b"Raw profile type APP1"];
+
+/// Chunks ExifTool never moves a text chunk across (`%noLeapFrog`, PNG.pm
+/// 13.59:96-97).
+const NO_LEAP_FROG: &[&[u8; 4]] = &[
+    b"SAVE", b"SEEK", b"IHDR", b"JHDR", b"IEND", b"MEND", b"DHDR", b"BASI", b"CLON", b"PAST",
+    b"SHOW", b"MAGN",
+];
+
+/// Chunks ExifTool moves from after IDAT to before it when it rewrites a
+/// PNG (`%isTxtChunk`, PNG.pm 13.59:93).
+fn is_movable_text(chunk_type: &[u8; 4]) -> bool {
+    matches!(chunk_type, b"tEXt" | b"zTXt" | b"iTXt" | b"eXIf")
+}
+
+fn is_exif_key(key: &str) -> bool {
+    EXIF_KEY_PREFIXES
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+/// The EXIF-family rows of a map.
+fn exif_rows(map: &MetadataMap) -> MetadataMap {
+    let mut rows = MetadataMap::new();
+    for (key, value) in map.iter() {
+        if is_exif_key(key) {
+            rows.insert(key, value.clone());
         }
     }
+    rows
+}
 
-    // If no EXIF tags, return empty (no eXIf chunk needed)
-    if exif_metadata.is_empty() {
+/// Whether the caller changed the EXIF block: an EXIF-family key added,
+/// changed or removed against `baseline`, or named for deletion. ExifTool
+/// rewrites the `eXIf` directory only when a tag in it is being edited
+/// (`$$et{EDIT_DIRS}{IFD0}`, PNG.pm 13.59:1395-1399) and otherwise copies
+/// the chunk untouched, so an unrelated edit (`-XMP-dc:Title=`, a `PNG:`
+/// text key) must leave every EXIF byte as it was.
+fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[String]) -> bool {
+    removed.iter().any(|key| is_exif_key(key))
+        || metadata
+            .iter()
+            .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
+        || baseline
+            .iter()
+            .any(|(key, _)| is_exif_key(key) && !metadata.contains_key(key))
+}
+
+/// The new TIFF payload for the `eXIf` chunk, through the same public write
+/// transaction the JPEG APP1 writer runs (`plan_public_write`, then the
+/// generated scalar path or the surgical legacy path): entries the caller
+/// did not change keep their type, count and value bytes, the original byte
+/// order, the MakerNote blob, the sub-IFDs and IFD1. `original` is the old
+/// payload (TIFF header onward), `None` when the PNG has no EXIF yet. Empty
+/// means the chunk is dropped.
+///
+/// Only EXIF-family rows reach the planner: every other key of the map
+/// belongs to a different chunk (text, XMP), and a non-EXIF spelling that
+/// shares a migrated tag name (`PNG:Artist`) must not be resolved as an
+/// EXIF address.
+fn rewrite_exif_payload(
+    original: Option<&[u8]>,
+    metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
+    let desired = exif_rows(metadata);
+    let baseline = exif_rows(baseline);
+    let removed: Vec<String> = removed.iter().filter(|k| is_exif_key(k)).cloned().collect();
+    let plan =
+        crate::writers::generated_public_write::plan_public_write(&baseline, &desired, &removed)?;
+    if plan.whole_exif_clear {
         return Ok(Vec::new());
     }
+    if plan.generated.is_empty() {
+        return crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
+            original,
+            &baseline,
+            &plan.legacy_metadata,
+            &plan.legacy_removed,
+        );
+    }
+    // A PNG has no JFIF segment, so `WriteExif` seeds no resolution defaults
+    // from one (`$$et{JFIFYResolution}` is undefined).
+    crate::writers::jpeg_writer::rewrite_generated_exif_payload(
+        original,
+        &|| Ok(std::collections::BTreeMap::new()),
+        &baseline,
+        plan,
+    )
+}
 
-    // Build complete TIFF structure with header
-    let mut result = Vec::new();
-    let byte_order = ByteOrder::LittleEndian;
+/// What the writer does with the EXIF block.
+enum ExifFate {
+    /// No EXIF-family change: every `eXIf` chunk is carried byte-for-byte.
+    Carry,
+    /// Replace the (single) original `eXIf` chunk with this payload, or drop
+    /// it when empty; with no original chunk, add one before the first IDAT
+    /// when non-empty.
+    Replace(Vec<u8>),
+}
 
-    // Write TIFF header (8 bytes)
-    // "II" - Intel byte order (little-endian)
-    result.extend_from_slice(&[0x49, 0x49]);
-    // Magic number 42 (little-endian)
-    result.extend_from_slice(&[0x2A, 0x00]);
-    // First IFD offset: 8 (little-endian) - starts right after header
-    result.extend_from_slice(&[0x08, 0x00, 0x00, 0x00]);
-
-    // Serialize IFD starting at offset 8
-    let ifd_bytes = serialize_ifd(&exif_metadata, byte_order, 8)?;
-    result.extend_from_slice(&ifd_bytes);
-
-    Ok(result)
+/// Decides the EXIF block's fate. A change is refused, with the file left
+/// untouched, where ExifTool 13.59 also refuses to write (`[minor] IFD0
+/// pointer references previous IFD0 directory`) or where the block lives
+/// somewhere this writer cannot edit:
+///
+/// - more than one `eXIf` chunk (ExifTool edits the first, then refuses at
+///   the second's IFD0);
+/// - EXIF in a `Raw profile type exif` / `APP1` text chunk: a set is
+///   refused by ExifTool too; a pure deletion there, which ExifTool performs
+///   by re-encoding the hex profile, is not supported here;
+/// - an `eXIf` payload that is not a TIFF structure (compressed `zxIf`-style
+///   data, garbage): nothing to edit surgically.
+fn plan_exif(
+    chunks: &[PngChunk],
+    metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
+) -> Result<ExifFate> {
+    if !exif_changed(metadata, baseline, removed) {
+        return Ok(ExifFate::Carry);
+    }
+    let exif_chunks: Vec<&PngChunk> = chunks
+        .iter()
+        .filter(|chunk| chunk.chunk_type == *b"eXIf")
+        .collect();
+    if exif_chunks.len() > 1 {
+        return Err(ExifToolError::unsupported_format(
+            "Cannot edit EXIF in a PNG with more than one eXIf chunk \
+             (ExifTool also refuses: IFD0 pointer references previous IFD0 directory)",
+        ));
+    }
+    let raw_profile = chunks.iter().find_map(|chunk| {
+        if !chunk.is_text_chunk() {
+            return None;
+        }
+        let keyword = chunk.data.split(|b| *b == 0).next().unwrap_or_default();
+        RAW_EXIF_PROFILE_KEYWORDS
+            .contains(&keyword)
+            .then(|| String::from_utf8_lossy(keyword).into_owned())
+    });
+    if let Some(keyword) = raw_profile {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot edit EXIF stored in a PNG '{keyword}' text chunk: this writer \
+             edits only the eXIf chunk (ExifTool also refuses to set tags there)"
+        )));
+    }
+    // ExifTool strips an improper `Exif\0\0` header and writes the edited
+    // directory without it (PNG.pm 13.59:1367-1372).
+    let original = exif_chunks.first().map(|chunk| {
+        chunk
+            .data
+            .strip_prefix(b"Exif\0\0".as_slice())
+            .unwrap_or(&chunk.data)
+    });
+    Ok(ExifFate::Replace(rewrite_exif_payload(
+        original, metadata, baseline, removed,
+    )?))
 }
 
 /// What the writer does with one original tEXt / zTXt / iTXt chunk.
@@ -479,12 +594,34 @@ pub fn write_png_metadata(
 /// [`write_png_metadata`] with the caller's baseline: the map read from the
 /// original file that `modified_metadata` was derived from. A `PNG:` key
 /// whose value still equals its baseline value is unchanged, and its
-/// original chunks are carried byte-for-byte (see [`plan_text_chunks`]).
+/// original chunks are carried byte-for-byte (see [`plan_text_chunks`]); so
+/// is the `eXIf` chunk while no EXIF-family key changed (see [`plan_exif`]).
 pub fn write_png_metadata_with_baseline(
     path: &Path,
     original_reader: &dyn FileReader,
     modified_metadata: &MetadataMap,
     baseline: &MetadataMap,
+) -> Result<()> {
+    write_png_metadata_with_removals(path, original_reader, modified_metadata, baseline, &[])
+}
+
+/// [`write_png_metadata_with_baseline`], plus the keys the caller asked by
+/// name to delete, which the EXIF writer needs for an entry the reader
+/// surfaced no row for (`exif_surgical::removal_names_rowless_entry`).
+///
+/// Chunk order follows ExifTool's `ProcessPNG` (PNG.pm 13.59:1451-1640):
+/// every original chunk keeps its place, except that text and `eXIf` chunks
+/// after the first IDAT (up to the first `%noLeapFrog` chunk) move to just
+/// before it; new text chunks, then a new `eXIf` chunk, go immediately
+/// before the first IDAT (`AddChunks`, then `AddChunks(..., 'IFD0')`); an
+/// edited `eXIf` chunk is rewritten where it stands. Bytes after IEND are
+/// copied, as ExifTool copies a trailer.
+pub(crate) fn write_png_metadata_with_removals(
+    path: &Path,
+    original_reader: &dyn FileReader,
+    modified_metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
 ) -> Result<()> {
     // Verify PNG signature
     if original_reader.size() < 8 {
@@ -499,12 +636,14 @@ pub fn write_png_metadata_with_baseline(
     // Parse all existing chunks
     let mut chunks = Vec::new();
     let mut offset = 8; // Start after signature
+    let mut trailer_start = None;
 
     while offset < original_reader.size() {
         let (next_offset, chunk) = parse_chunk(original_reader, offset)?;
         let is_iend = chunk.chunk_type == *b"IEND";
         chunks.push(chunk);
         if is_iend {
+            trailer_start = Some(next_offset);
             break;
         }
         offset = next_offset;
@@ -514,52 +653,28 @@ pub fn write_png_metadata_with_baseline(
         return Err(ExifToolError::parse_error("No PNG chunks found"));
     }
 
+    // Verify critical chunks exist
+    if !chunks.iter().any(|chunk| chunk.chunk_type == *b"IHDR") {
+        return Err(ExifToolError::parse_error("Missing IHDR chunk"));
+    }
+    let Some(trailer_start) = trailer_start else {
+        return Err(ExifToolError::parse_error("Missing IEND chunk"));
+    };
+    let first_idat = chunks
+        .iter()
+        .position(|chunk| chunk.chunk_type == *b"IDAT")
+        .ok_or_else(|| ExifToolError::parse_error("Missing IDAT chunks"))?;
+
+    // Decide the EXIF block's fate first: a refused EXIF edit must leave the
+    // file untouched.
+    let exif_fate = plan_exif(&chunks, modified_metadata, baseline, removed)?;
+
     // Decide the original text chunks' fates (see `plan_text_chunks`).
     let (mut text_fates, answered) = plan_text_chunks(&chunks, modified_metadata, baseline);
 
-    // Categorize chunks
-    let mut ihdr_chunk: Option<&PngChunk> = None;
-    let mut idat_chunks = Vec::new();
-    let mut iend_chunk: Option<&PngChunk> = None;
-    let mut other_chunks: Vec<([u8; 4], Cow<'_, [u8]>)> = Vec::new();
-
-    for (index, chunk) in chunks.iter().enumerate() {
-        match &chunk.chunk_type {
-            b"IHDR" => ihdr_chunk = Some(chunk),
-            b"IDAT" => idat_chunks.push(chunk),
-            b"IEND" => iend_chunk = Some(chunk),
-            b"tEXt" | b"iTXt" | b"zTXt" => match text_fates.remove(&index) {
-                Some(TextFate::Rebuild(chunk_type, data)) => {
-                    other_chunks.push((chunk_type, Cow::Owned(data)));
-                }
-                Some(TextFate::Drop) => {}
-                Some(TextFate::Carry) | None => {
-                    other_chunks.push((chunk.chunk_type, Cow::Borrowed(&chunk.data)));
-                }
-            },
-            b"eXIf" => {
-                // Skip old metadata chunk - it'll be replaced
-            }
-            _ => {
-                // Preserve other chunks (PLTE, tRNS, etc.)
-                other_chunks.push((chunk.chunk_type, Cow::Borrowed(&chunk.data)));
-            }
-        }
-    }
-
-    // Verify critical chunks exist
-    let ihdr = ihdr_chunk.ok_or_else(|| ExifToolError::parse_error("Missing IHDR chunk"))?;
-    let iend = iend_chunk.ok_or_else(|| ExifToolError::parse_error("Missing IEND chunk"))?;
-
-    if idat_chunks.is_empty() {
-        return Err(ExifToolError::parse_error("Missing IDAT chunks"));
-    }
-
-    // Build new metadata chunks from modified_metadata
-    let mut metadata_chunks: Vec<([u8; 4], Vec<u8>)> = Vec::new();
-
     // New text chunks for caller-authored `PNG:<Name>` keys that no original
-    // chunk answers (those were rebuilt in place above).
+    // chunk answers (those were rebuilt in place).
+    let mut new_chunks: Vec<([u8; 4], Vec<u8>)> = Vec::new();
     for (tag_name, tag_value) in modified_metadata.iter() {
         let Some(name) = tag_name.strip_prefix("PNG:") else {
             continue;
@@ -578,42 +693,76 @@ pub fn write_png_metadata_with_baseline(
         if let Some(text) = tag_value.as_string()
             && let Some(chunk) = build_new_text_chunk(name, text)
         {
-            metadata_chunks.push(chunk);
+            new_chunks.push(chunk);
+        }
+    }
+    // A new eXIf chunk follows the new text chunks.
+    let has_exif_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"eXIf");
+    if let ExifFate::Replace(payload) = &exif_fate
+        && !has_exif_chunk
+        && !payload.is_empty()
+    {
+        new_chunks.push((*b"eXIf", payload.clone()));
+    }
+
+    // Text and eXIf chunks ExifTool moves from after IDAT to before it.
+    let mut moved = Vec::new();
+    for (index, chunk) in chunks.iter().enumerate().skip(first_idat + 1) {
+        if NO_LEAP_FROG.contains(&&chunk.chunk_type) {
+            break;
+        }
+        if is_movable_text(&chunk.chunk_type) {
+            moved.push(index);
         }
     }
 
-    // Process eXIf chunk
-    let exif_data = serialize_exif_chunk(modified_metadata)?;
-    if !exif_data.is_empty() {
-        metadata_chunks.push((*b"eXIf", exif_data));
-    }
-
-    // Reassemble PNG file
+    // Output order: chunks before the first IDAT in place, the moved text
+    // chunks, the new chunks (`None`), then the first IDAT onward less the
+    // moved ones.
+    let order = (0..first_idat)
+        .map(Some)
+        .chain(moved.iter().copied().map(Some))
+        .chain(std::iter::once(None))
+        .chain(
+            (first_idat..chunks.len())
+                .filter(|index| !moved.contains(index))
+                .map(Some),
+        );
     let mut output = Vec::new();
-
-    // Write PNG signature
     output.extend_from_slice(&PNG_SIGNATURE);
-
-    // Write IHDR (must be first)
-    write_chunk(&mut output, &ihdr.chunk_type, &ihdr.data);
-
-    // Write metadata chunks (before IDAT for better compatibility)
-    for (chunk_type, data) in metadata_chunks {
-        write_chunk(&mut output, &chunk_type, &data);
+    for slot in order {
+        let Some(index) = slot else {
+            for (chunk_type, data) in &new_chunks {
+                write_chunk(&mut output, chunk_type, data);
+            }
+            continue;
+        };
+        let chunk = &chunks[index];
+        match &chunk.chunk_type {
+            b"tEXt" | b"iTXt" | b"zTXt" => match text_fates.remove(&index) {
+                Some(TextFate::Rebuild(chunk_type, data)) => {
+                    write_chunk(&mut output, &chunk_type, &data);
+                }
+                Some(TextFate::Drop) => {}
+                Some(TextFate::Carry) | None => {
+                    write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
+                }
+            },
+            b"eXIf" => match &exif_fate {
+                ExifFate::Carry => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+                // Nothing left in the EXIF block: the chunk goes.
+                ExifFate::Replace(payload) if payload.is_empty() => {}
+                ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
+            },
+            _ => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+        }
     }
-
-    // Write other chunks (PLTE, tRNS, carried or rebuilt text, etc.)
-    for (chunk_type, data) in other_chunks {
-        write_chunk(&mut output, &chunk_type, &data);
+    // Bytes after IEND (a trailer) are copied unchanged.
+    let size = original_reader.size();
+    if trailer_start < size {
+        let trailer = original_reader.read(trailer_start, (size - trailer_start) as usize)?;
+        output.extend_from_slice(trailer);
     }
-
-    // Write IDAT chunks (preserve image data unchanged)
-    for chunk in idat_chunks {
-        write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
-    }
-
-    // Write IEND (must be last)
-    write_chunk(&mut output, &iend.chunk_type, &iend.data);
 
     // Write atomically to prevent corruption
     write_atomic(path, &output)?;

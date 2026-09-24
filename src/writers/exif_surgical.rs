@@ -61,6 +61,20 @@ const MAKERNOTE: u16 = 0x927C;
 /// `original_map` as carried.
 fn carried_class_reader_keys(entry: &RawEntry) -> Vec<String> {
     let mut keys = vec![lookup_tag_name(entry.tag_id, entry.ifd.prefix())];
+    if entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE {
+        // A MakerNote no maker parser claims is surfaced under the
+        // `%MakerNotes::Main` fallback whose Condition matched (`tiff_helpers`;
+        // MakerNotes.pm 13.59:951, 1102, 1110). Without these the unchanged
+        // row was taken for a new tag to add, and every other edit of the
+        // file failed with "not a known EXIF tag".
+        for name in [
+            "MakerNoteSamsung1a",
+            "MakerNoteUnknownText",
+            "MakerNoteUnknownBinary",
+        ] {
+            keys.push(format!("ExifIFD:{name}"));
+        }
+    }
     if entry.ifd == IfdKind::Interop {
         let name = crate::core::tiff_helpers::interop_tag_to_name(entry.tag_id);
         if name != "Unknown" {
@@ -1167,14 +1181,20 @@ pub(crate) fn plan_exif_write_with_removals(
 
     // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
     // without a GPS IFD gains one when a covered tag is added, so emit
-    // ExifTool's declared default version alongside it. Existing GPS IFDs
-    // already carry their raw version entry through the loop above.
-    if plan.gps.iter().any(|entry| {
-        matches!(
-            entry.tag_id,
-            0x000d | 0x000f | 0x0014 | 0x0018 | 0x001d | 0x001f
-        )
-    }) && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
+    // ExifTool's declared default version alongside it. An existing GPS IFD
+    // is left as it is, version entry or not: `WriteExif` adds mandatory
+    // entries only to a directory it creates (WriteExif.pl 13.59:714-719),
+    // and an iPhone GPS IFD without GPSVersionID gained one on every
+    // unrelated edit.
+    let gps_existed = scan.entries.iter().any(|entry| entry.ifd == IfdKind::Gps);
+    if !gps_existed
+        && plan.gps.iter().any(|entry| {
+            matches!(
+                entry.tag_id,
+                0x000d | 0x000f | 0x0014 | 0x0018 | 0x001d | 0x001f
+            )
+        })
+        && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
     {
         plan.gps.push(OutEntry {
             tag_id: 0x0000,
@@ -1721,38 +1741,23 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
             .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec())
     };
 
-    let (scan, original_map) = match &tiff {
-        Some(tiff_bytes) => {
-            let scan = scan_exif_entries(tiff_bytes)?;
-            // The exact reader the diff must mirror: parse the whole JPEG the
-            // same way read_metadata does (includes tag-name normalization).
-            // `ReadOptions::default_full_listing()` (non-extended, nothing
-            // specifically requested) is correct here regardless: the
-            // undecoded-MakerNote hex-fallback key (`ExifIFD:0x927C`) this
-            // diff depends on is inserted unconditionally at the source --
-            // Step 21 only hides it at the CLI *display* boundary, never in
-            // this internal map -- see `core::read_options`'s "Two different
-            // gate sites" doc comment.
-            let reader = SliceReader(file_bytes);
-            let original_map = crate::core::operations::parse_jpeg_metadata(
-                &reader,
-                &crate::core::ReadOptions::default_full_listing(),
-            )?;
-            (scan, original_map)
-        }
-        None => (
-            ExifScan {
-                byte_order: ByteOrder::LittleEndian,
-                entries: Vec::new(),
-                thumbnail: None,
-                makernote_offset: None,
-            },
-            MetadataMap::new(),
-        ),
+    // The exact reader the diff must mirror: parse the whole JPEG the same way
+    // read_metadata does (includes tag-name normalization).
+    // `ReadOptions::default_full_listing()` (non-extended, nothing
+    // specifically requested) is correct here regardless: the
+    // undecoded-MakerNote hex-fallback key (`ExifIFD:0x927C`) this diff
+    // depends on is inserted unconditionally at the source -- Step 21 only
+    // hides it at the CLI *display* boundary, never in this internal map --
+    // see `core::read_options`'s "Two different gate sites" doc comment.
+    let original_map = match &tiff {
+        Some(_) => crate::core::operations::parse_jpeg_metadata(
+            &SliceReader(file_bytes),
+            &crate::core::ReadOptions::default_full_listing(),
+        )?,
+        None => MetadataMap::new(),
     };
-
-    let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
-    let tiff_out = serialize_exif(&plan)?;
+    let tiff_out =
+        rewrite_tiff_exif_with_removals(tiff.as_deref(), &original_map, desired, removed)?;
     if tiff_out.is_empty() {
         return Ok(Vec::new());
     }
@@ -1760,6 +1765,39 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
     segment.extend_from_slice(EXIF_IDENTIFIER);
     segment.extend_from_slice(&tiff_out);
     Ok(segment)
+}
+
+/// The carrier-neutral core of [`rewrite_jpeg_exif_with_removals`]: the new
+/// TIFF payload (header onward, no `Exif\0\0`) for an EXIF block whose
+/// original payload is `tiff`, preserving everything the caller did not
+/// change. `original_map` is the map the reader produced for the file that
+/// holds `tiff` (what `desired` was derived from); with no original payload
+/// there is nothing to diff and it is not consulted. Returns an empty Vec
+/// when the block should be dropped entirely.
+///
+/// The JPEG APP1 writer and the PNG `eXIf` writer share it: both carry the
+/// same TIFF structure, only the framing around it differs.
+pub(crate) fn rewrite_tiff_exif_with_removals(
+    tiff: Option<&[u8]>,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
+    let empty = MetadataMap::new();
+    let (scan, original_map) = match tiff {
+        Some(tiff_bytes) => (scan_exif_entries(tiff_bytes)?, original_map),
+        None => (
+            ExifScan {
+                byte_order: ByteOrder::LittleEndian,
+                entries: Vec::new(),
+                thumbnail: None,
+                makernote_offset: None,
+            },
+            &empty,
+        ),
+    };
+    let plan = plan_exif_write_with_removals(&scan, original_map, desired, removed)?;
+    serialize_exif(&plan)
 }
 
 #[cfg(test)]
@@ -3265,5 +3303,87 @@ mod tests {
             bytes,
             [100_u16.to_ne_bytes(), 200_u16.to_ne_bytes()].concat()
         );
+    }
+
+    #[test]
+    fn an_unchanged_fallback_maker_note_row_is_carried_not_added() {
+        // The reader surfaces a SilverFast note (`LSI1\0`) as
+        // `ExifIFD:MakerNoteUnknownBinary` (MakerNotes.pm 13.59:1110). Left
+        // unchanged it is the carried MakerNote itself; before, it was taken
+        // for a tag to add and every edit of the file failed.
+        let note = b"LSI1\0\x01\x02\x03 opaque maker note".to_vec();
+        let scan = ExifScan {
+            byte_order: ByteOrder::BigEndian,
+            entries: vec![RawEntry {
+                ifd: IfdKind::ExifIfd,
+                tag_id: MAKERNOTE,
+                field_type: 7,
+                count: note.len() as u32,
+                value: note.clone(),
+            }],
+            thumbnail: None,
+            makernote_offset: Some(38),
+        };
+        let mut original = MetadataMap::new();
+        original.insert(
+            "ExifIFD:MakerNoteUnknownBinary",
+            TagValue::new_binary(note.clone()),
+        );
+        let mut desired = original.clone();
+        desired.insert("IFD0:Artist", TagValue::new_string("you"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let carried = plan
+            .exif_ifd
+            .iter()
+            .find(|entry| entry.tag_id == MAKERNOTE)
+            .unwrap();
+        assert_eq!((carried.field_type, &carried.value), (7, &note));
+        assert_eq!(plan.exif_ifd.len(), 1);
+
+        // Removing it is still refused loudly, not dropped in silence.
+        let mut removed = original.clone();
+        removed.remove("ExifIFD:MakerNoteUnknownBinary");
+        removed.insert("IFD0:Artist", TagValue::new_string("you"));
+        assert!(plan_exif_write(&scan, &original, &removed).is_err());
+    }
+
+    #[test]
+    fn an_existing_gps_ifd_without_a_version_gains_none() {
+        // `WriteExif` adds GPSVersionID only to a GPS IFD it creates
+        // (WriteExif.pl 13.59:714-719); pinned ExifTool leaves an iPhone GPS
+        // IFD that has none (t/images/Apple.jpg) as it is on an unrelated
+        // edit.
+        let speed = [0u32.to_be_bytes(), 1u32.to_be_bytes()].concat();
+        let scan = ExifScan {
+            byte_order: ByteOrder::BigEndian,
+            entries: vec![RawEntry {
+                ifd: IfdKind::Gps,
+                tag_id: 0x000d,
+                field_type: 5,
+                count: 1,
+                value: speed.clone(),
+            }],
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let mut original = MetadataMap::new();
+        original.insert(
+            "GPS:GPSSpeed",
+            crate::core::tag_conversion::raw_bytes_to_tag_value(
+                &speed,
+                5,
+                1,
+                0x000d,
+                ByteOrder::BigEndian,
+            ),
+        );
+        let mut desired = original.clone();
+        desired.insert("IFD0:Artist", TagValue::new_string("you"));
+
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        assert_eq!(plan.gps.len(), 1);
+        assert_eq!(plan.gps[0].tag_id, 0x000d);
+        assert_eq!(plan.gps[0].value, speed);
     }
 }
