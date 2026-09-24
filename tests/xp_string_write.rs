@@ -603,6 +603,42 @@ fn rewriting_an_existing_xp_entry_keeps_undef_and_otherwise_writes_byte() {
     }
 }
 
+/// An XP string in the ExifIFD (the generated engine's row there) keeps its
+/// stored bytes too, so a copied lone surrogate survives: the oracle's
+/// `-TagsFromFile` writes `41 00 00 d8 42 00 00 00` back unchanged.
+#[test]
+fn exif_ifd_xp_rows_keep_their_stored_bytes() {
+    let raw = hex("410000d842000000");
+    // IFD0 holds only the ExifIFD pointer (to offset 26); the ExifIFD holds
+    // XPComment, its value right after the directory.
+    let mut t = b"II\x2a\0\x08\0\0\0".to_vec();
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x8769u16.to_le_bytes());
+    t.extend_from_slice(&4u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&26u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x9c9cu16.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+    t.extend_from_slice(&44u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&raw);
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "exififd.jpg", &jpeg_with(&t));
+    let metadata = read_metadata(&path).unwrap();
+    let stored: Vec<_> = metadata
+        .project_occurrences(ValueChannel::Stored)
+        .filter(|(key, _, _)| key.ends_with(":XPComment"))
+        .map(|(key, _, value)| (key.to_owned(), value.into_owned()))
+        .collect();
+    assert_eq!(
+        stored,
+        vec![("ExifIFD:XPComment".to_owned(), TagValue::Binary(raw))]
+    );
+}
+
 /// A typed code point above U+FFFF keeps only its low 16 bits, as ExifTool
 /// 13.59 writes it: `Encode($val,"UCS2","II")` packs each code point with
 /// `pack('v*')` (Charset.pm:387-390). Oracle `-XPTitle=V` bytes: `A🎌` ->
