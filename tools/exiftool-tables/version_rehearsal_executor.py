@@ -11,6 +11,7 @@ It deliberately has no promotion action.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -19,6 +20,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable, Mapping
 
@@ -30,7 +32,8 @@ import artifacts
 SCHEMA = 1
 KIND = "oxidex_exiftool_version_rehearsal_execution"
 RESULT_KIND = "oxidex_version_rehearsal_stage_result"
-STAGES = ("native", "generate", "build", "read", "write")
+STAGES = ("native", "generate", "build", "test", "read", "write")
+OPTIONAL_COMMANDS = ("test", "write")
 REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
 COMMAND_TIMEOUT_SECONDS = 3600
@@ -39,12 +42,22 @@ _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
     "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
     "write_fixture_manifest",
+    "read_fixture_manifest",
 }
 _WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
+_READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 
 
 class Refused(ValueError):
     """The requested execution cannot be attributed safely."""
+
+
+class LockRetained(Refused):
+    """A host lock was deliberately left held because an owned child may be live."""
+
+    def __init__(self, message: str, survivors: list[dict[str, Any]]):
+        super().__init__(message)
+        self.survivors = survivors
 
 
 def _sha_json(value: Any) -> str:
@@ -81,50 +94,55 @@ def _sha_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_fixture_binding(value: Any) -> dict[str, Any]:
-    """Capture a write fixture manifest and every requested JPEG identity.
+def _fixture_binding(value: Any, *, kind: str, jpeg_only: bool) -> dict[str, Any]:
+    """Capture a fixture manifest and every requested source identity.
 
     The path alone cannot be immutable execution input: both the manifest and
     its listed source fixtures must still equal this snapshot at execution.
     """
+    label = "write fixture" if jpeg_only else "read fixture"
     if not isinstance(value, str) or not os.path.isabs(value) or "\x00" in value:
-        raise Refused("write fixture manifest path is malformed")
-    manifest = _regular(Path(value), "write fixture manifest")
+        raise Refused(f"{label} manifest path is malformed")
+    manifest = _regular(Path(value), f"{label} manifest")
     try:
         document = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise Refused("write fixture manifest is unreadable") from exc
+        raise Refused(f"{label} manifest is unreadable") from exc
     if (not isinstance(document, dict) or document.get("schema") != 1
-            or document.get("kind") != _WRITE_FIXTURE_KIND
+            or document.get("kind") != kind
             or not isinstance(document.get("fixtures"), list) or not document["fixtures"]):
-        raise Refused("write fixture manifest schema is unsupported")
+        raise Refused(f"{label} manifest schema is unsupported")
     fixtures = []
     for item in document["fixtures"]:
         if (not isinstance(item, dict) or set(item) != {"path", "sha256", "bytes"}
                 or not isinstance(item["path"], str) or not os.path.isabs(item["path"])
                 or not isinstance(item["sha256"], str) or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
                 or type(item["bytes"]) is not int or item["bytes"] < 1):
-            raise Refused("write fixture manifest item is malformed")
-        fixture = _regular(Path(item["path"]), "write fixture")
+            raise Refused(f"{label} manifest item is malformed")
+        fixture = _regular(Path(item["path"]), label)
         if _sha_file(fixture) != item["sha256"] or fixture.stat().st_size != item["bytes"]:
-            raise Refused("write fixture differs from immutable manifest")
-        if fixture.read_bytes()[:2] != b"\xff\xd8":
+            raise Refused(f"{label} differs from immutable manifest")
+        if jpeg_only and fixture.read_bytes()[:2] != b"\xff\xd8":
             raise Refused("write fixture manifest contains a non-JPEG fixture")
         fixtures.append({"path": str(fixture), "sha256": item["sha256"], "bytes": item["bytes"]})
     if len({(item["path"], item["sha256"]) for item in fixtures}) != len(fixtures):
-        raise Refused("write fixture manifest has duplicate fixture identity")
+        raise Refused(f"{label} manifest has duplicate fixture identity")
     return {"path": str(manifest), "sha256": _sha_file(manifest), "bytes": manifest.stat().st_size,
             "fixtures": fixtures}
 
 
-def _config(value: Any, releases: list[str]) -> dict[str, Any]:
+def _write_fixture_binding(value: Any) -> dict[str, Any]:
+    return _fixture_binding(value, kind=_WRITE_FIXTURE_KIND, jpeg_only=True)
+
+
+def _config(value: Any, releases: list[str], *, allow_legacy_recovery: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise Refused("execution config schema is unsupported")
     commands = value.get("commands")
     if not isinstance(commands, dict) or any(stage not in commands for stage in REQUIRED_COMMANDS):
         raise Refused("generate, build, and read commands are required")
     for stage, spec in commands.items():
-        if stage not in {"generate", "build", "read", "write"}:
+        if stage not in {"generate", "build", "test", "read", "write"}:
             raise Refused("execution config has an unknown command stage")
         if not isinstance(spec, dict) or not isinstance(spec.get("argv"), list) or not spec["argv"]:
             raise Refused(f"{stage} command requires a nonempty argv array")
@@ -137,13 +155,19 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
                 raise Refused(f"{stage} command has malformed placeholder") from exc
             if any(field not in _PLACEHOLDERS for field in fields):
                 raise Refused(f"{stage} command has an unsupported placeholder")
+    execution_releases = value.get("execution_releases", releases)
+    if (not isinstance(execution_releases, list) or not execution_releases
+            or len(set(execution_releases)) != len(execution_releases)
+            or any(release not in releases for release in execution_releases)):
+        raise Refused("execution releases must be a unique nonempty subset of the verified plan")
     perls = value.get("perls")
     cases = value.get("native_cases")
-    if not isinstance(perls, dict) or not isinstance(cases, dict) or set(perls) != set(releases) or set(cases) != set(releases):
-        raise Refused("config must bind an explicit Perl and native cases to every selected release")
-    if any(not isinstance(perls[row], str) or not perls[row] for row in releases):
+    if (not isinstance(perls, dict) or not isinstance(cases, dict)
+            or set(perls) != set(execution_releases) or set(cases) != set(execution_releases)):
+        raise Refused("config must bind an explicit Perl and native cases to every execution release")
+    if any(not isinstance(perls[row], str) or not perls[row] for row in execution_releases):
         raise Refused("native Perl binding is malformed")
-    if any(not isinstance(cases[row], list) or not cases[row] for row in releases):
+    if any(not isinstance(cases[row], list) or not cases[row] for row in execution_releases):
         raise Refused("native cases must be a nonempty list for every selected release")
     lock = value.get("host_lock")
     if not isinstance(lock, str) or not os.path.isabs(lock) or "\x00" in lock:
@@ -151,18 +175,40 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
     source_commit = value.get("execution_source_commit")
     if not isinstance(source_commit, str) or rehearsal.GIT_OID_RE.fullmatch(source_commit) is None:
         raise Refused("config must bind an immutable execution source commit")
+    targets = value.get("target_directories")
+    if targets is not None:
+        if (not isinstance(targets, dict) or set(targets) != set(execution_releases)
+                or any(not isinstance(targets[release], str) or not os.path.isabs(targets[release])
+                       or "\x00" in targets[release] for release in execution_releases)
+                or len({str(Path(targets[release]).resolve()) for release in execution_releases}) != len(execution_releases)):
+            raise Refused("target directories must uniquely bind every execution release")
+    read_manifests = value.get("read_fixture_manifests")
+    saved_reads = value.get("read_fixture_bindings")
+    normalized = dict(value)
+    legacy_reads_absent = read_manifests is None and saved_reads is None
+    if legacy_reads_absent and allow_legacy_recovery:
+        pass
+    else:
+        if not isinstance(read_manifests, dict) or set(read_manifests) != set(execution_releases):
+            raise Refused("read command requires one immutable fixture manifest per execution release")
+        current_reads = {
+            release: _fixture_binding(read_manifests[release], kind=_READ_FIXTURE_KIND, jpeg_only=False)
+            for release in execution_releases
+        }
+        if saved_reads is not None and saved_reads != current_reads:
+            raise Refused("read fixture manifest or requested scope changed after initialization")
+        normalized["read_fixture_bindings"] = current_reads
     has_write = "write" in commands
     manifests, bindings = value.get("write_fixture_manifests"), value.get("write_fixture_bindings")
     if not has_write:
         if manifests is not None or bindings is not None:
             raise Refused("write fixture bindings require a configured write command")
-        return value
-    if not isinstance(manifests, dict) or set(manifests) != set(releases):
+        return normalized
+    if not isinstance(manifests, dict) or set(manifests) != set(execution_releases):
         raise Refused("write command requires one immutable fixture manifest per selected release")
-    current = {release: _write_fixture_binding(manifests[release]) for release in releases}
+    current = {release: _write_fixture_binding(manifests[release]) for release in execution_releases}
     if bindings is not None and bindings != current:
         raise Refused("write fixture manifest or requested JPEG scope changed after initialization")
-    normalized = dict(value)
     normalized["write_fixture_bindings"] = current
     return normalized
 
@@ -184,7 +230,7 @@ def _verify_inputs(run_dir: Path, archive_cache: Path, source_root: Path) -> tup
 
 
 def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    releases = _selected(plan)
+    releases = config.get("execution_releases", _selected(plan))
     return {
         "schema": SCHEMA,
         "kind": KIND,
@@ -216,6 +262,7 @@ def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], conf
             "selected_releases": releases,
             "untested_eligible_releases": plan["untested_eligible_releases"],
             "write_acceptance": "pending_or_unsupported",
+            "release_tests": "pending_or_unsupported",
             "parity": "unproven_until_each_release_has_passed_read_and_write_reports",
         },
     }
@@ -243,12 +290,14 @@ def initialize_run(run_dir: Path, capture: dict[str, Any], catalog: dict[str, An
     return journal
 
 
-def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path) -> tuple[dict[str, Any], tuple[dict[str, Any], ...], dict[str, Any]]:
+def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path, *,
+                  allow_legacy_recovery: bool = False) -> tuple[dict[str, Any], tuple[dict[str, Any], ...], dict[str, Any]]:
     docs = _verify_inputs(run_dir, archive_cache, source_root)
     config = _read(run_dir / "inputs" / "config.json")
     plan, materialization = docs[2], docs[4]
-    releases = _selected(plan)
-    _config(config, releases)
+    selected_releases = _selected(plan)
+    _config(config, selected_releases, allow_legacy_recovery=allow_legacy_recovery)
+    releases = config.get("execution_releases", selected_releases)
     journal = _read(run_dir / "execution-status.json")
     if (journal.get("schema") != SCHEMA or journal.get("kind") != KIND
             or journal.get("plan_sha256") != plan["plan_sha256"]
@@ -373,7 +422,7 @@ def _require_binary_proof(result: Mapping[str, Any], target: Path, field: str = 
     return row
 
 
-def _require_fixture_proof(result: Mapping[str, Any]) -> None:
+def _require_fixture_proof(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     row = result.get("fixtures")
     if (not isinstance(row, dict) or not isinstance(row.get("manifest"), str) or not isinstance(row.get("manifest_sha256"), str)
             or __import__("re").fullmatch(r"[0-9a-f]{64}", row["manifest_sha256"]) is None or not isinstance(row.get("entries"), list) or not row["entries"]):
@@ -381,6 +430,7 @@ def _require_fixture_proof(result: Mapping[str, Any]) -> None:
     manifest = _regular(Path(row["manifest"]), "fixture manifest")
     if hashlib.sha256(manifest.read_bytes()).hexdigest() != row["manifest_sha256"]:
         raise Refused("fixture manifest changed after comparison")
+    scope: list[dict[str, Any]] = []
     for item in row["entries"]:
         if (not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("sha256"), str)
                 or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
@@ -397,6 +447,8 @@ def _require_fixture_proof(result: Mapping[str, Any]) -> None:
                 or staged.stat().st_size != item["corpus_bytes"]
                 or item["corpus_sha256"] != item["sha256"] or item["corpus_bytes"] != item["bytes"]):
             raise Refused("staged fixture changed after comparison")
+        scope.append({"path": str(fixture), "sha256": item["sha256"], "bytes": item["bytes"]})
+    return scope
 
 
 def _require_native_identity(result: Mapping[str, Any], release: str, native: tuple[Path, Path, Path], perl: str) -> None:
@@ -407,6 +459,43 @@ def _require_native_identity(result: Mapping[str, Any], release: str, native: tu
                 "source": {"path": str(source.resolve())}, "lib": {"path": str(lib.resolve()), "exiftool_pm_sha256": hashlib.sha256(pm.read_bytes()).hexdigest()}}
     if result.get("native_identity") != expected:
         raise Refused("stage result is not bound to the selected native identity")
+
+
+def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
+    """A release test stage passes only with counted, zero-failure results."""
+    suite = result.get("test_suite")
+    keys = ("passed", "failed", "ignored", "measured", "filtered_out", "targets")
+    totals = suite.get("totals") if isinstance(suite, dict) else None
+    commands = suite.get("commands") if isinstance(suite, dict) else None
+    if (not isinstance(totals, dict) or not isinstance(commands, list) or not commands
+            or any(type(totals.get(key)) is not int or totals[key] < 0 for key in keys)
+            or totals["failed"] != 0 or totals["passed"] < 1 or totals["targets"] < 1
+            or result.get("denominator") != totals["passed"] + totals["failed"]
+            or suite.get("log") != result.get("raw_report")
+            or any(not isinstance(row, dict) or row.get("exit") != 0
+                   or any(type(row.get(key)) is not int or row[key] < 0 for key in keys)
+                   for row in commands)
+            or any(totals[key] != sum(row[key] for row in commands) for key in keys)):
+        raise Refused("test result lacks a counted zero-failure release test suite")
+    oracle = suite.get("exiftool_oracle")
+    native = result.get("native_identity")
+    try:
+        same_native = (oracle["tree_realpath"] == native["source"]["path"]
+                       and oracle["lib"]["exiftool_pm_sha256"] == native["lib"]["exiftool_pm_sha256"]
+                       and oracle["perl"] == native["perl"])
+    except (KeyError, TypeError):
+        same_native = False
+    if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
+            or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True
+            or not same_native):
+        raise Refused("test result was not graded by the selected release's capable ExifTool")
+    corpus = suite.get("fixture_corpus")
+    manifest = corpus.get("manifest") if isinstance(corpus, dict) else None
+    if (not isinstance(manifest, dict) or type(manifest.get("file_count")) is not int or manifest["file_count"] < 1
+            or not isinstance(manifest.get("sha256"), str)
+            or __import__("re").fullmatch(r"[0-9a-f]{64}", manifest["sha256"]) is None
+            or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True):
+        raise Refused("test result lacks a verified fixture corpus held unchanged across the run")
 
 
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
@@ -446,6 +535,8 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             _require_binary_proof(result, target, "writer_binary")
         if stage in {"read", "write"}:
             _require_fixture_proof(result)
+        if stage == "test":
+            _require_test_suite_proof(result)
         if stage == "write":
             mode = result.get("write_mode")
             if (not isinstance(mode, dict) or mode.get("kind") != "selected-release-live-native"
@@ -496,6 +587,293 @@ def _descendants(pid: int) -> list[int]:
                 found.append(child)
                 pending.append(child)
     return found
+
+
+class _OwnedChildren:
+    """Every child spawned with inherited host-lock descriptors, until proven gone.
+
+    Children run with ``close_fds=False`` so a live child keeps the host lock's
+    open file description referenced. flock(2) is per description: an explicit
+    LOCK_UN by the owner would release it for the child too, while closing only
+    the owner's descriptor would not. A lock owner therefore unlocks only once
+    each registered child has been reaped and its process group is empty.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.children: dict[int, subprocess.Popen[Any]] = {}
+        self.spawns_in_flight = 0
+
+
+_OWNED = _OwnedChildren()
+# Lock streams deliberately neither unlocked nor closed because an owned
+# child could not be proven gone; see release_retained_locks().
+_RETAINED_LOCKS: list[Any] = []
+
+
+def _spawn(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+    """Popen that registers the child before any interruption can lose its PID."""
+    owned = _OWNED
+    with owned.lock:
+        owned.spawns_in_flight += 1
+    try:
+        child = subprocess.Popen(argv, **kwargs)
+    except OSError:
+        with owned.lock:
+            owned.spawns_in_flight -= 1
+        raise
+    # Any other interruption above deliberately leaves the in-flight count
+    # raised: a child may exist whose PID was never observed, so every later
+    # lock release in this process must fail closed.
+    with owned.lock:
+        owned.children[child.pid] = child
+        owned.spawns_in_flight -= 1
+    return child
+
+
+# Process-group membership is read from the kernel, never from `ps` columns
+# (a `ps` column silently wrong on one platform is AGENTS.md incident #9).
+# Only macOS offers a trustworthy view here. On Linux /proc/<pid>/stat shows
+# only a main thread's state (a worker thread sharing the lock descriptor can
+# outlive a `Z` main thread) and a /proc walk is not a snapshot, so every
+# other platform stays fail closed: a group that still answers is unproven.
+_DARWIN_PROC_PGRP_ONLY = 2          # proc_listpids(PROC_PGRP_ONLY, pgid, ...)
+_DARWIN_KERN_PROC = (1, 14)         # CTL_KERN, KERN_PROC
+_DARWIN_KERN_PROC_PID, _DARWIN_KERN_PROC_PGRP = 1, 2
+_DARWIN_KINFO_PROC_SIZE = 648       # sizeof(struct kinfo_proc), 64-bit
+_DARWIN_P_STAT_OFFSET, _DARWIN_P_PID_OFFSET = 36, 40  # extern_proc.p_stat / p_pid
+_DARWIN_SRUN, _DARWIN_SZOMB = 2, 5
+_DARWIN_LIBRARIES: tuple[Any, Any] | None = None
+
+
+def _darwin_libraries() -> tuple[Any, Any]:
+    """libc and libproc with explicit prototypes (no default int conversions)."""
+    global _DARWIN_LIBRARIES
+    if _DARWIN_LIBRARIES is None:
+        import ctypes
+        import ctypes.util
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        libc.sysctl.restype = ctypes.c_int
+        library = ctypes.util.find_library("proc")
+        if library is None:
+            raise OSError("libproc is unavailable")
+        libproc = ctypes.CDLL(library, use_errno=True)
+        libproc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        libproc.proc_listpids.restype = ctypes.c_int
+        _DARWIN_LIBRARIES = (libc, libproc)
+    return _DARWIN_LIBRARIES
+
+
+def _darwin_pgrp_listpids(pgid: int) -> list[int] | None:
+    """libproc's view of a group's members; None when it cannot be read."""
+    try:
+        import ctypes
+        _libc, libproc = _darwin_libraries()
+        needed = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, None, 0)
+        if needed < 0:
+            return None
+        buffer = (ctypes.c_int * (needed // ctypes.sizeof(ctypes.c_int) + 64))()
+        filled = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, buffer, ctypes.sizeof(buffer))
+        if filled < 0 or filled >= ctypes.sizeof(buffer):
+            return None  # an error, or possibly truncated: never guess
+        return [pid for pid in buffer[: filled // ctypes.sizeof(ctypes.c_int)] if pid > 0]
+    except (OSError, AttributeError, ctypes.ArgumentError):
+        return None
+
+
+def _darwin_kinfo(mib: list[int]) -> list[tuple[int, int]] | None:
+    """(pid, p_stat) for each kinfo_proc a KERN_PROC sysctl returns."""
+    try:
+        import ctypes
+        libc, _libproc = _darwin_libraries()
+        names = (ctypes.c_int * len(mib))(*mib)
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(names, len(mib), None, ctypes.byref(size), None, 0) != 0:
+            return None
+        size = ctypes.c_size_t(size.value + _DARWIN_KINFO_PROC_SIZE * 16)
+        buffer = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(names, len(mib), buffer, ctypes.byref(size), None, 0) != 0:
+            return None
+    except (OSError, AttributeError, ctypes.ArgumentError):
+        return None
+    raw = buffer.raw[: size.value]
+    if len(raw) % _DARWIN_KINFO_PROC_SIZE:
+        return None
+    return [(int.from_bytes(raw[start + _DARWIN_P_PID_OFFSET:start + _DARWIN_P_PID_OFFSET + 4], sys.byteorder,
+                            signed=True), raw[start + _DARWIN_P_STAT_OFFSET])
+            for start in range(0, len(raw), _DARWIN_KINFO_PROC_SIZE)]
+
+
+def _darwin_group_members(pgid: int) -> list[tuple[int, str]] | None:
+    """Members only when libproc and sysctl agree and the struct layout checks."""
+    # Validate the kinfo_proc layout against this running process first.
+    me = os.getpid()
+    if _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PID, me]) != [(me, _DARWIN_SRUN)]:
+        return None
+    listed = _darwin_pgrp_listpids(pgid)
+    kinfo = _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PGRP, pgid])
+    if listed is None or kinfo is None or sorted(listed) != sorted(pid for pid, _stat in kinfo):
+        return None
+    return [(pid, "zombie" if stat == _DARWIN_SZOMB else "live") for pid, stat in kinfo]
+
+
+def _group_member_states(pgid: int) -> list[tuple[int, str]] | None:
+    """Every member of a process group as (pid, zombie|live); None if unknowable here.
+
+    macOS only. Every other platform returns None, which keeps the group
+    unproven and the host lock held.
+    """
+    if sys.platform == "darwin":
+        return _darwin_group_members(pgid)
+    return None
+
+
+def _zombie_only_group(pgid: int) -> bool:
+    """True only when every member is verified to be a zombie, twice over.
+
+    A zombie has already closed every descriptor, so a group holding only
+    zombies cannot keep the host lock's file description referenced. The
+    enumeration is repeated and must return the identical all-zombie member
+    set, closing the window in which a member forks a live child into the
+    group between the two kernel views. Any enumeration failure, an empty
+    answer, a live member, a changed membership or a non-macOS platform
+    leaves the group unproven.
+    """
+    first = _group_member_states(pgid)
+    if not first or any(state != "zombie" for _pid, state in first):
+        return False
+    second = _group_member_states(pgid)
+    return second is not None and sorted(second) == sorted(first)
+
+
+def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
+    """None only when the child is reaped and its whole process group is gone.
+
+    A group that still answers ``killpg(pgid, 0)`` (or refuses it with EPERM,
+    as macOS does for a zombie-only group) counts as gone only when every
+    member is verified to be a zombie.
+    """
+    try:
+        if child.poll() is None:
+            return "running"
+    except OSError as exc:
+        return f"exit status cannot be observed: {exc}"
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as exc:
+        if _zombie_only_group(child.pid):
+            return None
+        return f"exited; process group {child.pid} cannot be inspected: {exc}"
+    if _zombie_only_group(child.pid):
+        return None
+    return f"exited; process group {child.pid} still has live members"
+
+
+def _settle(child: subprocess.Popen[Any]) -> None:
+    owned = _OWNED
+    with owned.lock:
+        if owned.children.get(child.pid) is child and _unproven_state(child) is None:
+            del owned.children[child.pid]
+
+
+def unproven_children() -> list[dict[str, Any]]:
+    """Owned children not proven gone; proven ones are pruned."""
+    owned = _OWNED
+    survivors: list[dict[str, Any]] = []
+    with owned.lock:
+        for pid, child in list(owned.children.items()):
+            state = _unproven_state(child)
+            if state is None:
+                del owned.children[pid]
+            else:
+                survivors.append({"pid": pid, "pgid": pid, "state": state})
+        if owned.spawns_in_flight:
+            survivors.append({"pid": None, "pgid": None,
+                              "state": "spawn interrupted before its PID was recorded"})
+    return survivors
+
+
+def describe_survivors(survivors: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"PID {item['pid']} (process group {item['pgid']}, {item['state']})" if item["pid"] is not None
+        else f"PID unknown ({item['state']})"
+        for item in survivors
+    )
+
+
+def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[dict[str, Any]]:
+    """Unlock only when every owned child is proven gone; otherwise retain.
+
+    Retention means no LOCK_UN and no close: the stream is parked for the rest
+    of this process so the lock stays held even if a surviving child has
+    closed its inherited copy. Returns the survivors (empty after release).
+    """
+    if capability is not None:
+        capability.deactivate()
+    survivors = unproven_children()
+    # A reaped child whose group still answers (macOS returns EPERM while the
+    # group's last members are zombies awaiting reaping by init) gets a short,
+    # bounded chance to be proven gone. A running or unknown child gets none.
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while (survivors and time.monotonic() < deadline
+           and all(item["pid"] is not None and item["state"].startswith("exited") for item in survivors)):
+        time.sleep(0.02)
+        survivors = unproven_children()
+    if survivors:
+        _RETAINED_LOCKS.append(stream)
+        return survivors
+    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return []
+
+
+def release_retained_locks() -> list[dict[str, Any]]:
+    """Release retained locks once every owned child is proven gone."""
+    survivors = unproven_children()
+    if survivors:
+        return survivors
+    while _RETAINED_LOCKS:
+        stream = _RETAINED_LOCKS.pop()
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+    return []
+
+
+def retained_lock_message(path: Path, survivors: list[dict[str, Any]]) -> str:
+    return (f"{path} is intentionally still held (no unlock, descriptor retained) because owned "
+            f"child process(es) could not be proven gone: {describe_survivors(survivors)}. The lock is "
+            "released only when they exit; inspect or terminate them, then recover the execution "
+            "journal before retrying")
+
+
+def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_output: bool = False,
+                 started: Callable[[int, int], None] | None = None,
+                 **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    """subprocess.run for an owned child; interruption leaves it registered."""
+    if capture_output:
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    child = _spawn(argv, **kwargs)
+    try:
+        if started is not None:
+            try:
+                started(child.pid, child.pid)
+            except OSError:
+                _bounded_timeout_cleanup(child)
+                raise
+        try:
+            stdout, stderr = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = _bounded_timeout_cleanup(child)
+            exc.output, exc.stderr = stdout, stderr
+            raise
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+    finally:
+        _settle(child)
 
 
 def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
@@ -595,12 +973,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
     The production branch deliberately leaves inherited descriptors open. The
     host-lock descriptor is inheritable, so a supervisor dying while this child
     is live cannot let another rehearsal acquire the shared lock prematurely.
+    The child stays registered in ``_OWNED`` until it is proven gone, so the
+    lock owner never explicitly unlocks while it may still be live.
     """
     if run is subprocess.run:
         try:
-            child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace",
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     start_new_session=True, close_fds=False)
+            child = _spawn(argv, cwd=str(cwd), env=env, text=True, errors="replace",
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           start_new_session=True, close_fds=False)
         except OSError as exc:
             return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
                     "state": "spawn_failed", "operation": "spawn"}
@@ -624,12 +1004,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                         stdout = partial_stdout
                     if not stderr:
                         stderr = partial_stderr
+                _settle(child)
                 record = {"argv": argv, "exit": None, "stdout": stdout,
                           "stderr": stderr + str(exc), "state": "timeout",
                           "pid": child.pid, "pgid": child.pid}
                 if cleanup_error is not None:
                     record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
                 return record
+            _settle(child)
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         except OSError as exc:
@@ -639,6 +1021,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             except OSError as cleanup:
                 stdout, stderr = _emergency_reap_group(child)
                 cleanup_error = str(cleanup)
+            _settle(child)
             record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
                       "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
             if cleanup_error is not None:
@@ -704,9 +1087,10 @@ def _native_identity(materialization: Mapping[str, Any], source_root: Path, rele
 
 def _verify_checkout_head(checkout: Path, expected_commit: str,
                           run: Callable[..., subprocess.CompletedProcess[str]]) -> None:
+    runner = _tracked_run if run is subprocess.run else run
     try:
-        result = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
-                     text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+        result = runner(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
+                        text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused("cannot verify owned checkout HEAD") from exc
     if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
@@ -715,15 +1099,17 @@ def _verify_checkout_head(checkout: Path, expected_commit: str,
 
 def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str, checkout: Path, target: Path,
                native: tuple[Path, Path, Path], perl: str, native_probe: dict[str, Any], config: dict[str, Any],
-               run: Callable[..., subprocess.CompletedProcess[str]]) -> bool:
-    state = journal["releases"][release]["stages"][stage]
+               run: Callable[..., subprocess.CompletedProcess[str]],
+               stage_guard: Callable[[str, str, str], None] | None = None) -> bool:
+    # Journals initialized before the release-test stage existed lack its slot.
+    state = journal["releases"][release]["stages"].setdefault(stage, "pending")
     if state == "passed" or state == "unsupported":
         return True
     if state != "pending":
         raise Refused(f"{release} {stage} is not safely runnable after interruption or failure")
-    if stage == "write" and stage not in config["commands"]:
+    if stage in OPTIONAL_COMMANDS and stage not in config["commands"]:
         journal["releases"][release]["stages"][stage] = "unsupported"
-        journal["releases"][release]["reports"][stage] = {"reason": "no generated write acceptance command configured"}
+        journal["releases"][release]["reports"][stage] = {"reason": f"no {stage} command configured"}
         _event(journal, "stage_unsupported", release=release, stage=stage)
         _store_journal(run_dir, journal)
         return True
@@ -746,6 +1132,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
               "native_source": str(source), "native_lib": str(lib), "native_program": str(program),
               "native_perl": perl, "native_probe": str(_result_path(run_dir, release, "native")),
               "native_probe_sha256": str(native_probe.get("probe_sha256", "")),
+              "read_fixture_manifest": str(config["read_fixture_bindings"][release]["path"]),
               "write_fixture_manifest": str(config.get("write_fixture_bindings", {}).get(release, {}).get("path", "")),
               "source_commit": config["execution_source_commit"]}
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), OXIDEX_REHEARSAL_RELEASE=release,
@@ -754,13 +1141,16 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output),
                OXIDEX_REHEARSAL_NATIVE_PROBE_SHA256=values["native_probe_sha256"],
                OXIDEX_REHEARSAL_CHECKOUT=str(checkout), OXIDEX_REHEARSAL_SOURCE_COMMIT=config["execution_source_commit"],
+               OXIDEX_REHEARSAL_READ_FIXTURE_MANIFEST=values["read_fixture_manifest"],
                OXIDEX_REHEARSAL_WRITE_FIXTURE_MANIFEST=values["write_fixture_manifest"])
     def started(pid: int, pgid: int) -> None:
         journal["active"]["child"] = {"pid": pid, "pgid": pgid}
         _store_journal(run_dir, journal)
-    record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run, started=started)
-    command_log = _command_log(run_dir, release, stage, record)
     try:
+        if stage_guard is not None:
+            stage_guard(release, stage, "before")
+        record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run, started=started)
+        command_log = _command_log(run_dir, release, stage, record)
         if record["state"] != "ok":
             raise Refused(f"{stage} command {record['state']}")
         after_source = _source_tree(checkout)
@@ -775,6 +1165,13 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("binary") != build_report.get("binary"):
                 raise Refused("read result did not use the proven build binary")
+            fixture_binding = config["read_fixture_bindings"][release]
+            fixture_report = result.get("fixtures", {})
+            if (not isinstance(fixture_report, dict)
+                    or fixture_report.get("manifest") != fixture_binding["path"]
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]
+                    or _require_fixture_proof(result) != fixture_binding["fixtures"]):
+                raise Refused("read result did not cover the exact immutable selected fixture scope")
         if stage == "write":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("writer_binary") != build_report.get("writer_binary"):
@@ -783,12 +1180,18 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             fixture_report = result.get("fixtures", {})
             if (not isinstance(fixture_report, dict)
                     or fixture_report.get("manifest") != fixture_binding["path"]
-                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
-                raise Refused("write result did not use the immutable selected JPEG fixture manifest")
-    except Refused as exc:
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]
+                    or _require_fixture_proof(result) != fixture_binding["fixtures"]):
+                raise Refused("write result did not cover the exact immutable selected JPEG fixture scope")
+        if stage_guard is not None:
+            stage_guard(release, stage, "after")
+    except (Refused, OSError) as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["state"] = "failed"
-        journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}
+        failure = {"stage": stage, "detail": str(exc)}
+        if "command_log" in locals():
+            failure["command"] = command_log
+        journal["releases"][release]["failure"] = failure
         journal["phase"], journal["active"] = "failed", None
         _event(journal, "stage_failed", release=release, stage=stage, detail=str(exc))
         _store_journal(run_dir, journal)
@@ -803,7 +1206,8 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
 
 
 def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tuple[dict[str, Any], ...], config: dict[str, Any],
-                archive_cache: Path, source_root: Path, run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any] | None:
+                archive_cache: Path, source_root: Path, run: Callable[..., subprocess.CompletedProcess[str]],
+                stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any] | None:
     state = journal["releases"][release]["stages"]["native"]
     if state == "passed":
         return _read(run_dir / journal["releases"][release]["reports"]["native"]["path"])
@@ -819,26 +1223,23 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
-        timeout = kwargs.pop("timeout", None)
         kwargs.pop("capture_output", None)
-        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, close_fds=False, **kwargs)
-        journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
-        _store_journal(run_dir, journal)
-        try:
-            stdout, stderr = child.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            stdout, stderr = _bounded_timeout_cleanup(child)
-            exc.output, exc.stderr = stdout, stderr
-            raise
-        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+        def started(pid: int, pgid: int) -> None:
+            journal["active"]["child"] = {"pid": pid, "pgid": pgid}
+            _store_journal(run_dir, journal)
+        return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True, close_fds=False, started=started, **kwargs)
     try:
+        if stage_guard is not None:
+            stage_guard(release, "native", "before")
         report = native_oracle.probe_materialized_native(materialization, plan, catalog, capture, resolution,
                                                          archive_cache, source_root, release, config["perls"][release],
                                                          config["native_cases"][release], run=native_run)
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
+        if stage_guard is not None:
+            stage_guard(release, "native", "after")
     except (Refused, native_oracle.Refused, catalog_stage.Refused, rehearsal.Refused, OSError,
             subprocess.TimeoutExpired) as exc:
         journal["releases"][release]["stages"]["native"] = "failed"
@@ -856,27 +1257,113 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     return report
 
 
+class _HeldHostLock:
+    """Borrow an owner-held flock without ever acquiring an arbitrary raw FD."""
+
+    def __init__(self, path: Path, stream: Any):
+        raise Refused("host lock capability must be issued by lock acquisition")
+
+    @classmethod
+    def acquire(cls, path: Path, stream: Any) -> "_HeldHostLock":
+        """Issue a capability only after this stream acquires the configured flock."""
+        path = path.absolute()
+        if stream.closed or path.is_symlink() or not path.is_file():
+            raise Refused("host lock is not an open configured regular file")
+        try:
+            held = os.fstat(stream.fileno())
+            current = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise Refused("host lock is not an open configured regular file") from exc
+        if (not __import__("stat").S_ISREG(current.st_mode)
+                or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+            raise Refused("host lock stream differs from configured lease")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            current = os.stat(path, follow_symlinks=False)
+            if (path.is_symlink() or not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("host lock changed during acquisition")
+        except BaseException:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            raise
+        self = object.__new__(cls)
+        self.path = path.absolute()
+        self.stream = stream
+        self.owner_pid = os.getpid()
+        self.active = True
+        self._borrow_lock = threading.Lock()
+        return self
+
+    @contextmanager
+    def borrow(self, configured: Path):
+        configured = configured.absolute()
+        with self._borrow_lock:
+            if not self.active or self.owner_pid != os.getpid() or self.stream.closed:
+                raise Refused("external host lock is not held by a live owner")
+            if configured.is_symlink() or not configured.is_file() or configured != self.path:
+                raise Refused("external host lock differs from configured lease")
+            try:
+                held = os.fstat(self.stream.fileno())
+                current = os.stat(configured, follow_symlinks=False)
+            except OSError as exc:
+                raise Refused("external host lock is not held by a live owner") from exc
+            if (not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("external host lock differs from configured lease")
+            yield
+
+    def deactivate(self) -> None:
+        # An owner cannot release its flock until every in-process borrower
+        # has left the critical section.
+        with self._borrow_lock:
+            self.active = False
+
+
 class _HostLock:
-    def __init__(self, path: Path): self.path, self.file = path, None
+    def __init__(self, path: Path):
+        self.path, self.file, self.capability = path, None, None
     def __enter__(self):
         if self.path.is_symlink():
             raise Refused("version rehearsal host lock must not be a symbolic link")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open("a+")
         os.set_inheritable(self.file.fileno(), True)
-        try: fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc: self.file.close(); raise Refused("version rehearsal host lock is already held") from exc
+        try:
+            self.capability = _HeldHostLock.acquire(self.path, self.file)
+        except BlockingIOError as exc:
+            self.file.close()
+            raise Refused("version rehearsal host lock is already held") from exc
+        except BaseException:
+            self.file.close()
+            raise
         return self
     def __exit__(self, *_):
-        if self.file: fcntl.flock(self.file.fileno(), fcntl.LOCK_UN); self.file.close()
+        if self.file:
+            stream, self.file = self.file, None
+            survivors = release_or_retain(stream, self.capability)
+            if survivors:
+                raise LockRetained("version rehearsal host lock "
+                                   + retained_lock_message(self.path, survivors), survivors)
+            stream.close()
+
+
+def _external_host_lock(config: Mapping[str, Any], descriptor: _HeldHostLock | None):
+    if descriptor is None:
+        return _HostLock(Path(config["host_lock"]))
+    if not isinstance(descriptor, _HeldHostLock):
+        raise Refused("external host lock is not held by a live owner")
+    return descriptor.borrow(Path(config["host_lock"]))
 
 
 def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: Path, *,
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-            checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout) -> dict[str, Any]:
+            checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout,
+            host_lock_fd: _HeldHostLock | None = None,
+            stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
     journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
-    with _HostLock(Path(config["host_lock"])):
+    lock = _external_host_lock(config, host_lock_fd)
+    with lock:
         if journal["phase"] == "running":
             raise Refused("execution is interrupted; recover it before any later run")
         if journal["phase"] in {"failed", "interrupted", "complete"}:
@@ -885,27 +1372,36 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         repository = repository.resolve()
         if repository.is_symlink() or not (repository / ".git").exists():
             raise Refused("repository must be an existing Git checkout")
-        for release in _selected(plan):
+        for release in journal["releases"]:
             checkout_path = run_dir / "checkouts" / _safe_name(release)
-            target = run_dir / "targets" / _safe_name(release)
+            configured_targets = config.get("target_directories")
+            target = (Path(configured_targets[release]) if configured_targets is not None
+                      else run_dir / "targets" / _safe_name(release))
             try:
                 journal["phase"], journal["active"] = "running", {"release": release, "stage": "checkout"}
                 _event(journal, "checkout_started", release=release)
                 _store_journal(run_dir, journal)
+                if stage_guard is not None:
+                    stage_guard(release, "checkout", "before")
                 owned = checkout(repository, config["execution_source_commit"], checkout_path, run)
                 if owned.resolve() != checkout_path.resolve() or owned.is_symlink() or not owned.is_dir():
                     raise Refused("checkout provider did not return the owned release checkout")
                 _verify_checkout_head(owned, config["execution_source_commit"], run)
                 journal["releases"][release]["source_tree"] = _source_tree(owned)
-                target.mkdir(parents=True, exist_ok=True)
+                if target.exists() or target.is_symlink():
+                    raise Refused("execution target already exists; stale target reuse is forbidden")
+                target.mkdir(parents=True)
+                if stage_guard is not None:
+                    stage_guard(release, "checkout", "after")
                 journal["active"] = None
                 _event(journal, "checkout_completed", release=release)
                 _store_journal(run_dir, journal)
-                native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run)
+                native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run,
+                                     stage_guard)
                 if native is None: return journal
-                for stage in ("generate", "build", "read", "write"):
+                for stage in ("generate", "build", "test", "read", "write"):
                     if not _run_stage(run_dir, journal, release, stage, owned, target, _native_identity(materialization, source_root, release),
-                                      config["perls"][release], native, config, run): return journal
+                                      config["perls"][release], native, config, run, stage_guard): return journal
                 statuses = journal["releases"][release]["stages"]
                 journal["releases"][release]["state"] = "passed_with_write_gap" if statuses["write"] == "unsupported" else "passed"
                 _event(journal, "release_completed", release=release, state=journal["releases"][release]["state"])
@@ -925,6 +1421,8 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         journal["phase"] = "complete"
         journal["scope"]["write_acceptance"] = "unsupported_for_one_or_more_releases" if any(
             row["stages"]["write"] == "unsupported" for row in journal["releases"].values()) else "passed_per_release"
+        journal["scope"]["release_tests"] = "unsupported_for_one_or_more_releases" if any(
+            row["stages"].get("test") != "passed" for row in journal["releases"].values()) else "passed_per_release"
         journal["scope"]["parity"] = "unproven_without_all_per-release_read_and_write_acceptance" if any(
             row["stages"]["write"] != "passed" for row in journal["releases"].values()) else "per-version-read-write-rehearsed; no-promotion"
         _event(journal, "execution_complete", promotion="forbidden")
@@ -932,12 +1430,25 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         return journal
 
 
-def recover(run_dir: Path, archive_cache: Path, source_root: Path) -> dict[str, Any]:
+def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
+            host_lock_fd: _HeldHostLock | None = None) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
-    journal, _, config = _load_journal(run_dir, archive_cache, source_root)
-    with _HostLock(Path(config["host_lock"])):
-        if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
+    journal, _, config = _load_journal(
+        run_dir, archive_cache, source_root, allow_legacy_recovery=True,
+    )
+    with _external_host_lock(config, host_lock_fd):
+        if journal.get("phase") != "running":
             raise Refused("only a running execution can be recovered as interrupted")
+        if journal.get("active") is None:
+            # Interrupted between stages (after checkout_completed or
+            # stage_passed, before the next stage started): nothing was in
+            # flight and no child was spawned, so only the phase changes.
+            journal["phase"] = "interrupted"
+            _event(journal, "interrupted_between_stages")
+            _store_journal(run_dir, journal)
+            return journal
+        if not isinstance(journal.get("active"), dict):
+            raise Refused("running execution journal has a malformed active stage")
         active = journal["active"]
         child = active.get("child")
         if isinstance(child, dict) and type(child.get("pid")) is int and child["pid"] > 0:

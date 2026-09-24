@@ -50,7 +50,12 @@ class ExecutorTests(unittest.TestCase):
         self.lock = self.root / "shared-host.lock"
         self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
         self.fixture_manifest = self.root / "fixtures.json"
-        self.fixture_manifest.write_text(json.dumps({"fixtures": [str(self.fixture)]}))
+        self.fixture_manifest.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+            "fixtures": [{"path": str(self.fixture),
+                          "sha256": __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest(),
+                          "bytes": self.fixture.stat().st_size}],
+        }))
         self.write_fixture = self.root / "write.jpg"; self.write_fixture.write_bytes(b"\xff\xd8fixture")
         self.write_fixture_manifest = self.root / "write-fixtures.json"
         self.write_fixture_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.write_fixture), "sha256": __import__("hashlib").sha256(self.write_fixture.read_bytes()).hexdigest(), "bytes": self.write_fixture.stat().st_size}]}))
@@ -85,14 +90,17 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(record["pid"], 0)
 
-    def config(self, *, write=True):
+    def config(self, *, write=True, tests=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
+        if tests:
+            commands["test"] = {"argv": ["test"]}
         if write:
             commands["write"] = {"argv": ["write"]}
         result = {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
                 "execution_source_commit": self.plan["repository_commit"],
                 "perls": {release: str(Path(sys.executable).resolve()) for release in self.releases},
-                "native_cases": {release: [{"case": release}] for release in self.releases}}
+                "native_cases": {release: [{"case": release}] for release in self.releases},
+                "read_fixture_manifests": {release: str(self.fixture_manifest) for release in self.releases}}
         if write:
             result["write_fixture_manifests"] = {release: str(self.write_fixture_manifest) for release in self.releases}
         return result
@@ -151,6 +159,26 @@ class ExecutorTests(unittest.TestCase):
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
                         comparison={"kind": "oxidex_vs_native", "native_release": env["OXIDEX_REHEARSAL_RELEASE"],
                                     "matched": 3, "mismatched": 0})
+        if stage == "test":
+            body["test_suite"] = {
+                "commands": [{"argv": ["cargo", "test"], "exit": 0, "duration_seconds": 0.5,
+                              "passed": 3, "failed": 0, "ignored": 1, "measured": 0,
+                              "filtered_out": 0, "targets": 2}],
+                "totals": {"passed": 3, "failed": 0, "ignored": 1, "measured": 0,
+                           "filtered_out": 0, "targets": 2},
+                "log": body["raw_report"], "target_directory": env["CARGO_TARGET_DIR"] + "/test-suite",
+                "exiftool_oracle": {"version": env["OXIDEX_REHEARSAL_RELEASE"], "docx_filetype": "DOCX",
+                                    "perl_modules_available": True,
+                                    "tree_realpath": body["native_identity"]["source"]["path"],
+                                    "lib": {"exiftool_pm_sha256": body["native_identity"]["lib"]["exiftool_pm_sha256"]},
+                                    "perl": body["native_identity"]["perl"]},
+                "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 4249},
+                                   "verified_before_run": True, "verified_after_run": True},
+            }
+        if stage == "read":
+            body["classification_counts"] = {
+                "matched": 3, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
+            }
         if stage == "write":
             body["write_mode"] = {"kind": "selected-release-live-native", "release": env["OXIDEX_REHEARSAL_RELEASE"],
                                   "ledger_sha256": __import__("hashlib").sha256((checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json").read_bytes()).hexdigest(),
@@ -187,6 +215,160 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(journal["releases"][release]["reports"]["write"]["denominator"], 3)
             command_log = self.run_dir / journal["releases"][release]["reports"]["build"]["command"]["path"]
             self.assertEqual(json.loads(command_log.read_text())["stdout"], "ok")
+
+    def test_selected_release_uses_one_verified_plan_side_and_explicit_target(self):
+        selected = self.releases[0]
+        config = self.config()
+        config["execution_releases"] = [selected]
+        config["perls"] = {selected: config["perls"][selected]}
+        config["native_cases"] = {selected: config["native_cases"][selected]}
+        config["read_fixture_manifests"] = {
+            selected: config["read_fixture_manifests"][selected],
+        }
+        config["write_fixture_manifests"] = {
+            selected: config["write_fixture_manifests"][selected],
+        }
+        explicit_target = self.root / "assigned-target" / selected
+        config["target_directories"] = {selected: str(explicit_target)}
+        self.initialize(config)
+        journal = self.execute()
+        self.assertEqual(set(journal["releases"]), {selected})
+        self.assertEqual(self.native_calls, [selected])
+        self.assertEqual({target for _, _, target in self.calls}, {str(explicit_target)})
+        self.assertTrue(explicit_target.is_dir())
+
+    def test_release_tests_run_after_build_and_before_read(self):
+        self.initialize(self.config())
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "complete")
+        self.assertEqual(journal["scope"]["release_tests"], "passed_per_release")
+        per_release = [argv[0] for argv, _, _ in self.calls]
+        self.assertEqual(per_release, ["generate", "build", "test", "read", "write"] * len(self.releases))
+        for release in self.releases:
+            self.assertEqual(journal["releases"][release]["stages"]["test"], "passed")
+            self.assertEqual(journal["releases"][release]["reports"]["test"]["denominator"], 3)
+
+    def test_failed_release_tests_stop_the_release_before_read(self):
+        self.initialize(self.config())
+        original = self.command
+        def failing_tests(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "test":
+                return subprocess.CompletedProcess(argv, 2, "tests failed", "")
+            return result
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                       run=failing_tests, checkout=self.checkout)
+        self.assertEqual(journal["phase"], "failed")
+        release = next(name for name, row in journal["releases"].items() if row["failure"])
+        self.assertEqual(journal["releases"][release]["failure"]["stage"], "test")
+        self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_test_report_with_failures_cannot_pass_even_after_exit_zero(self):
+        self.initialize(self.config())
+        original = self.command
+        def forged(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "test":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text())
+                body["test_suite"]["totals"]["failed"] = 1
+                report.write_text(json.dumps(body))
+            return result
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                       run=forged, checkout=self.checkout)
+        self.assertEqual(journal["phase"], "failed")
+        self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_test_report_graded_by_another_exiftool_cannot_pass(self):
+        for field, value in (("version", "13.55"), ("docx_filetype", "ZIP"), ("perl_modules_available", False),
+                             ("fixture_corpus", None)):
+            with self.subTest(field=field):
+                self.run_dir = self.root / f"foreign-oracle-{field}"
+                self.calls.clear()
+                self.initialize(self.config())
+                original = self.command
+                def foreign(argv, **kwargs):
+                    result = original(argv, **kwargs)
+                    if argv[0] == "test":
+                        report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                        body = json.loads(report.read_text())
+                        if field == "fixture_corpus":
+                            body["test_suite"]["fixture_corpus"]["verified_after_run"] = False
+                        else:
+                            body["test_suite"]["exiftool_oracle"][field] = value
+                        report.write_text(json.dumps(body))
+                    return result
+                with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+                    journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                               run=foreign, checkout=self.checkout)
+                self.assertEqual(journal["phase"], "failed")
+                self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_test_suite_totals_must_be_the_sum_of_counted_commands(self):
+        native = {"release": "13.59", "perl": {"path": "/perl", "sha256": "c" * 64},
+                  "source": {"path": "/exiftool"}, "lib": {"path": "/exiftool/lib", "exiftool_pm_sha256": "d" * 64}}
+        base = {"release": "13.59", "denominator": 1, "raw_report": {"path": "raw", "sha256": "a" * 64},
+                "native_identity": native,
+                "test_suite": {"log": {"path": "raw", "sha256": "a" * 64},
+                               "exiftool_oracle": {"version": "13.59", "docx_filetype": "DOCX",
+                                                   "perl_modules_available": True, "tree_realpath": "/exiftool",
+                                                   "lib": {"exiftool_pm_sha256": "d" * 64},
+                                                   "perl": {"path": "/perl", "sha256": "c" * 64}},
+                               "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 1},
+                                                  "verified_before_run": True, "verified_after_run": True},
+                               "totals": {"passed": 1, "failed": 0, "ignored": 0, "measured": 0,
+                                          "filtered_out": 0, "targets": 1}}}
+        counted = {"exit": 0, "passed": 1, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": 1}
+        good = json.loads(json.dumps(base)); good["test_suite"]["commands"] = [dict(counted)]
+        executor._require_test_suite_proof(good)
+        for label, commands in (("uncounted command", [{"exit": 0}]),
+                                ("totals exceed commands", [dict(counted, passed=0, targets=1)]),
+                                ("string count", [dict(counted, passed="1")]),
+                                ("second command uncounted", [dict(counted), {"exit": 0}])):
+            with self.subTest(label=label):
+                forged = json.loads(json.dumps(base)); forged["test_suite"]["commands"] = commands
+                with self.assertRaisesRegex(executor.Refused, "counted zero-failure"):
+                    executor._require_test_suite_proof(forged)
+
+    def test_test_oracle_must_be_the_validated_native_identity(self):
+        """A custom wrapper cannot self-report an oracle other than the selected native tree."""
+        for label, mutate in (
+                ("foreign tree", lambda oracle, native: oracle.update(tree_realpath="/opt/homebrew/exiftool")),
+                ("foreign library", lambda oracle, native: oracle["lib"].update(exiftool_pm_sha256="0" * 64)),
+                ("foreign perl", lambda oracle, native: oracle.update(perl={"path": "/opt/homebrew/bin/perl",
+                                                                           "sha256": "0" * 64})),
+                ("identity missing", lambda oracle, native: oracle.pop("perl"))):
+            with self.subTest(label=label):
+                self.run_dir = self.root / f"oracle-{label.replace(' ', '-')}"
+                self.calls.clear()
+                self.initialize(self.config())
+                original = self.command
+                def forged(argv, **kwargs):
+                    result = original(argv, **kwargs)
+                    if argv[0] == "test":
+                        report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                        body = json.loads(report.read_text())
+                        mutate(body["test_suite"]["exiftool_oracle"], body["native_identity"])
+                        report.write_text(json.dumps(body))
+                    return result
+                with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+                    journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                               run=forged, checkout=self.checkout)
+                self.assertEqual(journal["phase"], "failed")
+                self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+        # The honest wrapper, whose oracle matches the native identity, still passes.
+        self.run_dir = self.root / "oracle-honest"
+        self.initialize(self.config())
+        self.assertEqual(self.execute()["phase"], "complete")
+
+    def test_absent_test_command_is_visible_as_unsupported(self):
+        self.initialize(self.config(tests=False))
+        journal = self.execute()
+        self.assertEqual(journal["scope"]["release_tests"], "unsupported_for_one_or_more_releases")
+        self.assertTrue(all(row["stages"]["test"] == "unsupported" for row in journal["releases"].values()))
+        self.assertNotIn("test", [argv[0] for argv, _, _ in self.calls])
 
     def test_absent_write_command_is_visible_not_parity(self):
         self.initialize(self.config(write=False))
@@ -278,6 +460,154 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaisesRegex(executor.Refused, "host lock"):
                 executor.execute(other, self.repository, self.cache, self.sources, run=self.command, checkout=self.checkout)
 
+    def test_external_lock_descriptor_must_be_the_held_configured_lease(self):
+        self.initialize(self.config())
+        self.lock.touch()
+        unrelated = self.root / "unrelated.lock"
+        unrelated.touch()
+        with unrelated.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "not held"):
+                executor.execute(
+                    self.run_dir, self.repository, self.cache, self.sources,
+                    run=self.command, checkout=self.checkout, host_lock_fd=stream.fileno(),
+                )
+        with executor._HostLock(self.lock) as held, \
+             patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
+            journal = executor.execute(
+                self.run_dir, self.repository, self.cache, self.sources,
+                run=self.command, checkout=self.checkout, host_lock_fd=capability,
+            )
+        self.assertEqual(journal["phase"], "complete")
+
+    def test_unlocked_external_descriptor_is_refused_without_leaking_a_lock(self):
+        self.initialize(self.config())
+        self.lock.touch()
+        with self.lock.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "not held"):
+                executor.execute(
+                    self.run_dir, self.repository, self.cache, self.sources,
+                    run=self.command, checkout=self.checkout, host_lock_fd=stream.fileno(),
+                )
+            with executor._HostLock(self.lock):
+                pass
+
+    def test_unlocked_stream_cannot_forge_an_external_lock_capability(self):
+        self.lock.touch()
+        with self.lock.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "issued by lock acquisition"):
+                executor._HeldHostLock(self.lock, stream)
+            # Rejection must not accidentally acquire or strand the host lock.
+            with executor._HostLock(self.lock):
+                pass
+
+    def test_external_capability_refuses_after_owning_lock_releases(self):
+        self.lock.touch()
+        with executor._HostLock(self.lock) as held:
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
+        with self.assertRaisesRegex(executor.Refused, "not held"):
+            with executor._external_host_lock({"host_lock": str(self.lock)}, capability):
+                pass
+
+    def test_external_capability_refuses_different_configured_path(self):
+        self.lock.touch()
+        other = self.root / "other-host.lock"
+        other.touch()
+        with executor._HostLock(self.lock) as held:
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
+            with self.assertRaisesRegex(executor.Refused, "differs from configured lease"):
+                with executor._external_host_lock({"host_lock": str(other)}, capability):
+                    pass
+
+    def test_exited_child_group_residue_gets_a_bounded_grace_then_fails_closed(self):
+        """macOS reports EPERM for killpg on a group left only with unreaped zombies."""
+        class Exited:
+            pid = 424242
+            def poll(self):
+                return 0
+        for label, residue_polls, expected in (("clears within grace", 3, []), ("never clears", None, 1)):
+            with self.subTest(label=label):
+                owned = executor._OwnedChildren()
+                owned.children[Exited.pid] = Exited()
+                calls = []
+                def killpg(pgid, _signal):
+                    calls.append(pgid)
+                    if residue_polls is None or len(calls) <= residue_polls:
+                        raise PermissionError(1, "Operation not permitted")
+                    raise ProcessLookupError()
+                self.lock.touch()
+                with patch.object(executor, "_OWNED", owned), \
+                     patch.object(executor.os, "killpg", side_effect=killpg), \
+                     patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.3):
+                    stream = self.lock.open("r+")
+                    capability = executor._HeldHostLock.acquire(self.lock, stream)
+                    began = __import__("time").monotonic()
+                    survivors = executor.release_or_retain(stream, capability)
+                    elapsed = __import__("time").monotonic() - began
+                self.assertLess(elapsed, 2)
+                if expected == []:
+                    self.assertEqual(survivors, [])
+                    stream.close()
+                else:
+                    self.assertEqual(len(survivors), expected)
+                    self.assertIn("cannot be inspected", survivors[0]["state"])
+                    self.assertGreaterEqual(elapsed, 0.3)
+                    with patch.object(executor, "_OWNED", executor._OwnedChildren()):
+                        self.assertEqual(executor.release_retained_locks(), [])
+
+    def test_standalone_host_lock_is_retained_while_owned_child_is_live(self):
+        """No explicit unlock may release the OFD a live child inherited."""
+        contender = ("import fcntl, sys\nwith open(sys.argv[1], 'r+') as s:\n"
+                     "    try: fcntl.flock(s.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                     "    except BlockingIOError: print('blocked')\n    else: print('acquired')\n")
+        def contend():
+            return subprocess.run([sys.executable, "-c", contender, str(self.lock)], capture_output=True,
+                                  text=True, timeout=20, check=True).stdout.strip()
+        self.lock.touch()
+        child = None
+        with patch.object(executor, "_OWNED", executor._OwnedChildren()):
+            try:
+                with self.assertRaisesRegex(executor.LockRetained, "intentionally still held") as raised:
+                    with executor._HostLock(self.lock):
+                        child = executor._spawn([sys.executable, "-c", "import time; time.sleep(60)"],
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                start_new_session=True, close_fds=False)
+                self.assertIn(f"PID {child.pid}", str(raised.exception))
+                self.assertEqual(contend(), "blocked")
+            finally:
+                if child is not None:
+                    child.kill()
+                    child.wait(10)
+            self.assertEqual(executor.release_retained_locks(), [])
+        self.assertEqual(contend(), "acquired")
+
+    def test_between_stage_interruption_is_recoverable(self):
+        """Interrupted after stage_passed/checkout_completed: running with nothing active."""
+        for boundary in ("checkout_completed", "stage_passed"):
+            with self.subTest(boundary=boundary):
+                self.run_dir = self.root / f"between-{boundary}"
+                self.initialize(self.config())
+                status = self.run_dir / "execution-status.json"
+                journal = json.loads(status.read_text())
+                release = self.releases[0]
+                journal["phase"], journal["active"] = "running", None
+                if boundary == "stage_passed":
+                    journal["releases"][release]["stages"]["native"] = "passed"
+                journal["events"].append({"event": boundary, "release": release})
+                status.write_text(json.dumps(journal))
+                before = json.loads(status.read_text())["releases"]
+                recovered = executor.recover(self.run_dir, self.cache, self.sources)
+                self.assertEqual(recovered["phase"], "interrupted")
+                self.assertIsNone(recovered["active"])
+                self.assertEqual(recovered["releases"], before)  # no stage was in flight
+                self.assertEqual(recovered["events"][-1]["event"], "interrupted_between_stages")
+                with self.assertRaisesRegex(executor.Refused, "terminal"):
+                    executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                     run=self.command, checkout=self.checkout)
+
     def test_live_child_cannot_be_recovered_as_interrupted(self):
         self.initialize(self.config())
         status = self.run_dir / "execution-status.json"
@@ -286,8 +616,48 @@ class ExecutorTests(unittest.TestCase):
         journal["active"] = {"release": self.releases[0], "stage": "generate", "child": {"pid": os.getpid(), "pgid": os.getpid()}}
         journal["releases"][self.releases[0]]["stages"]["generate"] = "running"
         status.write_text(json.dumps(journal))
-        with self.assertRaisesRegex(executor.Refused, "still live"):
-            executor.recover(self.run_dir, self.cache, self.sources)
+        self.lock.touch()
+        with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
+            executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.capability)
+
+    def test_recovery_accepts_legacy_schema_one_config_without_read_bindings(self):
+        self.initialize(self.config())
+        config_path = self.run_dir / "inputs/config.json"
+        config = json.loads(config_path.read_text())
+        config.pop("read_fixture_manifests")
+        config.pop("read_fixture_bindings")
+        config_path.write_text(json.dumps(config))
+        journal_path = self.run_dir / "execution-status.json"
+        journal = json.loads(journal_path.read_text())
+        release = self.releases[0]
+        journal["config_sha256"] = executor._sha_json(config)
+        journal["phase"] = "running"
+        journal["active"] = {"release": release, "stage": "generate"}
+        journal["releases"][release]["stages"]["generate"] = "running"
+        journal_path.write_text(json.dumps(journal))
+        with self.assertRaisesRegex(executor.Refused, "read command requires"):
+            executor._load_journal(self.run_dir, self.cache, self.sources)
+        recovered = executor.recover(self.run_dir, self.cache, self.sources)
+        self.assertEqual(recovered["phase"], "interrupted")
+        self.assertEqual(recovered["releases"][release]["stages"]["generate"], "interrupted")
+
+    def test_stage_guard_failure_after_generate_stops_later_stages(self):
+        self.initialize(self.config())
+        boundaries = []
+        def guard(release, stage, boundary):
+            boundaries.append((release, stage, boundary))
+            if stage == "generate" and boundary == "after":
+                raise executor.Refused("lease receipt guard failed")
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(
+                self.run_dir, self.repository, self.cache, self.sources,
+                run=self.command, checkout=self.checkout, stage_guard=guard,
+            )
+        self.assertEqual(journal["phase"], "failed")
+        self.assertEqual([argv[0] for argv, _, _ in self.calls], ["generate"])
+        self.assertIn((self.releases[0], "native", "before"), boundaries)
+        self.assertIn((self.releases[0], "generate", "after"), boundaries)
+        self.assertNotIn((self.releases[0], "build", "before"), boundaries)
 
     def test_main_returns_nonzero_for_failed_execution(self):
         failed = {"phase": "failed", "promotion": "forbidden", "scope": {"parity": "unproven"}}
@@ -373,6 +743,37 @@ class ExecutorTests(unittest.TestCase):
             self.execute()
         self.assertEqual(journal["phase"], "planned")
 
+    def test_read_fixture_manifest_and_scope_are_bound_at_init_and_rechecked(self):
+        journal = self.initialize(self.config())
+        binding = json.loads((self.run_dir / "inputs" / "config.json").read_text())["read_fixture_bindings"]
+        self.assertEqual(
+            binding[self.releases[0]]["sha256"],
+            __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(),
+        )
+        self.fixture.write_bytes(b"changed")
+        with self.assertRaisesRegex(executor.Refused, "read fixture"):
+            self.execute()
+        self.assertEqual(journal["phase"], "planned")
+        self.assertEqual(self.checkouts, [])
+        self.assertEqual(self.calls, [])
+
+    def test_read_report_must_cover_exact_bound_fixture_scope(self):
+        second = self.root / "second.jpg"
+        second.write_bytes(b"second fixture")
+        manifest = json.loads(self.fixture_manifest.read_text())
+        manifest["fixtures"].append({
+            "path": str(second),
+            "sha256": __import__("hashlib").sha256(second.read_bytes()).hexdigest(),
+            "bytes": second.stat().st_size,
+        })
+        self.fixture_manifest.write_text(json.dumps(manifest))
+        self.initialize(self.config())
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "read")
+        self.assertIn("exact immutable selected fixture scope", failure["detail"])
+
     def test_write_stage_refuses_replaced_writer_binary_or_read_fixture_substitution(self):
         self.initialize(self.config())
         original = self.command
@@ -426,6 +827,138 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(failure["stage"], "write")
         self.assertIn("differs from generated source operands", failure["detail"])
 
+
+
+ZOMBIE_GROUP_HELPER = r"""
+import os, sys, time
+b = os.fork()
+if b == 0:
+    os.setpgid(0, 0)                       # B leads a new group in A's session
+    z = os.fork()
+    if z == 0:
+        os._exit(0)                        # Z exits; B never reaps it
+    time.sleep(0.2)
+    os.setpgid(0, os.getpgid(os.getppid()))  # B rejoins A's group: group B is zombie Z only
+    sys.stdout.write(f"{os.getpid()} {z}\n"); sys.stdout.flush()
+    time.sleep(30)
+    os._exit(0)
+time.sleep(30)
+"""
+
+
+class _Reaped:
+    """A registered child already reaped by its Popen (poll() is final)."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def poll(self):
+        return 0
+
+
+class ZombieGroupTests(unittest.TestCase):
+    """A zombie holds no descriptors, so a zombie-only group cannot hold the flock."""
+
+    @unittest.skipUnless(sys.platform == "darwin", "the zombie-only relaxation is macOS-only")
+    def test_zombie_only_group_is_gone_but_a_live_member_is_not(self):
+        helper = subprocess.Popen([sys.executable, "-c", ZOMBIE_GROUP_HELPER], stdout=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        def cleanup():
+            # Only this test's own helper group; EPERM means only zombies remain.
+            try:
+                os.killpg(helper.pid, __import__("signal").SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            helper.wait(10)
+            helper.stdout.close()
+        self.addCleanup(cleanup)
+        leader_b, zombie = map(int, helper.stdout.readline().split())
+        self.assertIsNone(executor._unproven_state(_Reaped(leader_b)),
+                          "a group holding only zombie members cannot hold the lock")
+        self.assertEqual(executor._group_member_states(leader_b), [(zombie, "zombie")])
+        # Group A still holds live A and B: never proven gone.
+        members = dict(executor._group_member_states(helper.pid))
+        self.assertEqual(members, {helper.pid: "live", leader_b: "live"})
+        self.assertIn("live members", executor._unproven_state(_Reaped(helper.pid)))
+        with TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "zombie.lock"; lock.touch()
+            owned = executor._OwnedChildren(); owned.children[leader_b] = _Reaped(leader_b)
+            with patch.object(executor, "_OWNED", owned):
+                stream = lock.open("r+")
+                capability = executor._HeldHostLock.acquire(lock, stream)
+                began = __import__("time").monotonic()
+                self.assertEqual(executor.release_or_retain(stream, capability), [])
+                self.assertLess(__import__("time").monotonic() - began, 1)
+                stream.close()
+
+    def test_group_classifier_is_fail_closed(self):
+        for members, gone in ((None, False), ([], False), ([(1, "zombie"), (2, "live")], False),
+                              ([(1, "zombie"), (2, "zombie")], True)):
+            with self.subTest(members=members), \
+                 patch.object(executor, "_group_member_states", return_value=members):
+                self.assertIs(executor._zombie_only_group(7), gone)
+        with patch.object(executor.sys, "platform", "freebsd14"):
+            self.assertIsNone(executor._group_member_states(7))
+
+    def test_non_darwin_platforms_are_always_unproven(self):
+        """/proc shows only a main thread's state and is not a snapshot: never trust it."""
+        self.assertFalse(hasattr(executor, "_linux_group_members"), "no re-enableable /proc scan")
+        for platform in ("linux", "linux2", "freebsd14", "win32", "cygwin"):
+            with self.subTest(platform=platform), patch.object(executor.sys, "platform", platform), \
+                 patch.object(executor.os, "killpg", return_value=None):
+                self.assertIsNone(executor._group_member_states(7))
+                self.assertFalse(executor._zombie_only_group(7))
+                self.assertIn("live members", executor._unproven_state(_Reaped(7)))
+            with self.subTest(platform=platform, killpg="EPERM"), \
+                 patch.object(executor.sys, "platform", platform), \
+                 patch.object(executor.os, "killpg", side_effect=PermissionError(1, "Operation not permitted")):
+                self.assertIn("cannot be inspected", executor._unproven_state(_Reaped(7)))
+
+    def test_darwin_rescan_must_confirm_the_same_zombie_members(self):
+        zombie = [(10, "zombie")]
+        for label, rescan, gone in (("membership grew", [(10, "zombie"), (11, "zombie")], False),
+                                    ("member revived state", [(10, "live")], False),
+                                    ("rescan failed", None, False),
+                                    ("member replaced", [(12, "zombie")], False),
+                                    ("identical", [(10, "zombie")], True)):
+            with self.subTest(label=label), patch.object(executor.sys, "platform", "darwin"), \
+                 patch.object(executor, "_group_member_states", side_effect=[zombie, rescan]) as states:
+                self.assertIs(executor._zombie_only_group(10), gone)
+                self.assertEqual(states.call_count, 2)
+        with patch.object(executor.sys, "platform", "darwin"), \
+             patch.object(executor, "_group_member_states", side_effect=[[(10, "live")]]) as states:
+            self.assertFalse(executor._zombie_only_group(10))
+            self.assertEqual(states.call_count, 1)  # no re-scan once a live member is seen
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS libproc/sysctl prototypes")
+    def test_darwin_ctypes_prototypes_are_declared(self):
+        import ctypes
+        libc, libproc = executor._darwin_libraries()
+        self.assertEqual(libc.sysctl.argtypes, [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t])
+        self.assertIs(libc.sysctl.restype, ctypes.c_int)
+        self.assertEqual(libproc.proc_listpids.argtypes,
+                         [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int])
+        self.assertIs(libproc.proc_listpids.restype, ctypes.c_int)
+
+    def test_darwin_views_must_agree_and_layout_must_check(self):
+        me = os.getpid()
+        def kinfo(listing, group):
+            def view(mib):
+                return [(me, 2)] if mib[2] == 1 else group
+            return view
+        cases = (([10, 11], [(10, 5)], None),           # the two kernel views disagree
+                 ([10], [(10, 5)], [(10, "zombie")]),
+                 ([10], [(10, 2)], [(10, "live")]),
+                 ([10], None, None))                      # sysctl failed
+        for listing, group, expected in cases:
+            with self.subTest(listing=listing, group=group), \
+                 patch.object(executor, "_darwin_pgrp_listpids", return_value=listing), \
+                 patch.object(executor, "_darwin_kinfo", side_effect=kinfo(listing, group)):
+                self.assertEqual(executor._darwin_group_members(10), expected)
+        with patch.object(executor, "_darwin_pgrp_listpids", return_value=[10]), \
+             patch.object(executor, "_darwin_kinfo", side_effect=lambda mib: [(me + 1, 2)] if mib[2] == 1 else [(10, 5)]):
+            self.assertIsNone(executor._darwin_group_members(10))  # layout self-check failed
 
 if __name__ == "__main__":
     unittest.main()
