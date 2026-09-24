@@ -1,0 +1,191 @@
+{
+  "schema": "oxidex-generated-runtime-walker-inventory/v1",
+  "task": 17,
+  "exiftool_release": "13.59",
+  "inventory_base": "a6e6c3abc2f97053023b01f3104a18cc2458b245",
+  "shared_entry_point": {
+    "path": "src/exiftool_tables/pipeline.rs",
+    "symbol": "pipeline::execute",
+    "exiftool_source": "ExifTool.pm:9448 FoundTag (RawConv, ExifTool.pm:9484-9505) + ExifTool.pm:3477-3664 GetValue (ValueConv, PrintConv) + exiftool:3987 Binary placeholder",
+    "owns": [
+      "condition-resolved omission clearing",
+      "RawConv SetMember state write (ctx members, plus the file Session when the adapter supplies one)",
+      "unmodeled-RawConv refusal",
+      "Omitted withholding",
+      "Binary placeholder",
+      "ValueConv",
+      "PrintConv (shared PrintConv or an adapter-local renderer)",
+      "unconverted value form",
+      "family-1 group withholding",
+      "Emitted construction (identity, groups, priority, rational)"
+    ],
+    "does_not_own": [
+      "byte acquisition (ReadValue, Mask, cursor, IFD entry location, CIFF/word/serial layout)",
+      "GetTagInfo selection and Condition evaluation",
+      "SubDirectory descent",
+      "Unknown suppression (request-dependent per walker)",
+      "the attribution::Token guard, which stays at each engine's emit site (tools/exiftool-tables/genshare/attribute.py scans only the engine files)",
+      "walker bookkeeping (RootReads, KeyedWalkResult, SerialWalkResult, BinaryWalkOutcome)"
+    ]
+  },
+  "walkers": [
+    {
+      "id": "binary",
+      "engine_file": "src/exiftool_tables/engine.rs",
+      "exiftool_callback": "ExifTool.pm:9877 ProcessBinaryData",
+      "acquisition": "binary bytes: Cursor offset arithmetic, ReadValue with count shortening, Mask/BitShift, varSize",
+      "identity": "BinaryIndex { index, sub } (TagId::Numeric(index) or Named(\"index.sub\"))",
+      "entry_points": ["process_binary_data", "process_binary_data_checked", "walk"],
+      "current_conversion_path": "engine.rs::walk_with_policy lines 713-781 at the inventory base",
+      "target_conversion_path": "pipeline::execute",
+      "attribution_token": "Engine",
+      "enabled_tables": "ENABLED (src/exiftool_tables/enabled.rs): 13 tables; direct carrier callers may also pass a found table",
+      "production_callers": [
+        "src/parsers/icc/mod.rs",
+        "src/parsers/video/h264.rs",
+        "src/parsers/tiff/makernotes/panasonic.rs",
+        "src/parsers/tiff/makernotes/hp.rs",
+        "src/parsers/tiff/makernotes/kodak.rs",
+        "src/parsers/tiff/makernotes/canon/generated_subtables.rs",
+        "src/exiftool_tables/ifd_engine.rs (SubDirectory to a ProcessBinaryData table)",
+        "src/exiftool_tables/keyed_engine.rs (bounded value child, process_binary_data_checked)"
+      ],
+      "real_carrier_fixture": "t/images/ICC_Profile.icc (ICC-header:*)",
+      "detected_versus_parsed": "parsed",
+      "adapter_policy": {
+        "member_value": "engine::member_value (closed scalar domain; floats, rationals and arrays refused)",
+        "unrepresentable_member": "taint (stop the table)",
+        "set_member_clears_raw_conv_omission": true,
+        "unmodeled_raw_conv": "taint (already refused before ReadValue, so unreachable at the stage)",
+        "binary_placeholder": "never (a ProcessBinaryData Field carries no Binary flag)",
+        "unconverted_scalar_form": "runtime::to_exiftool_value (a fixed-count field is one space-joined string)",
+        "list_form": "not applicable (Field carries no List flag)",
+        "print_conv": "shared PrintConv",
+        "group1": "field Groups{1}, else table effective group 1",
+        "priority": "table PRIORITY only; Avoid never set",
+        "rational": "never"
+      },
+      "adapter_local": [
+        "Hook/varSize and unresolved SubDirectory refusal before ReadValue",
+        "offsets_sound_until bound",
+        "SubDirectory descend with the shared PROCESSED guard"
+      ]
+    },
+    {
+      "id": "ifd",
+      "engine_file": "src/exiftool_tables/ifd_engine.rs",
+      "exiftool_callback": "Exif.pm:6278 ProcessExif",
+      "acquisition": "IFD numeric entries: read_ifd, locate, read_plan/decode_plan/stored_plan, RoundFloat on rationals",
+      "identity": "IfdNumeric(tag id) (TagId::Numeric)",
+      "entry_points": ["process_exif", "process_exif_with_observer", "process_exif_decoded", "process_exif_decoded_outcome"],
+      "current_conversion_path": "ifd_engine.rs::process_residual_entry lines 1273-1382 at the inventory base",
+      "target_conversion_path": "pipeline::execute (residual only; generated Exif::Main arms stay in generated_arm/generated_row)",
+      "attribution_token": "Engine",
+      "enabled_tables": "ENABLED_IFD (src/exiftool_tables/enabled_ifd.rs): 11 tables",
+      "production_callers": [
+        "src/core/exif_dir_engine.rs (JPEG/TIFF Exif::Main IFDs, process_exif_decoded_outcome)",
+        "src/parsers/tiff/makernotes/canon/main_engine.rs (Canon::Main, process_exif)",
+        "src/parsers/tiff/makernotes/fujifilm/main_engine.rs (FujiFilm::Main, process_exif)",
+        "src/parsers/tiff/makernotes/olympus.rs (Olympus tables, process_exif_with_observer)"
+      ],
+      "real_carrier_fixture": "t/images/Olympus.jpg (Olympus:CameraType), t/images/ExifTool.jpg (IFD0:Make)",
+      "detected_versus_parsed": "parsed",
+      "adapter_policy": {
+        "member_value": "ifd_engine::member_value (64-bit rational digits and joined arrays representable; non-UTF-8 undef refused)",
+        "member_write": "ctx members and the file Session (both, exactly once)",
+        "unrepresentable_member": "decline (skip this entry; later entries still walk; RootReads unchanged)",
+        "set_member_clears_raw_conv_omission": false,
+        "unmodeled_raw_conv": "withhold (falls into the Omitted stage)",
+        "binary_placeholder": "Binary flag and no ValueConv, ifd_engine::perl_length",
+        "unconverted_scalar_form": "ifd_engine::ifd_exiftool_value (rational64 Perl digits joined)",
+        "list_form": "runtime::to_tag_value",
+        "print_conv": "shared PrintConv",
+        "group1": "SET_GROUP1 directory name (withheld when absent), else tag Groups{1}, else table group 1",
+        "priority": "tag Priority, else table PRIORITY, else Avoid -> 0",
+        "rational": "the single rational read, when the value is that number unconverted"
+      },
+      "adapter_local": [
+        "RoundFloat on every rational before the stage (round_rationals)",
+        "generated Session arms (generated_arm, resolve_generated_attempt, generated_row) with staged effects",
+        "Unknown suppression and unresolved Condition before SubDirectory",
+        "SubDirectory, serial child and binary child descent",
+        "RootReads bookkeeping (EntryRead::Unread after a generated decline withheld by an omission)"
+      ]
+    },
+    {
+      "id": "keyed",
+      "engine_file": "src/exiftool_tables/keyed_engine.rs",
+      "exiftool_callback": "CanonRaw.pm:616 ProcessCanonRaw; CanonCustom.pm:2772 ProcessCanonCustom (length-prefixed word directory)",
+      "acquisition": "keyed-name directories: CIFF ten-byte entries and source-authenticated u16 word pairs",
+      "identity": "KeyedRawId(raw id) (TagId::Numeric)",
+      "entry_points": ["process_keyed_directory"],
+      "current_conversion_path": "keyed_engine.rs::emit_resolved_scalar lines 754-852 at the inventory base",
+      "target_conversion_path": "pipeline::execute",
+      "attribution_token": "Keyed",
+      "enabled_tables": "none: Gate B is supplied only by a caller's KeyedEmissionSink",
+      "production_callers": [],
+      "real_carrier_fixture": "none in production; tests/generated_runtime_walker_contract.rs drives a hand CIFF block through the public entry point",
+      "detected_versus_parsed": "detected-not-parsed: CanonRaw.crw is read by the hand CanonRaw parser, not this walker. Adding a production caller is outside the Task 17 lease and would fail the Task 8 attribution instrument (genshare attribute.py keyed route ledger).",
+      "adapter_policy": {
+        "member_value": "engine::member_value",
+        "unrepresentable_member": "taint (stop the directory and every pending parent frame)",
+        "set_member_clears_raw_conv_omission": true,
+        "unmodeled_raw_conv": "taint",
+        "binary_placeholder": "Binary flag and no ValueConv, pipeline::scalar_perl_length",
+        "unconverted_scalar_form": "runtime::to_exiftool_value",
+        "list_form": "runtime::to_tag_value",
+        "print_conv": "shared PrintConv",
+        "group1": "carrier scope override (CIFF SET_GROUP1), else tag Groups{1}, else table group 1",
+        "priority": "tag Priority (table PRIORITY/AVOID pre-folded by the compiler), else Avoid -> 0",
+        "rational": "never"
+      },
+      "adapter_local": [
+        "CIFF and word-directory acquisition",
+        "Unknown suppression and refused Condition/Hook before edges",
+        "same-table and bounded value child descent",
+        "KeyedWalkResult counters"
+      ]
+    },
+    {
+      "id": "serial",
+      "engine_file": "src/exiftool_tables/serial_engine.rs",
+      "exiftool_callback": "Canon.pm:10518 ProcessSerialData",
+      "acquisition": "serial index: cursor-ordered fields with prior-raw count expressions",
+      "identity": "SerialIndex(index) (TagId::Numeric, or Named when the index exceeds u16)",
+      "entry_points": ["process_serial_directory"],
+      "current_conversion_path": "serial_engine.rs::emit_selected lines 317-403 at the inventory base",
+      "target_conversion_path": "pipeline::execute",
+      "attribution_token": "Serial",
+      "enabled_tables": "ENABLED_SERIAL (src/exiftool_tables/enabled_serial.rs): Canon::AFInfo2 through the IFD bridge; Real::AudioV4 opted in by its carrier",
+      "production_callers": [
+        "src/parsers/audio/real_audio.rs (Real::AudioV4)",
+        "src/exiftool_tables/ifd_engine.rs (IfdSerialSink, Canon::AFInfo2)"
+      ],
+      "real_carrier_fixture": "t/images/Real.ra (Real-RA4:Title)",
+      "detected_versus_parsed": "parsed",
+      "adapter_policy": {
+        "member_value": "engine::member_value",
+        "unrepresentable_member": "taint (result.tainted, stop the directory)",
+        "set_member_clears_raw_conv_omission": true,
+        "unmodeled_raw_conv": "taint",
+        "binary_placeholder": "Binary flag and no ValueConv, pipeline::scalar_perl_length (the pre-task order ValueConv-then-placeholder is equivalent: an absent ValueConv never declines)",
+        "unconverted_scalar_form": "runtime::to_exiftool_value",
+        "list_form": "runtime::to_tag_value",
+        "print_conv": "shared PrintConv, or the serial-only DecodeBitsWords renderer supplied by the adapter",
+        "group1": "tag Groups{1}, else table group 1",
+        "priority": "tag Priority, else Avoid -> 0",
+        "rational": "never"
+      },
+      "adapter_local": [
+        "DecodeBitsWords renderer",
+        "prior-raw count expressions and cursor",
+        "Hook/SubDirectory/zero-count/Unknown handling before FoundTag",
+        "SerialWalkResult counters"
+      ]
+    }
+  ],
+  "encrypted_walker": {
+    "status": "none",
+    "reason": "No decrypted buffer reaches one of the four generated walkers at the inventory base. Nikon (src/parsers/tiff/makernotes/nikon/encrypted.rs) and Sony (src/parsers/tiff/makernotes/sony/enciphered.rs) decrypt into hand-written readers. A fixture for this case would have to invent a carrier, so the contract test pins the absence instead."
+  }
+}
