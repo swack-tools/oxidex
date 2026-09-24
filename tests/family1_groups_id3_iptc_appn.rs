@@ -41,7 +41,8 @@ fn run(args: &[&str]) -> String {
     stdout
 }
 
-/// `[Group] Tag: value` lines, whitespace-normalized.
+/// `[Group] Tag : value` lines, whitespace-normalized (`-s` pads the group to
+/// 15 columns and the tag name to 32, exactly as the oracle does).
 fn lines(output: &str) -> Vec<String> {
     output
         .lines()
@@ -63,20 +64,20 @@ fn id3v2_frames_report_the_version_table_group() {
         return;
     };
     // The ID3v2.2 frame wins the bare request; the v1 copy is priority 0.
-    assert_eq!(g1, vec!["[ID3v2_2] Title: ExifTool Test"]);
+    assert_eq!(g1, vec!["[ID3v2_2] Title : ExifTool Test"]);
     let g0 = case("MP3.mp3", &["-G0", "-s", "-Title"]).unwrap();
-    assert_eq!(g0, vec!["[ID3] Title: ExifTool Test"]);
+    assert_eq!(g0, vec!["[ID3] Title : ExifTool Test"]);
     // Both the new family-1 name and the family-0 name select it.
     let by_g1 = case("MP3.mp3", &["-G1", "-s", "-ID3v2_2:Title"]).unwrap();
-    assert_eq!(by_g1, vec!["[ID3v2_2] Title: ExifTool Test"]);
+    assert_eq!(by_g1, vec!["[ID3v2_2] Title : ExifTool Test"]);
     let by_g0 = case("MP3.mp3", &["-a", "-G1", "-s", "-ID3:Title"]).unwrap();
     assert_eq!(
         by_g0,
-        vec!["[ID3v2_2] Title: ExifTool Test", "[ID3v1] Title: Title"]
+        vec!["[ID3v2_2] Title : ExifTool Test", "[ID3v1] Title : Title"]
     );
 
     let aiff = case("AIFF.aif", &["-G1", "-s", "-Album"]).unwrap();
-    assert_eq!(aiff, vec!["[ID3v2_2] Album: the album"]);
+    assert_eq!(aiff, vec!["[ID3v2_2] Album : the album"]);
 }
 
 #[test]
@@ -84,12 +85,12 @@ fn trailer_iptc_reports_numbered_groups() {
     let Some(afcp) = case("AFCP.jpg", &["-G1", "-s", "-Headline"]) else {
         return;
     };
-    assert_eq!(afcp, vec!["[IPTC2] Headline: headline"]);
+    assert_eq!(afcp, vec!["[IPTC2] Headline : headline"]);
     let afcp_g0 = case("AFCP.jpg", &["-G0", "-s", "-Headline"]).unwrap();
-    assert_eq!(afcp_g0, vec!["[IPTC] Headline: headline"]);
+    assert_eq!(afcp_g0, vec!["[IPTC] Headline : headline"]);
 
     let foto = case("FotoStation.jpg", &["-G1", "-s", "-Category"]).unwrap();
-    assert_eq!(foto, vec!["[IPTC2] Category: Cat"]);
+    assert_eq!(foto, vec!["[IPTC2] Category : Cat"]);
 
     // Standard APP13 IPTC, then FotoStation (outermost trailer) IPTC2, then
     // AFCP IPTC3. oxidex lists the trailers first (its own insertion order),
@@ -103,16 +104,16 @@ fn trailer_iptc_reports_numbered_groups() {
     assert_eq!(
         all,
         vec![
-            "[IPTC2] ApplicationRecordVersion: 2",
-            "[IPTC3] ApplicationRecordVersion: 2",
-            "[IPTC] ApplicationRecordVersion: 2",
+            "[IPTC2] ApplicationRecordVersion : 2",
+            "[IPTC3] ApplicationRecordVersion : 2",
+            "[IPTC] ApplicationRecordVersion : 2",
         ]
     );
     // The standard directory keeps the default winner.
     let winner = case("ExifTool.jpg", &["-G1", "-s", "-Headline"]).unwrap();
-    assert_eq!(winner, vec!["[IPTC] Headline: No headline"]);
+    assert_eq!(winner, vec!["[IPTC] Headline : No headline"]);
     let iptc3 = case("ExifTool.jpg", &["-G1", "-s", "-IPTC3:Headline"]).unwrap();
-    assert_eq!(iptc3, vec!["[IPTC3] Headline: headline"]);
+    assert_eq!(iptc3, vec!["[IPTC3] Headline : headline"]);
 }
 
 #[test]
@@ -120,9 +121,9 @@ fn adobe_app14_reports_the_adobe_group() {
     let Some(g1) = case("ExifTool.jpg", &["-G1", "-s", "-ColorTransform"]) else {
         return;
     };
-    assert_eq!(g1, vec!["[Adobe] ColorTransform: YCbCr"]);
+    assert_eq!(g1, vec!["[Adobe] ColorTransform : YCbCr"]);
     let g0 = case("ExifTool.jpg", &["-G0", "-s", "-APP14:ColorTransform"]).unwrap();
-    assert_eq!(g0, vec!["[APP14] ColorTransform: YCbCr"]);
+    assert_eq!(g0, vec!["[APP14] ColorTransform : YCbCr"]);
 }
 
 #[test]
@@ -130,9 +131,9 @@ fn infiray_records_report_the_infiray_group() {
     let Some(version) = case("InfiRay.jpg", &["-G1", "-s", "-IJPEGVersion"]) else {
         return;
     };
-    assert_eq!(version, vec!["[InfiRay] IJPEGVersion: 0 2 0 1"]);
+    assert_eq!(version, vec!["[InfiRay] IJPEGVersion : 0 2 0 1"]);
     let version_g0 = case("InfiRay.jpg", &["-G0", "-s", "-IJPEGVersion"]).unwrap();
-    assert_eq!(version_g0, vec!["[APP2] IJPEGVersion: 0 2 0 1"]);
+    assert_eq!(version_g0, vec!["[APP2] IJPEGVersion : 0 2 0 1"]);
     // APP3 (JPEG.pm's ImagingData), APP6 MixMode, APP8 Isothermal and APP9
     // Sensor each reach the output through a different merge.
     let rest = case(
@@ -150,10 +151,10 @@ fn infiray_records_report_the_infiray_group() {
     assert_eq!(
         rest,
         vec![
-            "[InfiRay] ImagingData: (Binary data 20 bytes, use -b option to extract)",
-            "[InfiRay] MixMode: 0",
-            "[InfiRay] IsothermalMax: 80",
-            "[InfiRay] IRSensorName: P2_USB_IR",
+            "[InfiRay] ImagingData : (Binary data 20 bytes, use -b option to extract)",
+            "[InfiRay] MixMode : 0",
+            "[InfiRay] IsothermalMax : 80",
+            "[InfiRay] IRSensorName : P2_USB_IR",
         ]
     );
 }
@@ -163,9 +164,9 @@ fn gopro_app6_reports_the_gopro_group() {
     let Some(g1) = case("GoPro.jpg", &["-G1", "-s", "-Model"]) else {
         return;
     };
-    assert_eq!(g1, vec!["[GoPro] Model: HERO6 Black"]);
+    assert_eq!(g1, vec!["[GoPro] Model : HERO6 Black"]);
     let g0 = case("GoPro.jpg", &["-G0", "-s", "-GoPro:Model"]).unwrap();
-    assert_eq!(g0, vec!["[APP6] Model: HERO6 Black"]);
+    assert_eq!(g0, vec!["[APP6] Model : HERO6 Black"]);
 }
 
 /// A JPEG with an IFD0 IPTC-NAA block and an AFCP trailer. Pinned ExifTool
@@ -185,12 +186,19 @@ fn trailer_iptc_is_not_numbered_ahead_of_an_ifd0_iptc_block() {
     );
     let out = run(&["-a", "-G1", "-s", "-ObjectName", path]);
     assert!(!out.contains("[IPTC2]"), "trailer took IPTC2:\n{out}");
+    // `-s` pads the tag name to 32 columns, as the oracle does; compare the
+    // whitespace-normalized lines.
+    let normalized = lines(&out);
     assert!(
-        out.contains("ObjectName: object name"),
+        normalized
+            .iter()
+            .any(|l| l.ends_with("ObjectName : object name")),
         "trailer value missing:\n{out}"
     );
     assert!(
-        out.contains("ObjectName: ifd0obj"),
+        normalized
+            .iter()
+            .any(|l| l.ends_with("ObjectName : ifd0obj")),
         "IFD0 value missing:\n{out}"
     );
 }

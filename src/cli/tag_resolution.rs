@@ -138,12 +138,31 @@ fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
 /// bracket/colon label ExifTool itself prints (`[MakerNotes:CIFF]`,
 /// `[File:System]`), confirmed against the pinned oracle for both the
 /// single-family and multi-family cases.
+///
+/// A multi-family request is *simplified* the way `GetGroup` does it
+/// (`ExifTool.pm` 13.59, the `$simplify` branch at the end of `GetGroup`):
+/// an empty family name is dropped, a name identical to the one before it is
+/// dropped, and a leading `Main` is dropped when anything follows it. So
+/// `-G0:1` labels `File:FileType` `[File]`, not `[File:File]`, and `-G0:1:4`
+/// labels a first-copy tag `MakerNotes:Olympus`, not `MakerNotes:Olympus:`
+/// -- both confirmed against the pinned oracle. A single-family request
+/// (`-G1`) is not simplified and is returned as-is, even when empty.
 pub fn joined_family_label(occurrence: &TagOccurrence, families: &[u8]) -> String {
-    families
-        .iter()
-        .map(|&family| family_label(occurrence, family))
-        .collect::<Vec<_>>()
-        .join(":")
+    if let [family] = families {
+        return family_label(occurrence, *family);
+    }
+    let mut labels: Vec<String> = Vec::with_capacity(families.len());
+    for &family in families {
+        let label = family_label(occurrence, family);
+        if label.is_empty() || labels.last() == Some(&label) {
+            continue;
+        }
+        labels.push(label);
+    }
+    if labels.len() > 1 && labels[0] == "Main" {
+        labels.remove(0);
+    }
+    labels.join(":")
 }
 
 /// Splits a requested token (`"Make"`, `"EXIF:Make"`, `"XMP-dc:Subject"`)
@@ -486,36 +505,122 @@ fn dedupe_key(map: &MetadataMap, base_key: String) -> String {
 /// instead of losing it to a formatter written for a different case.
 ///
 /// Reuses `output_formatter`'s own per-tag value rendering
-/// (`format_tag_value`/`format_tag_value_short`) so enum/GPS/binary
-/// rendering stays identical to every other output path; only the line
-/// shape (`"[label] name: value\n"`) and the ordering are specific to this
-/// function.
+/// (`format_tag_value`) so enum/GPS/binary rendering stays identical to
+/// every other output path; only the line shape (`"[label] name: value\n"`)
+/// and the ordering are specific to this function.
+///
+/// This is the default (level 0) layout only. ExifTool's level 0 prints tag
+/// *descriptions* padded to 32 columns, which needs per-table description
+/// text OxiDex does not carry, so it is left as it was; the short levels go
+/// through [`render_short_lines`].
 pub fn render_group_display_lines(
     resolved: &[ResolvedOccurrence<'_>],
     families: &[u8],
     no_print_conv: bool,
-    short: bool,
 ) -> String {
     let mut out = String::new();
     for entry in resolved {
         let label = joined_family_label(entry.occurrence, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        let rendered = if short {
-            super::output_formatter::format_tag_value_short_with_mode(
-                &entry.lookup_key,
-                &value,
-                no_print_conv,
-            )
-        } else {
-            super::output_formatter::format_tag_value_with_mode(
-                &entry.lookup_key,
-                &value,
-                no_print_conv,
-            )
-        };
+        let rendered = super::output_formatter::format_tag_value_with_mode(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+        );
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
             entry.occurrence.name
+        ));
+    }
+    out
+}
+
+/// One line of ExifTool's short text output at `level` (1, 2, or 3 and
+/// above), transcribed from the `exiftool` script's writer (13.59,
+/// `exiftool`:3034-3061):
+///
+/// ```perl
+/// } elsif ($outFormat == 0 or $outFormat == 1) {
+///     if (defined $group) { $buff = sprintf("%-15s ", "[$group]"); $len = 16; }
+///     $wid = 32 - (length($buff) - $len);
+///     my $padLen = $wid - LengthUTF8($desc);  $padLen = 0 if $padLen < 0;
+///     $buff .= $desc . (' ' x $padLen) . ": $val\n";
+/// } elsif ($outFormat == 2) {
+///     $buff = "[$group] " if defined $group;
+///     $buff .= "$tagName: $val\n";
+/// } ... else {
+///     $buff = "$group " if defined $group;
+///     $buff .= "$val\n";
+/// }
+/// ```
+///
+/// (`$desc` is the tag name once `$outFormat > 0`, `exiftool`:2861.) A group
+/// label wider than the 15-column field pushes the name column right, and
+/// the name's own padding shrinks by the same amount so `:` stays aligned:
+/// `[MakerNotes:CIFF] Make                          : Canon`. Level 3 prints
+/// the group *without* brackets.
+pub fn short_output_line(level: u8, group: Option<&str>, name: &str, value: &str) -> String {
+    match level {
+        0 | 1 => {
+            let mut line = String::new();
+            let mut len = 0usize;
+            if let Some(group) = group {
+                line = format!("{:<15} ", format!("[{group}]"));
+                len = 16;
+            }
+            let width = 32usize.saturating_sub(line.chars().count() - len);
+            let pad = width.saturating_sub(name.chars().count());
+            format!("{line}{name}{}: {value}\n", " ".repeat(pad))
+        }
+        2 => match group {
+            Some(group) => format!("[{group}] {name}: {value}\n"),
+            None => format!("{name}: {value}\n"),
+        },
+        _ => match group {
+            Some(group) => format!("{group} {value}\n"),
+            None => format!("{value}\n"),
+        },
+    }
+}
+
+/// Renders `resolved`, in its own order, at short output `level` (see
+/// [`short_output_line`]): request order for a specific `-TAG` list
+/// ([`resolve_requested_tags`]), file order for the full listing -- ExifTool
+/// sorts neither. `families` is the `-G`/`-Gn` request, if any.
+///
+/// Values go through `output_formatter`'s short value rendering, exactly as
+/// the `-G` short path and `ShortFormatter` always did. Without `-G`, the
+/// tags `ShortFormatter` always hid stay hidden
+/// ([`super::output_formatter::hidden_from_ungrouped_short_listing`]): this
+/// renderer changes the line layout and order, not the tag set.
+pub fn render_short_lines(
+    resolved: &[ResolvedOccurrence<'_>],
+    families: Option<&[u8]>,
+    no_print_conv: bool,
+    level: u8,
+) -> String {
+    let mut out = String::new();
+    for entry in resolved {
+        let value = resolved_display_value(entry.occurrence, no_print_conv);
+        if families.is_none()
+            && super::output_formatter::hidden_from_ungrouped_short_listing(
+                &entry.lookup_key,
+                &value,
+            )
+        {
+            continue;
+        }
+        let rendered = super::output_formatter::format_tag_value_short_with_mode(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+        );
+        let label = families.map(|families| joined_family_label(entry.occurrence, families));
+        out.push_str(&short_output_line(
+            level,
+            label.as_deref(),
+            &entry.occurrence.name,
+            &rendered,
         ));
     }
     out
@@ -566,14 +671,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     let tag_filter = args.specific_tags();
     let no_print_conv = !args.exiftool_compat();
 
+    // ExifTool's short text levels (`-s`, `-s2`/`-S`, `-s3`) render straight
+    // from the resolved occurrences, in request or file order, through
+    // `render_short_lines` -- with or without `-G`.
+    let short_text = args.short_level > 0 && !args.json && !args.csv;
+
     if let Some(requested) = &tag_filter {
         let resolved = resolve_requested_tags(raw_metadata, requested, args.all_tags);
+        if short_text {
+            return ResolvedFileOutput::Lines(render_short_lines(
+                &resolved,
+                args.group_display.as_deref(),
+                no_print_conv,
+                args.short_level,
+            ));
+        }
         if let Some(families) = &args.group_display
             && !args.json
             && !args.csv
         {
-            let lines =
-                render_group_display_lines(&resolved, families, no_print_conv, args.short_format);
+            let lines = render_group_display_lines(&resolved, families, no_print_conv);
             return ResolvedFileOutput::Lines(lines);
         }
         let metadata = build_display_map(
@@ -619,7 +736,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     // that path has always gone through `resolve_requested_tags`; only the
     // unfiltered listing was affected.
     let surviving = options.strip_extended_only(raw_metadata);
-    if args.group_display.is_some() || args.all_tags {
+    if args.group_display.is_some() || args.all_tags || short_text {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
         let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
             raw_metadata
@@ -642,14 +759,18 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         };
         resolved.sort_by_key(|entry| entry.occurrence.order);
 
+        if short_text {
+            return ResolvedFileOutput::Lines(render_short_lines(
+                &resolved,
+                args.group_display.as_deref(),
+                no_print_conv,
+                args.short_level,
+            ));
+        }
+
         if let Some(families) = &args.group_display {
             if !args.json && !args.csv {
-                let lines = render_group_display_lines(
-                    &resolved,
-                    families,
-                    no_print_conv,
-                    args.short_format,
-                );
+                let lines = render_group_display_lines(&resolved, families, no_print_conv);
                 return ResolvedFileOutput::Lines(lines);
             }
             let metadata = build_display_map(&resolved, Some(families), no_print_conv, !args.json);
@@ -757,7 +878,7 @@ mod tests {
             assert_eq!(resolved[0].lookup_key, "Olympus:ManometerPressure");
             assert_eq!(
                 joined_family_label(resolved[0].occurrence, &[0, 1, 4]),
-                "MakerNotes:Olympus:"
+                "MakerNotes:Olympus"
             );
             assert_eq!(
                 resolved_display_value(resolved[0].occurrence, true),
@@ -795,7 +916,7 @@ mod tests {
             detector: crate::cli::args::DetectorMode::Signature,
             json: true,
             csv: false,
-            short_format: false,
+            short_level: 0,
             all_tags,
             group_display: groups,
             extended_output: false,
@@ -971,10 +1092,14 @@ mod tests {
                 Some(vec![0, 1, 4]),
             ),
         );
+        // Pinned 13.59 `-j -G0:1:4 -Olympus:all t/images/Olympus.jpg` keys
+        // `MakerNotes:Olympus:SpecialMode`: `GetGroup` drops the empty
+        // family-4 slot of a multi-family request (see
+        // `joined_family_label`), so no `::` survives into the key.
         assert_eq!(
-            qualified_group_014.get_string("MakerNotes:Olympus::ChannelReplay"),
+            qualified_group_014.get_string("MakerNotes:Olympus:ChannelReplay"),
             Some("101.3 kPa"),
-            "-G0:1:4 retains the requested empty family-4 slot"
+            "-G0:1:4 drops the empty family-4 slot, as ExifTool's GetGroup does"
         );
 
         let replay = metadata
@@ -1048,7 +1173,7 @@ mod tests {
                     detector: DetectorMode::Signature,
                     json: true,
                     csv: false,
-                    short_format: false,
+                    short_level: 0,
                     all_tags,
                     group_display: grouped.then_some(vec![0, 1]),
                     extended_output: false,
@@ -1238,6 +1363,66 @@ mod tests {
         );
     }
 
+    /// `GetGroup`'s multi-family simplification: pinned 13.59 prints
+    /// `[File]` for `-G0:1 -FileType` and `[MakerNotes:CIFF]` for `-G0:1:4
+    /// -Make` on `t/images/ExifTool.jpg`.
+    #[test]
+    fn joined_family_label_simplifies_multi_family_requests_like_get_group() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence_with_raw(
+            "File:FileType",
+            TagValue::new_string("JPEG"),
+            TagValue::new_string("JPEG"),
+            1,
+            "File",
+            Instance::default(),
+        );
+        metadata.insert("CIFF:Make", TagValue::new_string("Canon"));
+        let file_type = resolve_requested_tag(&metadata, "FileType").unwrap();
+        assert_eq!(joined_family_label(file_type, &[0, 1]), "File");
+        assert_eq!(joined_family_label(file_type, &[1]), "File");
+        let make = resolve_requested_tag(&metadata, "Make").unwrap();
+        assert_eq!(joined_family_label(make, &[0, 1, 4]), "MakerNotes:CIFF");
+        // A single family is never simplified, even when empty.
+        assert_eq!(joined_family_label(make, &[4]), "");
+    }
+
+    /// Every layout below is the pinned 13.59 oracle's own line for
+    /// `t/images/ExifTool.jpg` (`-s`, `-G1 -s`, `-G0:1 -s`, `-G1 -s2`,
+    /// `-G1 -s3`, `-s3`).
+    #[test]
+    fn short_output_line_matches_the_exiftool_writer_at_each_level() {
+        assert_eq!(
+            short_output_line(1, None, "Make", "Canon"),
+            "Make                            : Canon\n"
+        );
+        assert_eq!(
+            short_output_line(1, Some("CIFF"), "Make", "Canon"),
+            "[CIFF]          Make                            : Canon\n"
+        );
+        assert_eq!(
+            short_output_line(1, Some("MakerNotes:CIFF"), "Make", "Canon"),
+            "[MakerNotes:CIFF] Make                          : Canon\n"
+        );
+        // A name longer than its column is never truncated.
+        let long = "A".repeat(40);
+        assert_eq!(
+            short_output_line(1, None, &long, "x"),
+            format!("{long}: x\n")
+        );
+        assert_eq!(
+            short_output_line(2, Some("CIFF"), "Make", "Canon"),
+            "[CIFF] Make: Canon\n"
+        );
+        assert_eq!(short_output_line(2, None, "Make", "Canon"), "Make: Canon\n");
+        assert_eq!(
+            short_output_line(3, Some("CIFF"), "Make", "Canon"),
+            "CIFF Canon\n"
+        );
+        assert_eq!(short_output_line(3, None, "Make", "Canon"), "Canon\n");
+        assert_eq!(short_output_line(9, None, "Make", "Canon"), "Canon\n");
+    }
+
     #[test]
     fn build_display_map_colon_style_matches_the_oracles_json_key_shape() {
         let metadata = sample_metadata();
@@ -1352,7 +1537,7 @@ mod tests {
                     detector: DetectorMode::Signature,
                     json: true,
                     csv: false,
-                    short_format: false,
+                    short_level: 0,
                     all_tags,
                     group_display: grouped.then_some(vec![0, 1]),
                     extended_output: false,
@@ -1446,7 +1631,7 @@ mod tests {
                     }
                 } else {
                     args.json = false;
-                    args.short_format = true;
+                    args.short_level = 2;
                     let ResolvedFileOutput::Lines(lines) = resolve_file_output(&source, &args)
                     else {
                         panic!("expected lines")

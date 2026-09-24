@@ -58,18 +58,21 @@ impl BatchStats {
 
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
+        // ExifTool's summary is `printf("%5d image files read\n", ...)`
+        // (`exiftool`:2071-2077, 13.59): the count is right-aligned in five
+        // columns, so ten or more files print `   12 ...`, not `    12 ...`.
         if self.files_read > 0 {
-            println!("    {} image files read", self.files_read);
+            println!("{:5} image files read", self.files_read);
         }
         if self.files_updated > 0 {
-            println!("    {} image files updated", self.files_updated);
+            println!("{:5} image files updated", self.files_updated);
         }
         if self.errors > 0 {
-            println!("    {} files could not be read", self.errors);
+            println!("{:5} files could not be read", self.errors);
         }
         if self.unidentified > 0 {
             println!(
-                "    {} files skipped (extension not recognized)",
+                "{:5} files skipped (extension not recognized)",
                 self.unidentified
             );
         }
@@ -325,7 +328,7 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         output_csv_results(&results, args)?;
     } else if args.json {
         output_json_results(&results, args)?;
-    } else if args.short_format {
+    } else if args.short_level > 0 {
         output_short_results(&results, args);
     } else {
         output_human_readable_results(&results, args);
@@ -531,25 +534,24 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
     Ok(())
 }
 
+/// Outputs results at one of ExifTool's short levels (`-s`, `-s2`, `-s3`).
+///
+/// Each file read is introduced by ExifTool's own `======== FILE` line
+/// (`exiftool`:2328-2332, printed whenever more than one file is processed),
+/// including a file that has none of the requested tags; the caller prints
+/// the `%5d image files read` summary after the last one.
 fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
     let formatter = ShortFormatter;
 
     for (path, result) in results {
         if let Ok(metadata) = result {
+            println!("======== {}", path.display());
             match resolve_file_output(metadata, args) {
-                ResolvedFileOutput::Lines(lines) => {
-                    if !lines.is_empty() {
-                        println!("SourceFile: {}", path.display());
-                        print!("{}", lines);
-                    }
-                }
+                ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                 ResolvedFileOutput::Metadata(metadata) => {
                     let output =
                         formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
-                    if !output.is_empty() {
-                        println!("SourceFile: {}", path.display());
-                        print!("{}", output);
-                    }
+                    print!("{}", output);
                 }
             }
         }

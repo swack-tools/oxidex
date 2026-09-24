@@ -43,12 +43,16 @@ fn batch_directory_honors_short_format() {
         "expected batch -s to succeed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Pinned 13.59 `exiftool -s tests/fixtures/jpeg/simple`: a
+    // `======== FILE` header per file, padded short tag names, and the
+    // `%5d image files read` summary.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Make:") || stdout.contains("Model:"));
-    assert!(stdout.contains("SourceFile: tests/fixtures/jpeg/simple/"));
+    assert!(stdout.contains("======== tests/fixtures/jpeg/simple/sample_with_exif.jpg\n"));
+    assert!(stdout.contains("Make                            : TestCamera\n"));
+    assert!(stdout.contains("   16 image files read\n"));
+    assert!(!stdout.contains("SourceFile:"));
     assert!(!stdout.contains("IFD0:"));
     assert!(!stdout.contains("EXIF:"));
-    assert!(!stdout.contains("========"));
     assert!(!stdout.contains("Found "));
 }
 
@@ -61,8 +65,8 @@ fn single_dash_short_option_cluster_still_reaches_lexopt() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("SourceFile: tests/fixtures/jpeg/simple/"));
-    assert!(!stdout.contains("image files read"));
+    assert!(stdout.contains("======== tests/fixtures/jpeg/simple/"));
+    assert!(stdout.contains("image files read"));
     assert!(!stdout.lines().any(|line| line.starts_with("File: ")));
 }
 

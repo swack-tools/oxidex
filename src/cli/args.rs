@@ -35,8 +35,14 @@ pub struct CliArgs {
     /// Output in CSV format
     pub csv: bool,
 
-    /// Short output format (not yet fully implemented)
-    pub short_format: bool,
+    /// ExifTool's short output level (`exiftool`:1243-1244): `0` is the
+    /// default layout, `1` (`-s`, `-short`) prints tag names padded to 32
+    /// columns, `2` (`-s2`, `-S`, `-veryShort`, `-s -s`) prints unpadded
+    /// `Name: value`, and `3` or more (`-s3`, `-s -s -s`, `-s -S`) prints
+    /// values only. `-s` adds 1, `-S`/`-veryShort` add 2, and `-sN`/`-shortN`
+    /// set the level to N. Rendered by
+    /// `cli::tag_resolution::render_short_lines`.
+    pub short_level: u8,
 
     /// Display every retained occurrence of a requested tag, not just the
     /// current priority winner (ExifTool's `-a`). Consumed by
@@ -164,6 +170,51 @@ fn normalize_exiftool_option(arg: String) -> String {
     }
 }
 
+/// One of ExifTool's short-output option spellings, as the `exiftool` script
+/// itself parses them (13.59, `exiftool`:1243-1244):
+///
+/// ```perl
+/// (/^S$/ or $a eq 'veryshort') and $outFormat+=2, next;
+/// /^s(hort)?(\d*)$/i and $outFormat = $2 eq '' ? $outFormat + 1 : $2, next;
+/// ```
+///
+/// `$a` is the lower-cased option, so `-veryShort`, `-SHORT` and `-S2` are
+/// all accepted; only the bare uppercase `-S` means "add 2".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortLevelOption {
+    Add(u8),
+    Set(u8),
+}
+
+impl ShortLevelOption {
+    fn apply(self, level: u8) -> u8 {
+        match self {
+            ShortLevelOption::Add(n) => level.saturating_add(n),
+            ShortLevelOption::Set(n) => n,
+        }
+    }
+}
+
+fn parse_short_level_option(arg: &str) -> Option<ShortLevelOption> {
+    let body = arg.strip_prefix('-')?;
+    if body == "S" || body.eq_ignore_ascii_case("veryshort") {
+        return Some(ShortLevelOption::Add(2));
+    }
+    let lower = body.to_ascii_lowercase();
+    let digits = lower
+        .strip_prefix("short")
+        .or_else(|| lower.strip_prefix('s'))?;
+    if digits.is_empty() {
+        return Some(ShortLevelOption::Add(1));
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // Perl keeps the number as given; any level of 3 or more renders the
+    // same values-only layout, so saturating an absurd one is exact.
+    Some(ShortLevelOption::Set(digits.parse().unwrap_or(u8::MAX)))
+}
+
 fn is_flag_short_option(ch: char) -> bool {
     matches!(ch, 'h' | 'V' | 'j' | 's' | 'a' | 'r' | 'e' | 'n')
 }
@@ -267,7 +318,7 @@ impl CliArgs {
         let mut detector = DetectorMode::default();
         let mut json = false;
         let mut csv = false;
-        let mut short_format = false;
+        let mut short_level: u8 = 0;
         let mut all_tags = false;
         let mut group_display: Option<Vec<u8>> = None;
         let mut extended_output = false;
@@ -298,6 +349,19 @@ impl CliArgs {
             }
 
             let arg = normalize_exiftool_option(raw_arg);
+
+            // ExifTool's short-output levels. Handled here, in argument
+            // order, because `-s2`/`-s3`/`-S`/`-veryShort`/`-short3` are not
+            // lexopt clusters and used to fall through to the specific-tag
+            // branch below as requests for tags literally named `s3`, `S`,
+            // ... -- `-s3 -Make` printed the full `Group:Tag: value` line
+            // instead of the value alone. A bare `-s` is handled here too so
+            // `-s -S` and `-S -s` both reach level 3; `-s` inside a cluster
+            // (`-sa`) still reaches lexopt's `Short('s')` below.
+            if let Some(option) = parse_short_level_option(&arg) {
+                short_level = option.apply(short_level);
+                continue;
+            }
 
             // ExifTool's group-display flags (-G, -G0..-G8, -g, -g0..-g8, and
             // colon-separated family lists like -G1:2) must not fall through
@@ -397,9 +461,10 @@ impl CliArgs {
                 Long("csv") => {
                     csv = true;
                 }
-                // Short format
+                // Short format, inside an option cluster (`-sa`); standalone
+                // spellings are counted during pre-processing above.
                 Short('s') => {
-                    short_format = true;
+                    short_level = short_level.saturating_add(1);
                 }
                 // All tags
                 Short('a') => {
@@ -513,7 +578,7 @@ impl CliArgs {
             detector,
             json,
             csv,
-            short_format,
+            short_level,
             all_tags,
             group_display,
             extended_output,
@@ -953,7 +1018,9 @@ fn print_help() {
     println!("    -V, --version               Print version information");
     println!("    -j, --json                  Output in JSON format");
     println!("        --csv                   Output in CSV format");
-    println!("    -s                          Short output format (not yet fully implemented)");
+    println!(
+        "    -s, -short                  Short output: tag names, padded (-s2/-S: unpadded, -s3: values only)"
+    );
     println!("    -a                          Display all tags (default behavior)");
     println!("    -r                          Recursive directory processing");
     println!(
@@ -1035,6 +1102,39 @@ mod tests {
         assert!(!is_group_display_flag("-GPSLatitude=1"));
         assert!(!is_group_display_flag("photo.jpg"));
         assert!(!is_group_display_flag("--json"));
+    }
+
+    /// Mirrors `exiftool`:1243-1244 (13.59): `-S`/`-veryShort` add 2,
+    /// `-s`/`-short` add 1, `-sN`/`-shortN` (any case) set the level.
+    #[test]
+    fn short_level_option_spellings_match_exiftool() {
+        use ShortLevelOption::{Add, Set};
+        for (arg, expected) in [
+            ("-s", Some(Add(1))),
+            ("-short", Some(Add(1))),
+            ("-SHORT", Some(Add(1))),
+            ("-S", Some(Add(2))),
+            ("-veryShort", Some(Add(2))),
+            ("-veryshort", Some(Add(2))),
+            ("-s0", Some(Set(0))),
+            ("-s2", Some(Set(2))),
+            ("-S2", Some(Set(2))),
+            ("-s3", Some(Set(3))),
+            ("-short3", Some(Set(3))),
+            ("-s999", Some(Set(u8::MAX))),
+            ("-sa", None),
+            ("-sep", None),
+            ("-shortx", None),
+            ("-Sharpness", None),
+            ("-ShutterSpeed", None),
+            ("-EXIF:s3", None),
+            ("s3", None),
+        ] {
+            assert_eq!(parse_short_level_option(arg), expected, "{arg}");
+        }
+        let level = [Add(1), Add(2)].iter().fold(0, |l, o| o.apply(l));
+        assert_eq!(level, 3, "-s -S is level 3");
+        assert_eq!(Set(2).apply(Add(1).apply(0)), 2, "-s -s2 is level 2");
     }
 
     #[test]
