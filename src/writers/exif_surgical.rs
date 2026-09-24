@@ -854,8 +854,11 @@ fn plan_exif_write_inner(
         )));
     }
 
-    // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
-    if drop_all_when_no_rows && exif_family_keys(desired).is_empty() {
+    // clear_all_metadata semantics: no EXIF-family keys desired -> drop all.
+    // Only for a map without EXIF rows and without named removals: a named
+    // removal of the last ordinary row (`-ExifIFD:ISO=`) is a deletion, not
+    // a clear, and must carry the rest (an IFD1 thumbnail) as ExifTool does.
+    if drop_all_when_no_rows && removed.is_empty() && exif_family_keys(desired).is_empty() {
         return Ok(plan);
     }
 
@@ -1697,11 +1700,15 @@ fn emit_ifd(
 /// Serializes a WritePlan into complete TIFF bytes. An empty plan yields an
 /// empty Vec (the caller omits the EXIF segment entirely).
 pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
+    // A thumbnail is surviving content: an IFD1 holding only the
+    // JPEGInterchangeFormat/Length pair (which the scanner moves into
+    // `plan.thumbnail`) is emitted with those pointers synthesized below.
     let has_entries = !(plan.ifd0.is_empty()
         && plan.exif_ifd.is_empty()
         && plan.gps.is_empty()
         && plan.interop.is_empty()
-        && plan.ifd1.is_empty());
+        && plan.ifd1.is_empty())
+        || plan.thumbnail.is_some();
     if !has_entries {
         return Ok(Vec::new());
     }
@@ -2298,6 +2305,44 @@ pub(crate) fn verify_exif_write(
                 "'{key}' was to be deleted but {} tag 0x{:04X} is still present",
                 entry.ifd.prefix(),
                 entry.tag_id
+            )));
+        }
+    }
+
+    // (a') the thumbnail: the IFD1 JPEGInterchangeFormat/Length pair is
+    // structural (never a scanned entry), so (a) cannot see it go. Any
+    // thumbnail the original carries must still be there, byte-identical and
+    // reachable through the pair, unless the caller deleted it (a row naming
+    // it gone from the map, or a named removal of it or of IFD1/EXIF:All).
+    if let Some(thumbnail) = &before.thumbnail {
+        let names_thumbnail = |key: &str| {
+            let Some((group, name)) = key.split_once(':') else {
+                return false;
+            };
+            matches!(group, "IFD1" | "EXIF")
+                && (name.eq_ignore_ascii_case("all")
+                    || matches!(
+                        name,
+                        "ThumbnailImage"
+                            | "ThumbnailOffset"
+                            | "ThumbnailLength"
+                            | "JPEGInterchangeFormat"
+                            | "JPEGInterchangeFormatLength"
+                    ))
+        };
+        let deleted = removed.iter().any(|key| names_thumbnail(key))
+            || baseline
+                .iter()
+                .any(|(key, _)| names_thumbnail(key) && !desired.contains_key(key.as_str()));
+        if !deleted && after.thumbnail.as_ref() != Some(thumbnail) {
+            return Err(refused(format!(
+                "the {}-byte IFD1 thumbnail was not asked to be deleted but is {}",
+                thumbnail.len(),
+                if after.thumbnail.is_some() {
+                    "changed"
+                } else {
+                    "gone"
+                }
             )));
         }
     }
@@ -4092,6 +4137,33 @@ mod tests {
                 &baseline,
                 &baseline,
                 &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap();
+
+            // A thumbnail the writer "forgot" (the IFD1 pointer pair is not
+            // a scanned entry, so the removal check alone cannot see it).
+            let mut lossy = plan_exif_write(&scan, &baseline, &added).unwrap();
+            assert!(lossy.thumbnail.is_some());
+            lossy.thumbnail = None;
+            let lossy = serialize_exif(&lossy).unwrap();
+            let err = verify_exif_write(
+                Some(&tiff),
+                &lossy,
+                &baseline,
+                &added,
+                &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("thumbnail"), "{err}");
+            // ... unless the caller deleted it.
+            verify_exif_write(
+                Some(&tiff),
+                &lossy,
+                &baseline,
+                &added,
+                &["IFD1:ThumbnailImage".to_string()],
                 EXIF_BLOCK_MAGICS,
             )
             .unwrap();
