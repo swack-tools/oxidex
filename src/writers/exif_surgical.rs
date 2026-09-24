@@ -2296,6 +2296,23 @@ fn is_no_op(
 ) -> bool {
     rows_unchanged(original_map, desired)
         && removals_name_nothing(scan, original_map, removed, true)
+        && !drops_empty_carrier(scan, removed)
+}
+
+/// Whether the write rewrites an EXIF carrier that holds no entry and no
+/// thumbnail, which pinned ExifTool 13.59 then drops: any removal of an
+/// EXIF-family key -- one naming nothing too -- rewrites the block, and an
+/// empty block is not written back (`-IFD0:Software=` / `-GPS:All=` on a
+/// JPEG whose APP1 is a bare empty IFD0: "1 image files updated", the APP1
+/// gone, as tip e4edc55c also wrote it byte for byte). b83ec323's up-front
+/// no-op check had kept such a block and reported success.
+fn drops_empty_carrier(scan: &ExifScan, removed: &[String]) -> bool {
+    scan.entries.is_empty()
+        && scan.thumbnail.is_none()
+        && removed.iter().any(|key| {
+            // A name ExifTool does not know rewrites nothing ("not defined").
+            is_planned_key(key) && (group_removal(key).is_some() || !key_addresses(key).is_empty())
+        })
 }
 
 /// Whether a write request is a no-op for a carrier whose EXIF payloads are
@@ -2316,10 +2333,15 @@ fn is_no_op(
 /// EXIF carriers proper. A PNG's raw EXIF profile is not one -- pinned
 /// ExifTool 13.59 leaves it under `-EXIF:All=` ("1 image files unchanged")
 /// -- so it is in `blocks` only.
+///
+/// `embedded` marks a JPEG's APP1 blocks, which pinned ExifTool 13.59 drops
+/// when a write rewrites one holding no entry ([`drops_empty_carrier`]); it
+/// keeps an empty PNG eXIf chunk, and never deletes a TIFF file's IFD0.
 pub(crate) fn exif_request_is_no_op(
     blocks: &[&[u8]],
     group_blocks: &[&[u8]],
     magics: &[u16],
+    embedded: bool,
     baseline: &MetadataMap,
     desired: &MetadataMap,
     removed: &[String],
@@ -2342,14 +2364,38 @@ pub(crate) fn exif_request_is_no_op(
         && group_blocks
             .iter()
             .all(|block| match scan_entries_with_magics(block, magics) {
-                Ok(scan) => removed
-                    .iter()
-                    .filter_map(|key| group_removal(key))
-                    .all(|group| !group_has_content(group, &scan, baseline)),
+                Ok(scan) => {
+                    removed
+                        .iter()
+                        .filter_map(|key| group_removal(key))
+                        .all(|group| !group_has_content(group, &scan, baseline))
+                        && !(embedded && drops_empty_carrier(&scan, removed))
+                }
                 // A carrier no scanner can read is still deleted wholesale by
                 // `IFD0:All` / `EXIF:All` (pinned ExifTool 13.59 drops it).
-                Err(_) => !removes_carrier(removed),
+                // One whose only fault is its TIFF magic number ExifTool reads
+                // anyway ("Invalid magic number in EXIF TIFF header"), and so
+                // drops it too when it is empty: not a no-op, so the write
+                // reaches the scanner and is refused, as at tip e4edc55c.
+                Err(_) => {
+                    !removes_carrier(removed)
+                        && !(embedded
+                            && scan_ignoring_magic(block)
+                                .is_some_and(|scan| drops_empty_carrier(&scan, removed)))
+                }
             })
+}
+
+/// `block` scanned whatever its TIFF magic number, as pinned ExifTool 13.59
+/// reads an APP1 EXIF block (it only warns), when its byte order is sound.
+fn scan_ignoring_magic(block: &[u8]) -> Option<ExifScan> {
+    let order = match block.get(..2) {
+        Some(b"II") => ByteOrder::LittleEndian,
+        Some(b"MM") => ByteOrder::BigEndian,
+        _ => return None,
+    };
+    let magic = read_u16(block.get(2..4)?, order);
+    scan_entries_with_magics(block, &[magic]).ok()
 }
 
 /// The TIFF payloads of every `Exif\0\0` APP1 block of a JPEG.

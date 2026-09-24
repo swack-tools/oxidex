@@ -408,6 +408,9 @@ fn plan_exif(
             &blocks,
             &exif_blocks,
             crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+            // Pinned ExifTool 13.59 keeps an empty eXIf chunk ("1 image
+            // files unchanged"); it drops only an empty JPEG APP1.
+            false,
             baseline,
             metadata,
             removed,

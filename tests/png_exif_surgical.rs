@@ -1444,7 +1444,16 @@ fn absent_removals_are_no_ops_before_any_carrier_refusal() {
         ] {
             for key in ["EXIF:BogusTag", "IFD0:Artist"] {
                 let path = write(dir.path(), name, &original);
-                remove_tag(&path, key).unwrap_or_else(|e| panic!("{label} {name} {key}: {e}"));
+                // The one exception: an empty JPEG block whose only fault is
+                // its magic number, which pinned ExifTool 13.59 reads and, on
+                // a removal of a real tag, drops; this writer cannot read it,
+                // so it refuses (see
+                // `an_empty_exif_app1_is_dropped_by_an_exif_removal`).
+                if (label, name, key) == ("magic", "bad.jpg", "IFD0:Artist") {
+                    assert!(remove_tag(&path, key).is_err(), "{label} {name} {key}");
+                } else {
+                    remove_tag(&path, key).unwrap_or_else(|e| panic!("{label} {name} {key}: {e}"));
+                }
                 assert_eq!(
                     std::fs::read(&path).unwrap(),
                     original,
@@ -1946,4 +1955,75 @@ fn makernotes_removal_drops_a_ciff_segment() {
     let len = u16::from_be_bytes([original[start + 2], original[start + 3]]) as usize;
     let expected = [&original[..start], &original[start + 2 + len..]].concat();
     assert_eq!(out, expected);
+}
+
+/// An EXIF-family removal rewrites the EXIF block, and pinned ExifTool
+/// 13.59 does not write back a JPEG APP1 left with no entry: on a bare
+/// empty IFD0 `-IFD0:Software=` and `-GPS:All=` drop the APP1 ("1 image
+/// files updated"; tip e4edc55c byte-identical to it). b83ec323's up-front
+/// no-op check kept it. An empty PNG eXIf chunk the oracle keeps ("1 image
+/// files unchanged"). A JPEG block whose only fault is its magic number the
+/// oracle reads anyway and drops when empty; the writer's scanner cannot
+/// read it, so that write is refused, as at tip, not reported done. With
+/// an entry in it, a removal naming nothing is a no-op (oracle unchanged).
+#[test]
+fn an_empty_exif_app1_is_dropped_by_an_exif_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let head = |magic: u16| {
+            [
+                match order {
+                    Order::Ii => b"II".as_slice(),
+                    Order::Mm => b"MM".as_slice(),
+                },
+                &order.u16(magic),
+                &order.u32(8),
+            ]
+            .concat()
+        };
+        let empty = [head(42), order.u16(0).to_vec(), order.u32(0).to_vec()].concat();
+        let bad_magic = [head(43), order.u16(0).to_vec(), order.u32(0).to_vec()].concat();
+        let bad_magic_make = [
+            head(43),
+            order.u16(1).to_vec(),
+            order.u16(0x010F).to_vec(),
+            order.u16(2).to_vec(),
+            order.u32(4).to_vec(),
+            b"Acme".to_vec(),
+            order.u32(0).to_vec(),
+        ]
+        .concat();
+        for key in ["IFD0:Software", "GPS:All"] {
+            let path = write(dir.path(), "empty.jpg", &jpeg_with(&empty));
+            remove_tag(&path, key).unwrap_or_else(|e| panic!("{order:?} {key}: {e}"));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                jpeg_without_exif(),
+                "{order:?} {key}"
+            );
+
+            let png_bytes = png(&[(b"eXIf", empty.clone())], &[]);
+            let path = write(dir.path(), "empty.png", &png_bytes);
+            remove_tag(&path, key).unwrap_or_else(|e| panic!("{order:?} {key} png: {e}"));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                png_bytes,
+                "{order:?} {key} png"
+            );
+
+            let jpeg = jpeg_with(&bad_magic);
+            let path = write(dir.path(), "magic.jpg", &jpeg);
+            assert!(remove_tag(&path, key).is_err(), "{order:?} {key} magic");
+            assert_eq!(std::fs::read(&path).unwrap(), jpeg, "{order:?} {key} magic");
+
+            let jpeg = jpeg_with(&bad_magic_make);
+            let path = write(dir.path(), "magic-make.jpg", &jpeg);
+            remove_tag(&path, key).unwrap_or_else(|e| panic!("{order:?} {key} magic+Make: {e}"));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                jpeg,
+                "{order:?} {key} magic+Make"
+            );
+        }
+    }
 }
