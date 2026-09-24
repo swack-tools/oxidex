@@ -1367,6 +1367,118 @@ fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
     Ok(matches!(detect_format(&reader)?, FileFormat::PDF))
 }
 
+/// `-GROUP:All=` (`remove_tag(path, "GPS:All")`): a group-wide deletion.
+///
+/// Where the file holds nothing in the group this is ExifTool's `0 image
+/// files updated` / `1 image files unchanged` and nothing is written (pinned
+/// 13.59 on t/images/PNG.png: `-GPS:All=`, `-ExifIFD:All=`, `-IFD1:All=`,
+/// `-InteropIFD:All=`, `-MakerNotes:All=`, `-IFD0:All=`, `-EXIF:All=`, all
+/// bytes identical). Where the group has entries (or emptiness cannot be
+/// proven, see [`group_is_empty`]), the group-wide expansion
+/// belongs to the writers (#943) and is refused here, loudly, until they
+/// perform it -- never reported as an update that stripped nothing.
+fn delete_group(path: &Path, tag_name: &str, group: &str) -> Result<()> {
+    let metadata = read_metadata(path)?;
+    if group_is_empty(path, group, &metadata)? {
+        return Ok(());
+    }
+    Err(ExifToolError::unsupported_format(format!(
+        "Cannot delete '{tag_name}': oxidex does not delete a whole {group} group yet, \
+         and this file is not provably free of {group} tags; delete the tags by name"
+    )))
+}
+
+/// Whether the file at `path` provably holds nothing in `group`.
+///
+/// EXIF-family groups are judged from the EXIF blocks themselves, entry by
+/// entry (the reader surfaces no row for some entries): a file with no EXIF
+/// block holds none, and a block that cannot be scanned proves nothing.
+/// Of the other groups only XMP/XML (any `XMP-*`/`XML-*` too), IPTC and PNG
+/// are judged, from the reader's map; the rest are never proven empty.
+fn group_is_empty(path: &Path, group: &str, metadata: &MetadataMap) -> Result<bool> {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, IfdKind, jpeg_exif_payloads, scan_entries_with_magics,
+    };
+    let lower = group.to_ascii_lowercase();
+    let ifd = match lower.as_str() {
+        "ifd0" => Some(IfdKind::Ifd0),
+        "ifd1" => Some(IfdKind::Ifd1),
+        "exififd" => Some(IfdKind::ExifIfd),
+        "gps" => Some(IfdKind::Gps),
+        "interopifd" => Some(IfdKind::Interop),
+        _ => None,
+    };
+    let exif_family = ifd.is_some()
+        || matches!(
+            lower.as_str(),
+            "exif" | "makernotes" | "subifd" | "globparamifd" | "metaifd"
+        );
+    if !exif_family {
+        // The map proves absence only for groups whose rows it keys under
+        // the group's own name. A family-2 group (`Time`, `Camera`) is no
+        // map key at all, and some family-0 groups are keyed under another
+        // spelling (`Adobe` rows as `APP14`, `MPF` as `MPF0`), so for those
+        // an absent key proves nothing: pinned 13.59 rewrites Canon.jpg for
+        // `-Time:All=` although the map holds no `Time:` key.
+        let key_group_matches = |pred: &dyn Fn(&str) -> bool| {
+            metadata.keys().any(|key| {
+                key.split_once(':')
+                    .is_some_and(|(key_group, _)| pred(&key_group.to_ascii_lowercase()))
+            })
+        };
+        let family = lower.split('-').next().unwrap_or_default();
+        return Ok(match family {
+            // Every XMP-* (XML-*) row is keyed under an `XMP` (`XML`)
+            // spelling: any such row makes every XMP-* group suspect.
+            "xmp" | "xml" => !key_group_matches(&|g| g.starts_with(family)),
+            // IPTC rides in a Photoshop IRB or a PNG raw profile: a row for
+            // either proves nothing about its absence.
+            "iptc" if lower == "iptc" => {
+                !key_group_matches(&|g| g == "iptc" || g == "photoshop")
+                    && !metadata
+                        .keys()
+                        .any(|key| key.to_ascii_lowercase().contains("iptc"))
+            }
+            "png" if lower == "png" => !key_group_matches(&|g| g == "png"),
+            _ => false,
+        });
+    }
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    let file_bytes = reader.read(0, reader.size() as usize)?;
+    let (blocks, magics): (Vec<Vec<u8>>, &[u16]) = if is_surgical_tiff_target(format, &reader) {
+        (
+            vec![file_bytes.to_vec()],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        )
+    } else {
+        match format {
+            FileFormat::JPEG => (jpeg_exif_payloads(file_bytes)?, EXIF_BLOCK_MAGICS),
+            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(&reader)? {
+                Some(payloads) => (payloads, EXIF_BLOCK_MAGICS),
+                None => return Ok(false),
+            },
+            FileFormat::PDF => (Vec::new(), EXIF_BLOCK_MAGICS),
+            _ => return Ok(false),
+        }
+    };
+    for block in &blocks {
+        let Ok(scan) = scan_entries_with_magics(block, magics) else {
+            return Ok(false);
+        };
+        let empty = match (ifd, lower.as_str()) {
+            (Some(ifd), _) => !scan.entries.iter().any(|entry| entry.ifd == ifd),
+            (None, "makernotes") => !scan.entries.iter().any(|entry| entry.tag_id == 0x927c),
+            (None, "exif") => scan.entries.is_empty(),
+            _ => false, // SubIFD/GlobParamIFD/MetaIFD: not walked by the scan
+        };
+        if !empty {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Every spelling under which the reader surfaces the PDF Info field `key`
 /// names: `PDF:CreateDate` and `PDF:CreationDate` (and `ModifyDate` /
 /// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
@@ -1446,6 +1558,12 @@ fn remove_field(metadata: &mut MetadataMap, key: &str) {
 /// - New value fails validation (InvalidTagValue)
 /// - File cannot be written (IoError)
 pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
+    if let Some(group) = crate::writers::write_request::group_deletion(tag_name) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot write tag '{tag_name}': {group}:All names every tag of the group; \
+             it can only be deleted (-{group}:All=)"
+        )));
+    }
     if exif_group_in_pdf(path, tag_name)? {
         return Ok(());
     }
@@ -1489,6 +1607,9 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
 /// remove_tag(Path::new("photo.jpg"), "EXIF:Artist").unwrap();
 /// ```
 pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
+    if let Some(group) = crate::writers::write_request::group_deletion(tag_name) {
+        return delete_group(path, tag_name, group);
+    }
     if exif_group_in_pdf(path, tag_name)? {
         return Ok(());
     }

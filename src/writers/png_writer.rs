@@ -867,24 +867,25 @@ pub(crate) fn write_png_metadata_with_removals(
     }
 
     // Nothing changes -- the EXIF block carried, every text chunk carried,
-    // nothing added: leave the file exactly as it is. Rebuilding it anyway
-    // moved text chunks that follow IDAT ahead of it (`output_order`), so a
-    // no-op deletion (`-IFD1:ImageDescription=` or `-IFD0:XPTitle=` on a PNG
-    // without one) changed the bytes and was reported as an update; pinned
-    // ExifTool 13.59 leaves the file untouched and reports it unchanged.
+    // nothing added: the output is the source, byte for byte, chunk order
+    // included. `output_order` moves text chunks that follow IDAT ahead of
+    // it, and pinned ExifTool 13.59 does that only when it writes a chunk:
+    // on t/images/PNG.png (IHDR bKGD IDAT tEXt iTXt IEND) `-IFD0:Artist=`,
+    // `-GPS:All=`, `-EXIF:All=` ... print `0 image files updated` / `1 image
+    // files unchanged` and leave the bytes alone. The same holds for a
+    // library `write_metadata` / `remove_tag` that changes nothing; a caller
+    // writing to another path still gets the (identical) file.
     if matches!(exif_fate, ExifFate::Carry)
         && new_chunks.is_empty()
         && text_fates
             .values()
             .all(|fate| matches!(fate, TextFate::Carry))
-        && original_reader
-            .read(0, original_reader.size() as usize)
-            .ok()
-            .zip(std::fs::read(path).ok())
-            .is_some_and(|(source, target)| source == target.as_slice())
     {
-        // (Only when `path` already holds these bytes: a caller writing a
-        // copy to another path still gets its file.)
+        let source = original_reader.read(0, original_reader.size() as usize)?;
+        if std::fs::read(path).is_ok_and(|target| target.as_slice() == source) {
+            return Ok(());
+        }
+        write_atomic(path, source)?;
         return Ok(());
     }
 
