@@ -248,13 +248,13 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         };
     }
 
-    // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
-    // CharsetEXIF this is the eight-byte ASCII identifier followed by the
-    // caller's text; the TIFF field itself remains UNDEFINED.
-    if tag_name == "GPS:GPSAreaInformation" {
-        let mut encoded = b"ASCII\0\0\0".to_vec();
-        encoded.extend_from_slice(raw.as_bytes());
-        return Ok(TagValue::Binary(encoded));
+    // UserComment (Exif.pm 0x9286) and GPSProcessingMethod /
+    // GPSAreaInformation (GPS.pm 0x001b / 0x001c) apply `EncodeExifText` as
+    // their RawConvInv, which needs the byte order of the EXIF block being
+    // written (UTF-16 for non-ASCII text). The value stays the caller's text
+    // here; the EXIF serializers encode it (`writers::exif_text`).
+    if crate::writers::exif_text::is_exif_text_key(tag_name) {
+        return Ok(TagValue::String(raw.to_string()));
     }
 
     // Exif.pm 13.59 0x9000 writes ExifVersion as four UNDEFINED ASCII bytes.
@@ -1928,12 +1928,26 @@ mod tests {
         }
     }
 
+    /// The `EncodeExifText` tags keep the caller's text: its header and
+    /// UTF-16 byte order depend on the EXIF block the writer lands it in
+    /// (`writers::exif_text`), so a `Binary` built here -- the old
+    /// `ASCII\0\0\0` + UTF-8 over any text -- was wrong for non-ASCII.
     #[test]
-    fn gps_area_information_is_encoded_as_exif_text() {
-        assert_eq!(
-            parse("GPS:GPSAreaInformation", "San Francisco").unwrap(),
-            TagValue::Binary(b"ASCII\0\0\0San Francisco".to_vec())
-        );
+    fn exif_text_tags_are_parsed_as_the_callers_text() {
+        for tag in [
+            "GPS:GPSAreaInformation",
+            "GPS:GPSProcessingMethod",
+            "ExifIFD:UserComment",
+            "UserComment",
+        ] {
+            for value in ["San Francisco", "café", ""] {
+                assert_eq!(
+                    parse(tag, value).unwrap(),
+                    TagValue::new_string(value),
+                    "{tag}={value}"
+                );
+            }
+        }
     }
 
     #[test]

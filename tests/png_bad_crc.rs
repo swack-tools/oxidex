@@ -1,7 +1,7 @@
 //! A PNG whose chunk CRC is wrong is not rewritten, as pinned ExifTool 13.59
 //! refuses to rewrite it.
 //!
-//! `ProcessPNG` (PNG.pm 13.59:1611-1619) checks every chunk's CRC while it
+//! `ProcessPNG` (PNG.pm 13.59:1612-1619) checks every chunk's CRC while it
 //! writes, unless `FastScan` is set:
 //!
 //! ```perl
@@ -22,9 +22,9 @@
 //! their CRC bytes are copied as they are:
 //!
 //! - IEND: its branch reads the CRC and writes it straight back
-//!   (PNG.pm 13.59:1545-1556);
+//!   (PNG.pm 13.59:1546-1556);
 //! - an IDAT of more than 10,000,000 bytes, which is copied with
-//!   `CopyBlock` without being read (PNG.pm 13.59:1579-1586).
+//!   `CopyBlock` without being read (PNG.pm 13.59:1577-1584).
 //!
 //! With `-m` ExifTool writes and keeps the bad CRC of every chunk it copies
 //! (it recomputes only a chunk it rebuilds). oxidex has no `-m` / ignore-

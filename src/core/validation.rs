@@ -111,6 +111,13 @@ pub fn validate_tag_value_with_name(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
+    // UserComment, GPSProcessingMethod and GPSAreaInformation take text: the
+    // EXIF serializers apply `EncodeExifText` to it (`writers::exif_text`),
+    // whatever `TagValue` shape the registry records for the stored bytes.
+    if matches!(value, TagValue::String(_)) && crate::writers::exif_text::is_exif_text_key(tag_name)
+    {
+        return Ok(());
+    }
     if !descriptor_has_reliable_value_type(descriptor) {
         return validate_tag_value_intrinsics(tag_name, value);
     }

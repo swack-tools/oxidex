@@ -396,7 +396,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
 
         validate_changed(&key, &desired_value)?;
         let (ft, count, native) =
-            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type))?;
+            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
         write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
     }
@@ -488,7 +488,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                 None => {}
             }
             let (ft, count, native) =
-                tag_value_to_field_for_key(key, value, Some(entry.field_type))?;
+                tag_value_to_field_for_key(key, value, Some(entry.field_type), bo)?;
             let bytes = native_to_byte_order(ft, &native, bo);
             write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
             *patched = Some(value.clone());
@@ -497,7 +497,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // As in the EXIF writer: a created tag has no existing entry to take
         // an IEEE 754 width from, so the declared type has to supply it.
         let (ft, count, native) =
-            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
+            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
         let bucket = if key.starts_with("ExifIFD:") {

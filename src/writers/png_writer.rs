@@ -87,6 +87,53 @@ fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     output.extend_from_slice(&crc.to_be_bytes());
 }
 
+/// Copies an original chunk as it stands, CRC bytes included. ExifTool
+/// writes back the `$cbuf` it read for every chunk it does not rebuild
+/// (PNG.pm 13.59:1621, :1672), so a CRC it never checks -- IEND's,
+/// or an oversized IDAT's (see [`crc_is_checked`]) -- survives a write
+/// unrepaired; every other carried CRC was verified before anything was
+/// written, so copying it equals recomputing it.
+fn write_carried_chunk(output: &mut Vec<u8>, chunk: &PngChunk) {
+    output.extend_from_slice(&(chunk.data.len() as u32).to_be_bytes());
+    output.extend_from_slice(&chunk.chunk_type);
+    output.extend_from_slice(&chunk.data);
+    output.extend_from_slice(&chunk.crc.to_be_bytes());
+}
+
+/// `$chunkSizeLimit` (PNG.pm 13.59:1577): a data chunk larger than this is
+/// copied with `CopyBlock`, unread, so its CRC is never checked.
+const PNG_CHUNK_SIZE_LIMIT: usize = 10_000_000;
+
+/// Whether ExifTool checks this chunk's CRC when it rewrites the file. Every
+/// chunk is checked (PNG.pm 13.59:1612-1619) except IEND, whose branch reads
+/// its CRC and writes it straight back (:1546-1556), and an IDAT over
+/// [`PNG_CHUNK_SIZE_LIMIT`] (:1577-1584).
+fn crc_is_checked(chunk: &PngChunk) -> bool {
+    match &chunk.chunk_type {
+        b"IEND" => false,
+        b"IDAT" => chunk.data.len() <= PNG_CHUNK_SIZE_LIMIT,
+        _ => true,
+    }
+}
+
+/// Refuses a PNG with a bad chunk CRC, before anything is written. ExifTool
+/// 13.59 raises `Error("Bad CRC for $chunk chunk", 1)` -- a minor error, which
+/// without `-m` (ignore minor errors) leaves the file untouched and exits 1.
+/// That covers critical and ancillary, known and unknown chunks alike. This
+/// writer has no `-m` equivalent, so it always refuses.
+fn check_chunk_crcs(chunks: &[PngChunk]) -> Result<()> {
+    match chunks.iter().find(|chunk| {
+        crc_is_checked(chunk) && chunk.crc != calculate_crc(&chunk.chunk_type, &chunk.data)
+    }) {
+        Some(chunk) => Err(ExifToolError::parse_error(format!(
+            "Bad CRC for {} chunk (a [minor] error that ExifTool also refuses to write \
+             over without -m); the file was not changed",
+            chunk.type_str()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Serializes a tEXt chunk from keyword and text.
 ///
 /// tEXt chunk format: `keyword\0text`
@@ -726,6 +773,10 @@ pub(crate) fn write_png_metadata_with_removals(
         .position(|chunk| chunk.chunk_type == *b"IDAT")
         .ok_or_else(|| ExifToolError::parse_error("Missing IDAT chunks"))?;
 
+    // A chunk whose CRC does not match is refused, as ExifTool refuses it,
+    // before anything else is decided or written.
+    check_chunk_crcs(&chunks)?;
+
     // Decide the EXIF block's fate first: a refused EXIF edit must leave the
     // file untouched.
     let exif_fate = plan_exif(&chunks, modified_metadata, baseline, removed)?;
@@ -783,17 +834,15 @@ pub(crate) fn write_png_metadata_with_removals(
                     write_chunk(&mut output, &chunk_type, &data);
                 }
                 Some(TextFate::Drop) => {}
-                Some(TextFate::Carry) | None => {
-                    write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
-                }
+                Some(TextFate::Carry) | None => write_carried_chunk(&mut output, chunk),
             },
             b"eXIf" => match &exif_fate {
-                ExifFate::Carry => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+                ExifFate::Carry => write_carried_chunk(&mut output, chunk),
                 // Nothing left in the EXIF block: the chunk goes.
                 ExifFate::Replace(payload) if payload.is_empty() => {}
                 ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
             },
-            _ => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+            _ => write_carried_chunk(&mut output, chunk),
         }
     }
     // Bytes after IEND (a trailer) are copied unchanged.
