@@ -1104,8 +1104,8 @@ mod document_name_tests {
 /// table does not report: the 0x927c MakerNote row and its dispatch, the
 /// `omitted` (withheld-conversion) ids, the offset class, `Unknown` and
 /// untranscribed ids -- plus [`EXIF_IFD_HAND_KEPT`]; `SubDirectory` edge ids
-/// report nothing when [`EXIF_IFD_SILENCE_EDGES`] is set (0xa005 stays the
-/// hand's pointer). An engine-reported entry whose absence is the engine's
+/// report nothing unless requested (decision D-3; 0xa005 stays the hand's
+/// pointer). An engine-reported entry whose absence is the engine's
 /// own (`DirEngineRows::undecoded`: a refusal ExifTool does not make) falls
 /// back to its hand arm; one ExifTool refuses too (an overlapping or
 /// out-of-block value, an entry past the warning budget) or whose value the
@@ -1241,19 +1241,6 @@ fn parse_exif_subifd_with_optional_options(
 /// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
 /// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
 const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
-
-/// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
-/// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
-/// sub-directory tag is processed, never reported unless requested by name
-/// or with the `MakerNotes` option). Decision D-3 of slice E-2, its own
-/// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
-/// ApplicationNotes, an XMP edge, was a census EXTRA).
-///
-/// A request-aware caller may restore the physical edge row by passing
-/// [`ReadOptions`]: ExifTool reports an edge requested by name (Exif.pm:7104
-/// `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default listing remains
-/// silent. The legacy wrapper intentionally supplies no request.
-const EXIF_IFD_SILENCE_EDGES: bool = true;
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
 /// family 1, as the hand arm (`lookup_tag_name(id, "ExifIFD")`) keys it.
@@ -1397,7 +1384,19 @@ fn parse_exif_directory_with_session(
             // of two priority-0 copies).
             let mut priority = SHIM_DEFAULT_PRIORITY;
             if let Some(engine) = engine.as_mut() {
-                let silence = EXIF_IFD_SILENCE_EDGES && *tag_id != INTEROPERABILITY_IFD_POINTER;
+                // `SubDirectory` edge ids (other than the 0xa005 pointer)
+                // report nothing in the ExifIFD, as in ExifTool
+                // (Exif.pm:7103-7104: a sub-directory tag is processed, never
+                // reported unless requested by name or with the `MakerNotes`
+                // option). Decision D-3 of slice E-2: before it the hand arm
+                // reported them (DJI_XT2.jpg's 0x02bc ApplicationNotes, an XMP
+                // edge, was a census EXTRA). A request-aware caller restores
+                // the physical edge row by passing [`ReadOptions`]: ExifTool
+                // reports an edge requested by name (Exif.pm:7104
+                // `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default
+                // listing remains silent. The legacy wrapper supplies no
+                // request.
+                let silence = *tag_id != INTEROPERABILITY_IFD_POINTER;
                 let requested_edge = options
                     .is_some_and(|options| requested_subdir_edge(engine.table(), *tag_id, options));
                 match engine.route_entry(
