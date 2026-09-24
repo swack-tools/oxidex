@@ -41,7 +41,10 @@ class RuntimeOwnershipTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         files = {
-            "src/core/exif_dir_engine.rs": "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n",
+            "src/core/exif_dir_engine.rs": (
+                "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n"
+                "pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[];\n"
+            ),
             "src/core/tiff_helpers.rs": (
                 "pub(crate) const EXIF_IFD_HAND_KEPT: &[u16] = &[];\n"
                 "pub(crate) const IFD1_RESIDUAL_IDS: &[u16] = &[];\n"
@@ -201,9 +204,71 @@ let ch = 'd';
             self.ownership.build_inventory(root)
         registry.write_text('pub const ENABLED: &[(&str, &str)] = &[("Exif", "Main")];\n')
         carrier = root / "src/core/exif_dir_engine.rs"
-        carrier.write_text('/* pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb]; */\npub(crate) const IFD0_HAND_KEPT: &[u16] = &[];\n')
+        carrier.write_text(
+            '/* pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb]; */\npub(crate) const IFD0_HAND_KEPT: &[u16] = &[];\n'
+            'pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[];\n'
+        )
         rows = self.ownership._expected_residual_rows(root)
         self.assertNotIn("IFD0/0x83bb", {row["field"]["value"] for row in rows})
+
+    def test_repository_xp_decline_fallback_is_fenced(self):
+        rows = self.ownership.build_inventory(self.root)["rows"]
+        by_field = {(row["field"]["kind"], row["field"]["value"]): row for row in rows}
+        for value in ("0x9c9b", "0x9c9c", "0x9c9d", "0x9c9e", "0x9c9f"):
+            self.assertEqual(by_field[("numeric", value)]["owner"], "generated", value)
+            fallback = by_field[("index", f"IFD0/{value}")]
+            self.assertEqual(fallback["owner"], "residual", value)
+            self.assertEqual(fallback["symbol"], "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE")
+            self.assertEqual(fallback["residual_disposition"], "fallback-on-decline")
+        dispositions = {
+            row["residual_disposition"]
+            for row in rows
+            if (row["module"], row["table"], row["field"]["kind"]) == ("Exif", "Main", "index")
+        }
+        self.assertEqual(dispositions, self.ownership.RESIDUAL_DISPOSITIONS)
+
+    def test_decline_fallback_needs_its_live_array_and_a_generated_owner(self):
+        root = self.temporary_root()
+        carrier = root / "src/core/exif_dir_engine.rs"
+        ledger_path = root / "tools/exiftool-tables/conv_exif_main_ledger.json"
+        carrier.write_text(
+            "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n"
+            "pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[0x9c9b];\n"
+        )
+        # A decline fallback with no generated arm behind it fences nothing.
+        with self.assertRaisesRegex(self.ownership.Refused, "has no generated owner"):
+            self.ownership.write_inventory(root)
+        ledger = json.loads(ledger_path.read_text())
+        ledger["generated"] = [{"id": "0x9c9b"}]
+        ledger_path.write_text(json.dumps(ledger))
+        self.ownership.write_inventory(root)
+        rows = self.ownership.load_rows(root)
+        fallback = next(row for row in rows if row["field"]["value"] == "IFD0/0x9c9b")
+        self.assertEqual(fallback["residual_disposition"], "fallback-on-decline")
+        # Dropping the id from the live array without regenerating is caught.
+        carrier.write_text(
+            "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n"
+            "pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[];\n"
+        )
+        with self.assertRaisesRegex(self.ownership.Refused, "residual fragments differ"):
+            self.ownership.load_rows(root)
+        # So is deleting the array: the fallback cannot go unrecorded.
+        carrier.write_text("pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n")
+        with self.assertRaisesRegex(self.ownership.Refused, "missing residual array IFD0_HAND_ON_DECLINE"):
+            self.ownership.load_rows(root)
+        # And a fragment row without a known disposition is refused.
+        fragment = root / "tools/exiftool-tables/runtime_ownership.d/exif_main_residuals.json"
+        carrier.write_text(
+            "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n"
+            "pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[0x9c9b];\n"
+        )
+        self.ownership.write_inventory(root)
+        tampered = json.loads(fragment.read_text())
+        for row in tampered:
+            row["residual_disposition"] = "sometimes"
+        rows = self.ownership._base_rows(root) + tampered
+        with self.assertRaisesRegex(self.ownership.Refused, "invalid residual disposition"):
+            self.ownership._validate_residual_dispositions(rows)
 
     def test_stale_inventory_and_empty_refusal_refuse(self):
         root = self.temporary_root()
@@ -247,7 +312,8 @@ class TypedFragmentTests(unittest.TestCase):
         root = Path(temp.name)
         self.write(
             root / "src/core/exif_dir_engine.rs",
-            "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n",
+            "pub(crate) const IFD0_HAND_KEPT: &[u16] = &[0x83bb];\n"
+            "pub(crate) const IFD0_HAND_ON_DECLINE: &[u16] = &[];\n",
         )
         self.write(
             root / "src/core/tiff_helpers.rs",
