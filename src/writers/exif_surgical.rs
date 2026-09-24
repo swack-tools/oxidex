@@ -1730,8 +1730,9 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
 }
 
 /// Whether [`rewrite_jpeg_exif_with_removals`] would change nothing: the JPEG
-/// has an EXIF directory and the plan carries every scanned entry raw, in
-/// full, with nothing added, edited or dropped.
+/// has an EXIF directory and the plan carries exactly the scanned entries of
+/// each IFD raw -- same tag, type, count and bytes -- with nothing added,
+/// edited or dropped.
 ///
 /// The serializer re-lays-out even an all-carried plan, so its bytes differ
 /// from the original while no tag does, and the CLI then reported an update
@@ -1753,18 +1754,38 @@ pub(crate) fn jpeg_exif_plan_is_identity(
         return Ok(false);
     }
     let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
+    // Entry for entry, not by count: a plan that drops one GPS entry and adds
+    // the mandatory GPSVersionID default has as many entries as the scan (a
+    // GPS IFD holding GPSAltitude and GPSSpeed, `-GPS:GPSAltitude=`), and a
+    // count comparison returned the original bytes -- the deletion silently
+    // skipped and reported unchanged. Every IFD must carry exactly the
+    // scanned (tag, type, count, raw bytes), none of them re-encoded.
     let planned = [
-        &plan.ifd0,
-        &plan.exif_ifd,
-        &plan.gps,
-        &plan.interop,
-        &plan.ifd1,
+        (IfdKind::Ifd0, &plan.ifd0),
+        (IfdKind::ExifIfd, &plan.exif_ifd),
+        (IfdKind::Gps, &plan.gps),
+        (IfdKind::Interop, &plan.interop),
+        (IfdKind::Ifd1, &plan.ifd1),
     ];
-    let count: usize = planned.iter().map(|entries| entries.len()).sum();
-    Ok(count == scan.entries.len()
-        && planned
+    let same_ifd = |ifd: IfdKind, entries: &[OutEntry]| {
+        if entries.iter().any(|entry| entry.native_endian) {
+            return false;
+        }
+        let mut ours: Vec<(u16, u16, u32, &[u8])> = entries
             .iter()
-            .all(|entries| entries.iter().all(|entry| !entry.native_endian))
+            .map(|e| (e.tag_id, e.field_type, e.count, e.value.as_slice()))
+            .collect();
+        let mut theirs: Vec<(u16, u16, u32, &[u8])> = scan
+            .entries
+            .iter()
+            .filter(|e| e.ifd == ifd)
+            .map(|e| (e.tag_id, e.field_type, e.count, e.value.as_slice()))
+            .collect();
+        ours.sort();
+        theirs.sort();
+        ours == theirs
+    };
+    Ok(planned.iter().all(|(ifd, entries)| same_ifd(*ifd, entries))
         && plan.thumbnail == scan.thumbnail)
 }
 

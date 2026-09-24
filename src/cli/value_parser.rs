@@ -678,6 +678,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             parse_shutter_speed_value(tag_name, raw)
         }
         Some(ValueType::Rational) => parse_rational(declared_tag_name, raw),
+        Some(ValueType::DateTime) if declared_tag_name.starts_with("PDF:") => {
+            parse_pdf_date(tag_name, raw)
+        }
         Some(ValueType::DateTime) => parse_datetime(tag_name, raw),
         // ExifTool's `undef` format imposes no shape on the value and stores
         // the argument's bytes verbatim (`Writer.pl:6847-6858`).
@@ -1234,6 +1237,30 @@ fn rationalize(value: f64, max_int: i64) -> (i64, i64) {
     }
     let (num, denom) = best.unwrap_or((0.0, 1.0));
     (num as i64 * sign, denom as i64)
+}
+
+/// A PDF Info date, kept as the text the PDF writer serializes.
+///
+/// PDF.pm's `PrintConvInv => '$self->InverseDateTime($val)'` keeps the
+/// zone, unlike the EXIF path ([`parse_datetime`] drops it): pinned 13.59
+/// writes `-PDF:CreateDate='2020:01:02 03:04:05'` as `(D:20200102030405)`
+/// and `...+02:00` as `(D:20200102030405+02'00')`. A `TagValue::DateTime`
+/// cannot say "no zone" (the writer printed `+00'00'`), so the text goes
+/// through. Only the two forms `pdf_writer` converts are accepted; anything
+/// else is refused with ExifTool's usage message rather than stored as text.
+fn parse_pdf_date(tag_name: &str, raw: &str) -> Result<TagValue> {
+    const USAGE: &str = "Invalid date/time (use YYYY:mm:dd HH:MM:SS[.ss][+/-HH:MM|Z])";
+    let text = raw.trim();
+    let (clock, zone) = text.split_at(text.len().min(19));
+    let zone_ok = zone.is_empty()
+        || (zone.len() == 6
+            && matches!(zone.as_bytes()[0], b'+' | b'-')
+            && chrono::NaiveTime::parse_from_str(&zone[1..], "%H:%M").is_ok());
+    if chrono::NaiveDateTime::parse_from_str(clock, "%Y:%m:%d %H:%M:%S").is_ok() && zone_ok {
+        Ok(TagValue::String(text.to_string()))
+    } else {
+        Err(invalid(tag_name, USAGE))
+    }
 }
 
 /// `InverseDateTime` — `Writer.pl:5012-5151`, for the case this CLI is in:

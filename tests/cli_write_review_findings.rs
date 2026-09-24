@@ -411,3 +411,186 @@ fn pdf_refusal_names_the_field() {
         err(&o)
     );
 }
+
+// --- Codex threads on a59758a0 -------------------------------------------
+
+/// Thread 1. The reader surfaces a PDF's creation date as both
+/// `PDF:CreateDate` and `PDF:CreationDate`; removing one spelling left the
+/// other in the map and the writer put the date back. Pinned ExifTool 13.59
+/// on sample.pdf: `-PDF:CreateDate=` removes it (`[PDF] ModifyDate` alone
+/// remains), `-PDF:CreateDate='2020:01:02 03:04:05'` reads back as written,
+/// and the Info-key spellings are not tags: `-PDF:CreationDate=` / `-PDF:ModDate=`
+/// warn `Sorry, PDF:ModDate doesn't exist or isn't writable` / `Nothing to
+/// do.` and exit 1.
+#[test]
+fn pdf_date_writes_act_on_every_spelling_of_the_field() {
+    let dir = TempDir::new().unwrap();
+    let pdf = copy_into(&dir, PDF, "a.pdf");
+    let o = run(&pdf, &["-PDF:CreateDate="]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(out(&o), "    1 image files updated\n");
+    assert_eq!(read_back(&pdf, "PDF:CreateDate"), "");
+    assert_eq!(
+        read_back(&pdf, "PDF:ModifyDate"),
+        "2024:01:15 15:00:00+00:00"
+    );
+
+    let pdf = copy_into(&dir, PDF, "b.pdf");
+    let o = run(&pdf, &["-PDF:ModifyDate="]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(read_back(&pdf, "PDF:ModifyDate"), "");
+    assert_eq!(
+        read_back(&pdf, "PDF:CreateDate"),
+        "2024:01:15 14:30:00+00:00"
+    );
+
+    let pdf = copy_into(&dir, PDF, "c.pdf");
+    let o = run(&pdf, &["-PDF:CreateDate=2020:01:02 03:04:05"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(read_back(&pdf, "PDF:CreateDate"), "2020:01:02 03:04:05");
+    // With a zone, and through ExifTool's other spelling: pinned 13.59 writes
+    // `(D:20200102030405+02'00')` and reads back `...+02:00`.
+    let o = run(&pdf, &["-PDF:ModifyDate=2020:01:02 03:04:05+02:00"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(
+        read_back(&pdf, "PDF:ModifyDate"),
+        "2020:01:02 03:04:05+02:00"
+    );
+
+    for spelling in ["PDF:CreationDate", "PDF:ModDate"] {
+        let pdf = copy_into(&dir, PDF, "d.pdf");
+        let before = sha(&pdf);
+        let o = run(&pdf, &[&format!("-{spelling}=")]);
+        assert_eq!(o.status.code(), Some(1), "{spelling}");
+        assert_eq!(out(&o), "", "{spelling}");
+        assert_eq!(
+            err(&o),
+            format!("Warning: Sorry, {spelling} doesn't exist or isn't writable\nNothing to do.\n")
+        );
+        assert_eq!(sha(&pdf), before, "{spelling}");
+    }
+}
+
+/// Thread 2. The public `copy_metadata` wrote each filtered tag as it went,
+/// so a later refusal left the earlier ones committed.
+#[test]
+fn a_refused_filter_leaves_the_copy_destination_untouched() {
+    let dir = TempDir::new().unwrap();
+    let src = copy_into(&dir, JPEG_XMP, "src.jpg");
+    assert_eq!(run(&src, &["-XPTitle=hello"]).status.code(), Some(0));
+    let dst = copy_into(&dir, JPEG, "dst.jpg");
+    let before = sha(&dst);
+    let filters = ["XPTitle".to_string(), "XMP:Title".to_string()];
+    let result = oxidex::core::operations::copy_metadata(&src, &dst, Some(&filters));
+    assert!(result.is_err(), "XMP:Title cannot be written");
+    assert_eq!(sha(&dst), before, "the XPTitle before it was committed");
+}
+
+/// A JPEG whose GPS IFD holds GPSAltitude (100/1) and GPSSpeed (5/1) and no
+/// GPSVersionID, built on tag_matrix_base.jpg with its EXIF segment removed.
+fn gps_jpeg(dir: &TempDir) -> PathBuf {
+    let entry = |tag: u16, typ: u16, count: u32, value: u32| {
+        let mut e = tag.to_le_bytes().to_vec();
+        e.extend(typ.to_le_bytes());
+        e.extend(count.to_le_bytes());
+        e.extend(value.to_le_bytes());
+        e
+    };
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend(8u32.to_le_bytes());
+    tiff.extend(1u16.to_le_bytes());
+    tiff.extend(entry(0x8825, 4, 1, 26));
+    tiff.extend(0u32.to_le_bytes());
+    let data = 26 + 2 + 2 * 12 + 4;
+    tiff.extend(2u16.to_le_bytes());
+    tiff.extend(entry(0x0006, 5, 1, data));
+    tiff.extend(entry(0x000d, 5, 1, data + 8));
+    tiff.extend(0u32.to_le_bytes());
+    for (n, d) in [(100u32, 1u32), (5, 1)] {
+        tiff.extend(n.to_le_bytes());
+        tiff.extend(d.to_le_bytes());
+    }
+    let base = fs::read("tests/fixtures/jpeg/tag_matrix_base.jpg").unwrap();
+    let mut kept = base[..2].to_vec();
+    let mut at = 2;
+    while at + 4 <= base.len() && base[at] == 0xff && !matches!(base[at + 1], 0xda | 0xd9) {
+        let len = u16::from_be_bytes([base[at + 2], base[at + 3]]) as usize;
+        let segment = &base[at..at + 2 + len];
+        if !(base[at + 1] == 0xe1 && segment[4..].starts_with(b"Exif\0\0")) {
+            kept.extend_from_slice(segment);
+        }
+        at += 2 + len;
+    }
+    let mut app1 = b"Exif\0\0".to_vec();
+    app1.extend(&tiff);
+    let mut out = kept[..2].to_vec();
+    out.extend([0xff, 0xe1]);
+    out.extend(((app1.len() + 2) as u16).to_be_bytes());
+    out.extend(&app1);
+    out.extend(&kept[2..]);
+    out.extend(&base[at..]);
+    let path = dir.path().join("gps.jpg");
+    fs::write(&path, out).unwrap();
+    path
+}
+
+/// Thread 3. Pinned ExifTool 13.59 on that file: `-GPS:GPSAltitude=` leaves
+/// `[GPS] GPSSpeed : 5` and reports an update. The planner dropped
+/// GPSAltitude and added the GPSVersionID default, the entry count matched
+/// the original, and the identity test handed back the original bytes:
+/// `0 image files updated` / `1 image files unchanged`, altitude still there.
+#[test]
+fn a_deletion_offset_by_a_generated_default_is_not_an_identity() {
+    let dir = TempDir::new().unwrap();
+    let file = gps_jpeg(&dir);
+    assert_eq!(read_back(&file, "GPS:GPSAltitude"), "100 m");
+    let o = run(&file, &["-GPS:GPSAltitude="]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(out(&o), "    1 image files updated\n");
+    assert_eq!(read_back(&file, "GPS:GPSAltitude"), "");
+    assert_eq!(read_back(&file, "GPS:GPSSpeed"), "5");
+}
+
+/// Thread 4. A copy-all with nothing the destination can hold (every tag of
+/// synthetic_001.jpg is EXIF/JFIF/File; the PDF writer takes only Info
+/// fields) serialized the PDF anyway, appending a revision reported as an
+/// update. Nothing copied is nothing written.
+#[test]
+fn a_copy_all_with_nothing_copied_leaves_the_file_alone() {
+    let dir = TempDir::new().unwrap();
+    let pdf = copy_into(&dir, PDF, "a.pdf");
+    let before = sha(&pdf);
+    let o = run(&pdf, &["-TagsFromFile", JPEG]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(
+        out(&o),
+        "    0 image files updated\n    1 image files unchanged\n"
+    );
+    assert!(err(&o).contains("Not copied"), "{}", err(&o));
+    assert_eq!(sha(&pdf), before);
+}
+
+/// Thread 5. Pinned ExifTool 13.59: `-TagsFromFile src -XPTitle -NoSuchTag=x
+/// dst` prints `Warning: Tag 'NoSuchTag' is not defined` and copies
+/// (`1 image files updated`); the undefined name was counted as a set and
+/// the copy refused.
+#[test]
+fn an_undefined_set_beside_a_copy_is_only_a_warning() {
+    let dir = TempDir::new().unwrap();
+    let src = xp_source(&dir);
+    for filters in [vec!["-XPTitle"], vec![]] {
+        let dst = copy_into(&dir, JPEG, "dst.jpg");
+        let mut args = vec!["-TagsFromFile", s(&src)];
+        args.extend(filters.iter().copied());
+        args.push("-NoSuchTag=x");
+        let o = run(&dst, &args);
+        assert_eq!(o.status.code(), Some(0), "{filters:?}: {}", err(&o));
+        assert!(
+            err(&o).starts_with("Warning: Tag 'NoSuchTag' is not defined\n"),
+            "{filters:?}: {}",
+            err(&o)
+        );
+        assert_eq!(out(&o), "    1 image files updated\n", "{filters:?}");
+        assert_eq!(read_back(&dst, "IFD0:XPTitle"), "hello", "{filters:?}");
+    }
+}

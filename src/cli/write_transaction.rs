@@ -133,7 +133,11 @@ impl WritePlan {
                     .to_string(),
             );
         }
-        if plan.copy_from.is_some() && (!plan.shifts.is_empty() || plan.requested_sets) {
+        // The sets that survive `partition_defined`: an undefined name is only
+        // ExifTool's warning (13.59, `-TagsFromFile src -XPTitle -NoSuchTag=x`:
+        // `Warning: Tag 'NoSuchTag' is not defined`, then the copy), never a
+        // reason to refuse the copy.
+        if plan.copy_from.is_some() && (!plan.shifts.is_empty() || !plan.sets.is_empty()) {
             return Err(
                 "Combining -TagsFromFile with -TAG=VALUE or a date shift is not \
                  supported yet; run them as separate commands"

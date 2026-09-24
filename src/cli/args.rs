@@ -1109,6 +1109,15 @@ impl CliArgs {
             ) {
                 return None;
             }
+            // A PDF Info date is an ordinary write too: the shift path only
+            // patches EXIF dates, so `-PDF:ModifyDate=2020:01:02 03:04:05`
+            // failed there ("not a DateTime tag") while pinned 13.59 writes it.
+            if tag
+                .split_once(':')
+                .is_some_and(|(group, _)| group.eq_ignore_ascii_case("PDF"))
+            {
+                return None;
+            }
 
             // Check if this looks like a date shift operation
             // Date shifts should have either:

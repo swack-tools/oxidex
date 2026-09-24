@@ -103,6 +103,17 @@ pub fn exiftool_tag_exists(name: &str) -> bool {
 /// `exiftool -NoSuchTag=v a.jpg` (13.59): `Warning: Tag 'NoSuchTag' is not
 /// defined`, then `Nothing to do.` and exit 1 when no other tag was set.
 pub fn undefined_tag_warning(tag: &str) -> Option<String> {
+    // `CreationDate` and `ModDate` are the PDF Info dictionary's keys, not
+    // ExifTool tag names: PDF.pm's Info table names them `CreateDate` and
+    // `ModifyDate` (PDF.pm:126-143), so pinned 13.59 answers `-PDF:CreationDate=` with `Sorry,
+    // PDF:CreationDate doesn't exist or isn't writable` / `Nothing to do.`
+    // (the reader surfaces both spellings; only ExifTool's writes).
+    if let Some((group, name)) = tag.rsplit_once(':')
+        && group.eq_ignore_ascii_case("PDF")
+        && (name.eq_ignore_ascii_case("CreationDate") || name.eq_ignore_ascii_case("ModDate"))
+    {
+        return Some(format!("Sorry, {tag} doesn't exist or isn't writable"));
+    }
     let name = plain_name(tag)?;
     if exiftool_tag_exists(name) {
         return None;

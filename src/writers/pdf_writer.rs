@@ -576,10 +576,12 @@ fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
         return Some(format_fixed_offset_pdf_date(dt));
     }
 
+    // A value without a zone is stored without one, as pinned ExifTool 13.59
+    // stores it (`-PDF:CreateDate='2020:01:02 03:04:05'` writes
+    // `(D:20200102030405)`); appending `+00'00'` invented a UTC offset the
+    // caller never gave, and the date then read back as `...+00:00`.
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S") {
-        let utc_dt = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
-        let fixed = utc_dt.with_timezone(&FixedOffset::east_opt(0).unwrap());
-        return Some(format_fixed_offset_pdf_date(fixed));
+        return Some(naive.format("%Y%m%d%H%M%S").to_string());
     }
 
     if let Ok(date_only) = NaiveDate::parse_from_str(value, "%Y:%m:%d") {

@@ -1060,7 +1060,13 @@ fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap
         }
         // Look up tag descriptor in registry
         if let Some(descriptor) = get_tag_descriptor(tag_name) {
-            if has_reliable_value_type(tag_name) {
+            // A PDF Info date travels as text so its zone (or its absence)
+            // survives to the writer (`cli::value_parser::parse_pdf_date`;
+            // `TagValue::DateTime` cannot say "no zone").
+            let pdf_date_text = tag_name.starts_with("PDF:")
+                && matches!(tag_value, TagValue::String(_))
+                && matches!(descriptor.value_type, crate::core::ValueType::DateTime);
+            if has_reliable_value_type(tag_name) && !pdf_date_text {
                 // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
                 validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
             } else {
@@ -1216,15 +1222,36 @@ fn refuse_png_exif_flattening(path: &Path, tag_name: &str, metadata: &MetadataMa
     Ok(())
 }
 
-/// Whether `metadata` holds `key`, counting the PDF writer's alias spellings
-/// (`CreateDate`/`CreationDate`, `ModifyDate`/`ModDate`) as one field.
-fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
-    let aliases: &[&str] = match key {
+/// Every spelling under which the reader surfaces the PDF Info field `key`
+/// names: `PDF:CreateDate` and `PDF:CreationDate` (and `ModifyDate` /
+/// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
+/// otherwise.
+fn field_spellings(key: &str) -> &[&str] {
+    match key {
         "PDF:CreateDate" | "PDF:CreationDate" => &["PDF:CreateDate", "PDF:CreationDate"],
         "PDF:ModifyDate" | "PDF:ModDate" => &["PDF:ModifyDate", "PDF:ModDate"],
         _ => &[],
-    };
-    metadata.contains_key(key) || aliases.iter().any(|alias| metadata.contains_key(alias))
+    }
+}
+
+/// Whether `metadata` holds `key` under any of its [`field_spellings`].
+fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
+    metadata.contains_key(key)
+        || field_spellings(key)
+            .iter()
+            .any(|alias| metadata.contains_key(alias))
+}
+
+/// Removes `key` and every other spelling of the same field. Removing only
+/// the requested spelling left the reader's alias in the map, which the PDF
+/// writer serialized straight back: `-PDF:CreateDate=` on PDF.pdf appended a
+/// revision that still carried the date and was reported as an update, and
+/// `-PDF:CreateDate=<new>` lost to the stale `CreationDate` spelling.
+fn remove_field(metadata: &mut MetadataMap, key: &str) {
+    metadata.remove(key);
+    for alias in field_spellings(key) {
+        metadata.remove(alias);
+    }
 }
 
 /// Modifies a single tag in a file's metadata.
@@ -1281,6 +1308,7 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     // proven to write (see `resolve_write_address`).
     let key = resolve_write_address(path, tag_name, &metadata)?;
     refuse_png_exif_flattening(path, tag_name, &metadata)?;
+    remove_field(&mut metadata, &key);
     metadata.insert(key, new_value);
 
     // Step 3: Write all metadata back to file
@@ -1334,7 +1362,7 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
         }
     }
     refuse_png_exif_flattening(path, tag_name, &metadata)?;
-    metadata.remove(&key);
+    remove_field(&mut metadata, &key);
 
     // Step 3: Write metadata back to file. The key goes along: an EXIF entry
     // the reader surfaces no row for has no key to take out of the map, yet
@@ -1486,7 +1514,10 @@ pub fn copy_metadata_report(
         return copy_all(&source_metadata, dest);
     };
 
-    let mut report = CopyReport::default();
+    // Resolve every filter against the source first; the destination is then
+    // written once, on a private copy, and only if every write succeeds --
+    // a later filter's refusal must not leave earlier ones committed.
+    let mut pending: Vec<(&str, TagValue)> = Vec::new();
     for filter in filters {
         let (source_spec, dest_spec) = if let Some((from, to)) = filter.split_once('>') {
             (from.trim(), to.trim())
@@ -1553,10 +1584,48 @@ pub fn copy_metadata_report(
         if crate::writers::xp_strings::is_xp_tag_key(source_key) {
             crate::writers::xp_strings::refuse_unknown_provenance(source_key, &value)?;
         }
-        modify_tag(dest, dest_spec, value)?;
-        report.copied += 1;
+        pending.push((dest_spec, value));
     }
+    let report = CopyReport {
+        copied: pending.len(),
+        uncopied_groups: Vec::new(),
+    };
+    if pending.is_empty() {
+        return Ok(report); // nothing to copy: the destination is not touched
+    }
+    on_scratch_copy(dest, |scratch| {
+        for (dest_spec, value) in pending {
+            modify_tag(scratch, dest_spec, value)?;
+        }
+        Ok(())
+    })?;
     Ok(report)
+}
+
+/// Runs `apply` on a private copy of `dest` (same directory and extension),
+/// and replaces `dest` only when every step succeeded and the bytes differ.
+fn on_scratch_copy(dest: &Path, apply: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    let original = std::fs::read(dest)?;
+    let dir = dest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut suffix = std::ffi::OsString::new();
+    if let Some(extension) = dest.extension() {
+        suffix.push(".");
+        suffix.push(extension);
+    }
+    let scratch = tempfile::Builder::new()
+        .prefix(".oxidex-copy-")
+        .suffix(&suffix)
+        .tempfile_in(dir)?;
+    std::fs::write(scratch.path(), &original)?;
+    apply(scratch.path())?;
+    let written = std::fs::read(scratch.path())?;
+    if written != original {
+        write_atomic(dest, &written)?;
+    }
+    Ok(())
 }
 
 /// The copy-all half of [`copy_metadata_report`]: every source tag the
@@ -1595,7 +1664,12 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
         report.copied += 1;
     }
     report.uncopied_groups.sort();
-    write_metadata(dest, &dest_metadata)?;
+    // Nothing the destination can hold: do not write at all. Serializing the
+    // unchanged map still appended a PDF revision (and may re-lay-out a PNG),
+    // which was then reported as an update.
+    if report.copied > 0 {
+        write_metadata(dest, &dest_metadata)?;
+    }
     Ok(report)
 }
 
