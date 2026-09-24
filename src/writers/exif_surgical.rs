@@ -681,6 +681,21 @@ pub(crate) fn plan_exif_write_with_removals(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<WritePlan> {
+    plan_exif_write_inner(scan, original_map, desired, removed, true)
+}
+
+/// [`plan_exif_write_with_removals`]; `drop_all_when_no_rows` selects the
+/// clear-all shortcut (a map with no IFD0/ExifIFD/GPS/EXIF key drops the
+/// whole block, raw-carried IFD1 and MakerNote included). A caller for which
+/// such a map is not a clear -- the legacy half of a transaction whose
+/// generated half still writes -- passes false and gets the per-entry diff.
+fn plan_exif_write_inner(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+    drop_all_when_no_rows: bool,
+) -> Result<WritePlan> {
     let exif_family_keys = |m: &MetadataMap| -> Vec<String> {
         m.iter()
             .map(|(k, _)| k.clone())
@@ -724,7 +739,7 @@ pub(crate) fn plan_exif_write_with_removals(
     }
 
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
-    if exif_family_keys(desired).is_empty() {
+    if drop_all_when_no_rows && exif_family_keys(desired).is_empty() {
         return Ok(plan);
     }
 
@@ -1817,6 +1832,22 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
         ),
     };
     let plan = plan_exif_write_with_removals(&scan, original_map, desired, removed)?;
+    serialize_exif(&plan)
+}
+
+/// [`rewrite_tiff_exif_with_removals`] for the legacy half of a transaction
+/// whose generated half still writes: a map left with no IFD0/ExifIFD/GPS/
+/// EXIF row is not a clear here, so entries are diffed one by one and IFD1,
+/// the thumbnail and the MakerNote are carried. Empty means no entry at all
+/// is left.
+pub(crate) fn rewrite_tiff_exif_keeping_carrier(
+    tiff: &[u8],
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
+    let scan = scan_exif_entries(tiff)?;
+    let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
     serialize_exif(&plan)
 }
 

@@ -868,3 +868,78 @@ fn a_generated_set_and_a_legacy_deletion_in_one_write() {
         }
     }
 }
+
+/// One `write_metadata` call that deletes the file's last legacy-owned
+/// EXIF value (ExifIFD:ISO) and sets a generated one (IFD0:Artist). The
+/// reconstructing writer's "nothing left" result used to be refused; with an
+/// IFD1 thumbnail present its drop-all shortcut would also have discarded
+/// the directory. Oracle (pinned ExifTool 13.59, `-ExifIFD:ISO=
+/// -IFD0:Artist=you`, PNG and JPEG alike): the original byte order is kept,
+/// IFD0 holds Artist and nothing else (no mandatory YCbCrPositioning, as
+/// IFD0 already existed), the emptied ExifIFD goes, and an IFD1 thumbnail or
+/// a MakerNote beside ISO survives verbatim.
+#[test]
+fn deleting_the_last_legacy_tag_while_setting_a_generated_one() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let iso = (0x8827, 3, 1, order.u16(100).to_vec());
+        let note = (0x927C, 7, 12, b"LSI1\0abcdefg".to_vec());
+        let r = [order.u32(72), order.u32(1)].concat();
+        let base = |exif: Vec<Entry>, ifd1: Option<(Vec<Entry>, Vec<u8>)>| {
+            Tiff {
+                ifd0: vec![],
+                exif: Some(exif),
+                interop: None,
+                gps: None,
+                ifd1,
+            }
+            .build(order)
+        };
+        for (label, tiff) in [
+            ("iso", base(vec![iso.clone()], None)),
+            (
+                "iso+thumb",
+                base(
+                    vec![iso.clone()],
+                    Some((
+                        vec![
+                            (0x0103, 3, 1, order.u16(6).to_vec()),
+                            (0x011A, 5, 1, r.clone()),
+                        ],
+                        vec![0xFF, 0xD8, 0xFF, 0xD9],
+                    )),
+                ),
+            ),
+            ("iso+makernote", base(vec![iso.clone(), note.clone()], None)),
+        ] {
+            let mut expected = dump(&tiff);
+            expected.remove("ExifIFD:0x8827");
+            expected.insert("IFD0:0x013b".into(), (2, 4, b"you\0".to_vec()));
+            for (name, original) in [
+                ("last.png", png(&[(b"eXIf", tiff.clone())], &[])),
+                ("last.jpg", jpeg_with(&tiff)),
+            ] {
+                let path = write(dir.path(), name, &original);
+                let mut map = read_metadata(&path).unwrap();
+                map.insert("IFD0:Artist", TagValue::new_string("you"));
+                assert!(map.remove("ExifIFD:ISO").is_some(), "{label} {name}");
+                write_metadata(&path, &map)
+                    .unwrap_or_else(|e| panic!("{order:?} {label} {name}: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let tiff_out = if name.ends_with(".png") {
+                    exif_of(&out).unwrap()
+                } else {
+                    let at = out
+                        .windows(6)
+                        .position(|w| w == b"Exif\0\0")
+                        .expect("EXIF APP1")
+                        + 6;
+                    let len = u16::from_be_bytes([out[at - 8], out[at - 7]]) as usize - 8;
+                    out[at..at + len].to_vec()
+                };
+                assert_eq!(&tiff_out[..2], &tiff[..2], "{order:?} {label} {name}");
+                assert_eq!(dump(&tiff_out), expected, "{order:?} {label} {name}");
+            }
+        }
+    }
+}

@@ -309,25 +309,44 @@ pub(crate) fn rewrite_generated_exif_payload(
     // writer -- the one a legacy-only plan uses -- and the generated edits
     // on top of that. Before, one write setting IFD0:Artist and deleting
     // ExifIFD:ISO failed "cannot shrink an IFD table".
+    //
+    // That legacy half is not a clear even when it leaves no IFD0/ExifIFD/
+    // GPS row, so the writer's drop-all shortcut is off: an IFD1 thumbnail
+    // or a MakerNote beside the last deleted tag is carried. When no entry
+    // at all is left, the generated edits start from an empty IFD0 in the
+    // original byte order; whether `WriteExif` seeds mandatory entries is
+    // still decided by the original IFD0 (`$numEntries`, WriteExif.pl
+    // 13.59:714-719), which existed. Oracle, `-ExifIFD:ISO= -IFD0:Artist=you`
+    // on a block holding only ISO: byte order kept, IFD0 = {Artist}.
+    let creation_count = match original {
+        Some(tiff) => Some(tiff_surgical::ifd0_state(tiff)?.0),
+        None => None,
+    };
     let mut plan = plan;
     let staged;
     let original = match original {
         Some(tiff) if plan.has_legacy_changes && legacy_deletes(baseline, &plan) => {
-            staged = crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
-                Some(tiff),
+            let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
+                tiff,
                 baseline,
                 &plan.legacy_metadata,
                 &plan.legacy_removed,
             )?;
-            if staged.is_empty() {
-                // The legacy delta removed every EXIF row; creating a fresh
-                // block for the generated edit would drop what the reader
-                // never surfaced (IFD1, the MakerNote). Refuse instead.
-                return Err(ExifToolError::unsupported_format(
-                    "Cannot delete every EXIF tag and set a new one in the same write: \
-                     write them separately",
-                ));
-            }
+            staged = if kept.is_empty() {
+                let order = match crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
+                {
+                    crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                        mandatory::TiffByteOrder::Little
+                    }
+                    crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                        mandatory::TiffByteOrder::Big
+                    }
+                };
+                mandatory::serialize_ifd0_defaults(Vec::new(), order)
+                    .map_err(ExifToolError::unsupported_format)?
+            } else {
+                kept
+            };
             plan.has_legacy_changes = false;
             Some(staged.as_slice())
         }
@@ -344,7 +363,10 @@ pub(crate) fn rewrite_generated_exif_payload(
         }
     };
     let scan = crate::writers::exif_surgical::scan_exif_entries(tiff)?;
-    let (original_count, _) = tiff_surgical::ifd0_state(tiff)?;
+    let original_count = match creation_count {
+        Some(count) => count,
+        None => tiff_surgical::ifd0_state(tiff)?.0,
+    };
     let order = match scan.byte_order {
         crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
             mandatory::TiffByteOrder::Little
