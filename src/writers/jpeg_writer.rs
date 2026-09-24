@@ -302,6 +302,37 @@ pub(crate) fn rewrite_generated_exif_payload(
 ) -> Result<Vec<u8>> {
     use crate::writers::mandatory_defaults_runtime as mandatory;
     use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
+    // The legacy delta is normally applied by the in-place TIFF payload
+    // writer, which cannot shrink an IFD and refuses a deletion. A plan that
+    // deletes a legacy tag (a key gone from the map, or named) therefore
+    // applies its legacy delta first through the reconstructing surgical
+    // writer -- the one a legacy-only plan uses -- and the generated edits
+    // on top of that. Before, one write setting IFD0:Artist and deleting
+    // ExifIFD:ISO failed "cannot shrink an IFD table".
+    let mut plan = plan;
+    let staged;
+    let original = match original {
+        Some(tiff) if plan.has_legacy_changes && legacy_deletes(baseline, &plan) => {
+            staged = crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
+                Some(tiff),
+                baseline,
+                &plan.legacy_metadata,
+                &plan.legacy_removed,
+            )?;
+            if staged.is_empty() {
+                // The legacy delta removed every EXIF row; creating a fresh
+                // block for the generated edit would drop what the reader
+                // never surfaced (IFD1, the MakerNote). Refuse instead.
+                return Err(ExifToolError::unsupported_format(
+                    "Cannot delete every EXIF tag and set a new one in the same write: \
+                     write them separately",
+                ));
+            }
+            plan.has_legacy_changes = false;
+            Some(staged.as_slice())
+        }
+        other => other,
+    };
     let empty;
     let tiff = match original {
         Some(tiff) => tiff,
@@ -409,6 +440,21 @@ pub(crate) fn rewrite_generated_exif_payload(
     } else {
         output
     })
+}
+
+/// Whether a public plan's legacy delta deletes a tag: an EXIF-family key of
+/// `baseline` that `legacy_metadata` no longer holds, or a named removal.
+fn legacy_deletes(
+    baseline: &MetadataMap,
+    plan: &crate::writers::generated_public_write::PublicWritePlan,
+) -> bool {
+    !plan.legacy_removed.is_empty()
+        || baseline.iter().any(|(key, _)| {
+            ["IFD0:", "ExifIFD:", "GPS:", "EXIF:"]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+                && !plan.legacy_metadata.contains_key(key)
+        })
 }
 
 /// `WriteExif` adds mandatory entries only when creating an empty directory.

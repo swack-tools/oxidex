@@ -311,6 +311,15 @@ fn plan_exif(
     baseline: &MetadataMap,
     removed: &[String],
 ) -> Result<ExifFate> {
+    // An empty replacement map with no named removals is the whole-metadata
+    // clear (`clear_all_metadata`, `-all=`): every eXIf chunk goes, whether
+    // or not the reader could surface a row from it (an IFD1-only block, one
+    // behind an improper `Exif\0\0` header). Judging it by the reader's
+    // rows carried such a chunk and reported success; pinned ExifTool 13.59
+    // `-all=` removes it, as the whole-map rebuild did.
+    if metadata.is_empty() && removed.is_empty() {
+        return Ok(ExifFate::Replace(Vec::new()));
+    }
     if !exif_changed(metadata, baseline, removed) {
         return Ok(ExifFate::Carry);
     }

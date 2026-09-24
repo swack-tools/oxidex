@@ -10,7 +10,9 @@
 //! `png-exif-surgical` matrix harness named in the PR (its fixtures are a
 //! superset of these), transcribed as data.
 
-use oxidex::core::operations::{modify_tag, read_metadata, remove_tag};
+use oxidex::core::operations::{
+    clear_all_metadata, modify_tag, read_metadata, remove_tag, write_metadata,
+};
 use oxidex::core::tag_value::TagValue;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -644,19 +646,46 @@ fn uneditable_exif_carriers_are_refused_untouched() {
     );
 }
 
-/// A minimal baseline JPEG with `tiff` as its EXIF APP1 block.
-fn jpeg_with(tiff: &[u8]) -> Vec<u8> {
+/// A minimal baseline JPEG with no metadata segment.
+fn jpeg_without_exif() -> Vec<u8> {
     const BODY: &str = "ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
-    let body: Vec<u8> = (0..BODY.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&BODY[i..i + 2], 16).unwrap())
-        .collect();
-    let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    let mut out = vec![0xFF, 0xD8];
+    out.extend(
+        (0..BODY.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&BODY[i..i + 2], 16).unwrap()),
+    );
+    out
+}
+
+/// [`jpeg_without_exif`] with `tiff` as its EXIF APP1 block.
+fn jpeg_with(tiff: &[u8]) -> Vec<u8> {
+    let bare = jpeg_without_exif();
+    let mut out = bare[..2].to_vec();
+    out.extend([0xFF, 0xE1]);
     out.extend(((tiff.len() + 8) as u16).to_be_bytes());
     out.extend(b"Exif\0\0");
     out.extend(tiff);
-    out.extend(body);
+    out.extend(&bare[2..]);
     out
+}
+
+/// A TIFF block whose IFD0 has no entries and whose IFD1 holds the only
+/// ones (Compression 6, XResolution 72/1): the reader surfaces no EXIF row
+/// for it in a PNG, while the oracle reads both IFD1 tags.
+fn ifd1_only(order: Order) -> Vec<u8> {
+    let r = [order.u32(72), order.u32(1)].concat();
+    Tiff {
+        ifd0: vec![],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: Some((
+            vec![(0x0103, 3, 1, order.u16(6).to_vec()), (0x011A, 5, 1, r)],
+            vec![0xFF, 0xD8, 0xFF, 0xD9],
+        )),
+    }
+    .build(order)
 }
 
 /// Pinned ExifTool 13.59 adds a new IFD1 tag (`-IFD1:PanasonicTitle=x`,
@@ -685,6 +714,13 @@ fn ifd1_and_interop_edits_are_refused_not_dropped() {
             ("small.png", png(&[(b"eXIf", small.clone())], &[])),
             ("full.jpg", jpeg_with(&tiff)),
             ("small.jpg", jpeg_with(&small)),
+            // An EXIF-family edit whose only rows are IFD1's: the planner's
+            // "no EXIF key left" shortcut ran before the refusal, emptied
+            // the plan and deleted the whole carrier (or created nothing).
+            ("ifd1only.png", png(&[(b"eXIf", ifd1_only(order))], &[])),
+            ("ifd1only.jpg", jpeg_with(&ifd1_only(order))),
+            ("none.png", png(&[], &[])),
+            ("none.jpg", jpeg_without_exif()),
         ] {
             for (key, value) in [
                 ("IFD1:PanasonicTitle", TagValue::new_string("x")),
@@ -754,4 +790,81 @@ fn exif_header_is_dropped_on_edit_and_a_trailer_is_kept() {
         Some(&(2, 5, b"Acme\0".to_vec()))
     );
     assert!(out.ends_with(b"TRAILER"));
+}
+
+/// `-all=` (an empty replacement map, no named removals) drops the eXIf
+/// chunk even when the reader surfaces no EXIF row from it: an IFD1-only
+/// block, or one behind an improper `Exif\0\0` header. Oracle: pinned
+/// ExifTool 13.59 `-all=` leaves `IHDR IDAT IEND` for both, as did the base
+/// rebuild; the in-place writer carried the chunk and reported success.
+#[test]
+fn clear_all_drops_an_exif_chunk_the_reader_surfaces_nothing_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let small = Tiff {
+        ifd0: vec![(0x013B, 2, 3, b"me\0".to_vec())],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: None,
+    }
+    .build(Order::Ii);
+    for (name, exif) in [
+        ("ifd1only.png", ifd1_only(Order::Ii)),
+        ("ifd1only-mm.png", ifd1_only(Order::Mm)),
+        ("header.png", [b"Exif\0\0".as_slice(), &small].concat()),
+        ("plain.png", small.clone()),
+    ] {
+        let path = write(dir.path(), name, &png(&[(b"eXIf", exif)], &[]));
+        clear_all_metadata(&path).unwrap();
+        assert_eq!(
+            kinds(&std::fs::read(&path).unwrap()),
+            ["IHDR", "IDAT", "IEND"],
+            "{name}"
+        );
+    }
+}
+
+/// One `write_metadata` call that sets a generated-path tag (IFD0:Artist)
+/// and deletes a legacy one (ExifIFD:ISO). The generated transaction applied
+/// the legacy delta with the in-place TIFF payload writer, which cannot
+/// shrink an IFD and refused the deletion; the deletion now goes through
+/// the reconstructing surgical writer first. Oracle: `-IFD0:Artist=you
+/// -ExifIFD:ISO=` sets Artist, deletes ISO and leaves every other entry.
+#[test]
+fn a_generated_set_and_a_legacy_deletion_in_one_write() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let before = dump(&tiff);
+        for (name, original) in [
+            ("mixed.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("mixed.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            let mut map = read_metadata(&path).unwrap();
+            map.insert("IFD0:Artist", TagValue::new_string("you"));
+            assert!(map.remove("ExifIFD:ISO").is_some(), "{name}");
+            write_metadata(&path, &map).unwrap_or_else(|e| panic!("{order:?} {name}: {e}"));
+            let out = std::fs::read(&path).unwrap();
+            let tiff_out = if name.ends_with(".png") {
+                exif_of(&out).unwrap()
+            } else {
+                let at = out
+                    .windows(6)
+                    .position(|w| w == b"Exif\0\0")
+                    .expect("EXIF APP1")
+                    + 6;
+                let len = u16::from_be_bytes([out[at - 8], out[at - 7]]) as usize - 8;
+                out[at..at + len].to_vec()
+            };
+            assert_only_changed(
+                &before,
+                &dump(&tiff_out),
+                &[
+                    ("IFD0:0x013b", Some((2, 4, b"you\0"))),
+                    ("ExifIFD:0x8827", None),
+                ],
+            );
+        }
+    }
 }

@@ -704,6 +704,25 @@ pub(crate) fn plan_exif_write_with_removals(
         makernote_pin: None,
     };
 
+    // An added or changed key of a raw-carried class (IFD1, InteropIFD,
+    // MakerNotes) is an error, never a silent drop: the Added loop below
+    // places new entries in IFD0/ExifIFD/GPS only, and `exif_family_keys`
+    // does not visit these prefixes. That covers an edit to a raw-carried
+    // InteropIFD entry the reader surfaces under `InteropIFD:<name>` (every
+    // Interop row since decision D-1 of slice E-1) and to an IFD1 entry, and
+    // a tag new to either directory, all of which pinned ExifTool 13.59
+    // writes (`-IFD1:PanasonicTitle=x` creates IFD1 when there is none).
+    //
+    // It runs before the drop-all shortcut below: a map whose only EXIF rows
+    // are IFD1's took that shortcut, so `-IFD1:Compression=1` on an
+    // IFD1-only block deleted the whole carrier and a new IFD1 tag on a file
+    // with no EXIF created nothing, both reported as success.
+    if let Some(key) = desired.iter().find_map(|(key, value)| {
+        (is_carried_only_key(key) && original_map.get(key) != Some(value)).then_some(key)
+    }) {
+        return Err(carried_only_edit_refused(key));
+    }
+
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
     if exif_family_keys(desired).is_empty() {
         return Ok(plan);
@@ -994,20 +1013,6 @@ pub(crate) fn plan_exif_write_with_removals(
                 native_endian: true,
             },
         );
-    }
-
-    // An added or changed key of a raw-carried class (IFD1, InteropIFD,
-    // MakerNotes) is an error, never a silent drop: the Added loop below
-    // places new entries in IFD0/ExifIFD/GPS only, and `exif_family_keys`
-    // does not visit these prefixes. That covers an edit to a raw-carried
-    // InteropIFD entry the reader surfaces under `InteropIFD:<name>` (every
-    // Interop row since decision D-1 of slice E-1) and to an IFD1 entry, and
-    // a tag new to either directory, all of which pinned ExifTool 13.59
-    // writes (`-IFD1:PanasonicTitle=x` creates IFD1 when there is none).
-    if let Some(key) = desired.iter().find_map(|(key, value)| {
-        (is_carried_only_key(key) && original_map.get(key) != Some(value)).then_some(key)
-    }) {
-        return Err(carried_only_edit_refused(key));
     }
 
     // Added: desired EXIF-family keys not matched to any original entry
@@ -3446,5 +3451,43 @@ mod tests {
         }
         // Unchanged rows of those classes are the carry-over, not edits.
         assert!(plan_exif_write(&scan, &original, &original).is_ok());
+    }
+
+    #[test]
+    fn an_ifd1_edit_is_refused_before_the_drop_all_shortcut() {
+        // With no IFD0/ExifIFD/GPS/EXIF row left in the map, the planner
+        // returns the empty (drop-all) plan. An IFD1-only block edited with
+        // `-IFD1:Compression=1`, or a new IFD1 tag on a file with no EXIF,
+        // took that shortcut and deleted the carrier (or created nothing).
+        let scan = ExifScan {
+            byte_order: ByteOrder::LittleEndian,
+            entries: vec![RawEntry {
+                ifd: IfdKind::Ifd1,
+                tag_id: 0x0103,
+                field_type: 3,
+                count: 1,
+                value: 6u16.to_le_bytes().to_vec(),
+            }],
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let mut original = MetadataMap::new();
+        original.insert("IFD1:Compression", TagValue::Integer(6));
+        let mut desired = original.clone();
+        desired.insert("IFD1:Compression", TagValue::Integer(1));
+        let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+        assert!(err.to_string().contains("IFD1:Compression"), "got: {err}");
+
+        let empty = ExifScan {
+            entries: Vec::new(),
+            ..scan
+        };
+        let mut added = MetadataMap::new();
+        added.insert("IFD1:PanasonicTitle", TagValue::new_string("x"));
+        let err = plan_exif_write(&empty, &MetadataMap::new(), &added).unwrap_err();
+        assert!(
+            err.to_string().contains("IFD1:PanasonicTitle"),
+            "got: {err}"
+        );
     }
 }
