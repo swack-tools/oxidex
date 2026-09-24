@@ -6,9 +6,10 @@
 //!
 //! * If the file holds nothing in the group, ExifTool reports `0 image files
 //!   updated` / `1 image files unchanged` and leaves the bytes identical.
-//! * If the group holds entries (or oxidex cannot prove it empty), ExifTool
-//!   deletes them. oxidex does not expand a group deletion yet, so it must
-//!   refuse with exit 1 and leave the file untouched, not report an update.
+//! * If the group holds entries, ExifTool deletes them. oxidex deletes the
+//!   EXIF-family groups the writers expand (#943). For any other group it
+//!   cannot prove empty, it refuses with exit 1 and leaves the file
+//!   untouched; it never reports an update.
 
 #[path = "common/fixtures.rs"]
 mod fixtures;
@@ -115,20 +116,68 @@ fn an_unknown_group_is_not_deletable() {
     }
 }
 
-/// 13.59 updates every one of these files (`1 image files updated`):
-/// * sample_with_exif_xmp.jpg holds IFD0, EXIF and XMP entries.
-/// * `-Time:All=` strips a text PNG's creation time, although no reader row
-///   is keyed `Time:`.
-/// * `-GPS:All=x` sets every GPS tag.
+/// The group keys (`EXIF:`, `XMP:`, ...) of oxidex's `-j -G` read-back.
+fn groups(path: &Path) -> Vec<String> {
+    let o = oxidex(&["-j", "-G"], path);
+    let json: serde_json::Value = serde_json::from_slice(&o.stdout).expect("oxidex -j output");
+    let mut groups: Vec<String> = json[0]
+        .as_object()
+        .expect("one record")
+        .keys()
+        .filter_map(|key| key.split_once(':').map(|(group, _)| group.to_string()))
+        .collect();
+    groups.dedup();
+    groups
+}
+
+/// With entries in the group, 13.59 deletes it (`1 image files updated`), and
+/// so does oxidex, through the writers' group-wide expansion (#943). Reading
+/// both output files with the oracle (`-G1 -a -s`) gives identical tag sets:
+/// Canon.jpg for EXIF, IFD0, ExifIFD, InteropIFD and MakerNotes; sample.png
+/// for EXIF, IFD0 and ExifIFD; sample_with_exif_xmp.jpg for EXIF and IFD0.
+/// e4edc55c answered each one with `Tag '...:All' is not defined`.
+#[test]
+fn an_exif_group_with_entries_is_deleted() {
+    let mut cases = vec![
+        (PathBuf::from(JPEG_XMP), "-EXIF:All="),
+        (PathBuf::from(JPEG_XMP), "-IFD0:All="),
+        (PathBuf::from(PNG_EXIF), "-EXIF:All="),
+    ];
+    if let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") {
+        cases.push((canon, "-EXIF:All="));
+    }
+    for (fixture, edit) in cases {
+        let label = format!("{} {edit}", fixture.display());
+        let dir = TempDir::new().unwrap();
+        let file = copy_into(&dir, &fixture, "a");
+        assert!(
+            groups(&file).iter().any(|g| g == "EXIF"),
+            "{label}: no EXIF to delete"
+        );
+        let o = oxidex(&[edit], &file);
+        assert_eq!(o.status.code(), Some(0), "{label}: {}", err(&o));
+        assert_eq!(out(&o), "    1 image files updated\n", "{label}");
+        assert!(
+            !groups(&file).iter().any(|g| g == "EXIF"),
+            "{label}: EXIF left"
+        );
+    }
+}
+
+/// Deletions 13.59 performs but oxidex cannot, each of which must be refused
+/// (exit 1, file untouched) rather than reported as done:
+/// * `-XMP:All=` on sample_with_exif_xmp.jpg, which holds XMP;
+/// * `-PNG:All=` on a text PNG, which holds PNG text;
+/// * `-Time:All=`, which strips a text PNG's creation time although no reader
+///   row is keyed `Time:`;
+/// * `-GPS:All=x`, which sets every GPS tag.
 ///
-/// oxidex cannot do any of these yet, so each must be refused.
+/// ExifTool reports `1 image files updated` for all four.
 #[test]
 fn a_group_deletion_oxidex_cannot_perform_is_refused() {
     for (fixture, edit) in [
-        (JPEG_XMP, "-EXIF:All="),
-        (JPEG_XMP, "-IFD0:All="),
         (JPEG_XMP, "-XMP:All="),
-        (PNG_EXIF, "-ExifIFD:All="),
+        (PNG_TEXT, "-PNG:All="),
         (PNG_TEXT, "-Time:All="),
         (PNG_TEXT, "-GPS:All=x"),
     ] {
