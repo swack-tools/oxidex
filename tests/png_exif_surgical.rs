@@ -1029,7 +1029,7 @@ fn subifd_block(order: Order) -> Vec<u8> {
 
 /// The entries of the IFD that IFD0's SubIFDs pointer leads to, raw, or
 /// `None` when the pointer is gone or leads outside the block.
-fn subifd_entries(tiff: &[u8]) -> Option<Vec<(u16, u16, u32, Vec<u8>)>> {
+fn subifd_entries(tiff: &[u8]) -> Option<Vec<Entry>> {
     let order = if &tiff[..2] == b"II" {
         Order::Ii
     } else {
