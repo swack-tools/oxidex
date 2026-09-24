@@ -324,8 +324,10 @@ pub(crate) fn rewrite_generated_exif_payload(
     };
     let mut plan = plan;
     let staged;
+    let restaged =
+        matches!(original, Some(_) if plan.has_legacy_changes && legacy_deletes(baseline, &plan));
     let original = match original {
-        Some(tiff) if plan.has_legacy_changes && legacy_deletes(baseline, &plan) => {
+        Some(tiff) if restaged => {
             let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
                 tiff,
                 baseline,
@@ -459,8 +461,19 @@ pub(crate) fn rewrite_generated_exif_payload(
     let (count, next) = tiff_surgical::ifd0_state(&output)?;
     Ok(if count == 0 && !next {
         Vec::new()
+    } else if restaged {
+        // The staged block was laid out by the serializer and the generated
+        // edits then grew it in place, which moves a grown directory to the
+        // end and leaves its old table behind: `-ExifIFD:ISO=
+        // -IFD0:Artist=you` in one pass put IFD0 after IFD1 and left the
+        // staged empty IFD0 at offset 8, and pinned ExifTool 13.59
+        // `-validate` warned "Short directory size for IFD1 (missing 8
+        // bytes)", as its own edit does not. Laid out once more, as a whole.
+        crate::writers::exif_surgical::relayout_exif(&output)?
     } else {
-        output
+        // Grown in place: a relocated IFD0 lands after the chain it links
+        // (`entry_edits::chain_tables_after_ifd0`).
+        entry_edits::chain_tables_after_ifd0(&output)?
     })
 }
 

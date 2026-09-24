@@ -17,7 +17,8 @@ use oxidex::core::operations::{
     clear_all_metadata, modify_tag, read_metadata, remove_tag, write_metadata,
 };
 use oxidex::core::tag_value::TagValue;
-use std::collections::BTreeMap;
+use oxidex::exiftool_oracle;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -649,6 +650,70 @@ fn uneditable_exif_carriers_are_refused_untouched() {
     );
 }
 
+/// The warnings pinned ExifTool 13.59's `-validate` gives for `path`, or
+/// `None` when no usable oracle is resolved (the test then skips the check).
+fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
+    if !exiftool_oracle::available() {
+        return None;
+    }
+    let oracle = exiftool_oracle::shared().ok()?;
+    let out = oracle
+        .command()
+        .args(["-a", "-s3", "-validate", "-Warning"])
+        .arg(path)
+        .output()
+        .unwrap();
+    // Each warning, less the `Validate` summary line ("2 Warnings"), which
+    // differs whenever the counts do.
+    let summary = |line: &str| {
+        line.split_once(' ').is_some_and(|(n, rest)| {
+            n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with("Warning")
+        })
+    };
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|line| !summary(line))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// `-validate` parity: oxidex's output `ours` draws no warning from pinned
+/// ExifTool 13.59 that the oracle's own edit of `original` (`args`, one
+/// invocation) does not draw too. A read-back compares values; this catches
+/// structural damage -- a directory placed out of order, an orphaned table,
+/// a short directory -- that one misses.
+fn assert_validate_parity(original: &[u8], name: &str, args: &[&str], ours: &Path, label: &str) {
+    let Some(oracle) = exiftool_oracle::available()
+        .then(exiftool_oracle::shared)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipping -validate parity ({label}): no usable ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let reference = write(dir.path(), name, original);
+    let status = oracle
+        .command()
+        .args(["-q", "-q", "-overwrite_original"])
+        .args(args)
+        .arg(&reference)
+        .status()
+        .unwrap();
+    assert!(status.success(), "{label}: oracle {args:?} failed");
+    let theirs = validate_warnings(&reference).unwrap();
+    let extra: Vec<String> = validate_warnings(ours)
+        .unwrap()
+        .difference(&theirs)
+        .cloned()
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "{label}: -validate warnings ExifTool's own {args:?} does not give: {extra:?}"
+    );
+}
+
 /// A minimal baseline JPEG with no metadata segment.
 fn jpeg_without_exif() -> Vec<u8> {
     const BODY: &str = "ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
@@ -880,7 +945,10 @@ fn a_generated_set_and_a_legacy_deletion_in_one_write() {
 /// -IFD0:Artist=you`, PNG and JPEG alike): the original byte order is kept,
 /// IFD0 holds Artist and nothing else (no mandatory YCbCrPositioning, as
 /// IFD0 already existed), the emptied ExifIFD goes, and an IFD1 thumbnail or
-/// a MakerNote beside ISO survives verbatim.
+/// a MakerNote beside ISO survives verbatim. The layout is sound too:
+/// `-validate` finds nothing ExifTool's own edit does not (c3bedc21 put IFD0
+/// after IFD1 and left the staged empty IFD0 at offset 8: "Short directory
+/// size for IFD1 (missing 8 bytes)").
 #[test]
 fn deleting_the_last_legacy_tag_while_setting_a_generated_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -954,6 +1022,13 @@ fn deleting_the_last_legacy_tag_while_setting_a_generated_one() {
                 };
                 assert_eq!(&tiff_out[..2], &tiff[..2], "{order:?} {label} {name}");
                 assert_eq!(dump(&tiff_out), expected, "{order:?} {label} {name}");
+                assert_validate_parity(
+                    &original,
+                    name,
+                    &["-ExifIFD:ISO=", "-IFD0:Artist=you"],
+                    &path,
+                    &format!("{order:?} {label} {name}"),
+                );
             }
         }
     }
@@ -2039,6 +2114,216 @@ fn an_empty_exif_app1_is_dropped_by_an_exif_removal() {
                 jpeg,
                 "{order:?} {key} magic+Make"
             );
+        }
+    }
+}
+
+/// A Leica-layout EXIF block: IFD0 {Make, Model, Artist "me"} -> IFD1
+/// {Compression, XResolution, a 4-byte thumbnail} -> IFD2 {ImageWidth,
+/// ImageHeight, Compression 7, StripOffsets/StripByteCounts} -- in a JPEG
+/// APP1, pinned ExifTool 13.59 reads IFD2's strip as PreviewImageStart/
+/// Length (Exif.pm 0x111, "APP1 IFD2 is for Leica JPEG preview"). The
+/// 16-byte preview lies inside the block, or, with `preview_at`, at that
+/// block-relative offset (after the JPEG's image, as Leica stores it).
+fn leica_tiff(order: Order, preview_at: Option<u32>) -> Vec<u8> {
+    let (ifd0, ifd1, ifd2) = (8u32, 64u32, 130u32);
+    let in_block = 196u32;
+    let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(typ),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    let short = |v: u16| {
+        let mut b = [0u8; 4];
+        b[..2].copy_from_slice(&order.u16(v));
+        b
+    };
+    let long = |v: u32| order.u32(v);
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(ifd0));
+    // IFD0 at 8: 3 entries (ends 50), Make at 50, Model at 56.
+    t.extend(order.u16(3));
+    t.extend(entry(0x010F, 2, 6, long(50)));
+    t.extend(entry(0x0110, 2, 8, long(56)));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(order.u32(ifd1));
+    t.extend(b"LEICA\0CL-TEST\0");
+    assert_eq!(t.len(), ifd1 as usize);
+    // IFD1 at 64: 4 entries (ends 118), XResolution at 118, thumb at 126.
+    t.extend(order.u16(4));
+    t.extend(entry(0x0103, 3, 1, short(6)));
+    t.extend(entry(0x011A, 5, 1, long(118)));
+    t.extend(entry(0x0201, 4, 1, long(126)));
+    t.extend(entry(0x0202, 4, 1, long(4)));
+    t.extend(order.u32(ifd2));
+    t.extend(order.u32(72));
+    t.extend(order.u32(1));
+    t.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+    assert_eq!(t.len(), ifd2 as usize);
+    // IFD2 at 130: 5 entries (ends 196), the preview at 196 or `preview_at`.
+    t.extend(order.u16(5));
+    t.extend(entry(0x0100, 4, 1, long(8)));
+    t.extend(entry(0x0101, 4, 1, long(8)));
+    t.extend(entry(0x0103, 3, 1, short(7)));
+    t.extend(entry(0x0111, 4, 1, long(preview_at.unwrap_or(in_block))));
+    t.extend(entry(0x0117, 4, 1, long(LEICA_PREVIEW.len() as u32)));
+    t.extend(order.u32(0));
+    assert_eq!(t.len(), in_block as usize);
+    if preview_at.is_none() {
+        t.extend(LEICA_PREVIEW);
+    }
+    t
+}
+
+/// The preview [`leica_tiff`] carries: a JPEG's SOI and EOI around filler.
+const LEICA_PREVIEW: &[u8] = b"\xFF\xD8\xFF\xFEpreview-data\xFF\xD9";
+
+/// A JPEG whose APP1 holds [`leica_tiff`] with its preview after the image.
+fn leica_trailer_jpeg(order: Order) -> Vec<u8> {
+    let probe = jpeg_with(&leica_tiff(order, Some(0)));
+    // The TIFF header sits 12 bytes in (SOI, APP1 marker and length, Exif\0\0).
+    let jpeg = jpeg_with(&leica_tiff(order, Some(probe.len() as u32 - 12)));
+    [jpeg, LEICA_PREVIEW.to_vec()].concat()
+}
+
+/// IFD2's table (count, records, next pointer) and the strip it locates,
+/// block-relative, or `None` when IFD1 does not link on.
+fn ifd2_of(tiff: &[u8], file_from_header: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+    let order = if &tiff[..2] == b"II" {
+        Order::Ii
+    } else {
+        Order::Mm
+    };
+    let u16_at = |at: usize| order.read_u16(&tiff[at..at + 2]);
+    let u32_at = |at: usize| order.read_u32(&tiff[at..at + 4]);
+    let next = |at: usize| u32_at(at + 2 + 12 * u16_at(at) as usize) as usize;
+    let ifd1 = next(u32_at(4) as usize);
+    if ifd1 == 0 {
+        return None;
+    }
+    let ifd2 = next(ifd1);
+    if ifd2 == 0 {
+        return None;
+    }
+    let n = u16_at(ifd2) as usize;
+    let table = tiff[ifd2..ifd2 + 2 + 12 * n + 4].to_vec();
+    let field = |tag: u16| {
+        (0..n)
+            .map(|i| ifd2 + 2 + 12 * i)
+            .find(|&at| u16_at(at) == tag)
+            .map(|at| u32_at(at + 8) as usize)
+    };
+    let strip = match (field(0x0111), field(0x0117)) {
+        (Some(start), Some(len)) => file_from_header.get(start..start + len).map(<[u8]>::to_vec),
+        _ => None,
+    };
+    Some((table, strip))
+}
+
+/// A carrier's TIFF block and its bytes from the TIFF header on.
+fn tiff_and_rest(name: &str, file: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    if name.ends_with(".png") {
+        let tiff = exif_of(file).unwrap();
+        (tiff.clone(), tiff)
+    } else {
+        let at = file.windows(6).position(|w| w == b"Exif\0\0").unwrap() + 6;
+        let len = u16::from_be_bytes([file[at - 8], file[at - 7]]) as usize - 8;
+        (file[at..at + len].to_vec(), file[at..].to_vec())
+    }
+}
+
+/// An EXIF block whose IFD1 links on to IFD2 (a Leica JPEG's PreviewImage
+/// IFD). The reconstructing writer followed IFD0's next pointer only as far
+/// as IFD1 and wrote IFD1 with a zero next pointer, so every write that
+/// re-laid the block out -- a legacy-only deletion or set, the staged half
+/// of a mixed write -- dropped IFD2 and its preview and reported success
+/// (tip e4edc55c too; pinned ExifTool 13.59 keeps the chain on all of
+/// them). Such a block is now never re-laid out: those writes are refused,
+/// file untouched. The in-place generated path keeps the chain
+/// byte-identical, and succeeds, unless the chain locates a preview after
+/// the JPEG's image and the APP1 changes length: ExifTool re-points that
+/// offset (Writer.pl `PREVIEW_INFO`), this writer does not (tip left it
+/// pointing 42 bytes early), so that write is refused. `IFD1:All` deletes
+/// IFD1 and the chain, as the oracle does; a removal naming nothing is a
+/// no-op. JPEG and PNG, both byte orders.
+#[test]
+fn a_chain_past_ifd1_is_kept_or_the_write_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = leica_tiff(order, None);
+        let cases = [
+            ("inblock.jpg", jpeg_with(&tiff)),
+            ("inblock.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("trailer.jpg", leica_trailer_jpeg(order)),
+        ];
+        for (name, original) in cases {
+            let label = format!("{order:?} {name}");
+            let (before, rest) = tiff_and_rest(name, &original);
+            let chain = ifd2_of(&before, &rest).expect("fixture has IFD2");
+            assert_eq!(
+                chain.1.as_deref(),
+                Some(LEICA_PREVIEW),
+                "{label}: fixture preview"
+            );
+            let untouched = |path: &Path, what: &str| {
+                assert_eq!(std::fs::read(path).unwrap(), original, "{label} {what}");
+            };
+
+            // Re-laying writes: refused, untouched.
+            let path = write(dir.path(), name, &original);
+            assert!(
+                remove_tag(&path, "IFD0:Model").is_err(),
+                "{label} -IFD0:Model="
+            );
+            untouched(&path, "-IFD0:Model=");
+            assert!(
+                modify_tag(&path, "ExifIFD:ISO", TagValue::new_string("200")).is_err(),
+                "{label} -ExifIFD:ISO=200"
+            );
+            untouched(&path, "-ExifIFD:ISO=200");
+            let mut map = read_metadata(&path).unwrap();
+            assert!(map.remove("IFD0:Model").is_some(), "{label}");
+            map.insert("IFD0:Artist", TagValue::new_string("you"));
+            assert!(write_metadata(&path, &map).is_err(), "{label} mixed");
+            untouched(&path, "mixed");
+
+            // A no-op.
+            remove_tag(&path, "EXIF:BogusTag").unwrap_or_else(|e| panic!("{label}: {e}"));
+            untouched(&path, "-EXIF:BogusTag=");
+
+            // In place: chain byte-identical, or refused for a trailer preview.
+            let result = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"));
+            if name == "trailer.jpg" {
+                assert!(result.is_err(), "{label} -IFD0:Artist=x");
+                untouched(&path, "-IFD0:Artist=x");
+            } else {
+                result.unwrap_or_else(|e| panic!("{label} -IFD0:Artist=x: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let (after, rest) = tiff_and_rest(name, &out);
+                assert_eq!(ifd2_of(&after, &rest), Some(chain.clone()), "{label} chain");
+                assert_eq!(
+                    read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                    Some("x"),
+                    "{label}"
+                );
+                assert_validate_parity(&original, name, &["-IFD0:Artist=x"], &path, &label);
+            }
+
+            // IFD1:All deletes IFD1 and everything after it.
+            let path = write(dir.path(), name, &original);
+            remove_tag(&path, "IFD1:All").unwrap_or_else(|e| panic!("{label} IFD1:All: {e}"));
+            let out = std::fs::read(&path).unwrap();
+            let (after, rest) = tiff_and_rest(name, &out);
+            assert_eq!(ifd2_of(&after, &rest), None, "{label} IFD1:All");
+            assert_validate_parity(&original, name, &["-IFD1:All="], &path, &label);
         }
     }
 }

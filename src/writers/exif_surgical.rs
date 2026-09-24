@@ -394,6 +394,10 @@ pub struct ExifScan {
     pub thumbnail: Option<Vec<u8>>,
     /// Original value offset of the MakerNote blob (for offset-stable layout)
     pub makernote_offset: Option<usize>,
+    /// IFD1's next-IFD pointer when nonzero: a directory chain past IFD1
+    /// (IFD2 -- a Leica JPEG's PreviewImage) that the serializer does not
+    /// model and would drop, so a block carrying one is never re-laid out.
+    pub ifd1_next: Option<usize>,
 }
 
 /// Byte size of one value of the given TIFF field type.
@@ -1066,6 +1070,20 @@ fn plan_exif_write_inner(
             entry.tag_id
         )));
     }
+    // Likewise a directory chain past IFD1 (IFD2 and on: a Leica JPEG's
+    // PreviewImage IFD). The serializer writes IFD1 with a zero next-IFD
+    // pointer, so the chain and the data it locates were dropped and the
+    // write reported success. Pinned ExifTool 13.59 rewrites every IFD of
+    // the chain and keeps it; `IFD1:All` alone deletes it (with IFD1).
+    if let Some(next) = scan.ifd1_next
+        && !groups.contains(&GroupRemoval::Ifd1)
+    {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot rewrite this EXIF block: IFD1 links to a further directory \
+             (IFD2, next-IFD offset {next}) that this writer does not relocate, and \
+             re-laying the block out would drop it"
+        )));
+    }
 
     // Normalize "EXIF:"-prefixed aliases onto their native per-entry key so
     // the per-entry loop below (which looks up `desired` by the reader's
@@ -1691,6 +1709,7 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
         entries: Vec::new(),
         thumbnail: None,
         makernote_offset: None,
+        ifd1_next: None,
     };
 
     let ifd0_offset = read_u32(&tiff[4..8], byte_order) as usize;
@@ -1707,6 +1726,7 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
     }
     if let Some(ifd1_off) = ifd0.next_ifd {
         let ifd1 = walk_ifd(tiff, ifd1_off, byte_order, IfdKind::Ifd1, &mut scan);
+        scan.ifd1_next = ifd1.next_ifd;
         if let (Some(t_off), Some(t_len)) = (ifd1.thumb_offset, ifd1.thumb_length)
             && t_off
                 .checked_add(t_len)
@@ -1809,7 +1829,7 @@ fn walk_ifd(
 
     // Next-IFD offset follows the entry table
     let next_at = entries_start + entry_count * 12;
-    if which == IfdKind::Ifd0 && next_at + 4 <= tiff.len() {
+    if matches!(which, IfdKind::Ifd0 | IfdKind::Ifd1) && next_at + 4 <= tiff.len() {
         let next = read_u32(&tiff[next_at..next_at + 4], byte_order) as usize;
         if next != 0 {
             result.next_ifd = Some(next);
@@ -2218,6 +2238,7 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
                 entries: Vec::new(),
                 thumbnail: None,
                 makernote_offset: None,
+                ifd1_next: None,
             },
             &empty,
         ),
@@ -2401,6 +2422,165 @@ fn scan_ignoring_magic(block: &[u8]) -> Option<ExifScan> {
     scan_entries_with_magics(block, &[magic]).ok()
 }
 
+/// One directory of the IFD chain past IFD1: its raw 12-byte records, the
+/// out-of-line value bytes each record locates, and the data block a
+/// JPEGInterchangeFormat / StripOffsets record locates with its length
+/// partner (a Leica IFD2 PreviewImage), each `None` when it lies outside
+/// the block.
+#[derive(Debug, PartialEq)]
+struct ChainIfd {
+    records: Vec<[u8; 12]>,
+    located: Vec<Option<Vec<u8>>>,
+    data: Vec<Option<Vec<u8>>>,
+}
+
+/// The directory chain IFD1's next-IFD pointer starts (IFD2 on).
+#[derive(Debug, PartialEq)]
+struct IfdChain {
+    /// IFD1's next-IFD pointer.
+    first: u32,
+    dirs: Vec<ChainIfd>,
+    /// The (start, length) spans, block-relative, that a directory or a
+    /// record of the chain locates past the end of the block: in a JPEG, a
+    /// Leica PreviewImage stored after the image
+    /// ([`verify_chain_data_after_block`]).
+    outside: Vec<(usize, usize)>,
+}
+
+/// The chain past IFD1 of `tiff`, or `None` when the block has no IFD1 or
+/// IFD1's next pointer is zero. Walks at most 64 directories and stops at
+/// a repeated one. Compared by its directories' records and located bytes:
+/// the tables may move (after a relocated IFD0), their contents may not.
+fn ifd_chain_beyond_ifd1(tiff: &[u8], magics: &[u16]) -> Option<IfdChain> {
+    let order = match tiff.get(..2)? {
+        b"II" => ByteOrder::LittleEndian,
+        b"MM" => ByteOrder::BigEndian,
+        _ => return None,
+    };
+    if !magics.contains(&read_u16(tiff.get(2..4)?, order)) {
+        return None;
+    }
+    let u16_at = |at: usize| tiff.get(at..at.checked_add(2)?).map(|b| read_u16(b, order));
+    let u32_at = |at: usize| tiff.get(at..at.checked_add(4)?).map(|b| read_u32(b, order));
+    let next_of = |at: usize| {
+        u32_at(
+            at.checked_add(2)?
+                .checked_add(usize::from(u16_at(at)?) * 12)?,
+        )
+    };
+    let ifd0 = u32_at(4)? as usize;
+    let ifd1 = next_of(ifd0)? as usize;
+    if ifd1 == 0 {
+        return None;
+    }
+    let first = next_of(ifd1)?;
+    if first == 0 {
+        return None;
+    }
+    let mut chain = IfdChain {
+        first,
+        dirs: Vec::new(),
+        outside: Vec::new(),
+    };
+    let mut seen = vec![ifd0, ifd1];
+    let mut at = first as usize;
+    while at != 0 && !seen.contains(&at) && chain.dirs.len() < 64 {
+        seen.push(at);
+        let Some(count) = u16_at(at) else {
+            chain.outside.push((at, 2));
+            break;
+        };
+        let mut dir = ChainIfd {
+            records: Vec::new(),
+            located: Vec::new(),
+            data: Vec::new(),
+        };
+        let mut locate = |start: usize, len: usize| {
+            let bytes = tiff
+                .get(start..start.saturating_add(len))
+                .map(<[u8]>::to_vec);
+            if bytes.is_none() {
+                chain.outside.push((start, len));
+            }
+            bytes
+        };
+        let mut values: Vec<(u16, usize)> = Vec::new();
+        for i in 0..usize::from(count) {
+            let Some(record) = tiff.get(at + 2 + i * 12..at + 14 + i * 12) else {
+                locate(at + 2 + i * 12, 12);
+                break;
+            };
+            let record: [u8; 12] = record.try_into().expect("12-byte record");
+            let tag = read_u16(&record[0..2], order);
+            let count = read_u32(&record[4..8], order) as usize;
+            let size = type_size(read_u16(&record[2..4], order)).saturating_mul(count);
+            let value = read_u32(&record[8..12], order) as usize;
+            dir.located
+                .push(if size > 4 { locate(value, size) } else { None });
+            values.push((tag, value));
+            dir.records.push(record);
+        }
+        for (offset_tag, length_tag) in [(0x0201u16, 0x0202u16), (0x0111, 0x0117)] {
+            let find = |tag: u16| values.iter().find(|(t, _)| *t == tag).map(|(_, v)| *v);
+            if let (Some(start), Some(len)) = (find(offset_tag), find(length_tag)) {
+                dir.data.push(locate(start, len));
+            }
+        }
+        chain.dirs.push(dir);
+        at = next_of(at).unwrap_or(0) as usize;
+    }
+    Some(chain)
+}
+
+/// A JPEG write's check that the directory chain past IFD1 of its EXIF
+/// block still locates the data it located past the block's end -- a Leica
+/// PreviewImage stored after the image, which the chain addresses relative
+/// to the TIFF header. `after_header` is the original JPEG from that header
+/// on. When such data is really there and the rewritten block has another
+/// length, everything after the block moved while the offsets did not:
+/// pinned ExifTool 13.59 re-points them (Writer.pl `PREVIEW_INFO`), this
+/// writer does not, so the write is refused. (Offsets past the end of the
+/// file -- a truncated sample -- located nothing to begin with.)
+pub(crate) fn verify_chain_data_after_block(
+    original: &[u8],
+    output: &[u8],
+    after_header: &[u8],
+) -> Result<()> {
+    let Some(chain) = ifd_chain_beyond_ifd1(original, EXIF_BLOCK_MAGICS) else {
+        return Ok(());
+    };
+    // Unchanged length moves nothing; no chain left is `IFD1:All`, which
+    // deletes it (`verify_exif_write` allows that and nothing else).
+    if original.len() == output.len() || ifd_chain_beyond_ifd1(output, EXIF_BLOCK_MAGICS).is_none()
+    {
+        return Ok(());
+    }
+    if let Some((start, len)) = chain.outside.iter().find(|(start, len)| {
+        start
+            .checked_add(*len)
+            .is_some_and(|end| *start >= original.len() && end <= after_header.len())
+    }) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "EXIF write verification failed: the directory chain past IFD1 (IFD2) \
+             locates {len} bytes at offset {start}, after the EXIF block (a PreviewImage \
+             stored after the image), and the rewritten block has another length, \
+             which would leave that offset pointing {} bytes off; nothing was written",
+            output.len().abs_diff(original.len())
+        )));
+    }
+    Ok(())
+}
+
+/// Where a JPEG's first `Exif\0\0` APP1 block's TIFF header starts.
+pub(crate) fn jpeg_exif_header_offset(file_bytes: &[u8]) -> Option<usize> {
+    let reader = SliceReader(file_bytes);
+    parse_segments(&reader)
+        .ok()?
+        .iter()
+        .find(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+        .map(|s| s.offset as usize + 4 + EXIF_IDENTIFIER.len())
+}
+
 /// The TIFF payloads of every `Exif\0\0` APP1 block of a JPEG.
 pub(crate) fn jpeg_exif_payloads(file_bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     let reader = SliceReader(file_bytes);
@@ -2431,6 +2611,20 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
         return Ok(tiff.to_vec());
     }
     let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
+    serialize_exif(&plan)
+}
+
+/// `tiff` laid out afresh by the serializer with every entry carried
+/// verbatim: IFD0 first at offset 8, then ExifIFD, InteropIFD, GPS, IFD1
+/// and the thumbnail, no orphaned bytes. For a block an edit has already
+/// re-laid out once (the staged half of a mixed write) and then grown in
+/// place, which relocates a grown directory to the end and leaves its old
+/// table behind. Carries nothing it cannot place, so it refuses what the
+/// serializer refuses (an unmodelled pointer, a chain past IFD1).
+pub(crate) fn relayout_exif(tiff: &[u8]) -> Result<Vec<u8>> {
+    let scan = scan_exif_entries(tiff)?;
+    let empty = MetadataMap::new();
+    let plan = plan_exif_write_inner(&scan, &empty, &empty, &[], false)?;
     serialize_exif(&plan)
 }
 
@@ -2537,6 +2731,7 @@ pub(crate) fn verify_exif_write(
         entries: Vec::new(),
         thumbnail: None,
         makernote_offset: None,
+        ifd1_next: None,
     };
     let is_exif = |key: &str| {
         ["IFD0:", "ExifIFD:", "GPS:", "EXIF:", "IFD1:", "InteropIFD:"]
@@ -2585,6 +2780,44 @@ pub(crate) fn verify_exif_write(
         .filter(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
         .flat_map(|(key, _)| key_addresses(key))
         .collect();
+
+    // (c) the directory chain past IFD1 (IFD2 and on, with the data its
+    // records locate) is still reachable from IFD1 and byte-identical --
+    // or, under `IFD1:All`, gone with IFD1, as pinned ExifTool 13.59 drops
+    // it. The serializer writes IFD1 with a zero next-IFD pointer, and the
+    // other checks never look past IFD1, so a lost IFD2 passed. (Data the
+    // chain locates past the block's end, a JPEG's Leica PreviewImage, is
+    // the JPEG writer's to check: [`verify_chain_data_after_block`].)
+    if !carrier_deleted
+        && let Some(chain) = original
+            .filter(|tiff| !tiff.is_empty())
+            .and_then(|tiff| ifd_chain_beyond_ifd1(tiff, magics))
+    {
+        let after = ifd_chain_beyond_ifd1(output, magics);
+        if removed
+            .iter()
+            .any(|key| group_removal(key) == Some(GroupRemoval::Ifd1))
+        {
+            if after.is_some() {
+                return Err(refused(
+                    "'IFD1:All' was to delete the directory chain past IFD1 but it is \
+                     still present"
+                        .to_string(),
+                ));
+            }
+        } else if after
+            .as_ref()
+            .is_none_or(|after| after.dirs != chain.dirs || after.outside != chain.outside)
+        {
+            return Err(refused(format!(
+                "the directory chain past IFD1 ({} director{} from next-IFD offset {}, \
+                 IFD2 on) is no longer present byte-identical",
+                chain.dirs.len(),
+                if chain.dirs.len() == 1 { "y" } else { "ies" },
+                chain.first
+            )));
+        }
+    }
 
     // (a) removals
     for entry in &before.entries {
@@ -3041,6 +3274,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3079,6 +3313,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3104,6 +3339,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3140,6 +3376,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3192,6 +3429,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3215,6 +3453,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3354,6 +3593,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3373,6 +3613,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3396,6 +3637,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3414,6 +3656,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3465,6 +3708,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -3880,6 +4124,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4065,6 +4310,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4088,6 +4334,7 @@ mod tests {
             entries: Vec::new(),
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4265,6 +4512,7 @@ mod tests {
             }],
             thumbnail: None,
             makernote_offset: Some(38),
+            ifd1_next: None,
         };
         let mut original = MetadataMap::new();
         original.insert(
@@ -4308,6 +4556,7 @@ mod tests {
             }],
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let mut original = MetadataMap::new();
         original.insert(
@@ -4357,6 +4606,7 @@ mod tests {
             ],
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let mut original = MetadataMap::new();
         original.insert("IFD0:Artist", TagValue::new_string("me"));
@@ -4392,6 +4642,7 @@ mod tests {
             }],
             thumbnail: None,
             makernote_offset: None,
+            ifd1_next: None,
         };
         let mut original = MetadataMap::new();
         original.insert("IFD1:Compression", TagValue::Integer(6));
@@ -4411,6 +4662,89 @@ mod tests {
             err.to_string().contains("IFD1:PanasonicTitle"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn a_chain_past_ifd1_is_refused_by_the_planner_and_the_verifier() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let w16 = |v: u16| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            let w32 = |v: u32| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            let entry = |tag: u16, typ: u16, value: u32| {
+                [w16(tag).as_slice(), &w16(typ), &w32(1), &w32(value)].concat()
+            };
+            // IFD0 {ImageWidth 7} at 8 -> IFD1 {Compression 6} at 26 ->
+            // IFD2 {ImageWidth 9} at 44.
+            let mut t = match bo {
+                ByteOrder::LittleEndian => b"II".to_vec(),
+                ByteOrder::BigEndian => b"MM".to_vec(),
+            };
+            t.extend(w16(42));
+            t.extend(w32(8));
+            for (at_next, tag, typ, value) in [
+                (26u32, 0x0100u16, 4u16, 7u32),
+                (44, 0x0103, 4, 6),
+                (0, 0x0100, 4, 9),
+            ] {
+                t.extend(w16(1));
+                t.extend(entry(tag, typ, value));
+                t.extend(w32(at_next));
+            }
+            let scan = scan_exif_entries(&t).unwrap();
+            assert_eq!(scan.ifd1_next, Some(44));
+            let empty = MetadataMap::new();
+
+            // (a) the planner refuses to re-lay it out ...
+            let err = plan_exif_write_with_removals(&scan, &empty, &empty, &["IFD0:Artist".into()])
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("IFD1 links to a further directory"),
+                "{err}"
+            );
+            // ... but for IFD1:All, which deletes the chain with IFD1.
+            plan_exif_write_with_removals(&scan, &empty, &empty, &["IFD1:All".into()]).unwrap();
+
+            // (b) the verifier, alone, catches a dropped or altered chain.
+            let mut lost = t.clone();
+            lost[40..44].copy_from_slice(&w32(0));
+            let err = verify_exif_write(Some(&t), &lost, &empty, &empty, &[], EXIF_BLOCK_MAGICS)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("directory chain past IFD1"),
+                "{err}"
+            );
+            let mut altered = t.clone();
+            let last = altered.len() - 5;
+            altered[last] ^= 1;
+            assert!(
+                verify_exif_write(Some(&t), &altered, &empty, &empty, &[], EXIF_BLOCK_MAGICS)
+                    .is_err()
+            );
+            verify_exif_write(Some(&t), &t, &empty, &empty, &[], EXIF_BLOCK_MAGICS).unwrap();
+            // IFD1:All: the chain must go.
+            let removed = ["IFD1:All".to_string()];
+            assert!(
+                verify_exif_write(Some(&t), &t, &empty, &empty, &removed, EXIF_BLOCK_MAGICS)
+                    .is_err()
+            );
+            let mut no_ifd1 = t[..26].to_vec();
+            no_ifd1[22..26].copy_from_slice(&w32(0));
+            verify_exif_write(
+                Some(&t),
+                &no_ifd1,
+                &empty,
+                &empty,
+                &removed,
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap();
+        }
     }
 
     #[test]
