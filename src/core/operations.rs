@@ -1023,11 +1023,11 @@ pub(crate) fn write_metadata_with_removals(
                         == Some(crate::writers::exif_surgical::GroupRemoval::MakerNotes)
                 })
                 .then(|| crate::writers::exif_surgical::jpeg_without_ciff(file_bytes))
+                .transpose()?
                 .flatten();
             let stripped = without_ciff
                 .as_deref()
                 .map(crate::writers::exif_surgical::SliceReader);
-            let original_file = file_bytes;
             let (reader, file_bytes): (&dyn FileReader, &[u8]) = match &stripped {
                 Some(stripped) => (stripped, stripped.0),
                 None => (&reader, file_bytes),
@@ -1046,10 +1046,7 @@ pub(crate) fn write_metadata_with_removals(
                     removed,
                 ) {
                     if without_ciff.is_some() {
-                        write_atomic(
-                            path,
-                            &crate::writers::jpeg_writer::rebase_afcp(original_file, file_bytes),
-                        )?;
+                        write_atomic(path, file_bytes)?;
                     }
                     return Ok(());
                 }
@@ -1098,16 +1095,16 @@ pub(crate) fn write_metadata_with_removals(
                 }
             }
             if without_ciff.is_some()
-                && crate::writers::exif_surgical::jpeg_without_ciff(&serialized_bytes).is_some()
+                && !matches!(
+                    crate::writers::exif_surgical::jpeg_without_ciff(&serialized_bytes),
+                    Ok(None)
+                )
             {
                 return Err(ExifToolError::unsupported_format(
                     "EXIF write verification failed: the CIFF segment was to be \
                      deleted but is still present; nothing was written",
                 ));
             }
-            // An AFCP trailer addresses its data by absolute file offset.
-            let serialized_bytes =
-                crate::writers::jpeg_writer::rebase_afcp(original_file, &serialized_bytes);
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {

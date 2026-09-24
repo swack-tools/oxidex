@@ -386,6 +386,85 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
+## How work lands
+
+Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
+one change per PR:
+
+1. One agent, one worktree, one `staging/<slug>` branch off the current tip
+   of `refactor/tag-machinery`. A stacked child is the exception: branch it
+   from its parent's current head (see "Stacking dependent PRs"). Run
+   `tools/preflight.sh --upstream` first.
+2. Verify with the instrument named for the change (a corpus comparison for
+   tag work; see "Closing an ExifTool coverage gap"). A change that touches
+   readers must show 0 proven reads lost (`tools/ci/read_regression_gate.py`,
+   which CI also runs on every PR).
+3. Open the PR against `refactor/tag-machinery`, name the instrument beside
+   every number, and let CI run: build and tests, lint, generated-table
+   verification, the corpus read-regression gate and the parity ratchet.
+4. Squash-merge only when CI is green, no review thread is unresolved, and the
+   PR's central claim has been verified independently of the agent that made
+   it: re-run its instrument yourself, don't trust its report. The maintainer
+   may waive the CI wait explicitly, and only for the PR they name.
+
+**`main` is the maintainer's decision alone.** During ordinary development,
+never push to it, merge into it, or rebase onto it. Release promotion is the
+only path to `main` (see "Release engineering"). `refactor/tag-machinery` and
+`main` carry rulesets that reject force-pushes and deletions.
+
+**Keep the branch on the current tip.** Other sessions land competing fixes
+often. Before starting, and again before merging, fetch and bring the branch
+up to `origin/refactor/tag-machinery` (not `origin/main`). Rebase only before
+the first push; once a branch is pushed, merge the tip with a signed merge,
+because a pushed branch must not be force-pushed. To decide whether upstream
+already fixed the defect, reproduce it against the fetched
+`origin/refactor/tag-machinery` itself (a clean base worktree or a binary
+built from it), never against your own branch, which contains your fix. Then
+verify the corrected behaviour separately on your branch's head. If the tip
+already contains the fix, or the branch's scope has shrunk to nearly nothing,
+report it superseded and stop rather than landing an empty change.
+
+## Stacking dependent PRs
+
+Stack instead of queueing when review loops pile up or too many PRs are open
+at once, and in particular when a branch depends on a PR that has not landed.
+Open the dependent PR now, with the parent's `staging/...` branch as its base,
+rather than parking finished work until the parent merges. CI and the PR
+reviewer then see only the child's own diff and start immediately; a queued
+branch instead waits out every one of the parent's review rounds and then
+takes one large conflict at the end.
+
+- **Keep children current.** Each time the parent's head moves, merge it into
+  every child with a signed merge (`git merge -S --no-ff origin/<parent>`), not
+  a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
+  favour of the parent's structure.
+- **Land only on the integration branch.** Never merge a child into its parent
+  branch. After the parent squash-merges into `refactor/tag-machinery`:
+  1. retarget the child first (`gh pr edit <n> --base refactor/tag-machinery`);
+  2. then merge the new tip into it and push.
+
+  The order matters. Retargeting is a PR `edited` event, which CI's
+  `pull_request` trigger does not subscribe to, so only the push that follows
+  starts a CI run against the new base. If the tip merge was already pushed
+  before retargeting, re-run CI explicitly. Then squash-merge under the rules
+  in "How work lands", which apply unchanged to every PR in the stack.
+- **Keep unapproved work out of any automatic integration queue.** The
+  multi-host fleet is stopped. Its train, however, treats every unclaimed,
+  non-withdrawn `staging/*` ref as a landing candidate
+  (`tools/fleet/workqueue.py`), and it squash-commits and pushes those refs
+  straight onto the integration tip (`tools/fleet/train.py`). It does this
+  whatever the ref's PR base, review state or CI status. If the fleet ever
+  runs again, it would therefore bypass the landing rules above for every PR,
+  not only for stacked children. Before restarting it, give the train an
+  explicit readiness filter (CI green, approved, no unresolved threads,
+  parent landed). Until then, withdraw every not-yet-approved branch from the
+  queue.
+- **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
+  review round, one defect blocking all of it, and no way to verify each
+  change's central claim on its own.
+- **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
+  child's PR body, so a successor knows the retarget order.
+
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
 - **Application**: CLI, C FFI bindings
