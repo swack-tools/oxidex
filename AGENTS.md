@@ -386,6 +386,32 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
+## Stacking dependent PRs
+
+Stack instead of queueing when review loops pile up or too many PRs are open
+at once, and in particular when a branch depends on a PR that has not landed.
+Open the dependent PR now, with the parent's `staging/...` branch as its base,
+rather than parking finished work until the parent merges. CI and the PR
+reviewer then see only the child's own diff and start immediately; a queued
+branch instead waits out every one of the parent's review rounds and then
+takes one large conflict at the end.
+
+- **Keep children current.** Each time the parent's head moves, merge it into
+  every child with a signed merge (`git merge -S --no-ff origin/<parent>`), not
+  a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
+  favour of the parent's structure.
+- **Land only on the integration branch.** Never merge a child into its parent
+  branch. After the parent squash-merges into `refactor/tag-machinery`, merge
+  that tip into the child, retarget it
+  (`gh pr edit <n> --base refactor/tag-machinery`), let CI rerun, and
+  squash-merge it as usual — the verification and merge rules in
+  `CLAUDE.md` apply unchanged to every PR in the stack.
+- **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
+  review round, one defect blocking all of it, and no way to verify each
+  change's central claim on its own.
+- **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
+  child's PR body, so a successor knows the retarget order.
+
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
 - **Application**: CLI, C FFI bindings
