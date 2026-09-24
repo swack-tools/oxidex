@@ -420,12 +420,97 @@ void test_write_refusals() {
     }
 }
 
+
+/* ------------------------------------------------------------------------
+ * Test 8: Group Deletions (`GROUP:All`)
+ *
+ * exiftool_remove_tag(h, "EXIF:All") records ExifTool's `-EXIF:All=`, and
+ * exiftool_write_file applies it through the library's write transaction
+ * (#943's group-wide expansion). Pinned ExifTool 13.59: `-EXIF:All=` strips
+ * t/images/Canon.jpg's EXIF; `-GPS:All=` leaves t/images/PNG.png unchanged;
+ * `-XMP:All=` deletes XMP, which oxidex cannot, so it must be refused.
+ * argv[2] / argv[3] are the pinned Canon.jpg / PNG.png ("" when absent).
+ * ------------------------------------------------------------------------ */
+
+static const char* pinned_canon = NULL;
+static const char* pinned_png = NULL;
+
+/* Whether the file at path has any tag in an EXIF directory group. */
+static int has_exif_rows(const char* path) {
+    ExifToolHandle* handle = exiftool_create();
+    int found = 0;
+    if (exiftool_read_file(handle, path) == EXIFTOOL_OK) {
+        size_t count = exiftool_get_tag_count(handle);
+        for (size_t i = 0; i < count; i++) {
+            const char* name = exiftool_get_tag_name_at(handle, i);
+            if (name && (strncmp(name, "IFD0:", 5) == 0 || strncmp(name, "IFD1:", 5) == 0
+                         || strncmp(name, "ExifIFD:", 8) == 0 || strncmp(name, "GPS:", 4) == 0
+                         || strncmp(name, "InteropIFD:", 11) == 0)) {
+                found = 1;
+            }
+        }
+    }
+    exiftool_destroy(handle);
+    return found;
+}
+
+/* Reads path, records a group deletion, writes; returns the write's code. */
+static int delete_group(const char* path, const char* group) {
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    int result = exiftool_remove_tag(handle, group);
+    if (result == EXIFTOOL_OK) {
+        result = exiftool_write_file(handle, path);
+    }
+    exiftool_destroy(handle);
+    return result;
+}
+
+void test_group_deletions() {
+    printf("\nTest 8: Group Deletions\n");
+    char path[4096];
+
+    if (pinned_canon && *pinned_canon && copy_fixture(pinned_canon, "canon.jpg", path, sizeof path)) {
+        TEST_ASSERT(has_exif_rows(path), "Canon.jpg carries EXIF before EXIF:All");
+        int result = delete_group(path, "EXIF:All");
+        TEST_ASSERT(result == EXIFTOOL_OK, "EXIF:All on Canon.jpg succeeds");
+        TEST_ASSERT(!has_exif_rows(path), "EXIF:All really strips Canon.jpg's EXIF");
+        TEST_ASSERT(!same_bytes(path, pinned_canon), "EXIF:All changed Canon.jpg");
+    } else {
+        printf("  [SKIP] pinned t/images/Canon.jpg not available\n");
+    }
+
+    if (pinned_png && *pinned_png && copy_fixture(pinned_png, "png.png", path, sizeof path)) {
+        int result = delete_group(path, "GPS:All");
+        TEST_ASSERT(result == EXIFTOOL_OK, "GPS:All on PNG.png succeeds");
+        TEST_ASSERT(same_bytes(path, pinned_png), "GPS:All leaves PNG.png byte-identical");
+    } else {
+        printf("  [SKIP] pinned t/images/PNG.png not available\n");
+    }
+
+    const char* xmp_fixture = "tests/fixtures/jpeg/sample_with_exif_xmp.jpg";
+    if (copy_fixture(xmp_fixture, "xmp-all.jpg", path, sizeof path)) {
+        int result = delete_group(path, "XMP:All");
+        TEST_ASSERT(result == EXIFTOOL_ERR_TAG_NOT_WRITTEN, "XMP:All is refused");
+        const char* tag = exiftool_get_last_error_tag(0);
+        TEST_ASSERT(exiftool_get_last_error_tag_count() == 1 && tag && strcmp(tag, "XMP:All") == 0,
+                    "the refusal names XMP:All");
+        TEST_ASSERT(same_bytes(path, xmp_fixture), "a refused XMP:All leaves the file untouched");
+    } else {
+        TEST_ASSERT(0, "XMP:All: copy fixture");
+    }
+}
+
 /**
  * Main test runner
  */
 int main(int argc, char** argv) {
     if (argc > 1) {
         scratch_dir = argv[1];
+    }
+    if (argc > 3) {
+        pinned_canon = argv[2];
+        pinned_png = argv[3];
     }
     printf("========================================\n");
     printf("ExifTool-RS C FFI Integration Tests\n");
@@ -439,6 +524,7 @@ int main(int argc, char** argv) {
     test_null_pointer_safety();
     test_invalid_float_values();
     test_write_refusals();
+    test_group_deletions();
 
     /* Print summary */
     printf("\n========================================\n");

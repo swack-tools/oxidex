@@ -516,3 +516,94 @@ fn write_metadata_with_the_files_own_map_changes_nothing() {
         assert_eq!(sha(&file), before, "{fixture}: nothing was requested");
     }
 }
+
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+/// The EXIF directories a whole-EXIF deletion must leave no row in.
+const EXIF_DIRECTORY_GROUPS: &[&str] = &["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "SubIFD"];
+
+fn exif_rows(path: &Path) -> Vec<String> {
+    read_metadata(path)
+        .unwrap()
+        .keys()
+        .filter(|key| {
+            key.split_once(':')
+                .is_some_and(|(group, _)| EXIF_DIRECTORY_GROUPS.contains(&group))
+        })
+        .cloned()
+        .collect()
+}
+
+/// `remove_tag("EXIF:All")` is ExifTool's `-EXIF:All=`: routed through the
+/// transaction to #943's group-wide expansion, it strips the EXIF block and
+/// returns Ok. Pinned 13.59 on t/images/Canon.jpg: `1 image files updated`,
+/// no IFD0/ExifIFD/InteropIFD/MakerNotes left.
+#[test]
+fn remove_tag_exif_all_strips_exif_from_canon_jpg() {
+    let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
+        eprintln!("skipped: pinned t/images/Canon.jpg is not available");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("Canon.jpg");
+    fs::copy(&canon, &file).unwrap();
+    assert!(!exif_rows(&file).is_empty(), "Canon.jpg carries EXIF");
+    let before = sha(&file);
+    remove_tag(&file, "EXIF:All").expect("EXIF:All strips EXIF");
+    assert_ne!(
+        sha(&file),
+        before,
+        "EXIF:All reported done without a change"
+    );
+    assert_eq!(exif_rows(&file), Vec::<String>::new(), "EXIF rows left");
+}
+
+/// `remove_tag("GPS:All")` on t/images/PNG.png, which holds no GPS: Ok and
+/// the file byte-identical (pinned 13.59: `0 image files updated` / `1 image
+/// files unchanged`).
+#[test]
+fn remove_tag_gps_all_on_png_without_gps_is_a_byte_identical_ok() {
+    let Some(png) = fixtures::pinned_t_images_fixture_path("PNG.png") else {
+        eprintln!("skipped: pinned t/images/PNG.png is not available");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("PNG.png");
+    fs::copy(&png, &file).unwrap();
+    let before = sha(&file);
+    remove_tag(&file, "GPS:All").expect("GPS:All on a PNG without GPS is a no-op");
+    assert_eq!(
+        sha(&file),
+        before,
+        "a no-op group deletion changed the file"
+    );
+}
+
+/// `remove_tag("XMP:All")` where the file holds XMP: pinned 13.59 deletes
+/// it; oxidex has no XMP writer, so it refuses by name, file untouched. A
+/// `<group>:All` set is refused too (it only deletes).
+#[test]
+fn remove_tag_xmp_all_is_refused_by_name() {
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, JPEG_XMP);
+    let before = sha(&file);
+    let result = remove_tag(&file, "XMP:All");
+    assert_refused(
+        "remove_tag XMP:All",
+        result,
+        &["XMP:All"],
+        &[],
+        &file,
+        &before,
+    );
+    let result = modify_tag(&file, "GPS:All", TagValue::new_string("x"));
+    assert_refused(
+        "modify_tag GPS:All",
+        result,
+        &["GPS:All"],
+        &[],
+        &file,
+        &before,
+    );
+}
