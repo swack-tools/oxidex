@@ -164,14 +164,19 @@ pub(crate) fn decode_perl_code_points(bytes: &[u8]) -> std::result::Result<Vec<u
 /// surrogate `ed a0 80` is the unit `D800`, and a code point above U+FFFF is
 /// truncated, not split into a pair.
 ///
-/// The bytes travel to the writer as a [`TagValue::Binary`], which
-/// `writers::xp_strings::encode_xp_value` treats as stored UCS-2 and puts
-/// through ExifTool's `ValueConvInv(ValueConv(..))` round trip. That round
-/// trip is the identity on these units except in two cases, which are
-/// refused here rather than written differently from ExifTool: a zero unit
-/// inside the value (only a code point above U+FFFF can produce one; the
-/// round trip ends the value there) and a first unit `FEFF`/`FFFE` (the
-/// round trip consumes it as a byte-order mark).
+/// This is the *typed-value* encoding `writers::xp_strings::encode_xp_value`
+/// applies to a [`TagValue::String`] (`pack_v`, low 16 bits per code point),
+/// extended to the one input a Rust `str` cannot hold: a surrogate code
+/// point. The units therefore travel to the writer as a
+/// [`TagValue::Binary`] -- the variant that encoder reads as *stored* bytes
+/// and puts through ExifTool's copy round trip,
+/// `ValueConvInv(ValueConv(..))`. That round trip is the identity on these
+/// units except in two cases, which are refused here rather than written
+/// differently from ExifTool's typed-value bytes: a zero unit inside the
+/// value (only a code point above U+FFFF can produce one; the round trip
+/// ends the value there) and a first unit `FEFF`/`FFFE` (the round trip
+/// consumes it as a byte-order mark). Oracle: `-IFD0:XPTitle=A<ed a0 80>B`
+/// writes `41 00 00 d8 42 00 00 00`, and so does this path.
 pub(crate) fn xp_value(tag_name: &str, bytes: &[u8]) -> Result<TagValue> {
     let code_points = decode_perl_code_points(bytes).map_err(|error| match error {
         DecodeError::Malformed { offset } => invalid(
