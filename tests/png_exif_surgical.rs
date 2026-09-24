@@ -1870,7 +1870,9 @@ fn group_wide_removals_on_tiff_structured_files_follow_the_oracle() {
 /// `IFD0:All` and `EXIF:All` delete the EXIF carrier wholesale, as pinned
 /// ExifTool 13.59 does even for one it cannot read ("1 image files
 /// updated", the APP1 / eXIf gone). c175e36b judged an unreadable block
-/// to hold nothing and reported success with it left in place.
+/// to hold nothing and reported success with it left in place. The one
+/// exception is the oracle's: `IFD0:All` keeps a PNG eXIf chunk too short
+/// for a TIFF header ("1 image files unchanged"), which `EXIF:All` drops.
 #[test]
 fn carrier_removals_drop_a_malformed_exif_carrier() {
     let dir = tempfile::tempdir().unwrap();
@@ -1884,17 +1886,18 @@ fn carrier_removals_drop_a_malformed_exif_carrier() {
                 "{label} {group}: EXIF APP1 left"
             );
 
-            let path = write(
-                dir.path(),
-                "bad.png",
-                &png(&[(b"eXIf", payload.clone())], &[]),
-            );
+            let original = png(&[(b"eXIf", payload.clone())], &[]);
+            let path = write(dir.path(), "bad.png", &original);
             remove_tag(&path, group).unwrap_or_else(|e| panic!("{label} png {group}: {e}"));
-            assert_eq!(
-                kinds(&std::fs::read(&path).unwrap()),
-                ["IHDR", "IDAT", "IEND"],
-                "{label} {group}"
-            );
+            if (label, group) == ("short", "IFD0:All") {
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{label} {group}");
+            } else {
+                assert_eq!(
+                    kinds(&std::fs::read(&path).unwrap()),
+                    ["IHDR", "IDAT", "IEND"],
+                    "{label} {group}"
+                );
+            }
         }
     }
 }

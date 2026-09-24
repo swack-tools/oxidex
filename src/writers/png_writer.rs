@@ -357,6 +357,33 @@ fn plan_exif(
         .iter()
         .filter(|chunk| chunk.chunk_type == *b"eXIf")
         .collect();
+    // `IFD0:All` deletes an eXIf chunk by way of its IFD0, which a chunk too
+    // short for a TIFF header has none of: pinned ExifTool 13.59 keeps such a
+    // chunk ("1 image files unchanged") while `EXIF:All` drops it (and a
+    // JPEG APP1 goes either way).
+    let too_short = |chunk: &&PngChunk| {
+        chunk
+            .data
+            .strip_prefix(b"Exif\0\0".as_slice())
+            .unwrap_or(&chunk.data)
+            .len()
+            < 8
+    };
+    let removed: Vec<String> = if !exif_chunks.is_empty() && exif_chunks.iter().all(too_short) {
+        removed
+            .iter()
+            .filter(|key| {
+                !(crate::writers::exif_surgical::removes_carrier(std::slice::from_ref(key))
+                    && key
+                        .split_once(':')
+                        .is_some_and(|(group, _)| group.eq_ignore_ascii_case("IFD0")))
+            })
+            .cloned()
+            .collect()
+    } else {
+        removed.to_vec()
+    };
+    let removed = removed.as_slice();
     // Keywords resolve exactly as the reader and ExifTool resolve them
     // (`TextTagNamer`, with `FoundPNG`'s `ucfirst` fallback, PNG.pm
     // 13.59:919-921): the oracle reads EXIF from a `raw profile type exif`
