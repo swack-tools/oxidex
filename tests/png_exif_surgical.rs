@@ -2553,9 +2553,12 @@ fn afcp_jpeg(order: Order) -> Vec<u8> {
 /// that changes the JPEG's length before it left every offset pointing off
 /// -- tip e4edc55c too -- and pinned ExifTool 13.59 read the output with
 /// "[minor] Adjusted AFCP offsets by N", a warning its own edit does not
-/// draw: it rewrites the offsets. So does the JPEG writer now. Measured by
+/// draw: it rewrites the offsets. So does the JPEG writer, through #952's
+/// `jpeg_trailer::rebase_trailer_offsets` (tests/afcp_trailer_offsets.rs
+/// drives the CLI); this pins the library write path and `EXIF:All`, by
 /// `-validate` parity against the oracle's own edit (sweep2 found it on
-/// t/images AFCP.jpg and ExifTool.jpg).
+/// t/images AFCP.jpg and ExifTool.jpg). The CIFF strip of `MakerNotes:All`
+/// goes through the same function (`makernotes_removal_drops_a_ciff_segment`).
 #[test]
 fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
     let dir = tempfile::tempdir().unwrap();
