@@ -31,7 +31,24 @@ The controller that would have attested them was retired the same day.
 
 Each change landed as a small commit and was proven to the Task 17 standard
 against a baseline binary rebuilt from `2791053b`, whose tree equals the #937
-merge `1c92e42d`. The standard:
+merge `1c92e42d`.
+
+The proof of record was measured at `00f6bba4`, with both the baseline and
+the candidate built on the rustup-pinned rustc 1.97.1 (commit `8bab26f4`). The
+toolchain was confirmed from the binaries themselves: every `/rustc/<hash>`
+path embedded in both release binaries is `8bab26f4f68e…`. The receipts are
+in `baseline-2791053b-rust1971/` and `review-head-00f6bba4/` under the
+evidence directory given below.
+
+The later commits change only tooling and documentation: the ownership
+inventory, `TODO.md`, and merges of the tip that add no decode logic. The
+`00f6bba4` corpus proof therefore still applies to the branch head.
+
+The earlier runs built with Homebrew rustc 1.98.1 (`baseline-2791053b/`,
+`review-head-fa0b0c70/`, `review-head-f89b47c8/` and `review-head-1394fac3/`)
+are superseded cross-checks. They gave the same totals.
+
+The standard:
 
 - conformance deltas of zero in every category and file;
 - an identical read gate (lost 0, the same newly-credited list);
@@ -39,6 +56,16 @@ merge `1c92e42d`. The standard:
   (combined-samples, 4,249 files; `t/images`, 194 files);
 - an unchanged genshare census;
 - `runtime_ownership.py verify` passing.
+
+At `00f6bba4` on 1.97.1 the results were:
+
+- conformance of 483,273 oracle, 472,034 matched, 10,951 missing, 266 value
+  and 1,490 extra, equal to the baseline;
+- a read gate with lost 0, 106 newly credited, and the same list as the
+  baseline;
+- 0 differing files in both output modes on both corpora;
+- genshare `matched_lost` of engine 16, producers 9 and union 25, as at the
+  baseline.
 
 Changes landed:
 
