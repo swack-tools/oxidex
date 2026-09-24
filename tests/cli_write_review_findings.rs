@@ -678,3 +678,30 @@ fn png_ifd1_numerator(path: &Path, tag: u16) -> Option<u32> {
     }
     None
 }
+
+/// ExifTool keeps no EXIF in a PDF: pinned 13.59 answers `-IFD0:Artist=you`,
+/// `-ExifIFD:ISO=200`, `-GPS:GPSAltitude=50`, `-IFD1:XResolution=300` and
+/// `-IFD0:Artist=` on sample.pdf with `0 image files updated` / `1 image
+/// files unchanged`, exit 0, bytes untouched (oxidex refused them).
+#[test]
+fn exif_writes_to_a_pdf_are_unchanged_like_exiftool() {
+    for arg in [
+        "-IFD0:Artist=you",
+        "-ExifIFD:ISO=200",
+        "-GPS:GPSAltitude=50",
+        "-IFD1:XResolution=300",
+        "-IFD0:Artist=",
+    ] {
+        let dir = TempDir::new().unwrap();
+        let file = copy_into(&dir, PDF, "a.pdf");
+        let before = sha(&file);
+        let o = run(&file, &[arg]);
+        assert_eq!(o.status.code(), Some(0), "{arg}: {}", err(&o));
+        assert_eq!(
+            out(&o),
+            "    0 image files updated\n    1 image files unchanged\n",
+            "{arg}"
+        );
+        assert_eq!(sha(&file), before, "{arg}");
+    }
+}

@@ -1942,7 +1942,7 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
     Ok(segment)
 }
 
-/// Whether the EXIF entry `key` names (`IFD0:`/`ExifIFD:`/`GPS:<name>`) in
+/// Whether the EXIF entry `key` names (`IFD0:`/`ExifIFD:`/`GPS:`/`IFD1:<name>`) in
 /// `file_bytes` (a JPEG, or a TIFF-structured file) holds exactly the
 /// field -- type, count and bytes -- this writer would emit for `value`.
 ///
@@ -1957,6 +1957,7 @@ pub(crate) fn stored_entry_matches(file_bytes: &[u8], key: &str, value: &TagValu
         "IFD0" => IfdKind::Ifd0,
         "ExifIFD" => IfdKind::ExifIfd,
         "GPS" => IfdKind::Gps,
+        "IFD1" => IfdKind::Ifd1,
         _ => return None,
     };
     let tag_id = descriptor_tag_id(get_tag_descriptor(key)?)?;

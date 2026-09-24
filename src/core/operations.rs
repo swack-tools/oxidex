@@ -1338,6 +1338,35 @@ pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     resolve_write_address(path, tag_name, &metadata)
 }
 
+/// Whether `tag_name` names an EXIF-family group in a PDF: ExifTool keeps no
+/// EXIF block in a PDF, and pinned 13.59 answers every such write -- a set or
+/// a deletion, `-IFD0:Artist=you`, `-EXIF:XPTitle=v`, `-ExifIFD:ISO=200`,
+/// `-GPS:GPSAltitude=50`, `-IFD1:XResolution=300`, `-MakerNotes:OwnerName=x`,
+/// `-InteropIFD:InteropIndex=R03` on t/images/PDF.pdf and
+/// tests/fixtures/pdf/sample.pdf -- with `0 image files updated` / `1 image
+/// files unchanged`, bytes untouched. oxidex does the same instead of
+/// refusing.
+fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
+    let exif_group = tag_name.split_once(':').is_some_and(|(group, _)| {
+        [
+            "IFD0",
+            "IFD1",
+            "ExifIFD",
+            "GPS",
+            "InteropIFD",
+            "EXIF",
+            "MakerNotes",
+        ]
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+    });
+    if !exif_group {
+        return Ok(false);
+    }
+    let reader = MMapReader::new(path)?;
+    Ok(matches!(detect_format(&reader)?, FileFormat::PDF))
+}
+
 /// Every spelling under which the reader surfaces the PDF Info field `key`
 /// names: `PDF:CreateDate` and `PDF:CreationDate` (and `ModifyDate` /
 /// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
@@ -1417,6 +1446,9 @@ fn remove_field(metadata: &mut MetadataMap, key: &str) {
 /// - New value fails validation (InvalidTagValue)
 /// - File cannot be written (IoError)
 pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
+    if exif_group_in_pdf(path, tag_name)? {
+        return Ok(());
+    }
     // Step 1: Read existing metadata (preserves all other tags)
     let mut metadata = read_metadata(path)?;
 
@@ -1457,6 +1489,9 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
 /// remove_tag(Path::new("photo.jpg"), "EXIF:Artist").unwrap();
 /// ```
 pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
+    if exif_group_in_pdf(path, tag_name)? {
+        return Ok(());
+    }
     // Step 1: Read existing metadata
     let mut metadata = read_metadata(path)?;
 

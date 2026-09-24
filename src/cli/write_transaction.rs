@@ -323,7 +323,10 @@ fn already_satisfied(path: &Path, modifications: &[(String, OsString)]) -> bool 
         // An EXIF entry must hold exactly the bytes the writer would emit: the
         // reader's value is normalized (a stored `"Canon   "` reads as
         // `"Canon"`), so matching it would prove nothing.
-        if matches!(key.split_once(':'), Some(("IFD0" | "ExifIFD" | "GPS", _))) {
+        if matches!(
+            key.split_once(':'),
+            Some(("IFD0" | "ExifIFD" | "GPS" | "IFD1", _))
+        ) {
             return file_bytes
                 .as_deref()
                 .is_some_and(|bytes| stored_entry_matches(bytes, &key, &requested) == Some(true));
