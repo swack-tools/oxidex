@@ -251,8 +251,14 @@ fn multi_file_no_op_deletion_reports_unchanged() {
 }
 
 /// The generic guard: across every spelling and fixture here, a run that
-/// prints `1 image files updated` must have changed the file's bytes, and a
-/// run whose bytes did not change must not claim an update.
+/// prints `1 image files updated` must have written the requested value at
+/// the address pinned ExifTool 13.59 writes it to -- checked with a grouped
+/// read-back -- and changed the bytes unless that read-back proves the value
+/// was already stored; a failed run must leave the file untouched.
+///
+/// Each spelling carries the one address the oracle writes it to (on these
+/// fixtures), or `None` where ExifTool writes a group oxidex cannot (XMP,
+/// IPTC, JFIF, File, a PNG's PNG:Software) so any oxidex "update" is wrong.
 #[test]
 fn updated_count_never_increments_without_a_byte_change() {
     let fixtures = [
@@ -263,60 +269,77 @@ fn updated_count_never_increments_without_a_byte_change() {
         (PDF, "a.pdf"),
         (PNG, "a.png"),
     ];
-    let args = [
-        "-XPTitle=v",
-        "-XPTitle=",
-        "-Make=v",
-        "-Make=",
-        "-Title=v",
-        "-Artist=v",
-        "-Software=v",
-        "-NoSuchTag=v",
-        "-IFD0:XPTitle=v",
-        "-EXIF:XPTitle=",
-        "-XMP:Title=v",
-        "-XMP:Title=",
-        "-IPTC:Keywords=k",
-        "-IFD1:XResolution=300",
-        "-InteropIFD:InteropIndex=R03",
-        "-JFIF:XResolution=300",
-        "-File:Comment=c",
-        "-PDF:Title=v",
-        "-PDF:Trapped=True",
-        "-PNG:Title=v",
-    ];
+    let exif = |ext: &str, key: &'static str| (ext != "pdf").then_some(key);
     for (fixture, name) in fixtures {
-        for arg in args {
+        let ext = name.rsplit('.').next().unwrap();
+        let in_exif_ifd0 = ext == "jpg" || ext == "tif";
+        let args: Vec<(&str, Option<&str>)> = vec![
+            ("-XPTitle=v", in_exif_ifd0.then_some("IFD0:XPTitle")),
+            ("-XPTitle=", in_exif_ifd0.then_some("IFD0:XPTitle")),
+            ("-Make=v", in_exif_ifd0.then_some("IFD0:Make")),
+            ("-Make=", in_exif_ifd0.then_some("IFD0:Make")),
+            ("-Title=v", None),
+            ("-Artist=v", in_exif_ifd0.then_some("IFD0:Artist")),
+            ("-Software=v", in_exif_ifd0.then_some("IFD0:Software")),
+            ("-NoSuchTag=v", None),
+            ("-IFD0:XPTitle=v", exif(ext, "IFD0:XPTitle")),
+            ("-EXIF:XPTitle=", exif(ext, "IFD0:XPTitle")),
+            ("-EXIF:ISO=100", exif(ext, "ExifIFD:ISO")),
+            ("-XMP:Title=v", None),
+            ("-XMP:Title=", None),
+            ("-IPTC:Keywords=k", None),
+            (
+                "-IFD1:XResolution=300",
+                (ext != "pdf" && ext != "png").then_some("IFD1:XResolution"),
+            ),
+            ("-InteropIFD:InteropIndex=R03", None),
+            ("-JFIF:XResolution=300", None),
+            ("-File:Comment=c", None),
+            ("-PDF:Title=v", (ext == "pdf").then_some("PDF:Title")),
+            ("-PDF:Trapped=True", None),
+            ("-PNG:Title=v", (ext == "png").then_some("PNG:Title")),
+        ];
+        for (arg, address) in args {
             let dir = TempDir::new().unwrap();
             let file = copy_into(&dir, fixture, name);
             let before = sha(&file);
             let out = write(&file, &[arg]);
             let changed = sha(&file) != before;
             let text = stdout(&out);
-            if text.contains("    1 image files updated") {
-                assert_eq!(out.status.code(), Some(0), "{fixture} {arg}");
-                if !changed {
-                    // Only a set whose value the file provably already holds
-                    // may be reported as updated without a byte change.
-                    let (tag, value) = arg[1..].split_once('=').unwrap();
-                    assert!(
-                        !value.is_empty() && read_back(&file, tag) == value,
-                        "{fixture} {arg}: claimed an update, bytes identical, value unproven"
-                    );
-                }
-            }
             if out.status.code() != Some(0) {
                 assert!(!changed, "{fixture} {arg}: failed but modified the file");
+                continue;
+            }
+            if !text.contains("    1 image files updated") {
+                assert!(!changed, "{fixture} {arg}: changed bytes without an update");
+                continue;
+            }
+            let Some(address) = address else {
+                panic!("{fixture} {arg}: reported an update ExifTool does not make here");
+            };
+            let value = arg.split_once('=').unwrap().1;
+            assert_eq!(
+                read_back(&file, address),
+                value,
+                "{fixture} {arg}: not at {address}"
+            );
+            if !changed {
+                assert!(
+                    !value.is_empty(),
+                    "{fixture} {arg}: deletion without a change"
+                );
             }
         }
     }
 }
 
 /// The same guard covers the other CLI writers. Pinned ExifTool 13.59:
-/// `-all=` on a file with nothing left to strip, and `-TagsFromFile SRC
-/// -XPTitle` from a source without one, both print `0 image files updated` /
-/// `1 image files unchanged` and leave the bytes alone. oxidex rewrote the
-/// file and printed `1 image files updated` (`(1 tags copied)`) for both.
+/// `-all=` on a file with nothing left to strip prints `0 image files
+/// updated` / `1 image files unchanged` and leaves the bytes alone;
+/// `-TagsFromFile SRC -XPTitle` from a source holding `[IFD0] XPTitle :
+/// hello` writes it (`1 image files updated`); from a source without one it
+/// warns `No writable tags set from SRC` and is unchanged. oxidex rewrote the
+/// file and printed `1 image files updated` (`(1 tags copied)`).
 #[test]
 fn clear_all_and_tags_from_file_report_unchanged_when_nothing_changes() {
     let dir = TempDir::new().unwrap();
@@ -334,7 +357,18 @@ fn clear_all_and_tags_from_file_report_unchanged_when_nothing_changes() {
     );
     assert_eq!(sha(&stripped), before);
 
+    let source = copy_into(&dir, JPEG, "source.jpg");
+    assert_eq!(write(&source, &["-XPTitle=hello"]).status.code(), Some(0));
     let dest = copy_into(&dir, JPEG, "dest.jpg");
+    let out = write(
+        &dest,
+        &["-TagsFromFile", source.to_str().unwrap(), "-XPTitle"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "    1 image files updated\n");
+    assert_eq!(read_back(&dest, "IFD0:XPTitle"), "hello");
+
+    let dest = copy_into(&dir, JPEG, "dest2.jpg");
     let before = sha(&dest);
     let out = write(
         &dest,
@@ -344,6 +378,11 @@ fn clear_all_and_tags_from_file_report_unchanged_when_nothing_changes() {
     assert_eq!(
         stdout(&out),
         "    0 image files updated\n    1 image files unchanged\n"
+    );
+    assert!(
+        stderr(&out).contains("No writable tags set from"),
+        "{}",
+        stderr(&out)
     );
     assert_eq!(sha(&dest), before);
 }

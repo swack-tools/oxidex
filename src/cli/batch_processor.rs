@@ -64,6 +64,14 @@ impl BatchStats {
         }
     }
 
+    /// Empty statistics for a write run (see [`BatchStats::print`]).
+    pub fn for_write() -> Self {
+        Self {
+            write_mode: true,
+            ..Self::new()
+        }
+    }
+
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
         // A write run prints what exiftool:2071-2074 (13.59) prints for one:
@@ -161,7 +169,7 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Determine operation mode
-    let modifications = args.tag_modifications();
+    let modifications = args.plain_tag_modifications();
     let is_write_mode = !modifications.is_empty();
 
     // Validate readonly flag for write operations
@@ -458,11 +466,11 @@ fn apply_modifications(
         if !args.backup {
             return Ok(());
         }
-        let backup_path = path.with_extension(format!(
-            "{}.bak",
-            path.extension().and_then(|e| e.to_str()).unwrap_or("")
-        ));
-        fs::copy(path, &backup_path)
+        // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file
+        // spelling; `with_extension("{ext}.bak")` made `a..bak`).
+        let mut backup_path = path.as_os_str().to_owned();
+        backup_path.push(".bak");
+        fs::copy(path, PathBuf::from(backup_path))
             .map(|_| ())
             .map_err(|e| e.to_string())
     };

@@ -1739,9 +1739,10 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
 /// (`-XPTitle=` where there is none) pinned ExifTool 13.59 answers
 /// `0 image files updated` / `1 image files unchanged` with untouched bytes.
 /// The caller uses this to return the original bytes instead. (For a set to
-/// the value already stored ExifTool rewrites the file and says `updated`;
-/// oxidex leaves the bytes alone and says `unchanged`, the same answer its
-/// in-place TIFF and generated-route writers already give.)
+/// the value already stored, ExifTool rewrites the file and says `updated`;
+/// oxidex leaves the bytes alone, and the CLI reports `updated` only when
+/// `stored_entry_matches` proves the stored entry is byte-for-byte what the
+/// writer would emit -- see `cli::write_transaction`.)
 pub(crate) fn jpeg_exif_plan_is_identity(
     file_bytes: &[u8],
     desired: &MetadataMap,
@@ -1765,6 +1766,56 @@ pub(crate) fn jpeg_exif_plan_is_identity(
             .iter()
             .all(|entries| entries.iter().all(|entry| !entry.native_endian))
         && plan.thumbnail == scan.thumbnail)
+}
+
+/// Whether the EXIF entry `key` names (`IFD0:`/`ExifIFD:`/`GPS:<name>`) in
+/// `file_bytes` (a JPEG, or a TIFF-structured file) holds exactly the
+/// field -- type, count and bytes -- this writer would emit for `value`.
+///
+/// This is the read-back proof behind reporting a byte-identical write as
+/// updated. The reader's map cannot give it: it normalizes (`Make` is read
+/// through ExifTool's `RawConv` trailing-space strip), so a stored
+/// `"Canon   "` reads as `"Canon"` while ExifTool's `-Make=Canon` rewrites
+/// it. `None` when the entry cannot be located or compared.
+pub(crate) fn stored_entry_matches(file_bytes: &[u8], key: &str, value: &TagValue) -> Option<bool> {
+    let (group, _) = key.split_once(':')?;
+    let ifd = match group {
+        "IFD0" => IfdKind::Ifd0,
+        "ExifIFD" => IfdKind::ExifIfd,
+        "GPS" => IfdKind::Gps,
+        _ => return None,
+    };
+    let tag_id = descriptor_tag_id(get_tag_descriptor(key)?)?;
+    let scan = if file_bytes.starts_with(&[0xff, 0xd8]) {
+        jpeg_exif_scan(file_bytes).ok()?.0
+    } else {
+        scan_exif_entries(file_bytes).ok()?
+    };
+    let mut entries = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.ifd == ifd && entry.tag_id == tag_id);
+    let entry = entries.next()?;
+    if entries.next().is_some() {
+        return None;
+    }
+    let (field_type, count, mut bytes) =
+        tag_value_to_field_for_key(key, value, Some(entry.field_type)).ok()?;
+    // Multi-byte numeric fields come back native-endian (see
+    // `tag_value_to_field`); put them in the file's order before comparing.
+    let width = match field_type {
+        3 | 8 => 2,
+        4 | 5 | 9 | 10 | 11 => 4,
+        12 => 8,
+        _ => 1,
+    };
+    let file_big = matches!(scan.byte_order, ByteOrder::BigEndian);
+    if width > 1 && file_big != cfg!(target_endian = "big") {
+        for chunk in bytes.chunks_mut(width) {
+            chunk.reverse();
+        }
+    }
+    Some(field_type == entry.field_type && count == entry.count && bytes == entry.value)
 }
 
 /// The EXIF scan of a JPEG and the reader's map of the same bytes -- the two

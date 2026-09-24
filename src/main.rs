@@ -8,11 +8,8 @@ use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
 use oxidex::cli::rename;
-use oxidex::cli::write_transaction::{WriteOutcome, partition_defined, transact, write_file};
-use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use oxidex::core::operations::{
-    clear_all_metadata, copy_metadata, read_metadata_report_with_detector_and_options,
-};
+use oxidex::cli::write_transaction::{WriteOutcome, WritePlan, write_plan_file};
+use oxidex::core::operations::read_metadata_report_with_detector_and_options;
 use oxidex::core::read_report::ParseStatus;
 use std::process;
 
@@ -41,72 +38,99 @@ fn main() {
         }
     };
 
-    // Check if this is a clear all metadata operation (-all=)
-    if args.is_clear_all_metadata() {
-        handle_clear_all_operation(&file, &args);
+    // Every write request on the line, classified once (see
+    // `cli::write_transaction::WritePlan`): combining modes applies all of
+    // them or refuses, never dispatches on the first and drops the rest.
+    let plan = match WritePlan::from_args(&args) {
+        Ok(plan) => plan,
+        Err(message) => {
+            eprintln!("Error: {}", message);
+            process::exit(1);
+        }
+    };
+    let files = args.files();
+
+    if let Some(pattern) = args.filename_pattern() {
+        // Rename mode renames one file and writes no tags; anything else on
+        // the line would be dropped, so it is refused instead.
+        if plan.is_write() {
+            eprintln!("Error: Combining -FileName< with tag writes is not supported");
+            process::exit(1);
+        }
+        if files.len() > 1 {
+            eprintln!("Error: -FileName< renames one file at a time");
+            process::exit(1);
+        }
+        handle_rename_operation(&file, &pattern, &args);
         return;
     }
 
-    // Check if this is a date shift operation
-    let date_shifts = args.date_shift_operations();
-
-    // ExifTool judges every `-TAG=VALUE` name before it opens a file
-    // (`SetNewValue`, exiftool:1735-1813): an undefined name is a warning and
-    // is dropped, and when no request is left it prints `Nothing to do.` and
-    // exits 1 without touching anything. Treating the request as written
-    // printed `1 image files updated` for `-NoSuchTag=v`.
-    if date_shifts.is_empty()
-        && args.filename_pattern().is_none()
-        && args.tags_from_file.is_none()
-        && !args.tag_modifications().is_empty()
-    {
-        let (warnings, defined) = partition_defined(&args.tag_modifications());
-        for warning in &warnings {
+    if plan.is_write() {
+        // ExifTool judges every `-TAG=VALUE` name before it opens a file
+        // (`SetNewValue`, exiftool:1735-1813): an undefined name is a warning
+        // and is dropped, and when no request is left it prints `Nothing to
+        // do.` and exits 1 without touching anything.
+        for warning in &plan.warnings {
             eprintln!("Warning: {}", warning);
         }
-        if defined.is_empty() {
+        if plan.nothing_to_do() {
             eprintln!("Nothing to do.");
             process::exit(1);
         }
+        // `--readonly` refuses every write, whichever mode and however many
+        // files (an explicit file list used to bypass it).
+        if args.readonly {
+            let what = if plan.copy_from.is_some() {
+                "copy metadata"
+            } else if plan.clear_all {
+                "clear metadata"
+            } else if !plan.shifts.is_empty() {
+                "shift dates"
+            } else {
+                "modify file"
+            };
+            eprintln!(
+                "Error: Cannot {} in read-only mode (--readonly flag set)",
+                what
+            );
+            process::exit(1);
+        }
+        if let Some((src, _)) = &plan.copy_from
+            && !src.exists()
+        {
+            eprintln!("Error: Source file not found: {}", src.display());
+            process::exit(1);
+        }
+        if files.len() == 1 && !files[0].is_dir() {
+            handle_single_write(&files[0], &plan, &args);
+        } else if plan.sets_only() {
+            if files.len() == 1 {
+                handle_batch_processing(&files[0], &args);
+            } else {
+                handle_multi_file_processing(&files, &args);
+            }
+        } else if files.iter().any(|path| path.is_dir()) {
+            eprintln!("Error: -all=, date shifts and -TagsFromFile take files, not directories");
+            process::exit(1);
+        } else {
+            handle_multi_write(&files, &plan, &args);
+        }
+        return;
     }
 
-    if !date_shifts.is_empty() {
-        // Date shift mode
-        handle_date_shift_operation(&file, &args);
-    } else if let Some(pattern) = args.filename_pattern() {
-        // Rename mode
-        handle_rename_operation(&file, &pattern, &args);
-    } else if args.tags_from_file.is_some() {
-        // Copy metadata mode
-        handle_copy_operation(&file, &args);
-    } else if file.is_dir() {
+    if file.is_dir() {
         // Batch processing mode (directory)
         handle_batch_processing(&file, &args);
-    } else {
+    } else if files.len() > 1 {
         // args.file() only ever returns the *last* positional argument, so a
         // plain-read invocation with more than one path -- `oxidex -j a.jpg
-        // b.jpg` -- fell through this whole dispatch chain looking at "b.jpg"
-        // alone: "a.jpg" was silently dropped, and every output formatter
-        // (JSON/CSV/human) emitted a single result with no SourceFile,
-        // rather than one result per input file. Route explicit multi-file
+        // b.jpg` -- used to see "b.jpg" alone. Route explicit multi-file
         // invocations through the same batch machinery a directory uses,
         // which already emits one tagged result per file.
-        let files = args.files();
-
-        if files.len() > 1 {
-            handle_multi_file_processing(&files, &args);
-        } else {
-            // Single file processing mode
-            let modifications = args.tag_modifications();
-
-            if !modifications.is_empty() {
-                // Write mode: modify tags
-                handle_write_operation(&file, &args);
-            } else {
-                // Read mode: display metadata
-                handle_read_operation(&file, &args);
-            }
-        }
+        handle_multi_file_processing(&files, &args);
+    } else {
+        // Read mode: display metadata
+        handle_read_operation(&file, &args);
     }
 }
 
@@ -116,7 +140,7 @@ fn main() {
 /// filter by extension -- the files were named explicitly on the command
 /// line, so every one of them is processed as given.
 fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
-    let modifications = args.tag_modifications();
+    let modifications = args.plain_tag_modifications();
     let result = if !modifications.is_empty() {
         batch_processor::batch_write(files.to_vec(), &modifications, args)
     } else {
@@ -143,25 +167,100 @@ fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
     }
 }
 
-/// Handles write operations (tag modifications)
-///
-/// All requests are applied as one transaction (`cli::write_transaction`),
-/// and the summary follows the bytes: a file that did not change is
-/// `0 image files updated` / `1 image files unchanged`, exactly as ExifTool
-/// 13.59 prints it, never an update.
-fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
-    // Undefined names were warned about (and dropped) before dispatch.
-    let (_, modifications) = partition_defined(&args.tag_modifications());
+/// Handles every write to one file: `-TAG=VALUE`, `-all=`, date shifts and
+/// `-TagsFromFile`, alone or combined, as one transaction
+/// (`cli::write_transaction::write_plan_file`). The summary follows what
+/// happened to the file: a file that did not change is `0 image files
+/// updated` / `1 image files unchanged`, exactly as ExifTool 13.59 prints it.
+fn handle_single_write(file: &std::path::Path, plan: &WritePlan, args: &CliArgs) {
+    let (label, noun) = if plan.copy_from.is_some() {
+        ("Destination file", "destination file")
+    } else {
+        ("File", "file")
+    };
+    let original_mtime = prepare_write_target(file, args, label, noun);
+    let result = write_plan_file(file, plan, backup_before_commit(file, args));
+    if let (Ok(done), Some((src, filters))) = (&result, &plan.copy_from)
+        && let Some(copy) = &done.copy
+    {
+        report_copy(src, filters, copy);
+    }
+    // ExifTool prints the same line for a copy; the old `(N tags copied)`
+    // suffix counted filter arguments, not tags written.
+    finish_write(
+        file,
+        result.map(|done| done.outcome),
+        original_mtime,
+        "    1 image files updated",
+    );
+}
 
-    // Check readonly flag FIRST - if set, prevent any writes
-    if args.readonly {
-        eprintln!("Error: Cannot modify file in read-only mode (--readonly flag set)");
+/// ExifTool's copy warnings: nothing found to copy (13.59: `Warning: No
+/// writable tags set from SRC`), and -- oxidex's own -- the source groups a
+/// copy-all could not write, which are named rather than silently skipped.
+fn report_copy(
+    src: &std::path::Path,
+    filters: &[String],
+    copy: &oxidex::core::operations::CopyReport,
+) {
+    if !filters.is_empty() && copy.copied == 0 {
+        eprintln!("Warning: No writable tags set from {}", src.display());
+    }
+    if !copy.uncopied_groups.is_empty() {
+        eprintln!(
+            "Warning: Not copied from {}: oxidex cannot write the {} group(s) here",
+            src.display(),
+            copy.uncopied_groups.join(", ")
+        );
+    }
+}
+
+/// Handles `-all=`, date shifts and `-TagsFromFile` (alone or with sets)
+/// over several explicit files: every file gets its own transaction, and
+/// the summary counts each one, as ExifTool's does. These modes used to act
+/// on the last path only.
+fn handle_multi_write(files: &[std::path::PathBuf], plan: &WritePlan, args: &CliArgs) {
+    let mut stats = batch_processor::BatchStats::for_write();
+    for file in files {
+        let prepared = std::fs::metadata(file)
+            .map_err(|e| format!("Cannot access file '{}': {}", file.display(), e))
+            .and_then(|metadata| {
+                if metadata.permissions().readonly() {
+                    Err(format!("File is read-only: {}", file.display()))
+                } else {
+                    Ok(metadata.modified().ok())
+                }
+            });
+        let result = prepared.and_then(|mtime| {
+            write_plan_file(file, plan, backup_before_commit(file, args)).map(|done| (done, mtime))
+        });
+        match result {
+            Ok((done, mtime)) => {
+                if let (Some((src, filters)), Some(copy)) = (&plan.copy_from, &done.copy) {
+                    report_copy(src, filters, copy);
+                }
+                match done.outcome {
+                    WriteOutcome::Updated => {
+                        stats.files_updated += 1;
+                        if args.preserve_file_times
+                            && let Some(mtime) = mtime
+                        {
+                            let _ = std::fs::File::open(file).and_then(|f| f.set_modified(mtime));
+                        }
+                    }
+                    WriteOutcome::Unchanged => stats.files_unchanged += 1,
+                }
+            }
+            Err(message) => {
+                stats.errors += 1;
+                eprintln!("Error writing {}: {}", file.display(), message);
+            }
+        }
+    }
+    stats.print();
+    if stats.errors > 0 {
         process::exit(1);
     }
-
-    let original_mtime = prepare_write_target(file, args, "File", "file");
-    let outcome = write_file(file, &modifications, backup_before_commit(file, args));
-    finish_write(file, outcome, original_mtime, "    1 image files updated");
 }
 
 /// The checks every single-file write makes before touching anything: the
@@ -401,7 +500,7 @@ fn print_resolved_metadata(
 fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
     match batch_processor::batch_process(path, args) {
         Ok(stats) => {
-            let is_read_mode = args.tag_modifications().is_empty();
+            let is_read_mode = args.plain_tag_modifications().is_empty();
             // ExifTool prints its read summary after text output at every
             // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
             if !(is_read_mode && (args.json || args.csv)) {
@@ -418,64 +517,6 @@ fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
             process::exit(1);
         }
     }
-}
-
-/// Handles copy operations (copying metadata from one file to another)
-fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
-    // Extract source file path from tags_from_file option
-    let src_file = match &args.tags_from_file {
-        Some(path) => std::path::PathBuf::from(path),
-        None => {
-            eprintln!("Error: No source file specified for -TagsFromFile");
-            process::exit(1);
-        }
-    };
-
-    // Check readonly flag FIRST - if set, prevent any writes
-    if args.readonly {
-        eprintln!("Error: Cannot copy metadata in read-only mode (--readonly flag set)");
-        process::exit(1);
-    }
-
-    // Verify source file exists
-    if !src_file.exists() {
-        eprintln!("Error: Source file not found: {}", src_file.display());
-        process::exit(1);
-    }
-
-    let original_mtime =
-        prepare_write_target(dest_file, args, "Destination file", "destination file");
-
-    // Extract tag filters (if specified)
-    let tag_filters = args.copy_tag_filters();
-    let tags_to_copy = match tag_filters {
-        Some(filters) if !filters.is_empty() => Some(filters),
-        _ => None, // Copy all tags
-    };
-
-    // Perform the copy operation on a working copy; only a byte change is an
-    // update (`cli::write_transaction::transact`).
-    let outcome = transact(
-        dest_file,
-        backup_before_commit(dest_file, args),
-        |scratch| {
-            copy_metadata(&src_file, scratch, tags_to_copy.as_deref()).map_err(|e| {
-                format!(
-                    "Failed to copy metadata from '{}' to '{}': {}",
-                    src_file.display(),
-                    dest_file.display(),
-                    e
-                )
-            })
-        },
-    );
-
-    // Print success message (matching ExifTool format)
-    let updated_line = match tags_to_copy.as_ref() {
-        Some(tags) => format!("    1 image files updated ({} tags copied)", tags.len()),
-        None => "    1 image files updated".to_string(),
-    };
-    finish_write(dest_file, outcome, original_mtime, &updated_line);
 }
 
 /// Handles rename operations (renaming files based on metadata)
@@ -510,64 +551,4 @@ fn handle_rename_operation(file: &std::path::Path, pattern: &str, args: &CliArgs
             process::exit(1);
         }
     }
-}
-
-/// Handles date shift operations (shifting date/time tags by offset)
-fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
-    // Extract date shift operations
-    let date_shifts = args.date_shift_operations();
-
-    // Check readonly flag FIRST - if set, prevent any writes
-    if args.readonly {
-        eprintln!("Error: Cannot shift dates in read-only mode (--readonly flag set)");
-        process::exit(1);
-    }
-
-    let original_mtime = prepare_write_target(file, args, "File", "file");
-
-    // Parse every operation before touching anything
-    let mut operations = Vec::new();
-    for (tag_pattern, op_str, offset_or_value) in &date_shifts {
-        let operation = match op_str.as_str() {
-            "+=" => ShiftOperation::Add,
-            "-=" => ShiftOperation::Subtract,
-            "=" => ShiftOperation::Set,
-            _ => {
-                eprintln!("Error: Invalid date shift operation '{}'", op_str);
-                eprintln!("Supported operations: +=, -=, =");
-                process::exit(1);
-            }
-        };
-        operations.push((tag_pattern, offset_or_value, operation));
-    }
-
-    // Apply every date shift to a working copy; only a byte change is an
-    // update (`cli::write_transaction::transact`).
-    let outcome = transact(file, backup_before_commit(file, args), |scratch| {
-        for (tag_pattern, offset_or_value, operation) in operations {
-            shift_metadata_dates(scratch, tag_pattern, offset_or_value, operation)
-                .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
-        }
-        Ok(())
-    });
-    finish_write(file, outcome, original_mtime, "    1 image files updated");
-}
-
-/// Handles clear all metadata operation (-all=)
-fn handle_clear_all_operation(file: &std::path::Path, args: &CliArgs) {
-    // Check readonly flag FIRST - if set, prevent any writes
-    if args.readonly {
-        eprintln!("Error: Cannot clear metadata in read-only mode (--readonly flag set)");
-        process::exit(1);
-    }
-
-    let original_mtime = prepare_write_target(file, args, "File", "file");
-
-    // Clear all metadata on a working copy: `-all=` on a file with nothing
-    // left to strip is `unchanged` (ExifTool 13.59), not an update.
-    let outcome = transact(file, backup_before_commit(file, args), |scratch| {
-        clear_all_metadata(scratch)
-            .map_err(|e| format!("Failed to clear metadata from '{}': {}", file.display(), e))
-    });
-    finish_write(file, outcome, original_mtime, "    1 image files updated");
 }

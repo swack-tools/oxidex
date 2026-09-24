@@ -1127,7 +1127,8 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
 /// (`writers::write_request::ensure_writer_addresses`).
 fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) -> Result<String> {
     use crate::writers::write_request::{
-        ensure_writer_addresses, generated_route_resolves, resolve_write_key,
+        ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
+        resolve_exif_family_key, resolve_write_key,
     };
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
@@ -1142,6 +1143,21 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
         });
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
+        // The hand-kept spellings keep their addresses, under the same checks
+        // as every other ungrouped name: only where IFD0 is EXIF (a PNG's
+        // bare `Software` is ExifTool's `PNG:Software`, not `IFD0:Software`),
+        // and never half of a write ExifTool also applies to another group
+        // (`XMP-tiff:Software`).
+        if !exif_ifd0_target && !surgical {
+            return Err(resolve_write_key(tag_name, false, baseline)
+                .err()
+                .unwrap_or_else(|| {
+                    ExifToolError::unsupported_format(format!(
+                        "Cannot write tag '{tag_name}': name its group explicitly"
+                    ))
+                }));
+        }
+        ensure_not_also_updated(tag_name, canonical, baseline)?;
         canonical.to_string()
     } else if !tag_name.contains(':')
         && surgical
@@ -1153,10 +1169,13 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
         // own ungrouped resolution, which predates this function, keeps
         // answering the names it owns.
         tag_name.to_string()
+    } else if let Some(resolved) = resolve_exif_family_key(tag_name) {
+        // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
+        resolved
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, baseline)?
     };
-    ensure_writer_addresses(&key, format, surgical)?;
+    ensure_writer_addresses(tag_name, &key, format, surgical)?;
     Ok(key)
 }
 
@@ -1166,6 +1185,46 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
 pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     let metadata = read_metadata(path)?;
     resolve_write_address(path, tag_name, &metadata)
+}
+
+/// Refuses any write to a PNG whose `eXIf` carries entries outside IFD0.
+///
+/// The PNG writer rebuilds `eXIf` from the map and flattens every entry into
+/// IFD0: `-PNG:Title=t` on tests/fixtures/png/sample.png moved ExifVersion,
+/// DateTimeOriginal, ComponentsConfiguration and ColorSpace from ExifIFD into
+/// IFD0 (pinned ExifTool 13.59 then decodes ComponentsConfiguration as `Err
+/// (89), ...`). Until the in-place PNG writer replaces it, such a write is
+/// refused rather than reported while it corrupts the file.
+fn refuse_png_exif_flattening(path: &Path, tag_name: &str, metadata: &MetadataMap) -> Result<()> {
+    let reader = MMapReader::new(path)?;
+    if !matches!(detect_format(&reader)?, FileFormat::PNG) {
+        return Ok(());
+    }
+    if let Some(key) = metadata.keys().find(|key| {
+        key.split_once(':').is_some_and(|(group, _)| {
+            matches!(
+                group,
+                "ExifIFD" | "GPS" | "IFD1" | "InteropIFD" | "MakerNotes"
+            )
+        })
+    }) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot write tag '{tag_name}': this PNG's eXIf carries {key}, which \
+             oxidex's PNG writer would move into IFD0"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `metadata` holds `key`, counting the PDF writer's alias spellings
+/// (`CreateDate`/`CreationDate`, `ModifyDate`/`ModDate`) as one field.
+fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
+    let aliases: &[&str] = match key {
+        "PDF:CreateDate" | "PDF:CreationDate" => &["PDF:CreateDate", "PDF:CreationDate"],
+        "PDF:ModifyDate" | "PDF:ModDate" => &["PDF:ModifyDate", "PDF:ModDate"],
+        _ => &[],
+    };
+    metadata.contains_key(key) || aliases.iter().any(|alias| metadata.contains_key(alias))
 }
 
 /// Modifies a single tag in a file's metadata.
@@ -1221,6 +1280,7 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     // Step 2: Modify the single tag, at an address the file's writer is
     // proven to write (see `resolve_write_address`).
     let key = resolve_write_address(path, tag_name, &metadata)?;
+    refuse_png_exif_flattening(path, tag_name, &metadata)?;
     metadata.insert(key, new_value);
 
     // Step 3: Write all metadata back to file
@@ -1260,6 +1320,20 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
     // Step 2: Remove the tag (if it exists), at an address the file's writer
     // is proven to write (see `resolve_write_address`).
     let key = resolve_write_address(path, tag_name, &metadata)?;
+    // The PNG and PDF writers rebuild what they write from the map (PNG text
+    // chunks and its `eXIf`; a PDF incremental update), so for them a key the
+    // map lacks names nothing, and writing anyway only re-lays-out the file
+    // (PNG) or appends an empty revision (PDF: `-PDF:Author=` on PDF.pdf grew
+    // it 8907 -> 9185 bytes). Pinned ExifTool 13.59 answers the same
+    // deletions `0 image files updated` / `1 image files unchanged` with the
+    // bytes untouched.
+    if !metadata_holds(&metadata, &key) {
+        let reader = MMapReader::new(path)?;
+        if matches!(detect_format(&reader)?, FileFormat::PNG | FileFormat::PDF) {
+            return Ok(());
+        }
+    }
+    refuse_png_exif_flattening(path, tag_name, &metadata)?;
     metadata.remove(&key);
 
     // Step 3: Write metadata back to file. The key goes along: an EXIF entry
@@ -1363,40 +1437,166 @@ pub fn clear_all_metadata(path: &Path) -> Result<()> {
 /// - Any tag value fails validation (InvalidTagValue)
 /// - Destination file cannot be written (IoError)
 pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<()> {
-    // Step 1: Read metadata from source file
+    copy_metadata_report(src, dest, tags).map(|_| ())
+}
+
+/// What [`copy_metadata_report`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CopyReport {
+    /// Tags actually written to the destination.
+    pub copied: usize,
+    /// For a copy-all: groups of source tags this destination's writer cannot
+    /// write, which were therefore not copied (never silently).
+    pub uncopied_groups: Vec<String>,
+}
+
+/// Groups no ExifTool writer writes either (file-system, derived and
+/// ExifTool-generated rows); a copy-all does not report them as uncopied.
+const READ_ONLY_GROUPS: &[&str] = &["File", "System", "Composite", "ExifTool"];
+
+/// [`copy_metadata`], reporting how many tags were written.
+///
+/// With a filter, each entry is one ExifTool `-TagsFromFile` argument:
+/// `TAG` or `GROUP:TAG`, optionally redirected (`SRC>DST` or `DST<SRC`).
+/// The source value is found by name (and group, when given: a family-1
+/// group, or `EXIF`/`XMP` for any of their directories) and written with
+/// [`modify_tag`] to the destination spelling -- the same resolution and
+/// refusal gate as `-TAG=VALUE`, so a bare `XPTitle` lands in IFD0 and a tag
+/// the destination's writer cannot write is refused, never dropped. A filter
+/// entry the source does not carry is skipped, as ExifTool skips it (13.59:
+/// `-TagsFromFile src -XPSubject -XPTitle` copies XPTitle and says nothing
+/// about XPSubject). Wildcards, `all` inside a group, and `--TAG`
+/// exclusions are refused rather than approximated.
+///
+/// Without a filter every source tag the destination's writer can address
+/// is copied, and the groups it cannot write are returned in
+/// [`CopyReport::uncopied_groups`] for the caller to report.
+pub fn copy_metadata_report(
+    src: &Path,
+    dest: &Path,
+    tags: Option<&[String]>,
+) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
+    let filters = tags.filter(|filters| {
+        !filters
+            .iter()
+            .all(|f| f.eq_ignore_ascii_case("all") || f == "*")
+    });
+    let Some(filters) = filters else {
+        return copy_all(&source_metadata, dest);
+    };
 
-    // Step 2: Read existing metadata from destination file
-    let mut dest_metadata = read_metadata(dest)?;
-
-    // Step 3: Filter and merge source tags into destination metadata
-    for (tag_name, occurrence) in source_metadata.winner_occurrences() {
-        // Check if this tag should be copied (if filter is specified)
-        let should_copy = tags.is_none_or(|filter| filter.contains(tag_name));
-
-        if should_copy {
-            // The value as the source file stores it where the producer keeps
-            // one beside its printed value (the ExifIFD engine rows: the
-            // SHORT behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
-            // placeholder, `TagOccurrence::stored`); the writer serializes
-            // stored forms, never printed ones.
-            let value = occurrence.project(ValueChannel::Stored).into_owned();
-            // An XP string copies as its stored bytes re-packed, which keeps
-            // a stored surrogate pair (ExifTool's `-TagsFromFile`). Text
-            // standing in for those bytes cannot say whether a code point
-            // above U+FFFF was a pair; refuse it rather than guess.
-            if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
-                crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
-            }
-            // Insert tag into destination (merges with existing, preserving others)
-            dest_metadata.insert(tag_name.clone(), value);
+    let mut report = CopyReport::default();
+    for filter in filters {
+        let (source_spec, dest_spec) = if let Some((from, to)) = filter.split_once('>') {
+            (from.trim(), to.trim())
+        } else if let Some((to, from)) = filter.split_once('<') {
+            (from.trim(), to.trim())
+        } else {
+            (filter.as_str(), filter.as_str())
+        };
+        let (source_group, source_name) = match source_spec.rsplit_once(':') {
+            Some((group, name)) => (Some(group), name),
+            None => (None, source_spec),
+        };
+        let plain = |text: &str| {
+            !text.is_empty() && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        };
+        if !plain(source_name)
+            || source_name.eq_ignore_ascii_case("all")
+            || source_group.is_some_and(|group| !plain(group))
+            || dest_spec.is_empty()
+        {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot copy '{filter}': oxidex copies plain TAG, GROUP:TAG and \
+                 SRC>DST names only (no wildcards, group-wide 'all' or exclusions)"
+            )));
         }
+        let group_matches = |key_group: &str| match source_group {
+            None => true,
+            Some(group) if group.eq_ignore_ascii_case("EXIF") => matches!(
+                key_group,
+                "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF"
+            ),
+            Some(group) if group.eq_ignore_ascii_case("XMP") => {
+                key_group == "XMP" || key_group.starts_with("XMP-")
+            }
+            Some(group) => key_group.eq_ignore_ascii_case(group),
+        };
+        let candidates: Vec<(&String, TagValue)> = source_metadata
+            .winner_occurrences()
+            .filter(|(key, _)| {
+                key.split_once(':').is_some_and(|(group, name)| {
+                    name.eq_ignore_ascii_case(source_name) && group_matches(group)
+                })
+            })
+            .map(|(key, occurrence)| (key, occurrence.project(ValueChannel::Stored).into_owned()))
+            .collect();
+        let Some((source_key, value)) = candidates.first().cloned() else {
+            continue; // the source does not carry it
+        };
+        if candidates.iter().any(|(_, other)| *other != value) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot copy '{filter}': the source holds {} with different values; \
+                 name the group to copy from",
+                candidates
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        // An XP string copies as its stored bytes re-packed, which keeps a
+        // stored surrogate pair (ExifTool's `-TagsFromFile`). Text standing
+        // in for those bytes cannot say whether a code point above U+FFFF was
+        // a pair; refuse it rather than guess.
+        if crate::writers::xp_strings::is_xp_tag_key(source_key) {
+            crate::writers::xp_strings::refuse_unknown_provenance(source_key, &value)?;
+        }
+        modify_tag(dest, dest_spec, value)?;
+        report.copied += 1;
     }
+    Ok(report)
+}
 
-    // Step 4: Write merged metadata back to destination file
+/// The copy-all half of [`copy_metadata_report`]: every source tag the
+/// destination's writer addresses, merged into the destination's own map.
+fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
+    let reader = MMapReader::new(dest)?;
+    let format = detect_format(&reader)?;
+    let surgical = is_surgical_tiff_target(format, &reader);
+    drop(reader);
+    let mut dest_metadata = read_metadata(dest)?;
+    let mut report = CopyReport::default();
+    for (tag_name, occurrence) in source_metadata.winner_occurrences() {
+        if crate::writers::write_request::ensure_writer_addresses(
+            tag_name, tag_name, format, surgical,
+        )
+        .is_err()
+        {
+            let group = tag_name.split_once(':').map_or("", |(group, _)| group);
+            if !READ_ONLY_GROUPS.contains(&group)
+                && !report.uncopied_groups.iter().any(|known| known == group)
+            {
+                report.uncopied_groups.push(group.to_string());
+            }
+            continue;
+        }
+        // The value as the source file stores it where the producer keeps
+        // one beside its printed value (the ExifIFD engine rows: the SHORT
+        // behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
+        // placeholder, `TagOccurrence::stored`); the writer serializes stored
+        // forms, never printed ones.
+        let value = occurrence.project(ValueChannel::Stored).into_owned();
+        if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
+            crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
+        }
+        dest_metadata.insert(tag_name.clone(), value);
+        report.copied += 1;
+    }
+    report.uncopied_groups.sort();
     write_metadata(dest, &dest_metadata)?;
-
-    Ok(())
+    Ok(report)
 }
 
 // ============================================================================

@@ -54,6 +54,12 @@ use crate::error::{ExifToolError, Result};
 /// every candidate that declares none of its own.
 const EXIF_MAIN_WRITE_GROUP: &str = "ExifIFD";
 
+/// Groups the PNG writer writes where they belong: `PNG:` text chunks, and
+/// IFD0 of the `eXIf` chunk it rebuilds. It flattens every other EXIF key
+/// into IFD0 (`-ExifIFD:ISO=200` landed in IFD0, `-IFD1:XResolution=10`
+/// became a second IFD0 XResolution), so those are refused, not misplaced.
+const PNG_WRITER_GROUPS: &[&str] = &["PNG", "IFD0"];
+
 /// Groups whose same-named rows ExifTool's `Exif::Main` write never touches:
 /// the EXIF directories themselves (a `WriteGroup => 'IFD0'` value is written
 /// to IFD0 only) and groups with no writable table (file-system, derived and
@@ -216,21 +222,84 @@ pub(crate) fn resolve_write_key(
             format!("ExifTool writes it to {group}, which oxidex cannot write"),
         ));
     }
-    if let Some((key, _)) = baseline.iter().find(|(key, _)| {
-        key.split_once(':').is_some_and(|(key_group, key_name)| {
-            key_name.eq_ignore_ascii_case(name) && !NOT_ALSO_UPDATED.contains(&key_group)
-        })
+    ensure_not_also_updated(tag, &format!("{group}:{}", field.name), baseline)?;
+    Ok(format!("{group}:{}", field.name))
+}
+
+/// Refuses an ungrouped `tag` resolved to `key` when the file carries the
+/// same name in a group ExifTool would also update (Writer.pl:613-782: every
+/// non-preferred candidate is written "if tag exists") but oxidex cannot
+/// write -- half of ExifTool's write is not ExifTool's write.
+pub(crate) fn ensure_not_also_updated(tag: &str, key: &str, baseline: &MetadataMap) -> Result<()> {
+    let name = key.rsplit(':').next().unwrap_or(key);
+    if let Some((existing, _)) = baseline.iter().find(|(existing, _)| {
+        existing
+            .split_once(':')
+            .is_some_and(|(group, existing_name)| {
+                existing_name.eq_ignore_ascii_case(name) && !NOT_ALSO_UPDATED.contains(&group)
+            })
     }) {
         return Err(refuse(
             tag,
             format!(
-                "ExifTool would also update the existing {key}, which oxidex cannot \
-                 write; use -{group}:{}= to change only the EXIF field",
-                field.name
+                "ExifTool would also update the existing {existing}, which oxidex cannot \
+                 write; use -{key}= to change only the EXIF field"
             ),
         ));
     }
-    Ok(format!("{group}:{}", field.name))
+    Ok(())
+}
+
+/// The directory an `EXIF:<name>` key really names. `EXIF` is family 0, not a
+/// directory: pinned ExifTool 13.59 writes `-EXIF:ISO=100` to `[ExifIFD] ISO`
+/// (the tag's `WriteGroup`, else `Exif::Main`'s `WRITE_GROUP => 'ExifIFD'`,
+/// Exif.pm:415), where the legacy planner created `[IFD0] ISO`. Resolved from
+/// the captured `FindTagInfo` candidates with the transcribed `Avoid` flags
+/// (an `Avoid` duplicate yields, Writer.pl:792-825), then from `GPS::Main`.
+/// `None` when the name is not one unambiguous EXIF field; the caller then
+/// keeps the key as written.
+pub(crate) fn resolve_exif_family_key(key: &str) -> Option<String> {
+    let (group, name) = key.split_once(':')?;
+    if !group.eq_ignore_ascii_case("EXIF") || plain_name(name) != Some(name) {
+        return None;
+    }
+    let table = crate::exiftool_tables::find_ifd_table("Exif", "Main")?;
+    let mut rows: Vec<(&str, &str)> = SET_NEW_VALUE_LOOKUP
+        .iter()
+        .filter(|candidate| is_exif_main(candidate) && candidate.name.eq_ignore_ascii_case(name))
+        .filter_map(|candidate| {
+            let id = match candidate.raw_id.strip_prefix("0x") {
+                Some(hex) => u16::from_str_radix(hex, 16).ok(),
+                None => candidate.raw_id.parse().ok(),
+            }?;
+            let field = table
+                .tag(id)
+                .filter(|field| field.name.eq_ignore_ascii_case(name))?;
+            (!field.flags.avoid).then(|| {
+                (
+                    candidate.write_group.unwrap_or(EXIF_MAIN_WRITE_GROUP),
+                    field.name,
+                )
+            })
+        })
+        .collect();
+    rows.dedup();
+    match rows.as_slice() {
+        [(group, name)] => return Some(format!("{group}:{name}")),
+        [] => {}
+        _ => return None,
+    }
+    let gps = crate::exiftool_tables::find_ifd_table("GPS", "Main")?;
+    let hits: Vec<&str> = gps
+        .tags
+        .iter()
+        .filter(|field| field.name.eq_ignore_ascii_case(name))
+        .map(|field| field.name)
+        .collect();
+    match hits.as_slice() {
+        [name] => Some(format!("GPS:{name}")),
+        _ => None,
+    }
 }
 
 /// Refuses a key the format's writer would silently drop.
@@ -243,6 +312,7 @@ pub(crate) fn resolve_write_key(
 /// dictionary fields (`pdf_writer::write_info_object`). Every other format's
 /// writer already refuses the whole write.
 pub(crate) fn ensure_writer_addresses(
+    requested: &str,
     key: &str,
     format: FileFormat,
     exif_surgical_target: bool,
@@ -253,14 +323,22 @@ pub(crate) fn ensure_writer_addresses(
             || generated_route_resolves(key)
     } else {
         match (format, key.split_once(':')) {
-            (FileFormat::PNG, Some((group, _))) => matches!(
-                group,
-                "PNG" | "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "EXIF" | "InteropIFD" | "MakerNotes"
-            ),
-            (FileFormat::PDF, Some((group, name))) => {
-                group == "PDF" && super::pdf_writer::is_info_field(name)
+            (FileFormat::PNG, Some((group, _))) => PNG_WRITER_GROUPS.contains(&group),
+            (FileFormat::PDF, Some((group, name))) if group == "PDF" => {
+                if super::pdf_writer::is_info_field(name) {
+                    true
+                } else {
+                    return Err(refuse(
+                        requested,
+                        format!(
+                            "oxidex's PDF writer writes only the Info dictionary fields \
+                             (Title, Author, Subject, Keywords, Creator, Producer, \
+                             CreationDate, ModDate); {name} is not one of them"
+                        ),
+                    ));
+                }
             }
-            (FileFormat::PNG | FileFormat::PDF, None) => false,
+            (FileFormat::PNG | FileFormat::PDF, _) => false,
             _ => true,
         }
     };
@@ -268,7 +346,7 @@ pub(crate) fn ensure_writer_addresses(
         return Ok(());
     }
     Err(refuse(
-        key,
+        requested,
         match group {
             Some(group) => format!("oxidex's {format:?} writer cannot write the {group} group"),
             None => "an ungrouped name reached the writer unresolved".to_string(),
@@ -397,7 +475,7 @@ mod tests {
             "GPS:GPSAltitude",
         ] {
             assert!(
-                ensure_writer_addresses(key, FileFormat::JPEG, false).is_ok(),
+                ensure_writer_addresses(key, key, FileFormat::JPEG, false).is_ok(),
                 "{key}"
             );
         }
@@ -409,15 +487,15 @@ mod tests {
             "JFIF:XResolution",
         ] {
             assert!(
-                ensure_writer_addresses(key, FileFormat::JPEG, false).is_err(),
+                ensure_writer_addresses(key, key, FileFormat::JPEG, false).is_err(),
                 "{key}"
             );
         }
-        assert!(ensure_writer_addresses("PDF:Title", FileFormat::PDF, false).is_ok());
-        assert!(ensure_writer_addresses("PDF:CreateDate", FileFormat::PDF, false).is_ok());
-        assert!(ensure_writer_addresses("PDF:Trapped", FileFormat::PDF, false).is_err());
-        assert!(ensure_writer_addresses("XMP:Title", FileFormat::PDF, false).is_err());
-        assert!(ensure_writer_addresses("PNG:Title", FileFormat::PNG, false).is_ok());
-        assert!(ensure_writer_addresses("XMP:Title", FileFormat::PNG, false).is_err());
+        assert!(ensure_writer_addresses("X", "PDF:Title", FileFormat::PDF, false).is_ok());
+        assert!(ensure_writer_addresses("X", "PDF:CreateDate", FileFormat::PDF, false).is_ok());
+        assert!(ensure_writer_addresses("X", "PDF:Trapped", FileFormat::PDF, false).is_err());
+        assert!(ensure_writer_addresses("X", "XMP:Title", FileFormat::PDF, false).is_err());
+        assert!(ensure_writer_addresses("X", "PNG:Title", FileFormat::PNG, false).is_ok());
+        assert!(ensure_writer_addresses("X", "XMP:Title", FileFormat::PNG, false).is_err());
     }
 }

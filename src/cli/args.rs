@@ -691,6 +691,24 @@ impl CliArgs {
         modifications
     }
 
+    /// The plain `-TAG=VALUE` requests: [`Self::tag_modifications`] minus
+    /// the arguments another mode owns -- `-all=` (clear) and every date
+    /// shift (`-DateTimeOriginal+=1`, an absolute `-ModifyDate=...`), which
+    /// `tag_modifications` also reports, spelled `DateTimeOriginal+` or
+    /// `all`. Classifying each argument exactly once is what lets a command
+    /// combining modes apply all of them instead of dispatching on the first
+    /// and dropping the rest.
+    pub fn plain_tag_modifications(&self) -> Vec<(String, String)> {
+        self.option_args()
+            .iter()
+            .filter(|arg| {
+                let lower = arg.to_lowercase();
+                lower != "-all=" && lower != "--all=" && Self::parse_date_shift(arg).is_none()
+            })
+            .filter_map(|arg| Self::parse_modification(arg))
+            .collect()
+    }
+
     /// Parses a single modification argument in the form -TAG=VALUE
     fn parse_modification(arg: &str) -> Option<(String, String)> {
         // Check if it starts with '-' and contains '='
@@ -756,8 +774,9 @@ impl CliArgs {
         for arg in self.option_args() {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
-                // Extract tag name (remove leading '-')
-                let tag_name = arg.trim_start_matches('-').to_string();
+                // Remove exactly one leading '-': `--TAG` is ExifTool's
+                // exclusion, which must not be mistaken for `-TAG`.
+                let tag_name = arg[1..].to_string();
                 tag_names.push(tag_name);
             }
         }
