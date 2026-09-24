@@ -11,12 +11,30 @@
 //! ValueConvInv => '$self->Encode($val,"UCS2","II") . "\0\0"',
 //! ```
 //!
-//! The map holds the decoded text, so every writer that serializes one of
-//! these from the map must apply `ValueConvInv`: the text's UCS-2 code units,
-//! little-endian whatever the file's byte order (the `"II"` argument), then a
-//! NUL pair. Serializing the text as an ASCII entry -- what every writer did
-//! before -- puts its UTF-8 bytes on disk, and ExifTool reads `Title` back as
-//! `楔汴e`.
+//! Every writer that serializes one of these from the map must apply
+//! `ValueConvInv`: the value's UCS-2 code units, little-endian whatever the
+//! file's byte order (the `"II"` argument), then a NUL pair. Serializing the
+//! text as an ASCII entry -- what every writer did before -- puts its UTF-8
+//! bytes on disk, and ExifTool reads `Title` back as `楔汴e`.
+//!
+//! What the code units are depends on where the value came from, exactly as
+//! in ExifTool, and the map value's variant carries that provenance:
+//!
+//! * [`TagValue::String`] (or an integer) is a value the caller supplied
+//!   (`-IFD0:XPTitle=V`, `modify_tag`, any API set). ExifTool encodes its
+//!   code points with `pack('v*')`, which keeps the low 16 bits of one above
+//!   U+FFFF: `-XPTitle=A🎌` writes `41 00 8c f3 00 00`.
+//! * [`TagValue::Binary`] is the entry's bytes as a file stored them -- the
+//!   readers keep them as `TagOccurrence::stored`, which `copy_metadata`
+//!   and the PNG `eXIf` rebuild serialize. ExifTool's UCS2 decode keeps
+//!   every unit as its own code point, so its copy packs the stored units
+//!   back unchanged: a surrogate pair `3c d8 8c df`, and even a lone
+//!   surrogate, survive `-TagsFromFile`.
+//!
+//! A path that holds the decoded text of a *stored* value without its bytes
+//! cannot tell which of the two ExifTool would write for a code point above
+//! U+FFFF, and refuses that value ([`refuse_unknown_provenance`]) rather
+//! than pick one.
 //!
 //! Verified against the pinned oracle (13.59, `-ver` and the `OOXML.docx`
 //! probe asserted): `-XPTitle=Title` writes `54 00 69 00 74 00 6c 00 65 00
@@ -25,6 +43,15 @@
 //! BOM, text after an embedded NUL, an odd trailing byte and extra NULs are
 //! all gone from the copy, and an `undef` or `int16u` source entry lands as
 //! `int8u`. `tests/xp_string_write.rs` pins each case.
+//!
+//! One case is not exact. When an unrelated edit rebuilds a PNG's `eXIf`
+//! chunk, ExifTool leaves an untouched XP entry byte for byte (type, BOM,
+//! text after a NUL and all), while the rebuild -- which re-serializes every
+//! tag from the map, always II -- writes the copy form above. The two agree
+//! whenever the stored value is canonical (UCS-2LE text, one NUL pair,
+//! `int8u`), surrogates included, and ExifTool reads the same text from
+//! both in every case; the JPEG and TIFF writers carry untouched entries
+//! verbatim and are exact.
 
 use crate::core::tag_conversion::xp_ucs2_units;
 use crate::core::tag_value::TagValue;
@@ -61,9 +88,15 @@ pub(crate) fn xp_field_type(existing: Option<u16>) -> u16 {
 
 /// The bytes ExifTool stores for `value`: `Encode($val,"UCS2","II") . "\0\0"`.
 ///
-/// * Text is encoded as its UTF-16 code units, little-endian, then `00 00`;
-///   the empty text is the NUL pair alone (what a copy of an empty XPTitle
-///   writes, Nikon/NikonCoolpixS9900.jpg).
+/// * Text (a caller-supplied value) is encoded one unit per code point,
+///   keeping each code point's low 16 bits -- Charset.pm 13.59:387-390
+///   `pack('v*', @uni)` -- little-endian, then `00 00`. Oracle `-XPTitle=V`:
+///   `A🎌` -> `41 00 8c f3 00 00`, `x😀y中𝄞z` -> `78 00 00 f6 79 00 2d 4e 1e d1
+///   7a 00 00 00`, U+10000 -> `00 00 00 00`, U+10FFFF -> `ff ff 00 00`. The
+///   empty text is the NUL pair alone (what a copy of an empty XPTitle
+///   writes, Nikon/NikonCoolpixS9900.jpg). A Rust `str` cannot hold the one
+///   input that differs further -- a lone surrogate, which ExifTool accepts
+///   as CESU-8 -- so no case is left unmatched.
 /// * An integer is the decimal text it was typed as: the CLI keeps a value
 ///   as `Integer` only when `i64::to_string` reproduces it byte for byte
 ///   (`parse_string_to_tag_value`). Oracle: `-XPTitle=123` writes
@@ -78,20 +111,10 @@ pub(crate) fn xp_field_type(existing: Option<u16>) -> u16 {
 ///   text ExifTool would have been given, and is refused rather than
 ///   guessed at.
 ///
-/// One input is deliberately not ExifTool's bytes. A code point above U+FFFF
-/// is written as its surrogate pair. 13.59 packs every code point with
-/// `pack('v*')` (Charset.pm:387-390), keeping its low 16 bits, so it writes
-/// a *typed* `-XPTitle=A🎌` as `41 00 8c f3 00 00` (U+F38C) -- but it copies
-/// a stored pair `3c d8 8c df` back unchanged, because its UCS2 decode keeps
-/// the two halves as two code points. oxidex's reader folds that stored pair
-/// into the one `char` a typed value holds
-/// (`tag_conversion::decode_xp_ucs2_string`), so the two cases reach this
-/// function identical; the pair is ExifTool's bytes for the copy, and
-/// truncating would corrupt it.
 pub(crate) fn encode_xp_value(value: &TagValue) -> Result<Vec<u8>> {
     let units: Vec<u16> = match value {
-        TagValue::String(text) => text.encode_utf16().collect(),
-        TagValue::Integer(number) => number.to_string().encode_utf16().collect(),
+        TagValue::String(text) => pack_v(text),
+        TagValue::Integer(number) => pack_v(&number.to_string()),
         TagValue::Binary(bytes) => xp_ucs2_units(bytes),
         other => {
             return Err(ExifToolError::parse_error(format!(
@@ -102,6 +125,35 @@ pub(crate) fn encode_xp_value(value: &TagValue) -> Result<Vec<u8>> {
     let mut out: Vec<u8> = units.into_iter().flat_map(u16::to_le_bytes).collect();
     out.extend_from_slice(&[0, 0]);
     Ok(out)
+}
+
+/// Perl's `pack('v*', @uni)` over a string's code points: each one's low 16
+/// bits (Charset.pm 13.59:387-390; `UCS2`, unlike `UTF16`, adds no
+/// surrogate pairs).
+fn pack_v(text: &str) -> Vec<u16> {
+    text.chars()
+        .map(|c| (u32::from(c) & 0xFFFF) as u16)
+        .collect()
+}
+
+/// Refuses the decoded text of a *stored* XP value that arrived without the
+/// bytes it was decoded from, when it holds a code point above U+FFFF: its
+/// bytes are then either the stored surrogate pair (what ExifTool's copy
+/// writes) or the low 16 bits of the code point (what its direct write
+/// does), and nothing here says which. Every other text encodes the same
+/// either way. `key` names the tag in the error.
+pub(crate) fn refuse_unknown_provenance(key: &str, value: &TagValue) -> Result<()> {
+    match value {
+        TagValue::String(text) if text.chars().any(|c| u32::from(c) > 0xFFFF) => {
+            Err(ExifToolError::unsupported_format(format!(
+                "Cannot write {key}: its value was read from a file whose stored bytes \
+                 were not kept, and it holds a code point above U+FFFF, which ExifTool \
+                 writes differently for a copied value (the stored surrogate pair) and a \
+                 typed one (the low 16 bits)"
+            )))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// `(field type, count, bytes)` for an XP* entry: [`xp_field_type`] of the
@@ -173,12 +225,42 @@ mod tests {
         }
     }
 
+    /// A typed code point above U+FFFF keeps its low 16 bits, as the
+    /// oracle's `-XPTitle=V` writes it; the same text copied from stored
+    /// bytes keeps the stored surrogate pair.
     #[test]
-    fn a_code_point_above_the_bmp_is_its_surrogate_pair() {
+    fn typed_code_points_above_the_bmp_keep_their_low_16_bits() {
+        for (typed, oracle) in [
+            ("A🎌", "41008cf30000"),
+            ("x😀y中𝄞z", "780000f679002d4e1ed17a000000"),
+            ("\u{10000}", "00000000"),
+            ("\u{10ffff}", "ffff0000"),
+        ] {
+            assert_eq!(
+                encode_xp_value(&TagValue::new_string(typed)).unwrap(),
+                hex(oracle),
+                "{typed:?}"
+            );
+        }
         assert_eq!(
-            encode_xp_value(&TagValue::new_string("A🎌")).unwrap(),
+            encode_xp_value(&TagValue::Binary(hex("41003cd88cdf0000"))).unwrap(),
             hex("41003cd88cdf0000")
         );
+    }
+
+    #[test]
+    fn only_stored_text_above_the_bmp_is_of_unknown_provenance() {
+        assert!(refuse_unknown_provenance("IFD0:XPTitle", &TagValue::new_string("A🎌")).is_err());
+        for fine in [
+            TagValue::new_string("é中文 café"),
+            TagValue::new_string("A\u{fffd}B"),
+            TagValue::Binary(hex("41003cd88cdf0000")),
+        ] {
+            assert!(
+                refuse_unknown_provenance("IFD0:XPTitle", &fine).is_ok(),
+                "{fine:?}"
+            );
+        }
     }
 
     #[test]

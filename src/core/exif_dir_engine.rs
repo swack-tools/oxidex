@@ -767,6 +767,12 @@ fn stored_value(tiff: &[u8], entry: &IfdEntry, order: ByteOrder) -> Option<TagVa
         usize::try_from(entry.value_offset).ok()?
     };
     let bytes = tiff.get(start..start.checked_add(size)?)?;
+    // The XP strings store their bytes, not the decoded text: a copy
+    // re-packs the stored units, keeping a surrogate pair or a lone
+    // surrogate as ExifTool's `-TagsFromFile` does (`writers::xp_strings`).
+    if let Some(forms) = crate::core::tag_conversion::xp_string_forms(entry.tag_id, bytes) {
+        return Some(forms.stored);
+    }
     Some(crate::core::tag_conversion::raw_bytes_to_tag_value(
         bytes,
         entry.field_type,
