@@ -914,6 +914,18 @@ fn deleting_the_last_legacy_tag_while_setting_a_generated_one() {
                 ),
             ),
             ("iso+makernote", base(vec![iso.clone(), note.clone()], None)),
+            // IFD1 holding only the JPEGInterchangeFormat/Length pair: the
+            // scanner moves that pair into the plan's thumbnail, and the
+            // serializer judged emptiness by the entry lists alone, so the
+            // staged block came back empty and the thumbnail was dropped
+            // (the "iso+thumb" fixture above has IFD1 entries besides it).
+            (
+                "iso+thumb-pointers-only",
+                base(
+                    vec![iso.clone()],
+                    Some((vec![], vec![0xFF, 0xD8, 0xFF, 0xD9])),
+                ),
+            ),
         ] {
             let mut expected = dump(&tiff);
             expected.remove("ExifIFD:0x8827");
@@ -1439,6 +1451,45 @@ fn absent_removals_are_no_ops_before_any_carrier_refusal() {
                     "{label} {name} {key}"
                 );
             }
+        }
+    }
+}
+
+/// A legacy-only deletion of the block's last ordinary value
+/// (`-ExifIFD:ISO=`) beside an IFD1 holding only a thumbnail. Pinned
+/// ExifTool 13.59 keeps the thumbnail: IFD0 empty, IFD1 = the pointer pair,
+/// thumbnail bytes unchanged. The reconstructing writer's "no EXIF row left:
+/// drop everything" shortcut took a named removal for a clear and dropped
+/// the block, thumbnail included (tip 707c7565 too); it now applies only to
+/// a map with no EXIF row and no named removal.
+#[test]
+fn deleting_the_last_row_keeps_a_thumbnail_only_ifd1() {
+    let dir = tempfile::tempdir().unwrap();
+    let thumb = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x03, 0x01, 0xFF, 0xD9];
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(100).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: Some((vec![], thumb.clone())),
+        }
+        .build(order);
+        let mut expected = dump(&tiff);
+        expected.remove("ExifIFD:0x8827");
+        for (name, original) in [
+            ("thumb.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("thumb.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            remove_tag(&path, "ExifIFD:ISO").unwrap_or_else(|e| panic!("{order:?} {name}: {e}"));
+            let out = tiff_of(name, &std::fs::read(&path).unwrap());
+            assert_eq!(&out[..2], &tiff[..2], "{order:?} {name}");
+            assert_eq!(dump(&out), expected, "{order:?} {name}");
+            assert_eq!(
+                dump(&out).get("IFD1:thumbnail").map(|t| t.2.clone()),
+                Some(thumb.clone())
+            );
         }
     }
 }
