@@ -109,7 +109,12 @@ fn c_ffi_integration_test_compiles_and_runs() {
         .expect("compile C FFI integration test");
     assert!(compile_status.success(), "C FFI integration compile failed");
 
+    // The write tests copy fixtures here and write the copies; argv[1].
+    let scratch = out_dir.path().join("scratch");
+    std::fs::create_dir(&scratch).expect("create scratch dir for the C write tests");
+
     let mut run = Command::new(&out);
+    run.arg(&scratch);
     run.current_dir(&manifest_dir);
     prepend_env_path(&mut run, "DYLD_LIBRARY_PATH", &lib_dir);
     prepend_env_path(&mut run, "LD_LIBRARY_PATH", &lib_dir);

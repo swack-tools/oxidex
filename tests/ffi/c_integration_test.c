@@ -247,10 +247,146 @@ void test_invalid_float_values() {
     exiftool_destroy(handle);
 }
 
+
+/* ------------------------------------------------------------------------
+ * Test 7: Writes Are Applied Or Refused By Name
+ *
+ * exiftool_write_file used to hand the handle's map straight to the format
+ * writer, which skips every group it does not write, and return EXIFTOOL_OK:
+ * an XMP:Title in a JPEG, a File:Comment or an IFD1 key the writer drops, and
+ * an ungrouped XPTitle were all "written" without touching the file. A write
+ * either applies every requested change or fails, names each key it would
+ * not write, and leaves the file byte-identical.
+ * ------------------------------------------------------------------------ */
+
+static const char* scratch_dir = NULL;
+
+/* Reads a whole file; returns NULL on failure. */
+static unsigned char* slurp(const char* path, long* len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char* buf = (unsigned char*)malloc((size_t)(*len > 0 ? *len : 1));
+    if (buf && fread(buf, 1, (size_t)*len, f) != (size_t)*len) {
+        free(buf);
+        buf = NULL;
+    }
+    fclose(f);
+    return buf;
+}
+
+/* Copies fixture to scratch_dir/name; writes the destination into out. */
+static int copy_fixture(const char* fixture, const char* name, char* out, size_t out_len) {
+    long len = 0;
+    unsigned char* buf = slurp(fixture, &len);
+    if (!buf) return 0;
+    snprintf(out, out_len, "%s/%s", scratch_dir, name);
+    FILE* f = fopen(out, "wb");
+    if (!f) {
+        free(buf);
+        return 0;
+    }
+    int ok = fwrite(buf, 1, (size_t)len, f) == (size_t)len;
+    fclose(f);
+    free(buf);
+    return ok;
+}
+
+/* Whether path holds exactly the bytes of fixture. */
+static int same_bytes(const char* path, const char* fixture) {
+    long a_len = 0, b_len = 0;
+    unsigned char* a = slurp(path, &a_len);
+    unsigned char* b = slurp(fixture, &b_len);
+    int same = a && b && a_len == b_len && memcmp(a, b, (size_t)a_len) == 0;
+    free(a);
+    free(b);
+    return same;
+}
+
+#define JPEG_FIXTURE "tests/fixtures/jpeg/simple/synthetic_001.jpg"
+#define PNG_FIXTURE "tests/fixtures/png/sample.png"
+
+/* One refused write: set each key, write, and check the result. */
+static void expect_refused(const char* what, const char* fixture, const char* name,
+                           const char* const* keys, size_t key_count,
+                           const char* writable_key) {
+    char path[4096];
+    char label[512];
+    if (!copy_fixture(fixture, name, path, sizeof path)) {
+        snprintf(label, sizeof label, "%s: copy fixture", what);
+        TEST_ASSERT(0, label);
+        return;
+    }
+    ExifToolHandle* handle = exiftool_create();
+    int result = exiftool_read_file(handle, path);
+    snprintf(label, sizeof label, "%s: read succeeds", what);
+    TEST_ASSERT(result == EXIFTOOL_OK, label);
+    if (writable_key) {
+        exiftool_set_tag_string(handle, writable_key, "v");
+    }
+    for (size_t i = 0; i < key_count; i++) {
+        exiftool_set_tag_string(handle, keys[i], "v");
+    }
+    result = exiftool_write_file(handle, path);
+    snprintf(label, sizeof label, "%s: write is refused, not reported (code %d)", what, result);
+    TEST_ASSERT(result != EXIFTOOL_OK, label);
+    const char* message = exiftool_get_last_error();
+    for (size_t i = 0; i < key_count; i++) {
+        snprintf(label, sizeof label, "%s: message names %s", what, keys[i]);
+        TEST_ASSERT(message && strstr(message, keys[i]) != NULL, label);
+    }
+    snprintf(label, sizeof label, "%s: file is byte-identical", what);
+    TEST_ASSERT(same_bytes(path, fixture), label);
+    exiftool_destroy(handle);
+}
+
+void test_write_refusals() {
+    printf("\nTest 7: Writes Are Applied Or Refused By Name\n");
+    if (!scratch_dir) {
+        TEST_ASSERT(0, "harness passes a scratch directory as argv[1]");
+        return;
+    }
+
+    static const char* const xmp[] = {"XMP:Title"};
+    expect_refused("JPEG XMP:Title", JPEG_FIXTURE, "xmp.jpg", xmp, 1, NULL);
+    static const char* const file_comment[] = {"File:Comment"};
+    expect_refused("JPEG File:Comment", JPEG_FIXTURE, "comment.jpg", file_comment, 1, NULL);
+    static const char* const ifd1[] = {"IFD1:ImageDescription"};
+    expect_refused("JPEG IFD1:ImageDescription", JPEG_FIXTURE, "ifd1.jpg", ifd1, 1, NULL);
+    static const char* const png_xmp[] = {"XMP:Title"};
+    expect_refused("PNG XMP:Title", PNG_FIXTURE, "xmp.png", png_xmp, 1, NULL);
+    /* Multi-key: the writable IFD0:XPTitle is not half-applied. */
+    static const char* const several[] = {"XMP:Title", "File:Comment"};
+    expect_refused("JPEG multi-key", JPEG_FIXTURE, "multi.jpg", several, 2, "IFD0:XPTitle");
+
+    /* An ungrouped XPTitle resolves to IFD0, as pinned ExifTool 13.59 writes it. */
+    char path[4096];
+    if (copy_fixture(JPEG_FIXTURE, "ungrouped.jpg", path, sizeof path)) {
+        ExifToolHandle* handle = exiftool_create();
+        exiftool_read_file(handle, path);
+        exiftool_set_tag_string(handle, "XPTitle", "v");
+        int result = exiftool_write_file(handle, path);
+        TEST_ASSERT(result == EXIFTOOL_OK, "ungrouped XPTitle write succeeds");
+        exiftool_destroy(handle);
+        handle = exiftool_create();
+        exiftool_read_file(handle, path);
+        const char* title = exiftool_get_tag_string(handle, "IFD0:XPTitle");
+        TEST_ASSERT(title && strcmp(title, "v") == 0, "ungrouped XPTitle lands in IFD0");
+        exiftool_destroy(handle);
+    } else {
+        TEST_ASSERT(0, "ungrouped XPTitle: copy fixture");
+    }
+}
+
 /**
  * Main test runner
  */
-int main(void) {
+int main(int argc, char** argv) {
+    if (argc > 1) {
+        scratch_dir = argv[1];
+    }
     printf("========================================\n");
     printf("ExifTool-RS C FFI Integration Tests\n");
     printf("========================================\n");
@@ -262,6 +398,7 @@ int main(void) {
     test_type_checking();
     test_null_pointer_safety();
     test_invalid_float_values();
+    test_write_refusals();
 
     /* Print summary */
     printf("\n========================================\n");

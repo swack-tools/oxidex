@@ -66,6 +66,12 @@ def _find_library() -> ctypes.CDLL:
     else:  # Linux and other Unix-like systems
         lib_name = "liboxidex.so"
 
+    # An explicit path wins: tests/python_bindings.rs points it at the
+    # library the running `cargo test` just built.
+    explicit = os.environ.get("OXIDEX_LIBRARY")
+    if explicit:
+        return ctypes.CDLL(explicit)
+
     # Try common build directories relative to this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     search_paths = [
@@ -155,6 +161,22 @@ _lib.exiftool_get_tag_float.argtypes = [
     ctypes.c_char_p,
     ctypes.POINTER(ctypes.c_double)
 ]
+
+# Tag mutation and file writing
+_lib.exiftool_set_tag_string.restype = ctypes.c_int
+_lib.exiftool_set_tag_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+
+_lib.exiftool_set_tag_integer.restype = ctypes.c_int
+_lib.exiftool_set_tag_integer.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int64]
+
+_lib.exiftool_set_tag_float.restype = ctypes.c_int
+_lib.exiftool_set_tag_float.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
+
+_lib.exiftool_remove_tag.restype = ctypes.c_int
+_lib.exiftool_remove_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+_lib.exiftool_write_file.restype = ctypes.c_int
+_lib.exiftool_write_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
 # Error handling
 _lib.exiftool_get_last_error.restype = ctypes.c_char_p
@@ -359,6 +381,53 @@ class Oxidex:
         if result == OXIDEX_OK:
             return value.value
         return None
+
+    def set_tag(self, tag_name: str, value: str) -> None:
+        """Set a tag to a string value in the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(
+            _lib.exiftool_set_tag_string(
+                self._handle, tag_name.encode('utf-8'), value.encode('utf-8')
+            )
+        )
+
+    def set_tag_integer(self, tag_name: str, value: int) -> None:
+        """Set a tag to an integer value in the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(
+            _lib.exiftool_set_tag_integer(self._handle, tag_name.encode('utf-8'), value)
+        )
+
+    def set_tag_float(self, tag_name: str, value: float) -> None:
+        """Set a tag to a float value in the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(
+            _lib.exiftool_set_tag_float(self._handle, tag_name.encode('utf-8'), value)
+        )
+
+    def remove_tag(self, tag_name: str) -> None:
+        """Remove a tag from the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(_lib.exiftool_remove_tag(self._handle, tag_name.encode('utf-8')))
+
+    def write_file(self, filepath: str) -> None:
+        """
+        Write the loaded metadata to a file.
+
+        Every tag that differs from the file is a requested change: a changed
+        or added tag is set, and a tag the file carries that the handle no
+        longer does is deleted.
+
+        Raises:
+            OxidexError: If the write fails. Nothing is written then.
+        """
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(_lib.exiftool_write_file(self._handle, filepath.encode('utf-8')))
 
     def get_all_tags(self) -> dict[str, Optional[str]]:
         """
