@@ -392,7 +392,9 @@ Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
 one change per PR:
 
 1. One agent, one worktree, one `staging/<slug>` branch off the current tip
-   of `refactor/tag-machinery`. Run `tools/preflight.sh --upstream` first.
+   of `refactor/tag-machinery`. A stacked child is the exception: branch it
+   from its parent's current head (see "Stacking dependent PRs"). Run
+   `tools/preflight.sh --upstream` first.
 2. Verify with the instrument named for the change (a corpus comparison for
    tag work; see "Closing an ExifTool coverage gap"). A change that touches
    readers must show 0 proven reads lost (`tools/ci/read_regression_gate.py`,
@@ -414,10 +416,13 @@ only path to `main` (see "Release engineering"). `refactor/tag-machinery` and
 often. Before starting, and again before merging, fetch and bring the branch
 up to `origin/refactor/tag-machinery` (not `origin/main`). Rebase only before
 the first push; once a branch is pushed, merge the tip with a signed merge,
-because a pushed branch must not be force-pushed. Afterwards, re-check that
-the defect still reproduces at that HEAD. If the tip already contains the
-fix, or the branch's scope has shrunk to nearly nothing, report it superseded
-and stop rather than landing an empty change.
+because a pushed branch must not be force-pushed. To decide whether upstream
+already fixed the defect, reproduce it against the fetched
+`origin/refactor/tag-machinery` itself (a clean base worktree or a binary
+built from it), never against your own branch, which contains your fix. Then
+verify the corrected behaviour separately on your branch's head. If the tip
+already contains the fix, or the branch's scope has shrunk to nearly nothing,
+report it superseded and stop rather than landing an empty change.
 
 ## Stacking dependent PRs
 
@@ -443,13 +448,17 @@ takes one large conflict at the end.
   starts a CI run against the new base. If the tip merge was already pushed
   before retargeting, re-run CI explicitly. Then squash-merge under the rules
   in "How work lands", which apply unchanged to every PR in the stack.
-- **Keep waiting children out of any automatic integration queue.** The
-  multi-host fleet is stopped, but its train (`tools/fleet/workqueue.py`,
-  `tools/fleet/train.py`) treats every non-withdrawn `staging/*` ref as a
-  landing candidate, whatever its PR base. If the fleet ever runs again, a
-  child selected before its parent would land both changes together. So
-  withdraw children from the queue until their parent lands, or give them a
-  branch name outside `staging/`.
+- **Keep unapproved work out of any automatic integration queue.** The
+  multi-host fleet is stopped. Its train, however, treats every unclaimed,
+  non-withdrawn `staging/*` ref as a landing candidate
+  (`tools/fleet/workqueue.py`), and it squash-commits and pushes those refs
+  straight onto the integration tip (`tools/fleet/train.py`). It does this
+  whatever the ref's PR base, review state or CI status. If the fleet ever
+  runs again, it would therefore bypass the landing rules above for every PR,
+  not only for stacked children. Before restarting it, give the train an
+  explicit readiness filter (CI green, approved, no unresolved threads,
+  parent landed). Until then, withdraw every not-yet-approved branch from the
+  queue.
 - **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
   review round, one defect blocking all of it, and no way to verify each
   change's central claim on its own.
