@@ -4516,6 +4516,12 @@ int exiftool_set_tag_float(struct ExifToolHandle *handle, const char *tag_name, 
  - `handle`: Handle to modify (must not be NULL)
  - `tag_name`: Tag name to remove (must not be NULL)
 
+ A group deletion (`GROUP:All`, such as `EXIF:All` or `GPS:All`) removes
+ no row of the handle: it is recorded and applied when the handle is next
+ written to a file (ExifTool's `-GROUP:All=`), which refuses it with
+ `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when oxidex cannot delete that group from
+ the file. `exiftool_read_file` discards recorded group deletions.
+
  # Returns
  - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
  - `EXIFTOOL_ERR_NULL_POINTER` if handle or tag_name is NULL

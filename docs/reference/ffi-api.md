@@ -426,6 +426,13 @@ int exiftool_remove_tag(ExifToolHandle* handle, const char* tag_name);
 exiftool_remove_tag(handle, "IFD0:Artist");
 ```
 
+A group name ending in `:All` (`EXIF:All`, `GPS:All`) is ExifTool's
+`-GROUP:All=`: it removes no row of the handle, and the next
+`exiftool_write_file()` deletes the whole group from the file. When the file
+holds nothing in the group, the file is left byte-identical and the call
+succeeds. A group oxidex cannot delete from that file (`XMP:All` where there
+is XMP) fails with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`.
+
 #### `exiftool_write_file()`
 
 Writes modified metadata to file.

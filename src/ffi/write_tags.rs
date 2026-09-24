@@ -8,7 +8,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 use crate::core::TagValue;
-use crate::core::operations::write_metadata;
 
 use super::context::{ExifToolHandle, handle_to_context, handle_to_context_mut};
 use super::error::{
@@ -222,6 +221,12 @@ pub extern "C" fn exiftool_set_tag_float(
 /// - `handle`: Handle to modify (must not be NULL)
 /// - `tag_name`: Tag name to remove (must not be NULL)
 ///
+/// A group deletion (`GROUP:All`, such as `EXIF:All` or `GPS:All`) removes
+/// no row of the handle: it is recorded and applied when the handle is next
+/// written to a file (ExifTool's `-GROUP:All=`), which refuses it with
+/// `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when oxidex cannot delete that group from
+/// the file. `exiftool_read_file` discards recorded group deletions.
+///
 /// # Returns
 /// - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
 /// - `EXIFTOOL_ERR_NULL_POINTER` if handle or tag_name is NULL
@@ -255,6 +260,18 @@ pub extern "C" fn exiftool_remove_tag(
             }
         };
 
+        // `GROUP:All` (`EXIF:All`, `GPS:All`) is a group deletion, which no
+        // row of the map names: record it for the next file write.
+        if crate::writers::write_request::group_deletion(name_str).is_some() {
+            if !context
+                .group_deletions
+                .iter()
+                .any(|group| group == name_str)
+            {
+                context.group_deletions.push(name_str.to_string());
+            }
+            return EXIFTOOL_OK;
+        }
         // Remove the tag (no error if it doesn't exist)
         context.metadata.remove(name_str);
         // Rebuild tag cache since we modified metadata
@@ -334,8 +351,13 @@ pub extern "C" fn exiftool_write_file(
 
         let path = Path::new(path_str);
 
-        // Call Rust write_metadata function
-        match write_metadata(path, &context.metadata) {
+        // The handle's map, plus any recorded `GROUP:All` deletions, in one
+        // write transaction (see `write_metadata`).
+        match crate::core::operations::write_metadata_and_delete_groups(
+            path,
+            &context.metadata,
+            &context.group_deletions,
+        ) {
             Ok(()) => EXIFTOOL_OK,
             Err(e) => error_to_code(&e),
         }
