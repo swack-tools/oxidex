@@ -5661,6 +5661,50 @@ mod exif_subifd_tests {
         );
     }
 
+    /// AmbientTemperature's every channel through the ExifIFD walk with the
+    /// generated table in force equals the hand arm's (table off): one
+    /// occurrence, the same priority, and the same print, ValueConv and
+    /// stored projections -- the stored form is what the PNG `eXIf` rebuild
+    /// and `copy_metadata` serialize -- for the signed 0/-1 of OlympusOM-1.jpg
+    /// and an ordinary value.
+    #[test]
+    fn ambient_temperature_channels_match_the_hand_arm() {
+        use crate::core::tag_occurrence::ValueChannel;
+        const SRATIONAL: u16 = 10;
+        let at = tail_at(1);
+        for bytes in [
+            [0u32.to_le_bytes(), u32::MAX.to_le_bytes()].concat(),
+            [43i32.to_le_bytes(), 2i32.to_le_bytes()].concat(),
+            [(-7i32).to_le_bytes(), 2i32.to_le_bytes()].concat(),
+        ] {
+            let data = exif_block(&[(0x9400, SRATIONAL, 1, at)], &bytes);
+            let engine = walk_exif(&data, None, exif_main(), &[]);
+            let hand = walk_exif(&data, None, None, &[]);
+            let engine = engine.occurrences_for("ExifIFD:AmbientTemperature");
+            let hand = hand.occurrences_for("ExifIFD:AmbientTemperature");
+            assert_eq!((engine.len(), hand.len()), (1, 1), "{bytes:?}");
+            assert_eq!(engine[0].priority, hand[0].priority, "{bytes:?}");
+            for channel in [
+                ValueChannel::PrintConv,
+                ValueChannel::ValueConv,
+                ValueChannel::Stored,
+            ] {
+                let print = |occurrence: &crate::core::tag_occurrence::TagOccurrence| {
+                    crate::core::exiftool_compat::format_tag_value(
+                        "ExifIFD:AmbientTemperature",
+                        occurrence.project(channel).as_ref(),
+                    )
+                };
+                assert_eq!(print(engine[0]), print(hand[0]), "{bytes:?} {channel:?}");
+            }
+            assert_eq!(
+                engine[0].project(ValueChannel::Stored),
+                hand[0].project(ValueChannel::Stored),
+                "{bytes:?} stored"
+            );
+        }
+    }
+
     /// Decision D-3: a `SubDirectory` edge id in the ExifIFD reports nothing
     /// (Exif.pm:7103-7104), as pinned ExifTool's `-a -G1` over the census
     /// shows for DJI_XT2.jpg's 0x02bc ApplicationNotes; the hand arm alone
