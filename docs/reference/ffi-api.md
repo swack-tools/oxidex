@@ -38,7 +38,7 @@ Two headers declare the API:
 - `include/oxidex.h` is maintained by hand, and the C integration test
   (`tests/ffi/c_integration_test.c`) uses it.
 
-Both declare the 18 exported `exiftool_*` functions. Tag names are the
+Both declare the 19 exported `exiftool_*` functions. Tag names are the
 group-qualified keys that `oxidex -j` prints, such as `IFD0:Make` and
 `ExifIFD:ISO`.
 
@@ -448,12 +448,14 @@ int exiftool_write_file(ExifToolHandle* handle, const char* path);
   does not create a new file. See [Writing metadata](/guide/writing) for
   which tags are proven against ExifTool.
 
-**What is written:** the handle's tags are the metadata the file should end
-up with. A tag that is new or differs from the file is set -- resolved the way
-the CLI resolves `-TAG=VALUE` (an ungrouped `XPTitle` lands in `IFD0`) -- and
-a tag the file carries that the handle lacks is deleted. The derived `File:`,
-`Composite:` and file-system rows are never deleted, and the file-system ones
-(`FileName`, `FileSize`, the file dates) are never written.
+**What is written:** a tag of the handle that is new or differs from the file
+is set -- resolved the way the CLI resolves `-TAG=VALUE` (an ungrouped
+`XPTitle` lands in `IFD0`). A tag the file carries that the handle lacks is
+deleted only when the handle was read from this same file and the caller
+removed it; a handle read from another file, or never read, only sets
+(ExifTool's SetNewValue model). The derived `File:`, `Composite:` and
+file-system rows are never deleted, and the file-system ones (`FileName`,
+`FileSize`, the file dates) are never written.
 
 **Returns:**
 - `EXIFTOOL_OK` when every change is in the file, proven by reading it back
@@ -477,6 +479,21 @@ if (result == EXIFTOOL_ERR_TAG_NOT_WRITTEN) {
     }
 }
 ```
+
+#### `exiftool_write_file_with_outcome()`
+
+As `exiftool_write_file()`, and reports what the write did, like ExifTool's
+`WriteInfo` return value.
+
+```c
+int exiftool_write_file_with_outcome(ExifToolHandle* handle, const char* path, int* outcome);
+```
+
+**Returns:** the same codes as `exiftool_write_file()`, plus
+`EXIFTOOL_ERR_NULL_POINTER` for a NULL `outcome`. On `EXIFTOOL_OK`, `*outcome`
+is `EXIFTOOL_WRITE_UPDATED` (1) when the file changed, or
+`EXIFTOOL_WRITE_UNCHANGED` (2) when every change was already in effect and the
+file is byte-identical.
 
 ### Utility Functions
 

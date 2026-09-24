@@ -24,6 +24,7 @@
 //! ```
 
 use crate::core::operations::{read_metadata, write_metadata};
+use crate::core::write_transaction::WriteOutcome;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
 use std::path::{Path, PathBuf};
@@ -226,7 +227,7 @@ impl Metadata {
     /// cannot write, or a change the read-back does not find, is
     /// [`crate::error::ExifToolError::TagsNotWritten`] naming each key, and
     /// the file is untouched.
-    pub fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    pub fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<WriteOutcome> {
         write_metadata(path.as_ref(), &self.map)
     }
 
@@ -252,7 +253,7 @@ impl Metadata {
     ///     .save()?;
     /// # Ok::<(), oxidex::error::ExifToolError>(())
     /// ```
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&self) -> Result<WriteOutcome> {
         match &self.source_path {
             Some(path) => write_metadata(path, &self.map),
             None => Err(crate::error::ExifToolError::IoError(std::io::Error::new(
@@ -351,7 +352,7 @@ impl<'a> CopyBuilder<'a> {
     /// is untouched. Without a tag filter the rows that describe the source
     /// file rather than being stored in it (`File:`, `System:`,
     /// `Composite:`, `ExifTool:`) are not copied.
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self) -> Result<WriteOutcome> {
         // Read destination metadata
         let mut dest_map = read_metadata(&self.dest)?;
 

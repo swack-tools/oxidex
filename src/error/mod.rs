@@ -11,7 +11,10 @@ use std::io;
 ///
 /// This enum represents all possible errors that can occur during
 /// metadata extraction, parsing, validation, and file I/O operations.
+/// `#[non_exhaustive]`: new failure kinds may be added in a minor release;
+/// match with a wildcard arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ExifToolError {
     /// I/O error occurred during file operations
     IoError(io::Error),
@@ -63,6 +66,7 @@ pub enum ExifToolError {
 
 /// One key a write request named that would not be written, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TagNotWritten {
     /// The key as the caller spelled it (`XPTitle`, `XMP:Title`).
     pub tag: String,

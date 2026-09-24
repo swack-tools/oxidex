@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 use crate::core::TagValue;
+use crate::core::write_transaction::WriteOutcome;
 
 use super::context::{ExifToolHandle, handle_to_context, handle_to_context_mut};
 use super::error::{
@@ -289,6 +290,14 @@ pub extern "C" fn exiftool_remove_tag(
     }
 }
 
+/// The outcome of a write that changed the file (ExifTool `WriteInfo`'s 1,
+/// "file written OK"), reported by the file writer's `_with_outcome` variant.
+pub const EXIFTOOL_WRITE_UPDATED: c_int = 1;
+/// The outcome of a write whose every change was already in effect, the file
+/// left byte-identical (ExifTool `WriteInfo`'s 2, "file written but no
+/// changes made"), reported by the file writer's `_with_outcome` variant.
+pub const EXIFTOOL_WRITE_UNCHANGED: c_int = 2;
+
 /// Writes metadata to a file.
 ///
 /// # Arguments
@@ -311,12 +320,15 @@ pub extern "C" fn exiftool_remove_tag(
 ///   `exiftool_get_last_error_tag()` name every such tag.
 ///
 /// # Requests and the guarantee
-/// The handle's tags are the metadata the file should end up with: a tag
-/// that is new or differs from the file is set, and a tag the file carries
-/// that the handle lacks is deleted (derived `File:`, `Composite:` and
-/// file-system rows excepted). `EXIFTOOL_OK` means every such change is in
-/// the file, proven by reading it back; on any error nothing was written and
-/// the file is byte-identical.
+/// A tag of the handle that is new or differs from the file is set. A tag
+/// the file carries that the handle lacks is deleted only when the handle
+/// was read from this same file (`exiftool_read_file`) and the caller removed
+/// it; a handle read from another file, or never read, only sets (derived
+/// `File:`, `Composite:` and file-system rows are never deleted). A recorded
+/// `GROUP:All` removal deletes that group. `EXIFTOOL_OK` means every such
+/// change is in the file, proven by reading it back; on any error nothing
+/// was written and the file is byte-identical. The `_with_outcome` variant
+/// below also reports whether the file changed.
 ///
 /// # Thread Safety
 /// Not thread-safe with respect to the handle. Do not call concurrently with
@@ -326,6 +338,53 @@ pub extern "C" fn exiftool_remove_tag(
 pub extern "C" fn exiftool_write_file(
     handle: *const ExifToolHandle,
     filepath: *const c_char,
+) -> c_int {
+    write_file_reporting(handle, filepath, |_| {})
+}
+
+/// Writes metadata to a file, as `exiftool_write_file`, and reports what the
+/// write did to it.
+///
+/// # Arguments
+/// - `handle`: Handle containing metadata to write (must not be NULL)
+/// - `filepath`: Path to file to write (null-terminated UTF-8, must not be NULL)
+/// - `outcome`: Receives `EXIFTOOL_WRITE_UPDATED` (the file changed) or
+///   `EXIFTOOL_WRITE_UNCHANGED` (every change was already in effect; the file
+///   is byte-identical) on success; untouched on failure (must not be NULL)
+///
+/// # Returns
+/// - `EXIFTOOL_OK` on success
+/// - `EXIFTOOL_ERR_NULL_POINTER` if any parameter is NULL
+/// - Every other code exactly as `exiftool_write_file` returns it
+///
+/// # Thread Safety
+/// As `exiftool_write_file`.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_write_file_with_outcome(
+    handle: *const ExifToolHandle,
+    filepath: *const c_char,
+    outcome: *mut c_int,
+) -> c_int {
+    if outcome.is_null() {
+        set_last_error("NULL pointer provided".to_string());
+        return EXIFTOOL_ERR_NULL_POINTER;
+    }
+    write_file_reporting(handle, filepath, |written| {
+        let code = match written {
+            WriteOutcome::Updated => EXIFTOOL_WRITE_UPDATED,
+            _ => EXIFTOOL_WRITE_UNCHANGED,
+        };
+        // SAFETY: checked non-NULL above; the caller owns the int.
+        unsafe { *outcome = code };
+    })
+}
+
+/// The body of `exiftool_write_file`, handing a successful write's outcome to
+/// `report`.
+fn write_file_reporting(
+    handle: *const ExifToolHandle,
+    filepath: *const c_char,
+    report: impl FnOnce(WriteOutcome),
 ) -> c_int {
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if handle.is_null() || filepath.is_null() {
@@ -358,7 +417,10 @@ pub extern "C" fn exiftool_write_file(
             &context.metadata,
             &context.group_deletions,
         ) {
-            Ok(()) => EXIFTOOL_OK,
+            Ok(written) => {
+                report(written);
+                EXIFTOOL_OK
+            }
             Err(e) => error_to_code(&e),
         }
     }));

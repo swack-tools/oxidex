@@ -74,6 +74,7 @@ pub use read_tags::{
     exiftool_has_tag, exiftool_read_file,
 };
 pub use write_tags::{
-    exiftool_remove_tag, exiftool_set_tag_float, exiftool_set_tag_integer, exiftool_set_tag_string,
-    exiftool_write_file,
+    EXIFTOOL_WRITE_UNCHANGED, EXIFTOOL_WRITE_UPDATED, exiftool_remove_tag, exiftool_set_tag_float,
+    exiftool_set_tag_integer, exiftool_set_tag_string, exiftool_write_file,
+    exiftool_write_file_with_outcome,
 };

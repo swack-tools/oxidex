@@ -31,6 +31,10 @@ OXIDEX_ERR_NULL_POINTER = 6
 OXIDEX_ERR_TAG_NOT_WRITTEN = 7
 OXIDEX_ERR_INTERNAL = 99
 
+# exiftool_write_file_with_outcome's outcomes (ExifTool WriteInfo's 1 / 2)
+OXIDEX_WRITE_UPDATED = 1
+OXIDEX_WRITE_UNCHANGED = 2
+
 
 class ValueChannel(IntEnum):
     """The stored, ValueConv, and PrintConv stages of a tag occurrence."""
@@ -193,6 +197,13 @@ _lib.exiftool_remove_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
 _lib.exiftool_write_file.restype = ctypes.c_int
 _lib.exiftool_write_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+_lib.exiftool_write_file_with_outcome.restype = ctypes.c_int
+_lib.exiftool_write_file_with_outcome.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_int),
+]
 
 # Error handling
 _lib.exiftool_get_last_error.restype = ctypes.c_char_p
@@ -451,13 +462,19 @@ class Oxidex:
             raise OxidexError("Oxidex handle has been destroyed")
         self._check_error(_lib.exiftool_remove_tag(self._handle, tag_name.encode('utf-8')))
 
-    def write_file(self, filepath: str) -> None:
+    def write_file(self, filepath: str) -> int:
         """
         Write the loaded metadata to a file.
 
-        Every tag that differs from the file is a requested change: a changed
-        or added tag is set, and a tag the file carries that the handle no
-        longer does is deleted.
+        A tag that is new or differs from the file is set. A tag removed from
+        a handle read from this same file is deleted; a handle read from
+        another file (or never read) only sets. ``remove_tag("GROUP:All")``
+        deletes the whole group.
+
+        Returns:
+            OXIDEX_WRITE_UPDATED when the file changed, OXIDEX_WRITE_UNCHANGED
+            when every change was already in effect (the file is
+            byte-identical) -- ExifTool WriteInfo's 1 / 2.
 
         Raises:
             OxidexTagsNotWrittenError: If a requested change would not be
@@ -466,7 +483,13 @@ class Oxidex:
         """
         if not self._handle:
             raise OxidexError("Oxidex handle has been destroyed")
-        self._check_error(_lib.exiftool_write_file(self._handle, filepath.encode('utf-8')))
+        outcome = ctypes.c_int(0)
+        self._check_error(
+            _lib.exiftool_write_file_with_outcome(
+                self._handle, filepath.encode('utf-8'), ctypes.byref(outcome)
+            )
+        )
+        return outcome.value
 
     def get_all_tags(self) -> dict[str, Optional[str]]:
         """

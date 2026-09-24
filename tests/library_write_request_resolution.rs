@@ -28,10 +28,8 @@
 //! refuses the whole request (ExifTool writes all of a file's tags or none).
 
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use oxidex::core::operations::{
-    copy_metadata, modify_tag, read_metadata, remove_tag, write_metadata,
-};
-use oxidex::core::{Metadata, MetadataMap, TagValue};
+use oxidex::core::operations::{modify_tag, read_metadata, remove_tag, write_metadata};
+use oxidex::core::{Metadata, MetadataMap, TagValue, WriteOutcome};
 use oxidex::error::ExifToolError;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -57,7 +55,7 @@ fn sha(path: &Path) -> Vec<u8> {
 
 /// Reads `path`, applies `edit` to its map and writes it back with
 /// `write_metadata`: the read-modify-write the API documents.
-fn rmw(path: &Path, edit: impl FnOnce(&mut MetadataMap)) -> Result<(), ExifToolError> {
+fn rmw(path: &Path, edit: impl FnOnce(&mut MetadataMap)) -> Result<WriteOutcome, ExifToolError> {
     let mut metadata = read_metadata(path).expect("read fixture");
     edit(&mut metadata);
     write_metadata(path, &metadata)
@@ -69,16 +67,16 @@ fn set(map: &mut MetadataMap, key: &str, value: &str) {
 
 /// Asserts `result` is a refusal naming every key in `keys` (and no key in
 /// `not_named`), and that `path` still has the bytes `before`.
-fn assert_refused(
+fn assert_refused<T: std::fmt::Debug>(
     what: &str,
-    result: Result<(), ExifToolError>,
+    result: Result<T, ExifToolError>,
     keys: &[&str],
     not_named: &[&str],
     path: &Path,
     before: &[u8],
 ) {
     let err = match result {
-        Ok(()) => panic!("{what}: reported success for a write it did not make"),
+        Ok(done) => panic!("{what}: reported success ({done:?}) for a write it did not make"),
         Err(err) => err,
     };
     let text = err.to_string();
@@ -259,7 +257,7 @@ fn write_metadata_png_ifd1_is_written_or_refused_by_name() {
         map.insert(key, TagValue::new_rational(300, 1));
     });
     match result {
-        Ok(()) => {
+        Ok(_) => {
             let bytes = fs::read(&file).unwrap();
             // the eXIf chunk: length, type, data
             let at = bytes
@@ -289,7 +287,7 @@ fn write_metadata_png_ifd1_is_written_or_refused_by_name() {
         }
         Err(err) => assert_refused(
             &format!("{PNG} {key}"),
-            Err(err),
+            Err::<(), _>(err),
             &[key],
             &[],
             &file,
@@ -375,25 +373,26 @@ fn copy_builder_refuses_rows_the_destination_cannot_hold() {
     assert_refused("CopyBuilder", result, &["XMP:Title"], &[], &dest, &before);
 }
 
-/// `copy_metadata(src, dest, None)` copies "all"; the XMP it could not write
-/// used to vanish behind `Ok(())` (the report that names it is only returned
-/// by `copy_metadata_report`).
+/// `copy_metadata(src, dest, None)` copies "all" best-effort (maintainer
+/// decision on #951, ExifTool's `SetNewValuesFromFile` with no tag list):
+/// it succeeds, and `copy_metadata_report` names the XMP it could not write
+/// -- it is never dropped without a trace.
 #[test]
-fn copy_metadata_all_refuses_when_it_cannot_copy_everything() {
+fn copy_metadata_all_reports_what_it_cannot_copy() {
     let dir = TempDir::new().unwrap();
     let source = copy_into(&dir, JPEG_XMP);
     let dest_dir = TempDir::new().unwrap();
     let dest = copy_into(&dest_dir, JPEG);
-    let before = sha(&dest);
-    let result = copy_metadata(&source, &dest, None);
-    assert_refused(
-        "copy_metadata all",
-        result,
-        &["XMP:Title"],
-        &[],
-        &dest,
-        &before,
+    let report = oxidex::core::operations::copy_metadata_report(&source, &dest, None).unwrap();
+    assert!(
+        report
+            .uncopied_tags
+            .iter()
+            .any(|tag| tag.tag == "XMP:Title"),
+        "{:?}",
+        report.uncopied_tags
     );
+    assert_eq!(report.uncopied_groups, ["XMP"]);
 }
 
 /// `shift_metadata_dates` on a PNG shifts through the map and
@@ -412,7 +411,7 @@ fn shift_metadata_dates_refuses_dates_it_cannot_write() {
         .expect("fixture carries a parsed ExifIFD:DateTimeOriginal");
     let before = sha(&file);
     match shift_metadata_dates(&file, "AllDates", "1:0:0 0:0:0", ShiftOperation::Add) {
-        Ok(()) => {
+        Ok(_) => {
             let after = read_metadata(&file).unwrap();
             let shifted = after
                 .get(key)
@@ -476,7 +475,7 @@ fn write_metadata_writes_what_modify_tag_writes() {
         let map_result = rmw(&by_map, |map| set(map, key, value));
         let tag_result = modify_tag(&by_tag, key, TagValue::new_string(value));
         match (map_result, tag_result) {
-            (Ok(()), Ok(())) => {
+            (Ok(_), Ok(_)) => {
                 assert_eq!(
                     read_string(&by_map, key).as_deref(),
                     Some(value),

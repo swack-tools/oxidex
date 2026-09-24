@@ -55,6 +55,7 @@ use std::path::Path;
 
 /// One requested change to a file's metadata.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TagChange {
     /// Set `tag` (as the caller spells it: `XPTitle`, `IFD0:Artist`,
     /// `EXIF:ISO`) to `value`.
@@ -101,13 +102,20 @@ impl TagChange {
     }
 }
 
-/// What a successful write did to the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a successful write did to the file: ExifTool's `WriteInfo` return
+/// values (ExifTool.pod: 1 = "file written OK", 2 = "file written but no
+/// changes made"). Every library write call returns it; the CLI's
+/// `image files updated` / `unchanged` counts are these, and the C ABI's
+/// `exiftool_write_file_with_outcome` reports them as
+/// `EXIFTOOL_WRITE_UPDATED` (1) / `EXIFTOOL_WRITE_UNCHANGED` (2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum WriteOutcome {
     /// The file's bytes changed.
     Updated,
-    /// Every change was already in effect and the bytes are identical; the
-    /// file was not rewritten.
+    /// Every change was already in effect (or nothing was requested) and the
+    /// bytes are identical; the file was not rewritten.
+    #[default]
     Unchanged,
 }
 
@@ -181,24 +189,38 @@ fn is_file_system_fact(key: &str) -> bool {
 }
 
 /// The requests a whole-map write makes of the file whose current map is
-/// `baseline`: every row of `desired` that is new or differs is a set, and
-/// every row of `baseline` that `desired` lacks is a deletion. The rows that
-/// describe the file rather than being stored in it are the exception
-/// ([`DESCRIPTIVE_GROUPS`]): the file-system facts are never requests, and a
-/// descriptive row `desired` lacks is not a deletion -- but a descriptive row
-/// it adds or changes (`File:Comment` on a file without one, a different
-/// `File:ImageWidth`) is a set, which no writer makes and is refused.
+/// `baseline`: every row of `desired` that is new or differs is a set. When
+/// `deletions` -- `desired` is a complete read of this same file
+/// (`MetadataMap::read_from`) -- every row of `baseline` that `desired` lacks
+/// is a row its caller removed, and a deletion. Otherwise (a map built from
+/// scratch, or read from another file) nothing is deleted: ExifTool's
+/// SetNewValue model, where a tag nobody named is never touched (ExifTool.pod,
+/// SetNewValue / WriteInfo; maintainer decision on #951, 2026-09-24).
+///
+/// The rows that describe the file rather than being stored in it are the
+/// exception ([`DESCRIPTIVE_GROUPS`]): the file-system facts are never
+/// requests, and a descriptive row `desired` lacks is not a deletion -- but a
+/// descriptive row it adds or changes (`File:Comment` on a file without one,
+/// a different `File:ImageWidth`) is a set, which no writer makes and is
+/// refused.
 ///
 /// A PDF Info field the reader surfaces under two spellings
 /// (`PDF:CreateDate` / `PDF:CreationDate`) is one field: dropping one
 /// spelling while the other stays is not a deletion of it.
-pub(crate) fn changes_between(baseline: &MetadataMap, desired: &MetadataMap) -> Vec<TagChange> {
+pub(crate) fn changes_between(
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    deletions: bool,
+) -> Vec<TagChange> {
     let mut changes = Vec::new();
     for (key, value) in desired.iter() {
         if is_file_system_fact(key) || baseline.get(key) == Some(value) {
             continue;
         }
         changes.push(TagChange::set(key.clone(), value.clone()));
+    }
+    if !deletions {
+        return changes;
     }
     for (key, _) in baseline.iter() {
         if desired.contains_key(key) || is_descriptive(key) || metadata_holds(desired, key) {
@@ -339,11 +361,19 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
 /// `tiff_surgical`: `Cannot write tag '<tag>': <reason>`) as the typed
 /// [`ExifToolError::TagsNotWritten`]; every other error is returned as is.
 fn typed_refusal(err: ExifToolError) -> ExifToolError {
-    if let ExifToolError::UnsupportedFormat { message } = &err
-        && let Some(rest) = message.strip_prefix("Cannot write tag '")
-        && let Some((tag, reason)) = rest.split_once("': ")
-    {
-        return ExifToolError::tag_not_written(tag, reason);
+    if let ExifToolError::UnsupportedFormat { message } = &err {
+        if let Some(rest) = message.strip_prefix("Cannot write tag '")
+            && let Some((tag, reason)) = rest.split_once("': ")
+        {
+            return ExifToolError::tag_not_written(tag, reason);
+        }
+        // #943's post-write check (`exif_surgical::verify_exif_write`)
+        // names the key whose set or deletion the writer did not make.
+        if let Some(rest) = message.strip_prefix("EXIF write verification failed: '")
+            && let Some((tag, _)) = rest.split_once('\'')
+        {
+            return ExifToolError::tag_not_written(tag, message.clone());
+        }
     }
     err
 }
@@ -665,7 +695,7 @@ mod tests {
             ("File:Comment", s("c")),
         ]);
         assert_eq!(
-            changes_between(&baseline, &desired),
+            changes_between(&baseline, &desired, true),
             vec![
                 TagChange::set("IFD0:Model", s("R5")),
                 TagChange::set("XPTitle", s("v")),
@@ -674,7 +704,16 @@ mod tests {
             ]
         );
         // The file's own map requests nothing.
-        assert!(changes_between(&baseline, &baseline).is_empty());
+        assert!(changes_between(&baseline, &baseline, true).is_empty());
+        // A map that is not a read of this file only sets.
+        assert_eq!(
+            changes_between(&baseline, &desired, false),
+            vec![
+                TagChange::set("IFD0:Model", s("R5")),
+                TagChange::set("XPTitle", s("v")),
+                TagChange::set("File:Comment", s("c")),
+            ]
+        );
     }
 
     #[test]
@@ -684,7 +723,7 @@ mod tests {
             ("PDF:CreationDate", s("2024:01:01 00:00:00")),
         ]);
         let desired = map(&[("PDF:CreateDate", s("2024:01:01 00:00:00"))]);
-        assert!(changes_between(&baseline, &desired).is_empty());
+        assert!(changes_between(&baseline, &desired, true).is_empty());
     }
 
     #[test]
@@ -711,6 +750,11 @@ mod tests {
             err.tags_not_written(),
             [TagNotWritten::new("IFD1:Make", "it requires a SubIFD")]
         );
+        let verified = typed_refusal(ExifToolError::unsupported_format(
+            "EXIF write verification failed: 'IFD1:XResolution' was set but no entry \
+             exists at its address; nothing was written",
+        ));
+        assert_eq!(verified.tags_not_written()[0].tag, "IFD1:XResolution");
         let other = typed_refusal(ExifToolError::unsupported_format("BMP"));
         assert!(other.tags_not_written().is_empty());
     }

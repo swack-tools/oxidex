@@ -244,16 +244,18 @@ fn handle_multi_write(files: &[std::path::PathBuf], plan: &WritePlan, args: &Cli
                 if let (Some((src, filters)), Some(copy)) = (&plan.copy_from, &done.copy) {
                     report_copy(src, filters, copy);
                 }
-                match done.outcome {
-                    WriteOutcome::Updated => {
-                        stats.files_updated += 1;
-                        if args.preserve_file_times
-                            && let Some(mtime) = mtime
-                        {
-                            let _ = std::fs::File::open(file).and_then(|f| f.set_modified(mtime));
-                        }
+                // The library's outcome (ExifTool's WriteInfo 1 / 2) is the
+                // count; `WriteOutcome` is non-exhaustive, and anything but
+                // `Updated` left the file as it was.
+                if done.outcome == WriteOutcome::Updated {
+                    stats.files_updated += 1;
+                    if args.preserve_file_times
+                        && let Some(mtime) = mtime
+                    {
+                        let _ = std::fs::File::open(file).and_then(|f| f.set_modified(mtime));
                     }
-                    WriteOutcome::Unchanged => stats.files_unchanged += 1,
+                } else {
+                    stats.files_unchanged += 1;
                 }
             }
             Err(message) => {
@@ -371,7 +373,7 @@ fn finish_write(
             // Print success message (matching ExifTool format)
             println!("{}", updated_line);
         }
-        Ok(WriteOutcome::Unchanged) => {
+        Ok(_) => {
             println!("    0 image files updated");
             println!("    1 image files unchanged");
         }

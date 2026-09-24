@@ -6,6 +6,8 @@ import unittest
 
 from oxidex import (
     OXIDEX_ERR_TAG_NOT_WRITTEN,
+    OXIDEX_WRITE_UNCHANGED,
+    OXIDEX_WRITE_UPDATED,
     Oxidex,
     OxidexError,
     OxidexTagsNotWrittenError,
@@ -117,6 +119,38 @@ class OxidexWriteTests(unittest.TestCase):
         with Oxidex() as ox:
             ox.read_file(path)
             self.assertEqual(ox.get_tag("IFD0:Artist"), "someone")
+
+
+class OxidexWriteOutcomeTests(unittest.TestCase):
+    """write_file returns ExifTool WriteInfo's outcome: UNCHANGED for a
+    same-value set (file byte-identical), UPDATED for a real change."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def check(self, source, name):
+        path = os.path.join(self.dir, name)
+        shutil.copyfile(source, path)
+        before = sha(path)
+        with Oxidex() as ox:
+            ox.read_file(path)
+            artist = ox.get_tag("IFD0:Artist")
+            self.assertIsNotNone(artist)
+            ox.set_tag("IFD0:Artist", artist)
+            self.assertEqual(ox.write_file(path), OXIDEX_WRITE_UNCHANGED)
+            self.assertEqual(sha(path), before)
+            ox.set_tag("IFD0:Artist", "someone else")
+            self.assertEqual(ox.write_file(path), OXIDEX_WRITE_UPDATED)
+            self.assertNotEqual(sha(path), before)
+
+    def test_jpeg_outcomes(self):
+        self.check(JPEG, "outcome.jpg")
+
+    def test_png_outcomes(self):
+        self.check(PNG, "outcome.png")
 
 
 if __name__ == "__main__":

@@ -61,3 +61,4 @@ pub use tag_occurrence::{Group, Instance, Provenance, SHIM_DEFAULT_PRIORITY, Tag
 pub use tag_sink::TagSink;
 pub use tag_value::TagValue;
 pub use validation::validate_tag_value;
+pub use write_transaction::{TagChange, WriteOutcome, apply_tag_changes};

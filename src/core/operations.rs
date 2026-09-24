@@ -29,6 +29,7 @@ use crate::core::tag_conversion::raw_bytes_to_tag_value;
 use crate::core::tag_occurrence::ValueChannel;
 use crate::core::tiff_helpers::parse_ifd_chain_with_options;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
+use crate::core::write_transaction::WriteOutcome;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::DetectorMode;
@@ -372,6 +373,20 @@ pub fn read_metadata_with_detector_and_options(
     detector_mode: DetectorMode,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
+    // Everything recorded by the read is the file's own; what a caller
+    // inserts afterwards is an assignment (`MetadataMap::assigned_after_read`).
+    read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
+        metadata.mark_read_complete();
+        metadata.set_read_source(path);
+        metadata
+    })
+}
+
+fn read_metadata_unmarked(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -621,6 +636,20 @@ pub fn read_metadata_report_with_detector(
 /// [`read_metadata_with_detector_and_options`]'s doc comment -- the same
 /// reasoning applies here.
 pub fn read_metadata_report_with_detector_and_options(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<ReadReport> {
+    // As `read_metadata_with_detector_and_options`: the read's occurrences
+    // are the file's, later insertions are assignments.
+    read_metadata_report_unmarked(path, detector_mode, options).map(|mut report| {
+        report.metadata.mark_read_complete();
+        report.metadata.set_read_source(path);
+        report
+    })
+}
+
+fn read_metadata_report_unmarked(
     path: &Path,
     detector_mode: DetectorMode,
     options: &ReadOptions,
@@ -932,12 +961,16 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 ///
 /// # What is requested, and the guarantee
 ///
-/// `metadata` is the map the file should end up with. Every row that is new
-/// or differs from the file's current map is a request to set it, and every
-/// row of the file's map that `metadata` lacks is a request to delete it --
-/// except the rows that describe the file rather than being stored in it
-/// (`File:`, `System:`, `Composite:`, `ExifTool:`): those are never
-/// deletions, and the file-system facts among them (`FileName`,
+/// Every row of `metadata` that is new or differs from the file's current
+/// map is a request to set it. A row of the file's map that `metadata` lacks
+/// is a request to delete it only when `metadata` is a read of this same
+/// file (`read_metadata(path)`, `Metadata::from_path`) from which the caller
+/// removed that row; a map built from scratch, or read from another file,
+/// only sets -- ExifTool's `SetNewValue` model, where a tag nobody named is
+/// never deleted (ExifTool.pod; maintainer decision on #951). Explicit
+/// deletions are [`remove_tag`]'s. The rows that describe the file rather
+/// than being stored in it (`File:`, `System:`, `Composite:`, `ExifTool:`)
+/// are never deletions, and the file-system facts among them (`FileName`,
 /// `Directory`, `FileSize`, the file dates and permissions) are never
 /// requests at all. A read-modify-write that changes nothing writes nothing.
 ///
@@ -946,10 +979,12 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// pinned ExifTool writes it (`XPTitle` -> `IFD0:XPTitle`) or refused, and a
 /// key the format's writer cannot write -- `XMP:Title` in a JPEG, TIFF or
 /// PNG, a `File:` key, most `IFD1:` keys -- is refused. `Ok(())` means every
-/// request is in the file, proven by a read-back; otherwise the error is
+/// request is in the file, proven by a read-back, and the [`WriteOutcome`]
+/// says whether the bytes changed (ExifTool `WriteInfo`'s 1 / 2); otherwise
+/// the error is
 /// [`ExifToolError::TagsNotWritten`] naming every key that would not be
 /// written, and the file is byte-identical to before the call.
-pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
+pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<WriteOutcome> {
     write_metadata_and_delete_groups(path, metadata, &[])
 }
 
@@ -962,18 +997,23 @@ pub(crate) fn write_metadata_and_delete_groups(
     path: &Path,
     metadata: &MetadataMap,
     groups: &[String],
-) -> Result<()> {
+) -> Result<WriteOutcome> {
     let baseline = read_metadata(path)?;
-    let mut changes = crate::core::write_transaction::changes_between(&baseline, metadata);
+    let mut changes = crate::core::write_transaction::changes_between(
+        &baseline,
+        metadata,
+        metadata.read_from(path),
+    );
     changes.extend(
         groups
             .iter()
             .map(|group| crate::core::write_transaction::TagChange::delete(group.clone())),
     );
     if changes.is_empty() {
-        return Ok(()); // the file already holds this map: nothing to write
+        // the file already holds this map: nothing to write
+        return Ok(WriteOutcome::Unchanged);
     }
-    crate::core::write_transaction::apply_tag_changes(path, &changes).map(|_| ())
+    crate::core::write_transaction::apply_tag_changes(path, &changes)
 }
 
 /// [`write_metadata`], plus the keys the caller asked by name to delete. The
@@ -1629,7 +1669,7 @@ pub(crate) fn remove_field(metadata: &mut MetadataMap, key: &str) {
 /// - File cannot be written (IoError)
 ///
 /// The file is unchanged whenever an error is returned.
-pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
+pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<WriteOutcome> {
     // One request through the library's write transaction: resolved to an
     // address the file's writer is proven to write (`resolve_write_address`),
     // applied with every other tag preserved, and read back.
@@ -1639,7 +1679,6 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
             tag_name, new_value,
         )],
     )
-    .map(|_| ())
 }
 
 /// Removes a metadata tag from a file.
@@ -1668,14 +1707,13 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
 /// // Remove the Artist tag from a JPEG file
 /// remove_tag(Path::new("photo.jpg"), "EXIF:Artist").unwrap();
 /// ```
-pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
+pub fn remove_tag(path: &Path, tag_name: &str) -> Result<WriteOutcome> {
     // One deletion through the library's write transaction (see
     // `modify_tag`); deleting a tag the file does not carry is a no-op.
     crate::core::write_transaction::apply_tag_changes(
         path,
         &[crate::core::write_transaction::TagChange::delete(tag_name)],
     )
-    .map(|_| ())
 }
 
 /// Clears all metadata from a file.
@@ -1702,11 +1740,14 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
 /// // Remove all metadata from a file (privacy)
 /// clear_all_metadata(Path::new("photo.jpg")).unwrap();
 /// ```
-pub fn clear_all_metadata(path: &Path) -> Result<()> {
+pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
     // An empty map with no named removals is the writers' whole-carrier
     // clear (`generated_public_write::plan_public_write`), not a series of
-    // per-tag deletions -- which `write_metadata` would now make of it.
-    write_metadata_with_removals(path, &MetadataMap::new(), &[])
+    // per-tag deletions -- which `write_metadata` would now make of it. Run
+    // on a private copy so the outcome is decided by the bytes.
+    crate::core::write_transaction::transact(path, |scratch| {
+        write_metadata_with_removals(scratch, &MetadataMap::new(), &[])
+    })
 }
 
 /// Copies metadata from a source file to a destination file.
@@ -1765,28 +1806,37 @@ pub fn clear_all_metadata(path: &Path) -> Result<()> {
 /// Returns an error if:
 /// - Source file cannot be read (IoError)
 /// - Destination file cannot be read (IoError)
-/// - A tag would not be written (TagsNotWritten). Without a filter this
-///   includes every source tag the destination's writer cannot write (an
-///   `XMP:` row into a JPEG): `copy_metadata` then copies nothing, where
-///   [`copy_metadata_report`] copies the rest and returns them in
-///   [`CopyReport::uncopied_groups`]. The derived `File:`, `System:`,
+/// - A tag the caller named would not be written (TagsNotWritten, naming
+///   it). Without a filter the copy is best-effort, like ExifTool's
+///   `SetNewValuesFromFile` with no tag list ("All writable tags are set if
+///   none are specified"): every source tag the destination's writer cannot
+///   write is skipped, and [`copy_metadata_report`] returns them in
+///   [`CopyReport::uncopied_groups`] / [`CopyReport::uncopied_tags`]
+///   (maintainer decision on #951). The derived `File:`, `System:`,
 ///   `Composite:` and `ExifTool:` rows are never copied.
 /// - Any tag value fails validation (InvalidTagValue)
 /// - Destination file cannot be written (IoError)
 ///
 /// The destination is unchanged whenever an error is returned.
-pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<()> {
-    copy_metadata_inner(src, dest, tags, false).map(|_| ())
+pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<WriteOutcome> {
+    copy_metadata_report(src, dest, tags).map(|report| report.outcome)
 }
 
 /// What [`copy_metadata_report`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CopyReport {
     /// Tags actually written to the destination.
     pub copied: usize,
     /// For a copy-all: groups of source tags this destination's writer cannot
     /// write, which were therefore not copied (never silently).
     pub uncopied_groups: Vec<String>,
+    /// For a copy-all: every source tag not copied, as the source spells it,
+    /// with the reason (the tags behind [`Self::uncopied_groups`], plus any
+    /// tag of a writable group the destination's writer refused).
+    pub uncopied_tags: Vec<crate::error::TagNotWritten>,
+    /// What the copy did to the destination's bytes.
+    pub outcome: WriteOutcome,
 }
 
 /// Groups no ExifTool writer writes either (file-system, derived and
@@ -1815,17 +1865,6 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_inner(src, dest, tags, true)
-}
-
-/// [`copy_metadata_report`] when `report_uncopied`; otherwise a copy-all that
-/// would leave a source tag uncopied is refused ([`copy_metadata`]).
-fn copy_metadata_inner(
-    src: &Path,
-    dest: &Path,
-    tags: Option<&[String]>,
-    report_uncopied: bool,
-) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
     let filters = tags.filter(|filters| {
         !filters
@@ -1833,7 +1872,7 @@ fn copy_metadata_inner(
             .all(|f| f.eq_ignore_ascii_case("all") || f == "*")
     });
     let Some(filters) = filters else {
-        return copy_all(&source_metadata, dest, report_uncopied);
+        return copy_all(&source_metadata, dest);
     };
 
     // Resolve every filter against the source first; the destination is then
@@ -1911,34 +1950,35 @@ fn copy_metadata_inner(
             dest_spec, value,
         ));
     }
-    let report = CopyReport {
+    let mut report = CopyReport {
         copied: pending.len(),
-        uncopied_groups: Vec::new(),
+        ..CopyReport::default()
     };
     if pending.is_empty() {
         return Ok(report); // nothing to copy: the destination is not touched
     }
-    crate::core::write_transaction::apply_tag_changes(dest, &pending)?;
+    report.outcome = crate::core::write_transaction::apply_tag_changes(dest, &pending)?;
     Ok(report)
 }
 
-/// The copy-all half of [`copy_metadata_report`]: every source tag the
-/// destination's writer addresses, merged into the destination's own map and
-/// written by [`write_metadata`]. A source tag it cannot address is reported
-/// in [`CopyReport::uncopied_groups`] when `report_uncopied`, and otherwise
-/// refuses the whole copy by name before anything is written.
-fn copy_all(
-    source_metadata: &MetadataMap,
-    dest: &Path,
-    report_uncopied: bool,
-) -> Result<CopyReport> {
+/// The copy-all half of [`copy_metadata_report`]: best-effort, like
+/// ExifTool's `SetNewValuesFromFile` with no tag list ("All writable tags
+/// are set if none are specified", ExifTool.pod). Every source tag the
+/// destination's writer addresses is merged into the destination's own map
+/// and written by [`write_metadata`] (sets only: the map is not a read of the
+/// source); a tag it cannot write is skipped and reported in
+/// [`CopyReport::uncopied_groups`] / [`CopyReport::uncopied_tags`]. A tag of
+/// a writable group the write itself refuses by name is dropped from the
+/// request and reported the same way (as is a value the destination's
+/// validation rejects), and the rest is written again.
+fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
     let surgical = is_surgical_tiff_target(format, &reader);
     drop(reader);
-    let mut dest_metadata = read_metadata(dest)?;
+    let dest_baseline = read_metadata(dest)?;
     let mut report = CopyReport::default();
-    let mut refused: Vec<crate::error::TagNotWritten> = Vec::new();
+    let mut copied: Vec<(String, TagValue)> = Vec::new();
     for (tag_name, occurrence) in source_metadata.winner_occurrences() {
         let group = tag_name.split_once(':').map_or("", |(group, _)| group);
         if READ_ONLY_GROUPS.contains(&group) {
@@ -1947,10 +1987,9 @@ fn copy_all(
         if let Err(err) = crate::writers::write_request::ensure_writer_addresses(
             tag_name, tag_name, format, surgical,
         ) {
-            refused.extend(err.tags_not_written().iter().cloned());
-            if !report.uncopied_groups.iter().any(|known| known == group) {
-                report.uncopied_groups.push(group.to_string());
-            }
+            report
+                .uncopied_tags
+                .extend(err.tags_not_written().iter().cloned());
             continue;
         }
         // The value as the source file stores it where the producer keeps
@@ -1962,19 +2001,53 @@ fn copy_all(
         if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
             crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
         }
-        dest_metadata.insert(tag_name.clone(), value);
-        report.copied += 1;
-    }
-    report.uncopied_groups.sort();
-    if !report_uncopied && !refused.is_empty() {
-        return Err(ExifToolError::TagsNotWritten { tags: refused });
+        copied.push((tag_name.clone(), value));
     }
     // Nothing the destination can hold: do not write at all. Serializing the
     // unchanged map still appended a PDF revision (and may re-lay-out a PNG),
     // which was then reported as an update.
-    if report.copied > 0 {
-        write_metadata(dest, &dest_metadata)?;
+    while !copied.is_empty() {
+        let mut dest_metadata = dest_baseline.clone();
+        for (key, value) in &copied {
+            dest_metadata.insert(key.clone(), value.clone());
+        }
+        match write_metadata(dest, &dest_metadata) {
+            Ok(outcome) => {
+                report.outcome = outcome;
+                break;
+            }
+            Err(ExifToolError::TagsNotWritten { tags })
+                if tags
+                    .iter()
+                    .all(|refused| copied.iter().any(|(key, _)| *key == refused.tag)) =>
+            {
+                // Skip what cannot be written, keep the rest: each round
+                // removes at least one tag, so this ends.
+                copied.retain(|(key, _)| !tags.iter().any(|refused| refused.tag == *key));
+                report.uncopied_tags.extend(tags);
+            }
+            // A copied value the destination's validation rejects (a source
+            // stored form the registry types differently) is skipped the same
+            // way.
+            Err(ExifToolError::InvalidTagValue { tag_name, reason })
+                if copied.iter().any(|(key, _)| *key == tag_name) =>
+            {
+                copied.retain(|(key, _)| *key != tag_name);
+                report
+                    .uncopied_tags
+                    .push(crate::error::TagNotWritten::new(tag_name, reason));
+            }
+            Err(other) => return Err(other),
+        }
     }
+    report.copied = copied.len();
+    for tag in &report.uncopied_tags {
+        let group = tag.tag.split_once(':').map_or("", |(group, _)| group);
+        if !report.uncopied_groups.iter().any(|known| known == group) {
+            report.uncopied_groups.push(group.to_string());
+        }
+    }
+    report.uncopied_groups.sort();
     Ok(report)
 }
 

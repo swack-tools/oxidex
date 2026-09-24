@@ -501,6 +501,65 @@ void test_group_deletions() {
     }
 }
 
+
+/* ------------------------------------------------------------------------
+ * Test 9: Write Outcome (ExifTool WriteInfo 1 / 2)
+ *
+ * exiftool_write_file_with_outcome reports EXIFTOOL_WRITE_UNCHANGED for a
+ * same-value set (the file byte-identical) and EXIFTOOL_WRITE_UPDATED for a
+ * real change, on a JPEG and a PNG.
+ * ------------------------------------------------------------------------ */
+
+static void expect_outcomes(const char* fixture, const char* name) {
+    char path[4096];
+    char label[512];
+    if (!copy_fixture(fixture, name, path, sizeof path)) {
+        snprintf(label, sizeof label, "%s: copy fixture", name);
+        TEST_ASSERT(0, label);
+        return;
+    }
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    const char* stored = exiftool_get_tag_string(handle, "IFD0:Artist");
+    char artist[256] = {0};
+    if (stored) {
+        snprintf(artist, sizeof artist, "%s", stored);
+    }
+    snprintf(label, sizeof label, "%s: fixture has IFD0:Artist", name);
+    TEST_ASSERT(stored != NULL, label);
+
+    int outcome = -1;
+    exiftool_set_tag_string(handle, "IFD0:Artist", artist);
+    int result = exiftool_write_file_with_outcome(handle, path, &outcome);
+    snprintf(label, sizeof label, "%s: same-value write succeeds", name);
+    TEST_ASSERT(result == EXIFTOOL_OK, label);
+    snprintf(label, sizeof label, "%s: same-value write is EXIFTOOL_WRITE_UNCHANGED (got %d)", name,
+             outcome);
+    TEST_ASSERT(outcome == EXIFTOOL_WRITE_UNCHANGED, label);
+    snprintf(label, sizeof label, "%s: unchanged file is byte-identical", name);
+    TEST_ASSERT(same_bytes(path, fixture), label);
+
+    outcome = -1;
+    exiftool_set_tag_string(handle, "IFD0:Artist", "someone else");
+    result = exiftool_write_file_with_outcome(handle, path, &outcome);
+    snprintf(label, sizeof label, "%s: real change is EXIFTOOL_WRITE_UPDATED (got %d)", name,
+             outcome);
+    TEST_ASSERT(result == EXIFTOOL_OK && outcome == EXIFTOOL_WRITE_UPDATED, label);
+    snprintf(label, sizeof label, "%s: updated file changed", name);
+    TEST_ASSERT(!same_bytes(path, fixture), label);
+
+    result = exiftool_write_file_with_outcome(handle, path, NULL);
+    snprintf(label, sizeof label, "%s: NULL outcome pointer is refused", name);
+    TEST_ASSERT(result == EXIFTOOL_ERR_NULL_POINTER, label);
+    exiftool_destroy(handle);
+}
+
+void test_write_outcome() {
+    printf("\nTest 9: Write Outcome\n");
+    expect_outcomes(JPEG_FIXTURE, "outcome.jpg");
+    expect_outcomes(PNG_FIXTURE, "outcome.png");
+}
+
 /**
  * Main test runner
  */
@@ -525,6 +584,7 @@ int main(int argc, char** argv) {
     test_invalid_float_values();
     test_write_refusals();
     test_group_deletions();
+    test_write_outcome();
 
     /* Print summary */
     printf("\n========================================\n");

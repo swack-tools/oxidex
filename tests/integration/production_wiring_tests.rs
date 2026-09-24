@@ -1557,26 +1557,30 @@ fn write_metadata_routes_png_and_pdf_writers() {
 }
 
 #[test]
-fn write_metadata_rejects_tiff_until_writer_preserves_image_data() {
-    // The TIFF writer rebuilds files from metadata alone and drops image data,
-    // so the high-level API must refuse to route TIFF writes to it.
+fn write_metadata_on_tiff_sets_only_and_preserves_image_data() {
+    // The TIFF path is the surgical in-place writer, which keeps the image
+    // data. A map built from scratch names only what it sets (maintainer
+    // decision on #951, ExifTool's SetNewValue model): `EXIF:Make` is set
+    // (resolved to IFD0:Make) and every other stored row survives. This test
+    // used to require a refusal, from when the TIFF writer rebuilt files from
+    // metadata alone and dropped the image data.
     let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
-    let size_before = std::fs::metadata(tiff.path()).expect("stat tiff").len();
+    let before = read_metadata(tiff.path()).expect("read tiff");
 
     let mut tiff_metadata = MetadataMap::new();
     tiff_metadata.insert("EXIF:Make", TagValue::new_string("OxiDex QA"));
+    write_metadata(tiff.path(), &tiff_metadata).expect("a from-scratch set on a TIFF");
 
-    let result = write_metadata(tiff.path(), &tiff_metadata);
-    assert!(
-        result.is_err(),
-        "TIFF writes must be rejected while the writer discards image data"
-    );
-
-    let size_after = std::fs::metadata(tiff.path()).expect("stat tiff").len();
-    assert_eq!(
-        size_before, size_after,
-        "rejected TIFF write must leave the file untouched"
-    );
+    let after = read_metadata(tiff.path()).expect("re-read tiff");
+    assert_eq!(after.get_string("IFD0:Make"), Some("OxiDex QA"));
+    for (key, value) in before.iter() {
+        let stored = key.split_once(':').is_some_and(|(group, _)| {
+            !matches!(group, "File" | "System" | "Composite" | "ExifTool")
+        });
+        if stored && key != "IFD0:Make" {
+            assert_eq!(after.get(key), Some(value), "{key} changed or vanished");
+        }
+    }
 }
 
 #[test]

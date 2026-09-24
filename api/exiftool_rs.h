@@ -56,6 +56,19 @@
 #define EXIFTOOL_ERR_INTERNAL 99
 
 /*
+ The outcome of a write that changed the file (ExifTool `WriteInfo`'s 1,
+ "file written OK"), reported by the file writer's `_with_outcome` variant.
+ */
+#define EXIFTOOL_WRITE_UPDATED 1
+
+/*
+ The outcome of a write whose every change was already in effect, the file
+ left byte-identical (ExifTool `WriteInfo`'s 2, "file written but no
+ changes made"), reported by the file writer's `_with_outcome` variant.
+ */
+#define EXIFTOOL_WRITE_UNCHANGED 2
+
+/*
  Unknown machine type
  */
 #define IMAGE_FILE_MACHINE_UNKNOWN 0
@@ -427,12 +440,15 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
    `exiftool_get_last_error_tag()` name every such tag.
 
  # Requests and the guarantee
- The handle's tags are the metadata the file should end up with: a tag
- that is new or differs from the file is set, and a tag the file carries
- that the handle lacks is deleted (derived `File:`, `Composite:` and
- file-system rows excepted). `EXIFTOOL_OK` means every such change is in
- the file, proven by reading it back; on any error nothing was written and
- the file is byte-identical.
+ A tag of the handle that is new or differs from the file is set. A tag
+ the file carries that the handle lacks is deleted only when the handle
+ was read from this same file (`exiftool_read_file`) and the caller removed
+ it; a handle read from another file, or never read, only sets (derived
+ `File:`, `Composite:` and file-system rows are never deleted). A recorded
+ `GROUP:All` removal deletes that group. `EXIFTOOL_OK` means every such
+ change is in the file, proven by reading it back; on any error nothing
+ was written and the file is byte-identical. The `_with_outcome` variant
+ below also reports whether the file changed.
 
  # Thread Safety
  Not thread-safe with respect to the handle. Do not call concurrently with
@@ -440,6 +456,29 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  destruction.
  */
 int exiftool_write_file(const struct ExifToolHandle *handle, const char *filepath);
+
+/*
+ Writes metadata to a file, as `exiftool_write_file`, and reports what the
+ write did to it.
+
+ # Arguments
+ - `handle`: Handle containing metadata to write (must not be NULL)
+ - `filepath`: Path to file to write (null-terminated UTF-8, must not be NULL)
+ - `outcome`: Receives `EXIFTOOL_WRITE_UPDATED` (the file changed) or
+   `EXIFTOOL_WRITE_UNCHANGED` (every change was already in effect; the file
+   is byte-identical) on success; untouched on failure (must not be NULL)
+
+ # Returns
+ - `EXIFTOOL_OK` on success
+ - `EXIFTOOL_ERR_NULL_POINTER` if any parameter is NULL
+ - Every other code exactly as `exiftool_write_file` returns it
+
+ # Thread Safety
+ As `exiftool_write_file`.
+ */
+int exiftool_write_file_with_outcome(const struct ExifToolHandle *handle,
+                                     const char *filepath,
+                                     int *outcome);
 
 /*
  Retrieves the last error message.
