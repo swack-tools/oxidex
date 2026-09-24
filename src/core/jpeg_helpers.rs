@@ -3208,6 +3208,290 @@ mod print_im_tests {
 }
 
 #[cfg(test)]
+mod xp_string_tests {
+    use super::*;
+    use crate::core::tag_occurrence::{SHIM_DEFAULT_PRIORITY, ValueChannel};
+    use crate::parsers::jpeg::segment_parser::parse_segments;
+    use crate::test_support::TestReader;
+
+    fn ucs2(text: &str) -> Vec<u8> {
+        text.encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .chain([0, 0])
+            .collect()
+    }
+
+    /// A little-endian TIFF block whose IFD0 (at 8) holds the five Windows
+    /// XP strings as `int8u` entries, values after the directory.
+    fn xp_tiff() -> Vec<u8> {
+        // FujiFilmFinePixZ100fd.jpg's XPTitle: `00 00`, then UCS-2 spaces.
+        let mut title = vec![0u8, 0];
+        title.extend(ucs2("   "));
+        let entries = [
+            (0x9c9bu16, title),
+            (0x9c9c, ucs2("Comment")),
+            (0x9c9d, ucs2("Author")),
+            (0x9c9e, ucs2("a;b")),
+            (0x9c9f, ucs2("Subject")),
+        ];
+        let mut blob_at = 8 + 2 + 12 * entries.len() + 4;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let mut blobs = Vec::new();
+        for (id, bytes) in &entries {
+            tiff.extend_from_slice(&id.to_le_bytes());
+            tiff.extend_from_slice(&1u16.to_le_bytes());
+            tiff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            assert!(bytes.len() > 4, "every value is out of line");
+            tiff.extend_from_slice(&(blob_at as u32).to_le_bytes());
+            blob_at += bytes.len();
+            blobs.extend_from_slice(bytes);
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&blobs);
+        tiff
+    }
+
+    /// The five XP strings (0x9c9b-0x9c9f), through the JPEG APP1 IFD0 walk
+    /// and the embedded-EXIF IFD0 walk (PNG `eXIf`, PSD, HEIF, WebP, JXL):
+    /// one occurrence each, at the IFD0 walks' uniform priority, carrying
+    /// ExifTool's decoded text on the print, ValueConv and stored channels
+    /// -- the stored form is what the PNG `eXIf` rebuild and `copy_metadata`
+    /// serialize. A leading U+0000 ends the value: 13.59 prints `""` for
+    /// FujiFilmFinePixZ100fd.jpg's XPTitle.
+    #[test]
+    fn xp_strings_decode_to_exiftool_text_on_every_channel() {
+        let tiff = xp_tiff();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("one EXIF APP1 segment");
+        let mut from_jpeg = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut from_jpeg, &mut Vec::new());
+
+        let mut from_embedded = MetadataMap::new();
+        assert!(crate::parsers::image::embedded::parse_embedded_exif(
+            &tiff,
+            &mut from_embedded
+        ));
+
+        let expected = [
+            ("XPTitle", ""),
+            ("XPComment", "Comment"),
+            ("XPAuthor", "Author"),
+            ("XPKeywords", "a;b"),
+            ("XPSubject", "Subject"),
+        ];
+        for (label, metadata) in [("jpeg", &from_jpeg), ("embedded", &from_embedded)] {
+            for (name, text) in expected {
+                let key = format!("IFD0:{name}");
+                let occurrences = metadata.occurrences_for(&key);
+                assert_eq!(occurrences.len(), 1, "{label} {key}: one occurrence");
+                assert_eq!(
+                    occurrences[0].priority, SHIM_DEFAULT_PRIORITY,
+                    "{label} {key}: priority"
+                );
+                for channel in [
+                    ValueChannel::PrintConv,
+                    ValueChannel::ValueConv,
+                    ValueChannel::Stored,
+                ] {
+                    assert_eq!(
+                        occurrences[0].project(channel).as_ref(),
+                        &TagValue::new_string(text),
+                        "{label} {key} {channel:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A TIFF block in `order` whose IFD0 holds every XP tag with the same
+    /// `payload` as `field_type` (int8u or undef), inline when it fits.
+    fn xp_tiff_all(payload: &[u8], field_type: u16, big_endian: bool) -> Vec<u8> {
+        let u16b = |v: u16| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let u32b = |v: u32| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let ids = [0x9c9bu16, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f];
+        let mut tiff = if big_endian {
+            b"MM\0\x2a".to_vec()
+        } else {
+            b"II\x2a\0".to_vec()
+        };
+        tiff.extend_from_slice(&u32b(8));
+        tiff.extend_from_slice(&u16b(ids.len() as u16));
+        let mut blob_at = 8 + 2 + 12 * ids.len() + 4;
+        let mut blobs = Vec::new();
+        for id in ids {
+            tiff.extend_from_slice(&u16b(id));
+            tiff.extend_from_slice(&u16b(field_type));
+            tiff.extend_from_slice(&u32b(payload.len() as u32));
+            if payload.len() <= 4 {
+                let mut inline = payload.to_vec();
+                inline.resize(4, 0);
+                tiff.extend_from_slice(&inline);
+            } else {
+                tiff.extend_from_slice(&u32b(blob_at as u32));
+                blob_at += payload.len();
+                blobs.extend_from_slice(payload);
+            }
+        }
+        tiff.extend_from_slice(&u32b(0));
+        tiff.extend_from_slice(&blobs);
+        tiff
+    }
+
+    fn jpeg_of(tiff: &[u8]) -> MetadataMap {
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("one EXIF APP1 segment");
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+        metadata
+    }
+
+    /// Every class of XP input -- a surrogate pair before the usual NUL
+    /// terminator, lone surrogates, odd byte counts, byte-order marks,
+    /// embedded and leading NULs, inline values -- as int8u and undef, in
+    /// II and MM files, through the JPEG and embedded IFD0 walks, gives
+    /// exactly the hand decoder's value (`raw_bytes_to_tag_value`, the
+    /// pre-B2 producer) on every channel. A generated `Decode` arm that
+    /// declines (a surrogate pair decodes to non-UTF-8 CESU-8 under
+    /// ExifTool's UCS2) must not fall through to a residual that keeps the
+    /// terminator.
+    #[test]
+    fn xp_strings_match_the_hand_decoder_for_every_input_class() {
+        fn utf16le(text: &str) -> Vec<u8> {
+            text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+        }
+        let cat = |parts: &[&[u8]]| parts.concat();
+        let emoji = utf16le("\u{1F38C}");
+        let classes: Vec<(&str, Vec<u8>)> = vec![
+            ("emoji+nul", cat(&[&emoji, &[0, 0]])),
+            ("A+emoji+nul", cat(&[&utf16le("A"), &emoji, &[0, 0]])),
+            ("emoji", emoji.clone()),
+            ("emoji+nul+tail", cat(&[&emoji, &[0, 0], &utf16le("tail")])),
+            ("emoji+nul+nul", cat(&[&emoji, &[0, 0, 0, 0]])),
+            ("emoji+odd", cat(&[&emoji, &[0, 0, 0x41]])),
+            ("bom-le+emoji+nul", cat(&[&[0xff, 0xfe], &emoji, &[0, 0]])),
+            (
+                "bom-be+emoji+nul",
+                cat(&[&[0xfe, 0xff, 0xd8, 0x3c, 0xdf, 0x8c], &[0, 0]]),
+            ),
+            (
+                "lone-high+nul",
+                cat(&[&utf16le("A"), &[0x00, 0xd8], &[0, 0]]),
+            ),
+            (
+                "lone-low+nul",
+                cat(&[&utf16le("A"), &[0x00, 0xdc], &[0, 0]]),
+            ),
+            ("lone-high-end", cat(&[&utf16le("A"), &[0x00, 0xd8]])),
+            (
+                "reversed-pair+nul",
+                cat(&[&[0x8c, 0xdf, 0x3c, 0xd8], &[0, 0]]),
+            ),
+            ("odd", cat(&[&utf16le("Hi"), b"X"])),
+            ("one-byte", b"A".to_vec()),
+            ("nul-nul", vec![0, 0]),
+            ("leading-nul", cat(&[&[0, 0], &utf16le("   ")])),
+            (
+                "embedded-nul",
+                cat(&[&utf16le("Hey"), &[0, 0], &utf16le("x")]),
+            ),
+            ("inline-emoji", emoji.clone()),
+            ("bmp", cat(&[&utf16le("\u{e9}\u{4e2d} caf\u{e9}"), &[0, 0]])),
+            ("latin-high-bytes", vec![0xff, 0x00, 0x80, 0x00, 0, 0]),
+        ];
+        let names = [
+            "XPTitle",
+            "XPComment",
+            "XPAuthor",
+            "XPKeywords",
+            "XPSubject",
+        ];
+        let mut failures = Vec::new();
+        for (class, payload) in &classes {
+            for field_type in [1u16, 7] {
+                for big_endian in [false, true] {
+                    let tiff = xp_tiff_all(payload, field_type, big_endian);
+                    let mut embedded = MetadataMap::new();
+                    assert!(crate::parsers::image::embedded::parse_embedded_exif(
+                        &tiff,
+                        &mut embedded
+                    ));
+                    for (carrier, metadata) in [("jpeg", jpeg_of(&tiff)), ("embedded", embedded)] {
+                        for (offset, name) in names.iter().enumerate() {
+                            let id = 0x9c9b + offset as u16;
+                            let hand = crate::core::tag_conversion::raw_bytes_to_tag_value(
+                                payload,
+                                field_type,
+                                payload.len() as u32,
+                                id,
+                                if big_endian {
+                                    ByteOrder::BigEndian
+                                } else {
+                                    ByteOrder::LittleEndian
+                                },
+                            );
+                            let key = format!("IFD0:{name}");
+                            let occurrences = metadata.occurrences_for(&key);
+                            let label = format!(
+                                "{class} type {field_type} {} {carrier} {key}",
+                                if big_endian { "MM" } else { "II" }
+                            );
+                            if occurrences.len() != 1 {
+                                failures
+                                    .push(format!("{label}: {} occurrences", occurrences.len()));
+                                continue;
+                            }
+                            for channel in [
+                                ValueChannel::PrintConv,
+                                ValueChannel::ValueConv,
+                                ValueChannel::Stored,
+                            ] {
+                                let got = occurrences[0].project(channel);
+                                if got.as_ref() != &hand {
+                                    failures.push(format!(
+                                        "{label} {channel:?}: {got:?} != hand {hand:?}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} mismatches:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
 mod transfer_function_tests {
     use super::*;
     use std::borrow::Cow;
