@@ -2642,11 +2642,15 @@ pub(crate) fn jpeg_exif_payload(file_bytes: &[u8]) -> Result<Option<Vec<u8>>> {
 /// `None` when it has none. Pinned ExifTool 13.59 files every CIFF tag under
 /// MakerNotes and so drops the whole segment on `MakerNotes:All`
 /// (Writer.pl `%excludeGroups` CIFF => MakerNotes; WriteCRW leaves it
-/// empty): t/images ExifTool.jpg loses only that segment, every other one
-/// byte-identical.
-pub(crate) fn jpeg_without_ciff(file_bytes: &[u8]) -> Option<Vec<u8>> {
+/// empty): t/images ExifTool.jpg loses only that segment. Everything after
+/// it moves, so an AFCP trailer's absolute offsets are re-based by the
+/// shared trailer writer (`jpeg_trailer::rebase_trailer_offsets`), which
+/// refuses a trailer it cannot re-base exactly.
+pub(crate) fn jpeg_without_ciff(file_bytes: &[u8]) -> Result<Option<Vec<u8>>> {
     let reader = SliceReader(file_bytes);
-    let segments = parse_segments(&reader).ok()?;
+    let Ok(segments) = parse_segments(&reader) else {
+        return Ok(None);
+    };
     let spans: Vec<(usize, usize)> = segments
         .iter()
         .filter(|s| {
@@ -2657,9 +2661,9 @@ pub(crate) fn jpeg_without_ciff(file_bytes: &[u8]) -> Option<Vec<u8>> {
         })
         .map(|s| (s.offset as usize, s.offset as usize + 4 + s.data.len()))
         .collect();
-    if spans.is_empty() {
-        return None;
-    }
+    let Some(&(_, last_end)) = spans.last() else {
+        return Ok(None);
+    };
     let mut out = Vec::with_capacity(file_bytes.len());
     let mut at = 0;
     for (start, end) in spans {
@@ -2667,7 +2671,18 @@ pub(crate) fn jpeg_without_ciff(file_bytes: &[u8]) -> Option<Vec<u8>> {
         at = end;
     }
     out.extend_from_slice(&file_bytes[at..]);
-    Some(out)
+    // Where the entropy-coded data starts (the end of the SOS header, or the
+    // EOI marker itself), as `transform_exif` hands it to the trailer writer.
+    let scan_from = segments
+        .iter()
+        .find_map(|s| match s.marker {
+            0xFFDA => Some(s.offset as usize + 4 + s.data.len()),
+            0xFFD9 => Some(s.offset as usize),
+            _ => None,
+        })
+        .ok_or_else(|| ExifToolError::parse_error("JPEG has no SOS or EOI marker"))?;
+    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, last_end, scan_from, out)
+        .map(Some)
 }
 
 /// The (IFD, tag id) addresses a write key can name: its group's IFD (every
