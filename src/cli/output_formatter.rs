@@ -780,22 +780,7 @@ impl OutputFormatter for ShortFormatter {
         // Format each tag in short format
         let mut output = String::new();
         for (tag_name, tag_value) in tags {
-            // Skip large binary data fields
-            if let TagValue::Binary(bytes) = tag_value
-                && bytes.len() > 256
-            {
-                continue;
-            }
-
-            // Skip known problematic tags
-            if matches!(
-                tag_name.as_str(),
-                "IFD0:LeafData"
-                    | "IFD1:LeafData"
-                    | "EXIF:MakerNoteApple"
-                    | "EXIF:PrintIM"
-                    | "EXIF:ApplicationNotes"
-            ) {
+            if hidden_from_ungrouped_short_listing(tag_name, tag_value) {
                 continue;
             }
 
@@ -808,6 +793,29 @@ impl OutputFormatter for ShortFormatter {
 
         output
     }
+}
+
+/// The tags the ungrouped short renderers have always left out: binary
+/// values over 256 bytes and a handful of structured blobs. This is an
+/// OxiDex tag-set decision, not an ExifTool one (ExifTool prints a
+/// `(Binary data N bytes, ...)` placeholder for them), and it is kept exactly
+/// as it was: the short-output layout work that moved these renderers to
+/// `cli::tag_resolution::render_short_lines` changes line *format* only,
+/// never which tags are shown.
+pub(crate) fn hidden_from_ungrouped_short_listing(tag_name: &str, tag_value: &TagValue) -> bool {
+    if let TagValue::Binary(bytes) = tag_value
+        && bytes.len() > 256
+    {
+        return true;
+    }
+    matches!(
+        tag_name,
+        "IFD0:LeafData"
+            | "IFD1:LeafData"
+            | "EXIF:MakerNoteApple"
+            | "EXIF:PrintIM"
+            | "EXIF:ApplicationNotes"
+    )
 }
 
 /// Helper function to format a TagValue for short format display
