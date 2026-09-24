@@ -967,6 +967,14 @@ pub(crate) fn write_metadata_with_removals(
         let out = crate::writers::generated_public_write::rewrite_tiff_transaction(
             file_bytes, &original, plan,
         )?;
+        // Every removal gone, every set present, before anything is written.
+        crate::writers::exif_surgical::verify_exif_write(
+            Some(file_bytes),
+            &out,
+            &original,
+            metadata,
+            removed,
+        )?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -980,6 +988,19 @@ pub(crate) fn write_metadata_with_removals(
             )?;
             let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
                 &reader, &original, plan,
+            )?;
+            // Every removal gone, every set present, before anything is
+            // written (`exif_surgical::verify_exif_write`).
+            let before = crate::writers::exif_surgical::jpeg_exif_payload(
+                reader.read(0, reader.size() as usize)?,
+            )?;
+            let after = crate::writers::exif_surgical::jpeg_exif_payload(&serialized_bytes)?;
+            crate::writers::exif_surgical::verify_exif_write(
+                before.as_deref(),
+                after.as_deref().unwrap_or_default(),
+                &original,
+                metadata,
+                removed,
             )?;
             write_atomic(path, &serialized_bytes)?;
         }

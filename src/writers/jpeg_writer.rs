@@ -466,15 +466,27 @@ pub(crate) fn rewrite_generated_exif_payload(
 
 /// Whether a public plan's legacy delta deletes a tag: an EXIF-family key of
 /// `baseline` that `legacy_metadata` no longer holds, or a named removal.
+/// The raw-carried directories count too: a surfaced InteropIFD, IFD1 or
+/// MakerNotes row dropped from the map must reach the reconstructing
+/// writer, which refuses it, not the in-place payload writer, which never
+/// walks those directories and would report success with the row kept.
 fn legacy_deletes(
     baseline: &MetadataMap,
     plan: &crate::writers::generated_public_write::PublicWritePlan,
 ) -> bool {
     !plan.legacy_removed.is_empty()
         || baseline.iter().any(|(key, _)| {
-            ["IFD0:", "ExifIFD:", "GPS:", "EXIF:"]
-                .iter()
-                .any(|prefix| key.starts_with(prefix))
+            [
+                "IFD0:",
+                "ExifIFD:",
+                "GPS:",
+                "EXIF:",
+                "IFD1:",
+                "InteropIFD:",
+                "MakerNotes:",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
                 && !plan.legacy_metadata.contains_key(key)
         })
 }

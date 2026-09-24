@@ -1180,3 +1180,77 @@ fn named_removals_of_absent_or_unmapped_carried_tags_are_no_ops() {
         }
     }
 }
+
+/// One `write_metadata` call that sets a generated tag (IFD0:Artist) and
+/// drops a surfaced row of a raw-carried directory from the map
+/// (InteropIFD:InteropIndex; for JPEG, whose reader surfaces IFD1, also
+/// IFD1:Compression). The mixed transaction's staging predicate knew only
+/// IFD0/ExifIFD/GPS/EXIF rows, so the legacy delta went to the in-place
+/// payload writer, which does not walk those directories: Artist was set,
+/// the deletion silently kept, success reported. Pinned ExifTool 13.59
+/// performs both; this writer cannot delete from those directories, so the
+/// write is refused with the file untouched.
+#[test]
+fn a_mixed_write_dropping_a_carried_row_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original, keys) in [
+            (
+                "mixed-carried.png",
+                png(&[(b"eXIf", tiff.clone())], &[]),
+                &["InteropIFD:InteropIndex"][..],
+            ),
+            (
+                "mixed-carried.jpg",
+                jpeg_with(&tiff),
+                &["InteropIFD:InteropIndex", "IFD1:Compression"][..],
+            ),
+        ] {
+            for key in keys {
+                let path = write(dir.path(), name, &original);
+                let mut map = read_metadata(&path).unwrap();
+                assert!(map.remove(key).is_some(), "{name}: reader surfaces {key}");
+                map.insert("IFD0:Artist", TagValue::new_string("you"));
+                assert!(
+                    write_metadata(&path, &map).is_err(),
+                    "{order:?} {name} {key}: silent success"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{name} {key}");
+            }
+        }
+    }
+}
+
+/// `remove_tag("EXIF:InteropIndex")` names the InteropIFD entry by its
+/// family-0 alias (the planner already maps `-EXIF:InteropIndex=R03` to
+/// InteropIFD when setting). The raw-carried removal check accepted only the
+/// `InteropIFD:` spelling, so with IFD0 rows present the entry was carried
+/// and success reported. Pinned ExifTool 13.59 deletes it; this writer
+/// cannot, so it refuses, file untouched, for PNG and JPEG and the CLI.
+#[test]
+fn a_family_alias_removal_of_a_carried_entry_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("alias.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("alias.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            assert!(
+                remove_tag(&path, "EXIF:InteropIndex").is_err(),
+                "{order:?} {name}: silent success"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name}");
+            let out = std::process::Command::new(cli)
+                .arg("-EXIF:InteropIndex=")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(1), "{order:?} {name} CLI");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name} CLI");
+        }
+    }
+}

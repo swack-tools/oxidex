@@ -259,28 +259,33 @@ fn rewrite_exif_payload(
     let removed: Vec<String> = removed.iter().filter(|k| is_exif_key(k)).cloned().collect();
     let plan =
         crate::writers::generated_public_write::plan_public_write(&baseline, &desired, &removed)?;
-    if plan.whole_exif_clear {
-        return Ok(Vec::new());
-    }
-    if plan.generated.is_empty() {
-        return crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
+    let payload = if plan.whole_exif_clear {
+        Vec::new()
+    } else if plan.generated.is_empty() {
+        crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
             original,
             &baseline,
             &plan.legacy_metadata,
             &plan.legacy_removed,
-        );
-    }
-    // A PNG has no JFIF segment, so `WriteExif` seeds no resolution defaults
-    // from one (`$$et{JFIFYResolution}` is undefined). A new block takes the
-    // same source-derived fresh byte order as a JPEG's: `ProcessPNG` sets
-    // `MM` exactly as `ProcessJPEG` does (PNG.pm 13.59:1441), and the oracle
-    // creates a big-endian eXIf.
-    crate::writers::jpeg_writer::rewrite_generated_exif_payload(
-        original,
-        &|| Ok(std::collections::BTreeMap::new()),
-        &baseline,
-        plan,
-    )
+        )?
+    } else {
+        // A PNG has no JFIF segment, so `WriteExif` seeds no resolution
+        // defaults from one (`$$et{JFIFYResolution}` is undefined). A new
+        // block takes the same source-derived fresh byte order as a JPEG's:
+        // `ProcessPNG` sets `MM` exactly as `ProcessJPEG` does (PNG.pm
+        // 13.59:1441), and the oracle creates a big-endian eXIf.
+        crate::writers::jpeg_writer::rewrite_generated_exif_payload(
+            original,
+            &|| Ok(std::collections::BTreeMap::new()),
+            &baseline,
+            plan,
+        )?
+    };
+    // Every removal gone, every set present, before anything is written.
+    crate::writers::exif_surgical::verify_exif_write(
+        original, &payload, &baseline, &desired, &removed,
+    )?;
+    Ok(payload)
 }
 
 /// What the writer does with the EXIF block.
@@ -368,6 +373,38 @@ fn plan_exif(
     Ok(ExifFate::Replace(rewrite_exif_payload(
         original, metadata, baseline, removed,
     )?))
+}
+
+/// The output order of the original chunks: those before the first IDAT
+/// in place, then the text and eXIf chunks ExifTool moves from after IDAT
+/// to before it (up to the first `%noLeapFrog` chunk), then the slot for
+/// new chunks (`None`), then the first IDAT onward less the moved ones.
+///
+/// Linear in the chunk count: membership of the moved set is tested once
+/// per chunk, so it is a bitmap, not a `Vec` -- an untrusted file with tens
+/// of thousands of post-IDAT text chunks made reassembly quadratic.
+fn output_order(chunks: &[PngChunk], first_idat: usize) -> Vec<Option<usize>> {
+    let mut moved = Vec::new();
+    let mut is_moved = vec![false; chunks.len()];
+    for (index, chunk) in chunks.iter().enumerate().skip(first_idat + 1) {
+        if NO_LEAP_FROG.contains(&&chunk.chunk_type) {
+            break;
+        }
+        if is_movable_text(&chunk.chunk_type) {
+            moved.push(index);
+            is_moved[index] = true;
+        }
+    }
+    (0..first_idat)
+        .map(Some)
+        .chain(moved.iter().copied().map(Some))
+        .chain(std::iter::once(None))
+        .chain(
+            (first_idat..chunks.len())
+                .filter(|index| !is_moved[*index])
+                .map(Some),
+        )
+        .collect()
 }
 
 /// What the writer does with one original tEXt / zTXt / iTXt chunk.
@@ -729,29 +766,7 @@ pub(crate) fn write_png_metadata_with_removals(
         new_chunks.push((*b"eXIf", payload.clone()));
     }
 
-    // Text and eXIf chunks ExifTool moves from after IDAT to before it.
-    let mut moved = Vec::new();
-    for (index, chunk) in chunks.iter().enumerate().skip(first_idat + 1) {
-        if NO_LEAP_FROG.contains(&&chunk.chunk_type) {
-            break;
-        }
-        if is_movable_text(&chunk.chunk_type) {
-            moved.push(index);
-        }
-    }
-
-    // Output order: chunks before the first IDAT in place, the moved text
-    // chunks, the new chunks (`None`), then the first IDAT onward less the
-    // moved ones.
-    let order = (0..first_idat)
-        .map(Some)
-        .chain(moved.iter().copied().map(Some))
-        .chain(std::iter::once(None))
-        .chain(
-            (first_idat..chunks.len())
-                .filter(|index| !moved.contains(index))
-                .map(Some),
-        );
+    let order = output_order(&chunks, first_idat);
     let mut output = Vec::new();
     output.extend_from_slice(&PNG_SIGNATURE);
     for slot in order {
@@ -1119,6 +1134,33 @@ mod tests {
             *b"iTXt",
             serialize_itxt_chunk(XMP_ITXT_KEYWORD.as_bytes(), b"", b"", &replacement)
         )));
+    }
+
+    #[test]
+    fn output_order_is_linear_in_post_idat_text_chunks() {
+        // A million text chunks after IDAT: every one moves before it. With
+        // a `Vec::contains` membership test that is 5e11 probes (tens of
+        // seconds even vectorized); with the bitmap it takes milliseconds.
+        const N: usize = 1_000_000;
+        let chunk = |t: &[u8; 4]| PngChunk {
+            chunk_type: *t,
+            data: Vec::new(),
+            crc: 0,
+        };
+        let mut chunks = vec![chunk(b"IHDR"), chunk(b"IDAT")];
+        chunks.extend((0..N).map(|_| chunk(b"tEXt")));
+        chunks.push(chunk(b"IEND"));
+        let started = std::time::Instant::now();
+        let order = output_order(&chunks, 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "output_order took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(order.len(), chunks.len() + 1);
+        assert_eq!(&order[..3], &[Some(0), Some(2), Some(3)]);
+        assert_eq!(order[N], Some(N + 1));
+        assert_eq!(&order[N + 1..], &[None, Some(1), Some(N + 2)]);
     }
 
     #[test]
