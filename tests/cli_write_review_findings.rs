@@ -277,26 +277,80 @@ fn absent_deletions_in_png_and_pdf_are_unchanged() {
     }
 }
 
-// --- P1-3 (pre-#943 PNG writer): no misplaced PNG EXIF ------------------
+// --- P1-3, after #943: PNG EXIF lands where ExifTool puts it --------------
 
+/// With #943's in-place PNG writer (the eXIf chunk through the JPEG writer's
+/// surgical EXIF transaction) the PNG address set is the JPEG writer's. Pinned
 /// ExifTool 13.59 on tests/fixtures/png/sample.png: `-IFD1:XResolution=10`
-/// writes `[IFD1]`, `-ExifIFD:ISO=200` writes `[ExifIFD]`. The PNG writer
-/// flattens everything into IFD0 (a second IFD0 XResolution; ISO in IFD0),
-/// and even `-PNG:Title=t` moved sample.png's ExifIFD entries into IFD0. All
-/// are refused until the in-place PNG writer lands.
+/// writes `[IFD1]`, `-ExifIFD:ISO=200` and `-EXIF:ISO=100` write `[ExifIFD]`,
+/// `-XPTitle=v` writes `[IFD0]`, and `-PNG:Title=t` leaves the ExifIFD rows in
+/// ExifIFD. The rebuild before #943 put each of them in IFD0.
 #[test]
-fn png_writes_that_would_misplace_exif_are_refused() {
-    for args in [
-        vec!["-IFD1:XResolution=10"],
-        vec!["-ExifIFD:ISO=200"],
-        vec!["-PNG:Title=t"],
+fn png_exif_writes_land_at_exiftools_address() {
+    for (arg, key, value) in [
+        ("-IFD1:XResolution=10", "IFD1:XResolution", "10"),
+        ("-ExifIFD:ISO=200", "ExifIFD:ISO", "200"),
+        ("-EXIF:ISO=100", "ExifIFD:ISO", "100"),
+        ("-XPTitle=v", "IFD0:XPTitle", "v"),
+        ("-PNG:Title=t", "PNG:Title", "t"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let file = copy_into(&dir, PNG_EXIF, "a.png");
+        let o = run(&file, &[arg]);
+        assert_eq!(o.status.code(), Some(0), "{arg}: {}", err(&o));
+        assert_eq!(out(&o), "    1 image files updated\n", "{arg}");
+        if key == "IFD1:XResolution" {
+            assert_eq!(png_ifd1_numerator(&file, 0x011a), Some(10), "{arg}");
+        } else {
+            assert_eq!(read_back(&file, key), value, "{arg}");
+        }
+        assert_eq!(read_back(&file, "ExifIFD:ExifVersion"), "0232", "{arg}");
+        assert_eq!(read_back(&file, "IFD0:ExifVersion"), "", "{arg}");
+        assert_eq!(read_back(&file, "IFD0:ISO"), "", "{arg}");
+    }
+    // A bare name ExifTool writes as a PNG text tag stays refused.
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, PNG_EXIF, "a.png");
+    let before = sha(&file);
+    let o = run(&file, &["-Software=NEW"]);
+    assert_refused_untouched(&o, &file, &before, "PNG -Software");
+}
+
+/// A deletion naming nothing in a PNG is a no-op before any guard. Pinned
+/// ExifTool 13.59 on sample.png (text chunks after IDAT): `-IFD1:ImageDescription=`
+/// and `-IFD0:XPTitle=` are `0 image files updated` / `1 image files
+/// unchanged` with the bytes untouched, and `-IFD1:BogusTag=` is `Tag
+/// 'IFD1:BogusTag' is not defined` / `Nothing to do.`. oxidex refused IFD1
+/// or rebuilt the file (moving the text chunks ahead of IDAT).
+#[test]
+fn png_absent_deletions_leave_the_file_alone() {
+    for arg in [
+        "-IFD1:ImageDescription=",
+        "-IFD0:XPTitle=",
+        "-PNG:Copyright=",
     ] {
         let dir = TempDir::new().unwrap();
         let file = copy_into(&dir, PNG_EXIF, "a.png");
         let before = sha(&file);
-        let o = run(&file, &args);
-        assert_refused_untouched(&o, &file, &before, &format!("{args:?}"));
+        let o = run(&file, &[arg]);
+        assert_eq!(o.status.code(), Some(0), "{arg}: {}", err(&o));
+        assert_eq!(
+            out(&o),
+            "    0 image files updated\n    1 image files unchanged\n",
+            "{arg}"
+        );
+        assert_eq!(sha(&file), before, "{arg}");
     }
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, PNG_EXIF, "a.png");
+    let before = sha(&file);
+    let o = run(&file, &["-IFD1:BogusTag="]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        err(&o),
+        "Warning: Tag 'IFD1:BogusTag' is not defined\nNothing to do.\n"
+    );
+    assert_eq!(sha(&file), before);
 }
 
 // --- P2-7 / P2-8: every file, and --readonly ---------------------------
@@ -593,4 +647,34 @@ fn an_undefined_set_beside_a_copy_is_only_a_warning() {
         assert_eq!(out(&o), "    1 image files updated\n", "{filters:?}");
         assert_eq!(read_back(&dst, "IFD0:XPTitle"), "hello", "{filters:?}");
     }
+}
+
+/// The first numerator of the IFD1 entry `tag` in a PNG's `eXIf` chunk,
+/// scanned from the bytes: oxidex's PNG reader does not surface IFD1 from
+/// `eXIf` (a read-side gap), so a grouped read-back cannot see it there.
+fn png_ifd1_numerator(path: &Path, tag: u16) -> Option<u32> {
+    use oxidex::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    let png = fs::read(path).ok()?;
+    let mut at = 8;
+    while at + 8 <= png.len() {
+        let len = u32::from_be_bytes(png[at..at + 4].try_into().ok()?) as usize;
+        if &png[at + 4..at + 8] == b"eXIf" {
+            let data = &png[at + 8..at + 8 + len];
+            let tiff = data.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(data);
+            let big = tiff.starts_with(b"MM");
+            let entry = scan_exif_entries(tiff)
+                .ok()?
+                .entries
+                .into_iter()
+                .find(|e| e.ifd == IfdKind::Ifd1 && e.tag_id == tag)?;
+            let raw: [u8; 4] = entry.value.get(..4)?.try_into().ok()?;
+            return Some(if big {
+                u32::from_be_bytes(raw)
+            } else {
+                u32::from_le_bytes(raw)
+            });
+        }
+        at += 12 + len;
+    }
+    None
 }

@@ -272,7 +272,7 @@ fn updated_count_never_increments_without_a_byte_change() {
     let exif = |ext: &str, key: &'static str| (ext != "pdf").then_some(key);
     for (fixture, name) in fixtures {
         let ext = name.rsplit('.').next().unwrap();
-        let in_exif_ifd0 = ext == "jpg" || ext == "tif";
+        let in_exif_ifd0 = ext == "jpg" || ext == "tif" || ext == "png";
         let args: Vec<(&str, Option<&str>)> = vec![
             ("-XPTitle=v", in_exif_ifd0.then_some("IFD0:XPTitle")),
             ("-XPTitle=", in_exif_ifd0.then_some("IFD0:XPTitle")),
@@ -290,7 +290,7 @@ fn updated_count_never_increments_without_a_byte_change() {
             ("-IPTC:Keywords=k", None),
             (
                 "-IFD1:XResolution=300",
-                (ext != "pdf" && ext != "png").then_some("IFD1:XResolution"),
+                (ext != "pdf").then_some("IFD1:XResolution"),
             ),
             ("-InteropIFD:InteropIndex=R03", None),
             ("-JFIF:XResolution=300", None),
@@ -318,11 +318,19 @@ fn updated_count_never_increments_without_a_byte_change() {
                 panic!("{fixture} {arg}: reported an update ExifTool does not make here");
             };
             let value = arg.split_once('=').unwrap().1;
-            assert_eq!(
-                read_back(&file, address),
-                value,
-                "{fixture} {arg}: not at {address}"
-            );
+            if ext == "png" && address == "IFD1:XResolution" {
+                assert_eq!(
+                    png_ifd1_numerator(&file, 0x011a),
+                    value.parse().ok(),
+                    "{fixture} {arg}: not at {address}"
+                );
+            } else {
+                assert_eq!(
+                    read_back(&file, address),
+                    value,
+                    "{fixture} {arg}: not at {address}"
+                );
+            }
             if !changed {
                 assert!(
                     !value.is_empty(),
@@ -554,4 +562,34 @@ fn bare_xp_tags_write_ifd0_bytes_identical_to_the_oracle() {
             }
         }
     }
+}
+
+/// The first numerator of the IFD1 entry `tag` in a PNG's `eXIf` chunk,
+/// scanned from the bytes: oxidex's PNG reader does not surface IFD1 from
+/// `eXIf` (a read-side gap), so a grouped read-back cannot see it there.
+fn png_ifd1_numerator(path: &Path, tag: u16) -> Option<u32> {
+    use oxidex::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    let png = fs::read(path).ok()?;
+    let mut at = 8;
+    while at + 8 <= png.len() {
+        let len = u32::from_be_bytes(png[at..at + 4].try_into().ok()?) as usize;
+        if &png[at + 4..at + 8] == b"eXIf" {
+            let data = &png[at + 8..at + 8 + len];
+            let tiff = data.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(data);
+            let big = tiff.starts_with(b"MM");
+            let entry = scan_exif_entries(tiff)
+                .ok()?
+                .entries
+                .into_iter()
+                .find(|e| e.ifd == IfdKind::Ifd1 && e.tag_id == tag)?;
+            let raw: [u8; 4] = entry.value.get(..4)?.try_into().ok()?;
+            return Some(if big {
+                u32::from_be_bytes(raw)
+            } else {
+                u32::from_le_bytes(raw)
+            });
+        }
+        at += 12 + len;
+    }
+    None
 }

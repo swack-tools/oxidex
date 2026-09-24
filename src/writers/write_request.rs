@@ -54,11 +54,17 @@ use crate::error::{ExifToolError, Result};
 /// every candidate that declares none of its own.
 const EXIF_MAIN_WRITE_GROUP: &str = "ExifIFD";
 
-/// Groups the PNG writer writes where they belong: `PNG:` text chunks, and
-/// IFD0 of the `eXIf` chunk it rebuilds. It flattens every other EXIF key
-/// into IFD0 (`-ExifIFD:ISO=200` landed in IFD0, `-IFD1:XResolution=10`
-/// became a second IFD0 XResolution), so those are refused, not misplaced.
-const PNG_WRITER_GROUPS: &[&str] = &["PNG", "IFD0"];
+/// Whether ExifTool writes an ungrouped `name` to a PNG as a PNG text tag:
+/// pinned 13.59 answers `-Software=NEW` on a PNG with `[PNG] Software`, not
+/// `[IFD0] Software` -- the name has a `PNG` candidate (`PNG::TextualData`,
+/// `PREFERRED => 1`, PNG.pm:596) -- while `-XPTitle=v` (no PNG candidate)
+/// lands in `[IFD0]`. oxidex refuses the former rather than guess how the
+/// text chunk would be spelled.
+pub(crate) fn png_prefers_text(name: &str) -> bool {
+    SET_NEW_VALUE_LOOKUP.iter().any(|candidate| {
+        candidate.name.eq_ignore_ascii_case(name) && family0(candidate) == Some("PNG")
+    })
+}
 
 /// Groups whose same-named rows ExifTool's `Exif::Main` write never touches:
 /// the EXIF directories themselves (a `WriteGroup => 'IFD0'` value is written
@@ -151,6 +157,7 @@ fn family0(candidate: &StaticNativeLookupCandidate) -> Option<&'static str> {
 pub(crate) fn resolve_write_key(
     tag: &str,
     exif_ifd0_target: bool,
+    png_target: bool,
     baseline: &MetadataMap,
 ) -> Result<String> {
     if tag.contains(':') {
@@ -171,6 +178,13 @@ pub(crate) fn resolve_write_key(
             "oxidex resolves an ungrouped tag name only where IFD0 is Exif::Main \
              (JPEG and TIFF-structured files); name the group explicitly \
              (for example -PDF:Title=)",
+        ));
+    }
+    if png_target && png_prefers_text(name) {
+        return Err(refuse(
+            tag,
+            "ExifTool writes this name to a PNG as a PNG text tag; name the group \
+             explicitly (-PNG:<Name>= for the text chunk, -IFD0:<Name>= for EXIF)",
         ));
     }
     let candidates: Vec<&StaticNativeLookupCandidate> = SET_NEW_VALUE_LOOKUP
@@ -329,12 +343,17 @@ pub(crate) fn ensure_writer_addresses(
     exif_surgical_target: bool,
 ) -> Result<()> {
     let group = key.split_once(':').map(|(group, _)| group);
-    let addressed = if exif_surgical_target || matches!(format, FileFormat::JPEG) {
+    // The PNG `eXIf` chunk goes through the JPEG writer's surgical EXIF
+    // transaction (#943), so it addresses what the JPEG writer addresses,
+    // plus the PNG text chunks.
+    let exif_transaction =
+        exif_surgical_target || matches!(format, FileFormat::JPEG | FileFormat::PNG);
+    let addressed = if exif_transaction {
         group.is_some_and(|group| matches!(group, "IFD0" | "ExifIFD" | "GPS" | "EXIF"))
+            || (matches!(format, FileFormat::PNG) && group == Some("PNG"))
             || generated_route_resolves(key)
     } else {
         match (format, key.split_once(':')) {
-            (FileFormat::PNG, Some((group, _))) => PNG_WRITER_GROUPS.contains(&group),
             (FileFormat::PDF, Some((group, name))) if group == "PDF" => {
                 if super::pdf_writer::is_info_field(name) {
                     true
@@ -349,7 +368,7 @@ pub(crate) fn ensure_writer_addresses(
                     ));
                 }
             }
-            (FileFormat::PNG | FileFormat::PDF, _) => false,
+            (FileFormat::PDF, _) => false,
             _ => true,
         }
     };
@@ -438,10 +457,14 @@ mod tests {
             ("ImageDescription", "IFD0:ImageDescription"),
             ("DateTimeOriginal", "ExifIFD:DateTimeOriginal"),
         ] {
-            assert_eq!(resolve_write_key(tag, true, &empty).unwrap(), key, "{tag}");
+            assert_eq!(
+                resolve_write_key(tag, true, false, &empty).unwrap(),
+                key,
+                "{tag}"
+            );
         }
         assert_eq!(
-            resolve_write_key("XMP:Title", true, &empty).unwrap(),
+            resolve_write_key("XMP:Title", true, false, &empty).unwrap(),
             "XMP:Title"
         );
     }
@@ -450,14 +473,14 @@ mod tests {
     fn ungrouped_names_exiftool_writes_elsewhere_are_refused() {
         let empty = MetadataMap::new();
         // XMP-dc:Title (pinned 13.59 on Writer.jpg); no EXIF candidate.
-        assert!(resolve_write_key("Title", true, &empty).is_err());
+        assert!(resolve_write_key("Title", true, false, &empty).is_err());
         // Exif.pm 0x4746 Rating is `Avoid => 1`: ExifTool creates XMP instead.
-        assert!(resolve_write_key("Rating", true, &empty).is_err());
+        assert!(resolve_write_key("Rating", true, false, &empty).is_err());
         // Not defined at all.
-        let err = resolve_write_key("NoSuchTag", true, &empty).unwrap_err();
+        let err = resolve_write_key("NoSuchTag", true, false, &empty).unwrap_err();
         assert!(err.to_string().contains("is not defined"), "{err}");
         // Outside JPEG/TIFF no ungrouped name is resolved.
-        assert!(resolve_write_key("XPTitle", false, &empty).is_err());
+        assert!(resolve_write_key("XPTitle", false, false, &empty).is_err());
     }
 
     /// Pinned 13.59 on t/images/ExifTool.jpg (which carries [CIFF] Make):
@@ -469,11 +492,11 @@ mod tests {
         baseline.insert("IFD1:Make", TagValue::new_string("x"));
         baseline.insert("File:Make", TagValue::new_string("x"));
         assert_eq!(
-            resolve_write_key("Make", true, &baseline).unwrap(),
+            resolve_write_key("Make", true, false, &baseline).unwrap(),
             "IFD0:Make"
         );
         baseline.insert("CIFF:Make", TagValue::new_string("Canon"));
-        let err = resolve_write_key("Make", true, &baseline).unwrap_err();
+        let err = resolve_write_key("Make", true, false, &baseline).unwrap_err();
         assert!(err.to_string().contains("CIFF:Make"), "{err}");
     }
 

@@ -740,6 +740,43 @@ pub fn write_png_metadata_with_baseline(
 /// before the first IDAT (`AddChunks`, then `AddChunks(..., 'IFD0')`); an
 /// edited `eXIf` chunk is rewritten where it stands. Bytes after IEND are
 /// copied, as ExifTool copies a trailer.
+/// The TIFF payloads of a PNG's `eXIf` chunks (a leading `Exif\0\0` header
+/// stripped), or `None` when the file also carries EXIF in a raw-profile
+/// text chunk -- a carrier this helper does not decode, so no removal can be
+/// judged a no-op from the chunks alone.
+pub(crate) fn png_exif_payloads(reader: &dyn FileReader) -> Result<Option<Vec<Vec<u8>>>> {
+    let mut payloads = Vec::new();
+    let mut namer = TextTagNamer::new();
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(reader, offset)?;
+        if chunk.chunk_type == *b"eXIf" {
+            payloads.push(
+                chunk
+                    .data
+                    .strip_prefix(b"Exif\0\0".as_slice())
+                    .unwrap_or(&chunk.data)
+                    .to_vec(),
+            );
+        } else if chunk.is_text_chunk()
+            && let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data)
+        {
+            let keyword = decode_latin(&record.keyword);
+            let lang = record.lang.as_deref().map(decode_latin);
+            if matches!(namer.resolve(&keyword, lang.as_deref()),
+                TextTagRoute::Profile(name) if RAW_EXIF_PROFILE_NAMES.contains(&name))
+            {
+                return Ok(None);
+            }
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(Some(payloads))
+}
+
 pub(crate) fn write_png_metadata_with_removals(
     path: &Path,
     original_reader: &dyn FileReader,
@@ -827,6 +864,28 @@ pub(crate) fn write_png_metadata_with_removals(
         && !payload.is_empty()
     {
         new_chunks.push((*b"eXIf", payload.clone()));
+    }
+
+    // Nothing changes -- the EXIF block carried, every text chunk carried,
+    // nothing added: leave the file exactly as it is. Rebuilding it anyway
+    // moved text chunks that follow IDAT ahead of it (`output_order`), so a
+    // no-op deletion (`-IFD1:ImageDescription=` or `-IFD0:XPTitle=` on a PNG
+    // without one) changed the bytes and was reported as an update; pinned
+    // ExifTool 13.59 leaves the file untouched and reports it unchanged.
+    if matches!(exif_fate, ExifFate::Carry)
+        && new_chunks.is_empty()
+        && text_fates
+            .values()
+            .all(|fate| matches!(fate, TextFate::Carry))
+        && original_reader
+            .read(0, original_reader.size() as usize)
+            .ok()
+            .zip(std::fs::read(path).ok())
+            .is_some_and(|(source, target)| source == target.as_slice())
+    {
+        // (Only when `path` already holds these bytes: a caller writing a
+        // copy to another path still gets its file.)
+        return Ok(());
     }
 
     let order = output_order(&chunks, first_idat);

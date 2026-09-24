@@ -1198,17 +1198,35 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
 /// must be a key the format's writer addresses
 /// (`writers::write_request::ensure_writer_addresses`).
 fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) -> Result<String> {
+    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    addressed?;
+    Ok(key)
+}
+
+/// [`resolve_write_address`] in two parts: the resolved key (or the error
+/// resolving it), and whether the format's writer addresses that key. A
+/// removal asks whether it is a no-op between the two (`remove_tag`): a
+/// deletion that names nothing succeeds untouched even where the writer
+/// could not have written the key.
+fn resolve_write_key_for(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
-        resolve_exif_family_key, resolve_write_key,
+        png_prefers_text, resolve_exif_family_key, resolve_write_key,
     };
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     let surgical = is_surgical_tiff_target(format, &reader);
+    let png = matches!(format, FileFormat::PNG);
     // ExifTool reads IFD0 with Exif::Main unless the TIFF header's identifier
     // is Panasonic's 0x55, which selects PanasonicRaw::Main (ExifTool.pm:
-    // 8646-8659 vs 8718). A JPEG's APP1 TIFF is always Exif::Main.
+    // 8646-8659 vs 8718). A JPEG's APP1 TIFF and a PNG's eXIf are always
+    // Exif::Main.
     let exif_ifd0_target = matches!(format, FileFormat::JPEG)
+        || png
         || (surgical && {
             let header = reader.read(0, reader.size().min(4) as usize).unwrap_or(&[]);
             matches!(header, [b'I', b'I', 42, 0] | [b'M', b'M', 0, 42])
@@ -1216,12 +1234,12 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
-        // as every other ungrouped name: only where IFD0 is EXIF (a PNG's
-        // bare `Software` is ExifTool's `PNG:Software`, not `IFD0:Software`),
-        // and never half of a write ExifTool also applies to another group
-        // (`XMP-tiff:Software`).
-        if !exif_ifd0_target && !surgical {
-            return Err(resolve_write_key(tag_name, false, baseline)
+        // as every other ungrouped name: only where IFD0 is EXIF, not where
+        // ExifTool writes a PNG text tag instead (a PNG's bare `Software` is
+        // ExifTool's `PNG:Software`), and never half of a write ExifTool also
+        // applies to another group (`XMP-tiff:Software`).
+        if (!exif_ifd0_target && !surgical) || (png && png_prefers_text(tag_name)) {
+            return Err(resolve_write_key(tag_name, exif_ifd0_target, png, baseline)
                 .err()
                 .unwrap_or_else(|| {
                     ExifToolError::unsupported_format(format!(
@@ -1245,10 +1263,71 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
         // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
         resolved
     } else {
-        resolve_write_key(tag_name, exif_ifd0_target, baseline)?
+        resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
     };
-    ensure_writer_addresses(tag_name, &key, format, surgical)?;
-    Ok(key)
+    let addressed = ensure_writer_addresses(tag_name, &key, format, surgical);
+    Ok((key, addressed))
+}
+
+/// Whether deleting `key` from the file at `path` changes nothing: the map
+/// does not hold it (under any spelling) and -- for an EXIF carrier -- no
+/// entry of any EXIF block is named by it (`exif_surgical::
+/// exif_request_is_no_op`, #943's up-front no-op decision, which also sees
+/// entries the reader surfaces no row for). A PDF Info field or a PNG text
+/// tag the map lacks names nothing. Pinned ExifTool 13.59 answers such a
+/// deletion `0 image files updated` / `1 image files unchanged`, bytes
+/// untouched.
+fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -> Result<bool> {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, exif_request_is_no_op, jpeg_exif_payloads,
+    };
+    if metadata_holds(metadata, key) {
+        return Ok(false);
+    }
+    // Only where absence is provable: an EXIF directory the block scan below
+    // sees entry by entry, a PDF Info field, a PNG text tag. A group the map
+    // spells differently (the reader keys `XMP-dc:Title` as `XMP:Title`) is
+    // never judged absent from the map alone.
+    let group = key.split_once(':').map_or("", |(group, _)| group);
+    let exif_group = matches!(
+        group,
+        "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
+    );
+    if !exif_group && group != "PDF" && group != "PNG" {
+        return Ok(false);
+    }
+    let removed = [key.to_string()];
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    let file_bytes = reader.read(0, reader.size() as usize)?;
+    let no_op = |blocks: &[&[u8]], magics: &[u16]| {
+        exif_request_is_no_op(blocks, magics, metadata, metadata, &removed)
+    };
+    Ok(if is_surgical_tiff_target(format, &reader) {
+        no_op(
+            &[file_bytes],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        )
+    } else {
+        match format {
+            FileFormat::PDF => group == "PDF",
+            FileFormat::PNG if group == "PNG" => true,
+            _ if !exif_group => false,
+            FileFormat::JPEG => {
+                let payloads = jpeg_exif_payloads(file_bytes)?;
+                let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                no_op(&blocks, EXIF_BLOCK_MAGICS)
+            }
+            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(&reader)? {
+                Some(payloads) => {
+                    let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                    no_op(&blocks, EXIF_BLOCK_MAGICS)
+                }
+                None => false,
+            },
+            _ => false,
+        }
+    })
 }
 
 /// The key [`modify_tag`]/[`remove_tag`] would write for `tag_name` in the
@@ -1257,35 +1336,6 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
 pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     let metadata = read_metadata(path)?;
     resolve_write_address(path, tag_name, &metadata)
-}
-
-/// Refuses any write to a PNG whose `eXIf` carries entries outside IFD0.
-///
-/// The PNG writer rebuilds `eXIf` from the map and flattens every entry into
-/// IFD0: `-PNG:Title=t` on tests/fixtures/png/sample.png moved ExifVersion,
-/// DateTimeOriginal, ComponentsConfiguration and ColorSpace from ExifIFD into
-/// IFD0 (pinned ExifTool 13.59 then decodes ComponentsConfiguration as `Err
-/// (89), ...`). Until the in-place PNG writer replaces it, such a write is
-/// refused rather than reported while it corrupts the file.
-fn refuse_png_exif_flattening(path: &Path, tag_name: &str, metadata: &MetadataMap) -> Result<()> {
-    let reader = MMapReader::new(path)?;
-    if !matches!(detect_format(&reader)?, FileFormat::PNG) {
-        return Ok(());
-    }
-    if let Some(key) = metadata.keys().find(|key| {
-        key.split_once(':').is_some_and(|(group, _)| {
-            matches!(
-                group,
-                "ExifIFD" | "GPS" | "IFD1" | "InteropIFD" | "MakerNotes"
-            )
-        })
-    }) {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Cannot write tag '{tag_name}': this PNG's eXIf carries {key}, which \
-             oxidex's PNG writer would move into IFD0"
-        )));
-    }
-    Ok(())
 }
 
 /// Every spelling under which the reader surfaces the PDF Info field `key`
@@ -1373,7 +1423,6 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     // Step 2: Modify the single tag, at an address the file's writer is
     // proven to write (see `resolve_write_address`).
     let key = resolve_write_address(path, tag_name, &metadata)?;
-    refuse_png_exif_flattening(path, tag_name, &metadata)?;
     remove_field(&mut metadata, &key);
     metadata.insert(key, new_value);
 
@@ -1413,21 +1462,15 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
 
     // Step 2: Remove the tag (if it exists), at an address the file's writer
     // is proven to write (see `resolve_write_address`).
-    let key = resolve_write_address(path, tag_name, &metadata)?;
-    // The PNG and PDF writers rebuild what they write from the map (PNG text
-    // chunks and its `eXIf`; a PDF incremental update), so for them a key the
-    // map lacks names nothing, and writing anyway only re-lays-out the file
-    // (PNG) or appends an empty revision (PDF: `-PDF:Author=` on PDF.pdf grew
-    // it 8907 -> 9185 bytes). Pinned ExifTool 13.59 answers the same
-    // deletions `0 image files updated` / `1 image files unchanged` with the
-    // bytes untouched.
-    if !metadata_holds(&metadata, &key) {
-        let reader = MMapReader::new(path)?;
-        if matches!(detect_format(&reader)?, FileFormat::PNG | FileFormat::PDF) {
-            return Ok(());
-        }
+    let (key, addressed) = resolve_write_key_for(path, tag_name, &metadata)?;
+    // A deletion that names nothing is a no-op, decided before the writer's
+    // address guard: `-IFD1:ImageDescription=` on a PNG without one leaves
+    // the file untouched (ExifTool: unchanged) rather than being refused or
+    // re-laid-out.
+    if removal_is_no_op(path, &key, &metadata)? {
+        return Ok(());
     }
-    refuse_png_exif_flattening(path, tag_name, &metadata)?;
+    addressed?;
     remove_field(&mut metadata, &key);
 
     // Step 3: Write metadata back to file. The key goes along: an EXIF entry
