@@ -1234,12 +1234,17 @@ fn parse_exif_subifd_with_optional_options(
 /// STRING, and for a signed 0/-1 that string is `-0` (C's `%.10g` keeps the
 /// sign), which `"$val C"` interpolates verbatim -- `-0 C`, as pinned
 /// ExifTool prints it for OlympusOM-1.jpg and four other OM bodies. The
-/// compiled expression receives the number and prints it with `perl_num`,
-/// Perl's default stringification, which is `0` for a negative-zero NV
-/// (Perl's own `print -1e-300*1e-300` prints `0`); making `perl_num` print
-/// `-0` would break every computed zero instead. The hand arm prints the
-/// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
-/// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
+/// generated arm (`conv::exif_main::arm_9400` / `pc_9400`, #850) receives
+/// the value as a number, and Perl's default stringification of a
+/// negative-zero NV is `0` (Perl's own `print -1e-300*1e-300` prints `0`);
+/// printing `-0` there would break every computed zero instead. The hand arm
+/// prints the rational's sign (`exiftool_compat` rule 16b), so it keeps the
+/// row. Re-measured by the Task 18 knockout (0x9400 off this list, against
+/// the #850 arm): the engine prints `0 C` (`-n`: `0`) where pinned 13.59
+/// prints `-0 C` (`-0`) for OlympusE-M1MarkIII, OM-1, OM-1MarkII, OM-3 and
+/// OM-5 in combined-samples -- 5 files differing in both `-j` and
+/// `-j --no-print-conv` -- and `ambient_temperature_channels_match_the_hand_arm`
+/// fails. Sorted.
 const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
