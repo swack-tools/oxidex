@@ -283,7 +283,12 @@ fn rewrite_exif_payload(
     };
     // Every removal gone, every set present, before anything is written.
     crate::writers::exif_surgical::verify_exif_write(
-        original, &payload, &baseline, &desired, &removed,
+        original,
+        &payload,
+        &baseline,
+        &desired,
+        &removed,
+        crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
     Ok(payload)
 }

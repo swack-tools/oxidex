@@ -974,6 +974,7 @@ pub(crate) fn write_metadata_with_removals(
             &original,
             metadata,
             removed,
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
         )?;
         write_atomic(path, &out)?;
         return Ok(());
@@ -1001,6 +1002,7 @@ pub(crate) fn write_metadata_with_removals(
                 &original,
                 metadata,
                 removed,
+                crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
             )?;
             write_atomic(path, &serialized_bytes)?;
         }

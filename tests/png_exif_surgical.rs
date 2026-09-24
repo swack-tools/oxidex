@@ -10,6 +10,9 @@
 //! `png-exif-surgical` matrix harness named in the PR (its fixtures are a
 //! superset of these), transcribed as data.
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::operations::{
     clear_all_metadata, modify_tag, read_metadata, remove_tag, write_metadata,
 };
@@ -1251,6 +1254,80 @@ fn a_family_alias_removal_of_a_carried_entry_is_refused() {
                 .unwrap();
             assert_eq!(out.status.code(), Some(1), "{order:?} {name} CLI");
             assert_eq!(std::fs::read(&path).unwrap(), original, "{name} CLI");
+        }
+    }
+}
+
+/// A TIFF-structured file is verified with the header set its writer walks:
+/// magic 42, and 85 for Panasonic's RW2/RWL (`tiff_surgical::
+/// is_walkable_tiff`). The post-write check scanned with the EXIF-block
+/// scanner, which accepts 42 only, so every RW2 edit failed "Invalid TIFF
+/// magic number in EXIF data" while tip 707c7565 wrote it. Pinned ExifTool
+/// 13.59 writes `-IFD0:Artist=x` to t/images/Panasonic.rw2 and reads it
+/// back; so does oxidex.
+#[test]
+fn an_rw2_edit_passes_the_post_write_check() {
+    let dir = tempfile::tempdir().unwrap();
+    // Synthetic RW2 header (`IIU\0`, magic 85, little-endian as Panasonic
+    // writes it): IFD0 {Make "Panasonic", Artist "me"}.
+    for order in [Order::Ii] {
+        let mut t = match order {
+            Order::Ii => b"II".to_vec(),
+            Order::Mm => b"MM".to_vec(),
+        };
+        t.extend(order.u16(85));
+        t.extend(order.u32(8));
+        t.extend(order.u16(2));
+        for (tag, count, value) in [(0x010Fu16, 10u32, order.u32(38)), (0x013B, 3, *b"me\0\0")] {
+            t.extend(order.u16(tag));
+            t.extend(order.u16(2));
+            t.extend(order.u32(count));
+            t.extend(value);
+        }
+        t.extend(order.u32(0));
+        t.extend(b"Panasonic\0");
+        let path = write(dir.path(), "synthetic.rw2", &t);
+        modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+            .unwrap_or_else(|e| panic!("{order:?} synthetic RW2: {e}"));
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("x"),
+            "{order:?}"
+        );
+    }
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
+        return;
+    };
+    let path = dir.path().join("Panasonic.rw2");
+    std::fs::copy(&sample, &path).unwrap();
+    modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+        .unwrap_or_else(|e| panic!("t/images/Panasonic.rw2: {e}"));
+    assert_eq!(
+        read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+        Some("x")
+    );
+}
+
+/// `remove_tag` of a tag the block does not hold is a no-op success, and it
+/// must stay one on a block the reconstructing writer refuses to re-lay out
+/// (an unmodelled SubIFDs pointer): the structural refusal applied before
+/// the writer noticed there was nothing to do. The payload is now returned
+/// unchanged, so the file's EXIF -- SubIFD included -- is untouched.
+#[test]
+fn a_no_op_removal_on_a_block_with_an_unmodelled_pointer_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = subifd_block(order);
+        for (name, original) in [
+            ("noop.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("noop.jpg", jpeg_with(&tiff)),
+        ] {
+            for key in ["ExifIFD:ExposureTime", "GPS:GPSAltitude", "IFD0:Software"] {
+                let path = write(dir.path(), name, &original);
+                remove_tag(&path, key).unwrap_or_else(|e| panic!("{order:?} {name} {key}: {e}"));
+                let out = tiff_of(name, &std::fs::read(&path).unwrap());
+                assert_eq!(out, tiff, "{order:?} {name} {key}: EXIF unchanged");
+            }
         }
     }
 }
