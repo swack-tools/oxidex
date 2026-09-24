@@ -285,6 +285,15 @@ fn rewrite_exif_payload(
     crate::writers::exif_surgical::verify_exif_write(
         original, &payload, &baseline, &desired, &removed,
     )?;
+    // And every maker-note value still reads back, including data the note
+    // locates outside itself (`makernote_guard`). Checked within the block:
+    // an `eXIf` chunk is self-contained, nothing past it belongs to it.
+    if let Some(original) = original {
+        crate::writers::makernote_guard::verify_makernote_preserved(
+            crate::writers::makernote_guard::Carrier::block(original),
+            crate::writers::makernote_guard::Carrier::block(&payload),
+        )?;
+    }
     Ok(payload)
 }
 

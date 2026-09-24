@@ -975,6 +975,12 @@ pub(crate) fn write_metadata_with_removals(
             metadata,
             removed,
         )?;
+        // Every maker-note value still reads back, the data it locates
+        // outside the MakerNote included (`writers::makernote_guard`).
+        crate::writers::makernote_guard::verify_makernote_preserved(
+            crate::writers::makernote_guard::Carrier::block(file_bytes),
+            crate::writers::makernote_guard::Carrier::block(&out),
+        )?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -991,9 +997,8 @@ pub(crate) fn write_metadata_with_removals(
             )?;
             // Every removal gone, every set present, before anything is
             // written (`exif_surgical::verify_exif_write`).
-            let before = crate::writers::exif_surgical::jpeg_exif_payload(
-                reader.read(0, reader.size() as usize)?,
-            )?;
+            let original_bytes = reader.read(0, reader.size() as usize)?;
+            let before = crate::writers::exif_surgical::jpeg_exif_payload(original_bytes)?;
             let after = crate::writers::exif_surgical::jpeg_exif_payload(&serialized_bytes)?;
             crate::writers::exif_surgical::verify_exif_write(
                 before.as_deref(),
@@ -1002,6 +1007,28 @@ pub(crate) fn write_metadata_with_removals(
                 metadata,
                 removed,
             )?;
+            // Every maker-note value still reads back, the data it locates
+            // outside the MakerNote included -- here in the whole file, so a
+            // preview in the JPEG trailer that a longer EXIF segment would
+            // shift away is caught too (`writers::makernote_guard`).
+            if let (Some((was_at, was_len)), Some((now_at, now_len))) = (
+                crate::writers::exif_surgical::jpeg_exif_block(original_bytes)?,
+                crate::writers::exif_surgical::jpeg_exif_block(&serialized_bytes)?,
+            ) {
+                use crate::writers::makernote_guard::{Carrier, verify_makernote_preserved};
+                verify_makernote_preserved(
+                    Carrier {
+                        file: original_bytes,
+                        tiff_at: was_at,
+                        tiff_len: was_len,
+                    },
+                    Carrier {
+                        file: &serialized_bytes,
+                        tiff_at: now_at,
+                        tiff_len: now_len,
+                    },
+                )?;
+            }
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {

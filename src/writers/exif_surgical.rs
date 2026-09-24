@@ -1614,30 +1614,55 @@ pub(crate) fn native_to_byte_order(field_type: u16, value: &[u8], bo: ByteOrder)
     out
 }
 
-/// Offset allocator that flows around one reserved window.
+/// Offset allocator that flows around reserved windows (the pinned
+/// MakerNote and, when the block has one, everything kept in place -- see
+/// [`serialize_exif_keeping`]).
 struct Allocator {
     cursor: usize,
-    reserved: Option<(usize, usize)>, // (start, len)
+    reserved: Vec<(usize, usize)>, // (start, len)
 }
 
 impl Allocator {
     fn alloc(&mut self, len: usize) -> usize {
-        // TIFF values should start on even offsets
-        if self.cursor % 2 == 1 {
-            self.cursor += 1;
-        }
-        if let Some((rs, rl)) = self.reserved
-            && self.cursor < rs + rl
-            && self.cursor + len > rs
-        {
-            self.cursor = rs + rl;
+        loop {
+            // TIFF values should start on even offsets
             if self.cursor % 2 == 1 {
                 self.cursor += 1;
+            }
+            let cursor = self.cursor;
+            match self
+                .reserved
+                .iter()
+                .find(|(rs, rl)| cursor < rs + rl && cursor + len > *rs)
+            {
+                Some((rs, rl)) => self.cursor = rs + rl,
+                None => break,
             }
         }
         let at = self.cursor;
         self.cursor += len;
         at
+    }
+
+    /// Reserves `[start, start + len)` unless it overlaps a window already
+    /// reserved; true when it did.
+    fn reserve(&mut self, start: usize, len: usize) -> bool {
+        let free = self
+            .reserved
+            .iter()
+            .all(|(rs, rl)| start >= rs + rl || start + len <= *rs);
+        if free && len > 0 {
+            self.reserved.push((start, len));
+        }
+        free && len > 0
+    }
+
+    fn reserved_end(&self) -> usize {
+        self.reserved
+            .iter()
+            .map(|(rs, rl)| rs + rl)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -1688,6 +1713,22 @@ fn emit_ifd(
 /// Serializes a WritePlan into complete TIFF bytes. An empty plan yields an
 /// empty Vec (the caller omits the EXIF segment entirely).
 pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
+    serialize_exif_keeping(plan, None)
+}
+
+/// [`serialize_exif`] for a plan derived from the block `original`.
+///
+/// When that block has a MakerNote (pinned at its original offset, as
+/// always), everything the edit leaves alone also stays where it was, so
+/// maker-note data outside the note's byte count survives
+/// ([`super::makernote_guard`]): every byte no standard structure owns is
+/// copied to its original offset, a table whose row count is unchanged is
+/// rewritten in place, an out-of-line value and the thumbnail whose bytes
+/// are unchanged keep their offsets, and the block never becomes shorter
+/// than the original. Only what the edit changes is laid out anew, around
+/// all of that. Without a MakerNote (or without `original`) the layout is
+/// exactly [`serialize_exif`]'s compact one.
+pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) -> Result<Vec<u8>> {
     let has_entries = !(plan.ifd0.is_empty()
         && plan.exif_ifd.is_empty()
         && plan.gps.is_empty()
@@ -1719,7 +1760,7 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
     // Pass 1: allocate tables, then oversized values, honoring the pin
     let mut alloc = Allocator {
         cursor: 8,
-        reserved: None,
+        reserved: Vec::new(),
     };
     let makernote_len = exif_ifd
         .iter()
@@ -1729,7 +1770,7 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
     let mut pinned = None;
     if let (Some(pin), Some(len)) = (plan.makernote_pin, makernote_len) {
         if pin >= 8 {
-            alloc.reserved = Some((pin, len));
+            alloc.reserve(pin, len);
             pinned = Some(pin);
         } else {
             eprintln!(
@@ -1740,36 +1781,104 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
         }
     }
 
-    let ifd0_at = alloc.alloc(table_size(ifd0.len() + ifd0_pointers));
-    let exif_at = if exif_ifd.is_empty() {
-        0
-    } else {
-        alloc.alloc(table_size(exif_ifd.len() + exif_pointers))
+    // Keep-in-place: only for a block whose MakerNote is pinned, the one
+    // thing whose offsets into the rest of the block this writer cannot
+    // follow.
+    let keep = original
+        .filter(|_| pinned.is_some())
+        .and_then(|tiff| super::makernote_guard::OriginalLayout::of(tiff).map(|l| (tiff, l)));
+    let kinds = [
+        IfdKind::Ifd0,
+        IfdKind::ExifIfd,
+        IfdKind::Interop,
+        IfdKind::Gps,
+        IfdKind::Ifd1,
+    ];
+    let rows = [
+        ifd0.len() + ifd0_pointers,
+        exif_ifd.len() + exif_pointers,
+        interop.len(),
+        gps.len(),
+        ifd1.len() + ifd1_pointers,
+    ];
+    let present = [
+        true,
+        !exif_ifd.is_empty(),
+        !interop.is_empty(),
+        !gps.is_empty(),
+        !(ifd1.is_empty() && plan.thumbnail.is_none()),
+    ];
+    let lists = [&ifd0, &exif_ifd, &interop, &gps, &ifd1];
+    let mut table_pins: [Option<usize>; 5] = [None; 5];
+    let mut value_pins: Vec<Vec<Option<usize>>> =
+        lists.iter().map(|l| vec![None; l.len()]).collect();
+    let mut thumb_pin = None;
+    let mut holes: Vec<(usize, usize)> = Vec::new();
+    if let Some((tiff, layout)) = &keep {
+        for (i, kind) in kinds.iter().enumerate() {
+            if let Some((at, original_rows)) = layout.table(*kind)
+                && present[i]
+                && original_rows == rows[i]
+                && at >= 8
+                && alloc.reserve(at, table_size(rows[i]))
+            {
+                table_pins[i] = Some(at);
+            }
+        }
+        for (i, list) in lists.iter().enumerate() {
+            for (j, e) in list.iter().enumerate() {
+                if e.value.len() <= 4 || (e.tag_id == MAKERNOTE && kinds[i] == IfdKind::ExifIfd) {
+                    continue;
+                }
+                if let Some((at, len)) = layout.value(kinds[i], e.tag_id)
+                    && len == e.value.len()
+                    && at >= 8
+                    && tiff[at..at + len] == value_in_byte_order(e, bo)[..]
+                    && alloc.reserve(at, len)
+                {
+                    value_pins[i][j] = Some(at);
+                }
+            }
+        }
+        if let (Some((at, len)), Some(thumb)) = (layout.thumbnail, plan.thumbnail.as_ref())
+            && len == thumb.len()
+            && at >= 8
+            && tiff[at..at + len] == thumb[..]
+            && alloc.reserve(at, len)
+        {
+            thumb_pin = Some(at);
+        }
+        for (start, end) in layout.holes() {
+            let start = start.max(8);
+            if end > start && alloc.reserve(start, end - start) {
+                holes.push((start, end));
+            }
+        }
+    }
+
+    let table_at = |i: usize, alloc: &mut Allocator| -> usize {
+        if !present[i] {
+            0
+        } else {
+            table_pins[i].unwrap_or_else(|| alloc.alloc(table_size(rows[i])))
+        }
     };
-    let interop_at = if interop.is_empty() {
-        0
-    } else {
-        alloc.alloc(table_size(interop.len()))
-    };
-    let gps_at = if gps.is_empty() {
-        0
-    } else {
-        alloc.alloc(table_size(gps.len()))
-    };
-    let ifd1_at = if ifd1.is_empty() && plan.thumbnail.is_none() {
-        0
-    } else {
-        alloc.alloc(table_size(ifd1.len() + ifd1_pointers))
-    };
+    let ifd0_at = table_at(0, &mut alloc);
+    let exif_at = table_at(1, &mut alloc);
+    let interop_at = table_at(2, &mut alloc);
+    let gps_at = table_at(3, &mut alloc);
+    let ifd1_at = table_at(4, &mut alloc);
 
     // Value offsets for every oversized value, deterministic order
     let mut value_offsets: Vec<Vec<usize>> = Vec::new();
-    for list in [&ifd0, &exif_ifd, &interop, &gps, &ifd1] {
+    for (i, list) in lists.iter().enumerate() {
         let mut offsets = Vec::with_capacity(list.len());
-        for e in list.iter() {
+        for (j, e) in list.iter().enumerate() {
             if e.value.len() > 4 {
                 if e.tag_id == MAKERNOTE && pinned.is_some() {
                     offsets.push(pinned.unwrap());
+                } else if let Some(at) = value_pins[i][j] {
+                    offsets.push(at);
                 } else {
                     offsets.push(alloc.alloc(e.value.len()));
                 }
@@ -1779,11 +1888,18 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
         }
         value_offsets.push(offsets);
     }
-    let thumb_at = plan.thumbnail.as_ref().map(|t| alloc.alloc(t.len()));
+    let thumb_at = plan
+        .thumbnail
+        .as_ref()
+        .map(|t| thumb_pin.unwrap_or_else(|| alloc.alloc(t.len())));
 
-    let total = alloc
+    let mut total = alloc
         .cursor
         .max(pinned.map_or(0, |p| p + makernote_len.unwrap_or(0)));
+    if let Some((_, layout)) = &keep {
+        // never shorter: data past the block's end stays where it was
+        total = total.max(alloc.reserved_end()).max(layout.len);
+    }
     let mut out = vec![0u8; total];
 
     // Header
@@ -1856,6 +1972,11 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
     }
     if let (Some(t_at), Some(thumb)) = (thumb_at, plan.thumbnail.as_ref()) {
         out[t_at..t_at + thumb.len()].copy_from_slice(thumb);
+    }
+    if let Some((tiff, _)) = &keep {
+        for (start, end) in holes {
+            out[start..end].copy_from_slice(&tiff[start..end]);
+        }
     }
 
     Ok(out)
@@ -1956,7 +2077,15 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
         ),
     };
     let plan = plan_exif_write_with_removals(&scan, original_map, desired, removed)?;
-    serialize_exif(&plan)
+    let out = serialize_exif_keeping(&plan, tiff)?;
+    if let Some(tiff) = tiff {
+        // maker-note data outside the note survived, or nothing is written
+        super::makernote_guard::verify_makernote_preserved(
+            super::makernote_guard::Carrier::block(tiff),
+            super::makernote_guard::Carrier::block(&out),
+        )?;
+    }
+    Ok(out)
 }
 
 /// [`rewrite_tiff_exif_with_removals`] for the legacy half of a transaction
@@ -1972,7 +2101,28 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
 ) -> Result<Vec<u8>> {
     let scan = scan_exif_entries(tiff)?;
     let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
-    serialize_exif(&plan)
+    let out = serialize_exif_keeping(&plan, Some(tiff))?;
+    super::makernote_guard::verify_makernote_preserved(
+        super::makernote_guard::Carrier::block(tiff),
+        super::makernote_guard::Carrier::block(&out),
+    )?;
+    Ok(out)
+}
+
+/// Where the TIFF payload of a JPEG's first `Exif\0\0` APP1 block sits in
+/// the file, as `(offset, length)`, if there is one.
+pub(crate) fn jpeg_exif_block(file_bytes: &[u8]) -> Result<Option<(usize, usize)>> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader)?;
+    Ok(segments
+        .iter()
+        .find(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+        .map(|s| {
+            (
+                s.offset as usize + 4 + EXIF_IDENTIFIER.len(),
+                s.data.len() - EXIF_IDENTIFIER.len(),
+            )
+        }))
 }
 
 /// The TIFF payload of a JPEG's first `Exif\0\0` APP1 block, if any.
