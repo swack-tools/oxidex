@@ -71,6 +71,10 @@ use crate::io::ByteOrder;
 use oxidex_tags::TagId;
 
 use super::cond;
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
+};
 use super::runtime::{DecodedValue, decode_value_of};
 use super::subdir::{Start, SubdirEdge};
 use super::{BinaryTable, Field, Fmt, Mask, find_table};
@@ -368,14 +372,6 @@ pub struct Emitted {
     pub is_list: bool,
 }
 
-fn binary_source_id(field: &Field) -> TagId {
-    match (u16::try_from(field.index), field.sub) {
-        (Ok(index), None) => TagId::Numeric(index),
-        (_, Some(sub)) => TagId::Named(format!("{}.{sub}", field.index)),
-        _ => TagId::Named(field.index.to_string()),
-    }
-}
-
 /// The `%dirInfo` a `ProcessBinaryData` call receives (ExifTool.pm:9880-9888).
 #[derive(Clone, Copy, Debug)]
 pub struct Dir<'a> {
@@ -585,6 +581,23 @@ pub(super) fn walk(
     let _ = walk_with_policy(table, dir, ctx, guard, out, ChildTaintPolicy::Contain);
 }
 
+/// `ProcessBinaryData`'s explicit conversion policy for the shared stage.
+///
+/// An unrepresentable state value taints the rest of the table. An unmodeled
+/// `RawConv` taints too, but [`walk_with_policy`] already refuses it before
+/// `ReadValue`, so the stage never sees one. A `Field` has no `Binary` or
+/// `List` flag: every unconverted value is ExifTool's one space-joined
+/// string (ExifTool.pm:6312), e.g. `"ConnectionSpaceIlluminant": "0.9642 1
+/// 0.82491"`.
+const BINARY_POLICY: Policy = Policy {
+    member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Taint,
+    set_member_clears_omission: true,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Taint,
+    perl_length: pipeline::scalar_perl_length,
+    scalar_form: super::runtime::to_exiftool_value,
+};
+
 fn walk_with_policy(
     table: &'static BinaryTable,
     dir: Dir<'_>,
@@ -709,70 +722,55 @@ fn walk_with_policy(
             continue;
         }
 
-        let mut omitted = field.omitted;
-        if entry.condition_resolved {
-            omitted.condition = false;
-        }
-        match field.raw_conv {
-            Some(super::ifd_schema::RawConvEffect::SetMember { member }) => {
-                let Some(value) = member_value(&raw) else {
-                    // `$val` is shared state for later Conditions. If it has
-                    // a domain this closed MemberValue model cannot preserve,
-                    // the safe answer is to stop this table before later
-                    // fields can observe a fabricated or absent value.
-                    return BinaryWalkOutcome::Tainted;
-                };
-                // FoundTag runs RawConv before it considers whether to report
-                // a tag. The assignment returns `$val`, so clearing this
-                // local omission is valid only after the state change.
-                ctx.members.insert(member, value);
-                omitted.raw_conv = false;
-            }
-            // This conversion changes only FoundTag's local `$val`; the
-            // value itself remains withheld until a renderer is modeled.
-            Some(super::ifd_schema::RawConvEffect::ValueLocal) | None => {}
-        }
-        if omitted.any() {
-            continue;
-        }
-        let Some(converted) = super::runtime::apply_value_conv(field.value_conv, &raw) else {
-            // A verified ValueConv may faithfully return Perl undef.  That is
-            // tag suppression, not permission to emit the raw value.
-            continue;
-        };
-        // The unconverted value in the form ExifTool reports it: a
-        // fixed-count field is ONE space-joined string (ExifTool.pm:6312
-        // `join ' '`), not a list -- `exiftool -j` prints
-        // `"ConnectionSpaceIlluminant": "0.9642 1 0.82491"`.
-        let (value, value_conv) = match super::runtime::render(field.print_conv, &converted) {
-            Some(rendered) => (
-                TagValue::String(rendered),
-                Some(super::runtime::to_exiftool_value(&converted)),
-            ),
-            None => (super::runtime::to_exiftool_value(&converted), None),
-        };
-        if !super::attribution::silenced(super::attribution::Token::Engine) {
-            out.push(Emitted {
+        // FoundTag (ExifTool.pm:10163) and GetValue: the shared stage.
+        let input = PipelineInput {
+            identity: StableFieldIdentity::BinaryIndex {
+                index: field.index,
+                sub: field.sub,
+            },
+            provenance: Provenance {
                 module: table.module,
                 table: table.table,
-                group0: table.group0,
+            },
+            groups: Groups {
+                g0: table.group0,
                 // The field's own `Groups{1}` else the table's (ExifTool.pm:
                 // 9236-9244 via `effective_groups`).
-                group1: table.effective_groups(field).1,
-                group2: table.group2,
+                g1: Some(table.effective_groups(field).1),
+                g2: table.group2,
+            },
+            reporting: Reporting {
                 name: field.name,
-                source_id: binary_source_id(field),
-                stored: read.stored,
-                value,
-                value_conv,
-                low_priority: table.priority == Some(0),
-                // `Avoid` is not part of the binary-table schema (`Field` has no
-                // flags); no ProcessBinaryData field in the pinned tree declares
-                // it.
+                low_priority: pipeline::effective_priority(None, table.priority, false) == Some(0),
+                // `Avoid` is not part of the binary-table schema (`Field` has
+                // no flags); no ProcessBinaryData field in the pinned tree
+                // declares it.
                 avoid: false,
-                rational: None,
                 is_list: false,
-            });
+            },
+            conversions: Conversions {
+                omitted: field.omitted,
+                condition_resolved: entry.condition_resolved,
+                raw_conv: field.raw_conv,
+                value_conv: field.value_conv,
+                print_conv: PrintStage::Shared(field.print_conv),
+                binary: false,
+            },
+            raw,
+            stored: read.stored,
+            rational: None,
+        };
+        match pipeline::execute(input, &BINARY_POLICY, ctx.members, None) {
+            Outcome::Report(row) => {
+                if !super::attribution::silenced(super::attribution::Token::Engine) {
+                    out.push(row);
+                }
+            }
+            Outcome::Omitted | Outcome::Declined => {}
+            // `$val` is shared state for later Conditions. If it has a domain
+            // this closed MemberValue model cannot preserve, stop this table
+            // before later fields can observe a fabricated or absent value.
+            Outcome::Tainted => return BinaryWalkOutcome::Tainted,
         }
     }
     BinaryWalkOutcome::Complete
