@@ -1711,6 +1711,59 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<Vec<u8>> {
+    let (scan, original_map) = jpeg_exif_scan(file_bytes)?;
+    let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
+    let tiff_out = serialize_exif(&plan)?;
+    if tiff_out.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut segment = Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_out.len());
+    segment.extend_from_slice(EXIF_IDENTIFIER);
+    segment.extend_from_slice(&tiff_out);
+    Ok(segment)
+}
+
+/// Whether [`rewrite_jpeg_exif_with_removals`] would change nothing: the JPEG
+/// has an EXIF directory and the plan carries every scanned entry raw, in
+/// full, with nothing added, edited or dropped.
+///
+/// The serializer re-lays-out even an all-carried plan, so its bytes differ
+/// from the original while no tag does, and the CLI then reported an update
+/// that changed nothing. For a deletion that names no entry in the file
+/// (`-XPTitle=` where there is none) pinned ExifTool 13.59 answers
+/// `0 image files updated` / `1 image files unchanged` with untouched bytes.
+/// The caller uses this to return the original bytes instead. (For a set to
+/// the value already stored ExifTool rewrites the file and says `updated`;
+/// oxidex leaves the bytes alone and says `unchanged`, the same answer its
+/// in-place TIFF and generated-route writers already give.)
+pub(crate) fn jpeg_exif_plan_is_identity(
+    file_bytes: &[u8],
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<bool> {
+    let (scan, original_map) = jpeg_exif_scan(file_bytes)?;
+    if scan.entries.is_empty() {
+        return Ok(false);
+    }
+    let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
+    let planned = [
+        &plan.ifd0,
+        &plan.exif_ifd,
+        &plan.gps,
+        &plan.interop,
+        &plan.ifd1,
+    ];
+    let count: usize = planned.iter().map(|entries| entries.len()).sum();
+    Ok(count == scan.entries.len()
+        && planned
+            .iter()
+            .all(|entries| entries.iter().all(|entry| !entry.native_endian))
+        && plan.thumbnail == scan.thumbnail)
+}
+
+/// The EXIF scan of a JPEG and the reader's map of the same bytes -- the two
+/// inputs every legacy EXIF plan diffs against.
+fn jpeg_exif_scan(file_bytes: &[u8]) -> Result<(ExifScan, MetadataMap)> {
     // Locate the original EXIF TIFF slice, if any
     let tiff: Option<Vec<u8>> = {
         let reader = SliceReader(file_bytes);
@@ -1750,16 +1803,7 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
             MetadataMap::new(),
         ),
     };
-
-    let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
-    let tiff_out = serialize_exif(&plan)?;
-    if tiff_out.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut segment = Vec::with_capacity(EXIF_IDENTIFIER.len() + tiff_out.len());
-    segment.extend_from_slice(EXIF_IDENTIFIER);
-    segment.extend_from_slice(&tiff_out);
-    Ok(segment)
+    Ok((scan, original_map))
 }
 
 #[cfg(test)]

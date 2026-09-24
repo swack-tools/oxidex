@@ -172,6 +172,13 @@ fn canonicalize_pdf_field(field: &str) -> Option<(String, FieldSource)> {
     }
 }
 
+/// Whether `field` (the part of a `PDF:` key after the group) is an Info
+/// dictionary field this writer serializes -- the set `write_info_object`
+/// keeps; any other `PDF:` key would be dropped.
+pub(crate) fn is_info_field(field: &str) -> bool {
+    canonicalize_pdf_field(field).is_some()
+}
+
 /// Parses PDF structure to extract xref table and Info object location
 fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
     let file_size = reader.size();

@@ -8,11 +8,10 @@ use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
 use oxidex::cli::rename;
-use oxidex::cli::value_parser::parse_cli_tag_value;
+use oxidex::cli::write_transaction::{WriteOutcome, partition_defined, transact, write_file};
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::operations::{
-    clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector_and_options,
-    remove_tag,
+    clear_all_metadata, copy_metadata, read_metadata_report_with_detector_and_options,
 };
 use oxidex::core::read_report::ParseStatus;
 use std::process;
@@ -50,6 +49,27 @@ fn main() {
 
     // Check if this is a date shift operation
     let date_shifts = args.date_shift_operations();
+
+    // ExifTool judges every `-TAG=VALUE` name before it opens a file
+    // (`SetNewValue`, exiftool:1735-1813): an undefined name is a warning and
+    // is dropped, and when no request is left it prints `Nothing to do.` and
+    // exits 1 without touching anything. Treating the request as written
+    // printed `1 image files updated` for `-NoSuchTag=v`.
+    if date_shifts.is_empty()
+        && args.filename_pattern().is_none()
+        && args.tags_from_file.is_none()
+        && !args.tag_modifications().is_empty()
+    {
+        let (warnings, defined) = partition_defined(&args.tag_modifications());
+        for warning in &warnings {
+            eprintln!("Warning: {}", warning);
+        }
+        if defined.is_empty() {
+            eprintln!("Nothing to do.");
+            process::exit(1);
+        }
+    }
+
     if !date_shifts.is_empty() {
         // Date shift mode
         handle_date_shift_operation(&file, &args);
@@ -124,9 +144,14 @@ fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
 }
 
 /// Handles write operations (tag modifications)
+///
+/// All requests are applied as one transaction (`cli::write_transaction`),
+/// and the summary follows the bytes: a file that did not change is
+/// `0 image files updated` / `1 image files unchanged`, exactly as ExifTool
+/// 13.59 prints it, never an update.
 fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
-    // Extract tag modifications
-    let modifications = args.tag_modifications();
+    // Undefined names were warned about (and dropped) before dispatch.
+    let (_, modifications) = partition_defined(&args.tag_modifications());
 
     // Check readonly flag FIRST - if set, prevent any writes
     if args.readonly {
@@ -134,9 +159,25 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
         process::exit(1);
     }
 
+    let original_mtime = prepare_write_target(file, args, "File", "file");
+    let outcome = write_file(file, &modifications, backup_before_commit(file, args));
+    finish_write(file, outcome, original_mtime, "    1 image files updated");
+}
+
+/// The checks every single-file write makes before touching anything: the
+/// file exists and is writable. Returns its modification time when
+/// `--preserve-file-times` asks for it to be restored after an update.
+/// `label`/`noun` keep each caller's existing wording ("File"/"file", or
+/// "Destination file"/"destination file").
+fn prepare_write_target(
+    file: &std::path::Path,
+    args: &CliArgs,
+    label: &str,
+    noun: &str,
+) -> Option<std::time::SystemTime> {
     // Verify file exists
     if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
+        eprintln!("Error: {} not found: {}", label, file.display());
         process::exit(1);
     }
 
@@ -144,19 +185,19 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
     let file_metadata = match std::fs::metadata(file) {
         Ok(metadata) => {
             if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
+                eprintln!("Error: {} is read-only: {}", label, file.display());
                 process::exit(1);
             }
             metadata
         }
         Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
+            eprintln!("Error: Cannot access {} '{}': {}", noun, file.display(), e);
             process::exit(1);
         }
     };
 
     // Save original modification time if preserve_file_times is enabled
-    let original_mtime = if args.preserve_file_times {
+    if args.preserve_file_times {
         match file_metadata.modified() {
             Ok(mtime) => Some(mtime),
             Err(e) => {
@@ -166,74 +207,65 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
         }
     } else {
         None
-    };
+    }
+}
 
-    // Create backup if requested
-    if args.backup {
-        // Create backup by appending .bak to the original filename
-        // Example: photo.jpg -> photo.jpg.bak
+/// The `--backup` copy (`photo.jpg` -> `photo.jpg.bak`), taken only once a
+/// write is known to change the file: ExifTool makes no `_original` for an
+/// unchanged file.
+fn backup_before_commit<'a>(
+    file: &'a std::path::Path,
+    args: &'a CliArgs,
+) -> impl FnOnce() -> Result<(), String> + 'a {
+    move || {
+        if !args.backup {
+            return Ok(());
+        }
         let mut backup_path = file.as_os_str().to_owned();
         backup_path.push(".bak");
         let backup_path = std::path::PathBuf::from(backup_path);
-
-        if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
+        std::fs::copy(file, &backup_path).map(|_| ()).map_err(|e| {
+            format!(
+                "Failed to create backup file '{}': {}",
                 backup_path.display(),
                 e
-            );
+            )
+        })
+    }
+}
+
+/// Prints a single-file write's summary from what actually happened to the
+/// bytes (`cli::write_transaction::transact`), restoring the modification
+/// time after an update when asked. `updated_line` is the caller's success
+/// line (the copy path appends its tag count).
+fn finish_write(
+    file: &std::path::Path,
+    outcome: Result<WriteOutcome, String>,
+    original_mtime: Option<std::time::SystemTime>,
+    updated_line: &str,
+) {
+    match outcome {
+        Ok(WriteOutcome::Updated) => {
+            // Restore original modification time if requested
+            if let Some(mtime) = original_mtime {
+                use std::fs::File;
+                if let Err(e) = File::open(file).and_then(|f| f.set_modified(mtime)) {
+                    eprintln!("Warning: Could not restore file modification time: {}", e);
+                    // Don't exit - the write succeeded, only mtime restoration failed
+                }
+            }
+            // Print success message (matching ExifTool format)
+            println!("{}", updated_line);
+        }
+        Ok(WriteOutcome::Unchanged) => {
+            println!("    0 image files updated");
+            println!("    1 image files unchanged");
+        }
+        Err(message) => {
+            eprintln!("Error: {}", message);
             process::exit(1);
         }
     }
-
-    // Apply each modification
-    for (tag_name, value) in &modifications {
-        if value.is_empty() {
-            // Empty value = delete tag (ExifTool -TAG= syntax)
-            if let Err(e) = remove_tag(file, tag_name) {
-                eprintln!("Error: Failed to remove tag '{}': {}", tag_name, e);
-                process::exit(1);
-            }
-        } else {
-            // Non-empty value = modify tag, typed as the tag's registry entry
-            // declares. Wrapping every value as a String here is what made
-            // Integer/Rational/DateTime tags unsettable from the CLI.
-            let tag_value = match parse_cli_tag_value(tag_name, value) {
-                Ok(tag_value) => tag_value,
-                Err(e) => {
-                    eprintln!("Error: Invalid value for {}: {}", tag_name, e);
-                    process::exit(1);
-                }
-            };
-
-            // Call modify_tag from core operations
-            if let Err(e) = modify_tag(file, tag_name, tag_value) {
-                // Format error message based on error type
-                let error_msg = format!("{}", e);
-                if error_msg.contains("invalid") || error_msg.contains("Invalid") {
-                    eprintln!("Error: Invalid value for {}: {}", tag_name, e);
-                } else {
-                    eprintln!("Error: Failed to modify tag '{}': {}", tag_name, e);
-                }
-                process::exit(1);
-            }
-        }
-    }
-
-    // Restore original modification time if requested
-    if let Some(mtime) = original_mtime {
-        use std::fs::File;
-        match File::open(file).and_then(|f| f.set_modified(mtime)) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Warning: Could not restore file modification time: {}", e);
-                // Don't exit - the write succeeded, only mtime restoration failed
-            }
-        }
-    }
-
-    // Print success message (matching ExifTool format)
-    println!("    1 image files updated");
 }
 
 /// Handles read operations (displaying metadata)
@@ -411,63 +443,8 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
         process::exit(1);
     }
 
-    // Verify destination file exists
-    if !dest_file.exists() {
-        eprintln!("Error: Destination file not found: {}", dest_file.display());
-        process::exit(1);
-    }
-
-    // Check if destination file is writable
-    let file_metadata = match std::fs::metadata(dest_file) {
-        Ok(metadata) => {
-            if metadata.permissions().readonly() {
-                eprintln!(
-                    "Error: Destination file is read-only: {}",
-                    dest_file.display()
-                );
-                process::exit(1);
-            }
-            metadata
-        }
-        Err(e) => {
-            eprintln!(
-                "Error: Cannot access destination file '{}': {}",
-                dest_file.display(),
-                e
-            );
-            process::exit(1);
-        }
-    };
-
-    // Save original modification time if preserve_file_times is enabled
-    let original_mtime = if args.preserve_file_times {
-        match file_metadata.modified() {
-            Ok(mtime) => Some(mtime),
-            Err(e) => {
-                eprintln!("Warning: Could not read file modification time: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Create backup if requested
-    if args.backup {
-        // Create backup by appending .bak to the original filename
-        let mut backup_path = dest_file.as_os_str().to_owned();
-        backup_path.push(".bak");
-        let backup_path = std::path::PathBuf::from(backup_path);
-
-        if let Err(e) = std::fs::copy(dest_file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
-            process::exit(1);
-        }
-    }
+    let original_mtime =
+        prepare_write_target(dest_file, args, "Destination file", "destination file");
 
     // Extract tag filters (if specified)
     let tag_filters = args.copy_tag_filters();
@@ -476,35 +453,29 @@ fn handle_copy_operation(dest_file: &std::path::Path, args: &CliArgs) {
         _ => None, // Copy all tags
     };
 
-    // Perform the copy operation
-    if let Err(e) = copy_metadata(&src_file, dest_file, tags_to_copy.as_deref()) {
-        eprintln!(
-            "Error: Failed to copy metadata from '{}' to '{}': {}",
-            src_file.display(),
-            dest_file.display(),
-            e
-        );
-        process::exit(1);
-    }
-
-    // Restore original modification time if requested
-    if let Some(mtime) = original_mtime {
-        use std::fs::File;
-        match File::open(dest_file).and_then(|f| f.set_modified(mtime)) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Warning: Could not restore file modification time: {}", e);
-                // Don't exit - the copy succeeded, only mtime restoration failed
-            }
-        }
-    }
+    // Perform the copy operation on a working copy; only a byte change is an
+    // update (`cli::write_transaction::transact`).
+    let outcome = transact(
+        dest_file,
+        backup_before_commit(dest_file, args),
+        |scratch| {
+            copy_metadata(&src_file, scratch, tags_to_copy.as_deref()).map_err(|e| {
+                format!(
+                    "Failed to copy metadata from '{}' to '{}': {}",
+                    src_file.display(),
+                    dest_file.display(),
+                    e
+                )
+            })
+        },
+    );
 
     // Print success message (matching ExifTool format)
-    if let Some(tags) = tags_to_copy.as_ref() {
-        println!("    1 image files updated ({} tags copied)", tags.len());
-    } else {
-        println!("    1 image files updated");
-    }
+    let updated_line = match tags_to_copy.as_ref() {
+        Some(tags) => format!("    1 image files updated ({} tags copied)", tags.len()),
+        None => "    1 image files updated".to_string(),
+    };
+    finish_write(dest_file, outcome, original_mtime, &updated_line);
 }
 
 /// Handles rename operations (renaming files based on metadata)
@@ -552,59 +523,11 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
         process::exit(1);
     }
 
-    // Verify file exists
-    if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
-        process::exit(1);
-    }
+    let original_mtime = prepare_write_target(file, args, "File", "file");
 
-    // Check if file is writable
-    let file_metadata = match std::fs::metadata(file) {
-        Ok(metadata) => {
-            if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
-                process::exit(1);
-            }
-            metadata
-        }
-        Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
-            process::exit(1);
-        }
-    };
-
-    // Save original modification time if preserve_file_times is enabled
-    let original_mtime = if args.preserve_file_times {
-        match file_metadata.modified() {
-            Ok(mtime) => Some(mtime),
-            Err(e) => {
-                eprintln!("Warning: Could not read file modification time: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Create backup if requested
-    if args.backup {
-        let mut backup_path = file.as_os_str().to_owned();
-        backup_path.push(".bak");
-        let backup_path = std::path::PathBuf::from(backup_path);
-
-        if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
-            process::exit(1);
-        }
-    }
-
-    // Apply each date shift operation
+    // Parse every operation before touching anything
+    let mut operations = Vec::new();
     for (tag_pattern, op_str, offset_or_value) in &date_shifts {
-        // Parse operation type
         let operation = match op_str.as_str() {
             "+=" => ShiftOperation::Add,
             "-=" => ShiftOperation::Subtract,
@@ -615,28 +538,19 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
                 process::exit(1);
             }
         };
-
-        // Apply the date shift
-        if let Err(e) = shift_metadata_dates(file, tag_pattern, offset_or_value, operation) {
-            eprintln!("Error: Failed to shift dates for '{}': {}", tag_pattern, e);
-            process::exit(1);
-        }
+        operations.push((tag_pattern, offset_or_value, operation));
     }
 
-    // Restore original modification time if requested
-    if let Some(mtime) = original_mtime {
-        use std::fs::File;
-        match File::open(file).and_then(|f| f.set_modified(mtime)) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Warning: Could not restore file modification time: {}", e);
-                // Don't exit - the shift succeeded, only mtime restoration failed
-            }
+    // Apply every date shift to a working copy; only a byte change is an
+    // update (`cli::write_transaction::transact`).
+    let outcome = transact(file, backup_before_commit(file, args), |scratch| {
+        for (tag_pattern, offset_or_value, operation) in operations {
+            shift_metadata_dates(scratch, tag_pattern, offset_or_value, operation)
+                .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
         }
-    }
-
-    // Print success message (matching ExifTool format)
-    println!("    1 image files updated");
+        Ok(())
+    });
+    finish_write(file, outcome, original_mtime, "    1 image files updated");
 }
 
 /// Handles clear all metadata operation (-all=)
@@ -647,77 +561,13 @@ fn handle_clear_all_operation(file: &std::path::Path, args: &CliArgs) {
         process::exit(1);
     }
 
-    // Verify file exists
-    if !file.exists() {
-        eprintln!("Error: File not found: {}", file.display());
-        process::exit(1);
-    }
+    let original_mtime = prepare_write_target(file, args, "File", "file");
 
-    // Check if file is writable
-    let file_metadata = match std::fs::metadata(file) {
-        Ok(metadata) => {
-            if metadata.permissions().readonly() {
-                eprintln!("Error: File is read-only: {}", file.display());
-                process::exit(1);
-            }
-            metadata
-        }
-        Err(e) => {
-            eprintln!("Error: Cannot access file '{}': {}", file.display(), e);
-            process::exit(1);
-        }
-    };
-
-    // Save original modification time if preserve_file_times is enabled
-    let original_mtime = if args.preserve_file_times {
-        match file_metadata.modified() {
-            Ok(mtime) => Some(mtime),
-            Err(e) => {
-                eprintln!("Warning: Could not read file modification time: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Create backup if requested
-    if args.backup {
-        let mut backup_path = file.as_os_str().to_owned();
-        backup_path.push(".bak");
-        let backup_path = std::path::PathBuf::from(backup_path);
-
-        if let Err(e) = std::fs::copy(file, &backup_path) {
-            eprintln!(
-                "Error: Failed to create backup file '{}': {}",
-                backup_path.display(),
-                e
-            );
-            process::exit(1);
-        }
-    }
-
-    // Clear all metadata
-    if let Err(e) = clear_all_metadata(file) {
-        eprintln!(
-            "Error: Failed to clear metadata from '{}': {}",
-            file.display(),
-            e
-        );
-        process::exit(1);
-    }
-
-    // Restore original modification time if requested
-    if let Some(mtime) = original_mtime {
-        use std::fs::File;
-        match File::open(file).and_then(|f| f.set_modified(mtime)) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Warning: Could not restore file modification time: {}", e);
-            }
-        }
-    }
-
-    // Print success message (matching ExifTool format)
-    println!("    1 image files updated");
+    // Clear all metadata on a working copy: `-all=` on a file with nothing
+    // left to strip is `unchanged` (ExifTool 13.59), not an update.
+    let outcome = transact(file, backup_before_commit(file, args), |scratch| {
+        clear_all_metadata(scratch)
+            .map_err(|e| format!("Failed to clear metadata from '{}': {}", file.display(), e))
+    });
+    finish_write(file, outcome, original_mtime, "    1 image files updated");
 }

@@ -9,9 +9,9 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::value_parser::parse_cli_tag_value;
+use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
 use crate::core::MetadataMap;
-use crate::core::operations::{modify_tag, read_metadata_with_detector_and_options};
+use crate::core::operations::read_metadata_with_detector_and_options;
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -28,6 +28,12 @@ pub struct BatchStats {
     pub files_read: usize,
     /// Number of files successfully updated (for write operations)
     pub files_updated: usize,
+    /// Number of files every write request succeeded on without changing a
+    /// byte (ExifTool's `image files unchanged`); never counted as updated.
+    pub files_unchanged: usize,
+    /// Whether these are write statistics, which ExifTool summarizes
+    /// differently from a read (see [`BatchStats::print`]).
+    pub write_mode: bool,
     /// Number of files that encountered errors
     pub errors: usize,
     /// Number of files a directory walk found but never attempted to read,
@@ -51,6 +57,8 @@ impl BatchStats {
         Self {
             files_read: 0,
             files_updated: 0,
+            files_unchanged: 0,
+            write_mode: false,
             errors: 0,
             unidentified: 0,
         }
@@ -58,6 +66,27 @@ impl BatchStats {
 
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
+        // A write run prints what exiftool:2071-2074 (13.59) prints for one:
+        // `updated` whenever a write was attempted (even `0`), `unchanged`
+        // and `weren't updated due to errors` when non-zero, and no read
+        // count -- `exiftool -XPTitle= a.jpg b.jpg` answers
+        // `    0 image files updated` / `    2 image files unchanged`.
+        if self.write_mode {
+            println!("{:5} image files updated", self.files_updated);
+            if self.files_unchanged > 0 {
+                println!("{:5} image files unchanged", self.files_unchanged);
+            }
+            if self.errors > 0 {
+                println!("{:5} files weren't updated due to errors", self.errors);
+            }
+            if self.unidentified > 0 {
+                println!(
+                    "{:5} files skipped (extension not recognized)",
+                    self.unidentified
+                );
+            }
+            return;
+        }
         // ExifTool's summary is `printf("%5d image files read\n", ...)`
         // (`exiftool`:2071-2077, 13.59): the count is right-aligned in five
         // columns, so ten or more files print `   12 ...`, not `    12 ...`.
@@ -337,6 +366,8 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     Ok(BatchStats {
         files_read: success_count.load(Ordering::Relaxed),
         files_updated: 0,
+        files_unchanged: 0,
+        write_mode: false,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
     })
@@ -361,21 +392,26 @@ pub fn batch_write(
     args: &CliArgs,
 ) -> Result<BatchStats> {
     let file_count = files.len();
+    // Undefined names were warned about before dispatch; they are not
+    // requests (ExifTool drops them in `SetNewValue`).
+    let (_, modifications) = partition_defined(modifications);
 
     // Create progress bar
     let progress = create_progress_bar(file_count, "Writing");
 
     // Atomic counters for thread-safe statistics
-    let success_count = AtomicUsize::new(0);
+    let updated_count = AtomicUsize::new(0);
+    let unchanged_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
-        let result = apply_modifications(path, modifications, args);
-
-        match result {
-            Ok(_) => {
-                success_count.fetch_add(1, Ordering::Relaxed);
+        match apply_modifications(path, &modifications, args) {
+            Ok(WriteOutcome::Updated) => {
+                updated_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(WriteOutcome::Unchanged) => {
+                unchanged_count.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 error_count.fetch_add(1, Ordering::Relaxed);
@@ -389,8 +425,10 @@ pub fn batch_write(
     progress.finish_and_clear();
 
     Ok(BatchStats {
-        files_read: file_count,
-        files_updated: success_count.load(Ordering::Relaxed),
+        files_read: 0,
+        files_updated: updated_count.load(Ordering::Relaxed),
+        files_unchanged: unchanged_count.load(Ordering::Relaxed),
+        write_mode: true,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
     })
@@ -398,44 +436,42 @@ pub fn batch_write(
 
 /// Applies tag modifications to a single file.
 ///
-/// Handles file preservation options (backup, preserve timestamps).
-///
-/// # Arguments
-///
-/// * `path` - File to modify
-/// * `modifications` - Tag modifications to apply
-/// * `args` - CLI arguments for preservation options
+/// The same transaction the single-file path uses
+/// (`cli::write_transaction::write_file`): all requests or none, `-TAG=` is a
+/// deletion, and a file whose bytes did not change is `Unchanged`, never
+/// counted as updated. Handles file preservation options (backup, preserve
+/// timestamps) around an actual update only.
 fn apply_modifications(
     path: &Path,
     modifications: &[(String, String)],
     args: &CliArgs,
-) -> Result<()> {
+) -> std::result::Result<WriteOutcome, String> {
     // Preserve original file times if requested
     let original_metadata = if args.preserve_file_times {
-        Some(fs::metadata(path)?)
+        Some(fs::metadata(path).map_err(|e| e.to_string())?)
     } else {
         None
     };
 
-    // Create backup if requested
-    if args.backup {
+    // Create backup if requested, once the write is known to change the file
+    let backup = || {
+        if !args.backup {
+            return Ok(());
+        }
         let backup_path = path.with_extension(format!(
             "{}.bak",
             path.extension().and_then(|e| e.to_str()).unwrap_or("")
         ));
-        fs::copy(path, &backup_path)?;
-    }
+        fs::copy(path, &backup_path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
 
-    // Apply all modifications
-    for (tag_name, value_str) in modifications {
-        // Parse the string into the type the tag declares, not into whatever
-        // type the value's own shape suggests.
-        let tag_value = parse_cli_tag_value(tag_name, value_str)?;
-        modify_tag(path, tag_name, tag_value)?;
-    }
+    let outcome = write_file(path, modifications, backup)?;
 
     // Restore file times if requested
-    if let Some(metadata) = original_metadata
+    if outcome == WriteOutcome::Updated
+        && let Some(metadata) = original_metadata
         && let Ok(mtime) = metadata.modified()
     {
         use std::fs::File;
@@ -445,7 +481,7 @@ fn apply_modifications(
         }
     }
 
-    Ok(())
+    Ok(outcome)
 }
 
 /// Creates a progress bar for batch processing.

@@ -1114,6 +1114,52 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
     }
 }
 
+/// The key `modify_tag`/`remove_tag` hand to the writers for `tag_name`,
+/// or an error when no writer of this file's format would write it.
+///
+/// Without this, an ungrouped name (`XPTitle`) or a group the format's writer
+/// never visits (`XMP:Title` in a JPEG) was inserted into the map, skipped by
+/// the writer, and reported as a successful write. The hand-kept
+/// [`canonical_write_tag_name`] spellings keep their existing addresses;
+/// every other ungrouped name is resolved the way pinned ExifTool resolves it
+/// or refused (`writers::write_request::resolve_write_key`), and the result
+/// must be a key the format's writer addresses
+/// (`writers::write_request::ensure_writer_addresses`).
+fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) -> Result<String> {
+    use crate::writers::write_request::{
+        ensure_writer_addresses, generated_route_resolves, resolve_write_key,
+    };
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    let surgical = is_surgical_tiff_target(format, &reader);
+    // ExifTool reads IFD0 with Exif::Main unless the TIFF header's identifier
+    // is Panasonic's 0x55, which selects PanasonicRaw::Main (ExifTool.pm:
+    // 8646-8659 vs 8718). A JPEG's APP1 TIFF is always Exif::Main.
+    let exif_ifd0_target = matches!(format, FileFormat::JPEG)
+        || (surgical && {
+            let header = reader.read(0, reader.size().min(4) as usize).unwrap_or(&[]);
+            matches!(header, [b'I', b'I', 42, 0] | [b'M', b'M', 0, 42])
+        });
+    let canonical = canonical_write_tag_name(tag_name);
+    let key = if canonical != tag_name {
+        canonical.to_string()
+    } else if !tag_name.contains(':')
+        && surgical
+        && !exif_ifd0_target
+        && generated_route_resolves(tag_name)
+    {
+        // A Panasonic RAW's IFD0 is read with PanasonicRaw::Main, so the
+        // Exif::Main resolution does not apply there; the generated route's
+        // own ungrouped resolution, which predates this function, keeps
+        // answering the names it owns.
+        tag_name.to_string()
+    } else {
+        resolve_write_key(tag_name, exif_ifd0_target, baseline)?
+    };
+    ensure_writer_addresses(&key, format, surgical)?;
+    Ok(key)
+}
+
 /// Modifies a single tag in a file's metadata.
 ///
 /// This is a convenience function that:
@@ -1164,8 +1210,10 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     // Step 1: Read existing metadata (preserves all other tags)
     let mut metadata = read_metadata(path)?;
 
-    // Step 2: Modify the single tag
-    metadata.insert(canonical_write_tag_name(tag_name), new_value);
+    // Step 2: Modify the single tag, at an address the file's writer is
+    // proven to write (see `resolve_write_address`).
+    let key = resolve_write_address(path, tag_name, &metadata)?;
+    metadata.insert(key, new_value);
 
     // Step 3: Write all metadata back to file
     write_metadata(path, &metadata)?;
@@ -1201,14 +1249,15 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
     // Step 1: Read existing metadata
     let mut metadata = read_metadata(path)?;
 
-    // Step 2: Remove the tag (if it exists)
-    let key = canonical_write_tag_name(tag_name);
-    metadata.remove(key);
+    // Step 2: Remove the tag (if it exists), at an address the file's writer
+    // is proven to write (see `resolve_write_address`).
+    let key = resolve_write_address(path, tag_name, &metadata)?;
+    metadata.remove(&key);
 
     // Step 3: Write metadata back to file. The key goes along: an EXIF entry
     // the reader surfaces no row for has no key to take out of the map, yet
     // `-ExifIFD:ApplicationNotes=` still names it for deletion.
-    write_metadata_with_removals(path, &metadata, &[key.to_string()])?;
+    write_metadata_with_removals(path, &metadata, &[key])?;
 
     Ok(())
 }

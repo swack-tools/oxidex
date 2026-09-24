@@ -145,6 +145,14 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     // original byte order, MakerNotes preserved) — issue #20
     let file_size = reader.size() as usize;
     let file_bytes = reader.read(0, file_size)?;
+    // A plan that changes no tag -- a deletion that names nothing in the file,
+    // a `-TagsFromFile` that found nothing to copy, a value equal to the one
+    // stored -- hands back the original bytes rather than a re-laid-out copy,
+    // so the caller reports the file unchanged instead of updated (see
+    // `exif_surgical::jpeg_exif_plan_is_identity`).
+    if crate::writers::exif_surgical::jpeg_exif_plan_is_identity(file_bytes, metadata, removed)? {
+        return Ok(file_bytes.to_vec());
+    }
     let new_exif_segment = crate::writers::exif_surgical::rewrite_jpeg_exif_with_removals(
         file_bytes, metadata, removed,
     )?;
