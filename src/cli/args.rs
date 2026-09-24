@@ -1389,7 +1389,6 @@ mod tests {
             (&[b"-=\xff", b"a.jpg"], "invalid tag name"),
             (&[b"-IFD0:Artist=A\xffB", b"a.jpg"], "not valid UTF-8"),
             (&[b"-IFD0:XPTitle=A\xffB", b"a.jpg"], "Malformed UTF-8"),
-            (&[b"-XPTitle=A\xed\xa0\x80B", b"a.jpg"], "-IFD0:XPTitle="),
             (&[b"-d", b"%Y\xff", b"a.jpg"], "-d must be valid UTF-8"),
             (
                 &[b"--detector", b"\xff", b"a.jpg"],

@@ -484,7 +484,10 @@ mod tests {
 
     #[test]
     fn only_xp_destinations_take_bytes() {
+        // The bare spelling resolves to IFD0 (`writers::write_request`), where
+        // pinned ExifTool 13.59 writes it too.
         for name in [
+            "XPTitle",
             "IFD0:XPTitle",
             "IFD0:XPComment",
             "EXIF:XPAuthor",
@@ -492,10 +495,6 @@ mod tests {
         ] {
             assert!(tag_value(name, b"A\xed\xa0\x80").is_ok(), "{name}");
         }
-        let error = tag_value("XPTitle", b"A\xed\xa0\x80")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("-IFD0:XPTitle="), "{error}");
         for name in [
             "Artist",
             "IFD0:Artist",
