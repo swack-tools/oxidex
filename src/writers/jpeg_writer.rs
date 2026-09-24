@@ -477,6 +477,85 @@ pub(crate) fn rewrite_generated_exif_payload(
     })
 }
 
+/// `output` -- the rewrite of the JPEG `original` -- with its AFCP trailer's
+/// absolute file offsets moved by the change in length before it.
+///
+/// An AFCP trailer (AXS File Concatenation Protocol: a 12-byte `AXS!`/`AXS*`
+/// header, 12-byte `tag, size, offset` entries, value data, and a 12-byte
+/// end record holding the header's position; other trailers may follow it)
+/// addresses everything by absolute offset, so a write that changes the
+/// file's length before it leaves every offset pointing off; pinned
+/// ExifTool 13.59 reads such a file with "[minor] Adjusted AFCP offsets by
+/// N" and rewrites the offsets when it writes (AFCP.pm `ProcessAFCP`).
+/// Applied only when the original's trailer, header to end record, appears
+/// in `output` verbatim and every entry addresses data inside it; otherwise
+/// `output` is returned as it is.
+pub(crate) fn rebase_afcp(original: &[u8], output: &[u8]) -> Vec<u8> {
+    try_rebase_afcp(original, output).unwrap_or_else(|| output.to_vec())
+}
+
+fn try_rebase_afcp(original: &[u8], output: &[u8]) -> Option<Vec<u8>> {
+    if original.len() == output.len() {
+        return None;
+    }
+    let get32 = |b: &[u8], big: bool| {
+        let b: [u8; 4] = b.try_into().ok()?;
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        })
+    };
+    // The end record: `AXS!`/`AXS*`, then the position of a header of the
+    // same kind before it.
+    let (start, end, big) =
+        (0..original.len().saturating_sub(11))
+            .rev()
+            .find_map(|at| {
+                let big = match &original[at..at + 4] {
+                    b"AXS!" => true,
+                    b"AXS*" => false,
+                    _ => return None,
+                };
+                let start = get32(&original[at + 4..at + 8], big)? as usize;
+                (start < at && original.get(start..start + 4)? == &original[at..at + 4])
+                    .then_some((start, at + 12, big))
+            })?;
+    let trailer = &original[start..end];
+    let new_start = (0..output.len().saturating_sub(trailer.len() - 1))
+        .find(|&at| output[at..at + 12] == trailer[..12] && output[at..].starts_with(trailer))?;
+    if new_start == start {
+        return None;
+    }
+    let delta = new_start as i64 - start as i64;
+    let put32 = |v: u32| {
+        if big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
+    };
+    let count = usize::from(if big {
+        u16::from_be_bytes([trailer[6], trailer[7]])
+    } else {
+        u16::from_le_bytes([trailer[6], trailer[7]])
+    });
+    let mut out = output.to_vec();
+    for index in 0..count {
+        let at = 12 + 12 * index;
+        let size = get32(trailer.get(at + 4..at + 8)?, big)? as usize;
+        let offset = get32(trailer.get(at + 8..at + 12)?, big)? as usize;
+        if offset < start || offset.checked_add(size)? > end - 12 {
+            return None;
+        }
+        let moved = u32::try_from(offset as i64 + delta).ok()?;
+        out[new_start + at + 8..new_start + at + 12].copy_from_slice(&put32(moved));
+    }
+    let record = new_start + trailer.len() - 12;
+    out[record + 4..record + 8].copy_from_slice(&put32(u32::try_from(new_start).ok()?));
+    Some(out)
+}
+
 /// Whether a public plan's legacy delta deletes a tag: an EXIF-family key of
 /// `baseline` that `legacy_metadata` no longer holds, or a named removal.
 /// The raw-carried directories count too: a surfaced InteropIFD, IFD1 or

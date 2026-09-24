@@ -2032,7 +2032,21 @@ fn makernotes_removal_drops_a_ciff_segment() {
     assert_eq!(original[start..start + 2], [0xFF, 0xE0]);
     let len = u16::from_be_bytes([original[start + 2], original[start + 3]]) as usize;
     let expected = [&original[..start], &original[start + 2 + len..]].concat();
-    assert_eq!(out, expected);
+    // ... but for its AFCP trailer's absolute offsets, which move with the
+    // segment (see `an_afcp_trailer_is_re_based_when_the_file_changes_length`).
+    let afcp = expected
+        .windows(4)
+        .position(|w| w == b"AXS!" || w == b"AXS*")
+        .expect("AFCP trailer");
+    assert_eq!(out.len(), expected.len());
+    assert_eq!(out[..afcp], expected[..afcp]);
+    assert_validate_parity(
+        &original,
+        "ExifTool.jpg",
+        &["-MakerNotes:All="],
+        &path,
+        "ExifTool.jpg",
+    );
 }
 
 /// An EXIF-family removal rewrites the EXIF block, and pinned ExifTool
@@ -2324,6 +2338,81 @@ fn a_chain_past_ifd1_is_kept_or_the_write_refused() {
             let (after, rest) = tiff_and_rest(name, &out);
             assert_eq!(ifd2_of(&after, &rest), None, "{label} IFD1:All");
             assert_validate_parity(&original, name, &["-IFD1:All="], &path, &label);
+        }
+    }
+}
+
+/// A JPEG with an AFCP trailer holding one `TEXT` record of `abcd`.
+fn afcp_jpeg(order: Order) -> Vec<u8> {
+    let tiff = Tiff {
+        ifd0: vec![(0x013B, 2, 3, b"me\0".to_vec())],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: None,
+    }
+    .build(order);
+    let jpeg = jpeg_with(&tiff);
+    let start = jpeg.len() as u32;
+    let le = |v: u32| v.to_le_bytes();
+    [
+        jpeg,
+        b"AXS*\x01\x00\x01\x00\0\0\0\0".to_vec(),
+        [b"TEXT".as_slice(), &le(4), &le(start + 24)].concat(),
+        b"abcd".to_vec(),
+        [b"AXS*".as_slice(), &le(start), &le(0)].concat(),
+    ]
+    .concat()
+}
+
+/// An AFCP trailer addresses its records by absolute file offset. A write
+/// that changes the JPEG's length before it left every offset pointing off
+/// -- tip e4edc55c too -- and pinned ExifTool 13.59 read the output with
+/// "[minor] Adjusted AFCP offsets by N", a warning its own edit does not
+/// draw: it rewrites the offsets. So does the JPEG writer now. Measured by
+/// `-validate` parity against the oracle's own edit (sweep2 found it on
+/// t/images AFCP.jpg and ExifTool.jpg).
+#[test]
+fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "a much longer artist than the two bytes before";
+    for order in [Order::Ii, Order::Mm] {
+        let original = afcp_jpeg(order);
+        let path = write(dir.path(), "afcp.jpg", &original);
+        modify_tag(&path, "IFD0:Artist", TagValue::new_string(long))
+            .unwrap_or_else(|e| panic!("{order:?}: {e}"));
+        let out = std::fs::read(&path).unwrap();
+        assert!(out.len() > original.len(), "{order:?}");
+        let end = &out[out.len() - 12..];
+        let start = u32::from_le_bytes(end[4..8].try_into().unwrap()) as usize;
+        assert_eq!(&out[start..start + 4], b"AXS*", "{order:?} end record");
+        let text = u32::from_le_bytes(out[start + 20..start + 24].try_into().unwrap()) as usize;
+        assert_eq!(&out[text..text + 4], b"abcd", "{order:?} TEXT record");
+        assert_validate_parity(
+            &original,
+            "afcp.jpg",
+            &[&format!("-IFD0:Artist={long}")],
+            &path,
+            &format!("{order:?} afcp.jpg"),
+        );
+    }
+    for name in ["AFCP.jpg", "ExifTool.jpg"] {
+        let Some(sample) = fixtures::pinned_t_images_fixture_path(name) else {
+            continue;
+        };
+        let original = std::fs::read(&sample).unwrap();
+        for (key, args) in [
+            ("IFD0:Artist", format!("-IFD0:Artist={long}")),
+            ("EXIF:All", "-EXIF:All=".to_string()),
+        ] {
+            let path = write(dir.path(), name, &original);
+            if key == "EXIF:All" {
+                remove_tag(&path, key).unwrap_or_else(|e| panic!("{name} {key}: {e}"));
+            } else {
+                modify_tag(&path, key, TagValue::new_string(long))
+                    .unwrap_or_else(|e| panic!("{name} {key}: {e}"));
+            }
+            assert_validate_parity(&original, name, &[&args], &path, &format!("{name} {key}"));
         }
     }
 }
