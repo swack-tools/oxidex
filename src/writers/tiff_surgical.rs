@@ -403,6 +403,18 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
 
     // --- Pass 2: added keys (no located entry) ---
     for (key, value) in desired.iter() {
+        // IFD1/InteropIFD/MakerNotes keys no located entry consumed: this
+        // pass adds to IFD0/ExifIFD/GPS only, so an added or changed one is
+        // refused rather than skipped (a skip reported success and wrote
+        // nothing).
+        if crate::writers::exif_surgical::is_carried_only_key(key)
+            && !consumed.iter().any(|k| k == key)
+            && original.get(key) != Some(value)
+        {
+            return Err(crate::writers::exif_surgical::carried_only_edit_refused(
+                key,
+            ));
+        }
         if !is_exif_family(key) || consumed.iter().any(|k| k == key) {
             continue;
         }
@@ -1037,6 +1049,29 @@ mod tests {
             "got: {}",
             err
         );
+    }
+
+    #[test]
+    fn an_ifd1_or_interop_edit_it_cannot_place_is_refused_not_dropped() {
+        // Pinned ExifTool 13.59 adds `-IFD1:PanasonicTitle=x` and
+        // `-InteropIFD:RelatedImageWidth=5` (creating the directory). This
+        // writer places additions in IFD0/ExifIFD/GPS only; before, pass 2
+        // skipped these keys and the write succeeded without them.
+        let file = build_tiff(ByteOrder::LittleEndian);
+        let original = original_map();
+        for (key, value) in [
+            ("IFD1:PanasonicTitle", TagValue::new_string("x")),
+            ("InteropIFD:RelatedImageWidth", TagValue::Integer(5)),
+        ] {
+            let mut desired = original.clone();
+            desired.insert(key, value);
+            for embedded in [false, true] {
+                let err =
+                    rewrite_tiff_payload_with_removals(&file, &original, &desired, &[], embedded)
+                        .unwrap_err();
+                assert!(err.to_string().contains(key), "got: {err}");
+            }
+        }
     }
 
     #[test]

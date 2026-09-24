@@ -603,6 +603,125 @@ fn uneditable_exif_carriers_are_refused_untouched() {
         "{error}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), profile);
+
+    // The keyword is resolved as ExifTool resolves it, through the `ucfirst`
+    // fallback (PNG.pm 13.59:919-921): the oracle reads `IFD0:Artist` from
+    // `raw profile type exif` and `raw profile type APP1` chunks (tEXt, zTXt
+    // and iTXt alike) and refuses to set a tag with either present. A
+    // spelling beyond `ucfirst` is not a profile: the oracle then creates an
+    // eXIf chunk, and so does this writer.
+    for (kind, data) in [
+        (
+            b"tEXt",
+            [b"raw profile type exif\0".as_slice(), &hex].concat(),
+        ),
+        (
+            b"iTXt",
+            [b"raw profile type APP1\0\0\0\0\0".as_slice(), &hex].concat(),
+        ),
+    ] {
+        let profile = png(&[(kind, data)], &[]);
+        let path = write(dir.path(), "lower.png", &profile);
+        let error = modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap_err();
+        assert!(error.to_string().contains("raw profile type"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), profile);
+    }
+    let path = write(
+        dir.path(),
+        "not-a-profile.png",
+        &png(
+            &[(
+                b"tEXt",
+                [b"Raw Profile Type exif\0".as_slice(), &hex].concat(),
+            )],
+            &[],
+        ),
+    );
+    modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
+    assert_eq!(
+        kinds(&std::fs::read(&path).unwrap()),
+        ["IHDR", "tEXt", "eXIf", "IDAT", "IEND"]
+    );
+}
+
+/// A minimal baseline JPEG with `tiff` as its EXIF APP1 block.
+fn jpeg_with(tiff: &[u8]) -> Vec<u8> {
+    const BODY: &str = "ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
+    let body: Vec<u8> = (0..BODY.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&BODY[i..i + 2], 16).unwrap())
+        .collect();
+    let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    out.extend(((tiff.len() + 8) as u16).to_be_bytes());
+    out.extend(b"Exif\0\0");
+    out.extend(tiff);
+    out.extend(body);
+    out
+}
+
+/// Pinned ExifTool 13.59 adds a new IFD1 tag (`-IFD1:PanasonicTitle=x`,
+/// `-IFD1:ImageDescription=x`, creating IFD1 when there is none), edits an
+/// existing one (`-IFD1:Compression=1`) and adds an InteropIFD tag
+/// (`-InteropIFD:RelatedImageWidth=5`). The surgical writers carry IFD1 and
+/// InteropIFD raw and cannot, so the write is refused and the file left
+/// untouched -- before, both the PNG and the JPEG writer reported success
+/// and changed nothing. `-IFD1:XResolution=300`, which the generated path
+/// owns, still writes.
+#[test]
+fn ifd1_and_interop_edits_are_refused_not_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let small = Tiff {
+            ifd0: vec![(0x013B, 2, 3, b"me\0".to_vec())],
+            exif: None,
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        for (name, original) in [
+            ("full.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("small.png", png(&[(b"eXIf", small.clone())], &[])),
+            ("full.jpg", jpeg_with(&tiff)),
+            ("small.jpg", jpeg_with(&small)),
+        ] {
+            for (key, value) in [
+                ("IFD1:PanasonicTitle", TagValue::new_string("x")),
+                ("IFD1:ImageDescription", TagValue::new_string("x")),
+                ("IFD1:Compression", TagValue::new_integer(1)),
+                ("InteropIFD:RelatedImageWidth", TagValue::new_integer(5)),
+            ] {
+                let path = write(dir.path(), name, &original);
+                let result = modify_tag(&path, key, value);
+                assert!(result.is_err(), "{order:?} {name} {key}: silent success");
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    original,
+                    "{order:?} {name} {key}"
+                );
+            }
+        }
+
+        let path = write(
+            dir.path(),
+            "xres.png",
+            &png(&[(b"eXIf", tiff.clone())], &[]),
+        );
+        modify_tag(
+            &path,
+            "IFD1:XResolution",
+            TagValue::Rational {
+                numerator: 300,
+                denominator: 1,
+            },
+        )
+        .unwrap();
+        let out = std::fs::read(&path).unwrap();
+        let expected = [order.u32(300), order.u32(1)].concat();
+        let after = dump(&exif_of(&out).unwrap());
+        assert_eq!(after.get("IFD1:0x011a").map(|f| &f.2), Some(&expected));
+    }
 }
 
 /// ExifTool strips an improper `Exif\0\0` header from an eXIf chunk and

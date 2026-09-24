@@ -13,7 +13,10 @@ use crate::parsers::png::chunk_parser::{
     PNG_SIGNATURE, PngChunk, PngTextRecord, parse_chunk, parse_text_record,
 };
 use crate::parsers::png::parse_png_metadata;
-use crate::parsers::png::text_names::{TextRow, TextTagNamer, encode_latin, writable_text_name};
+use crate::parsers::png::text_names::{
+    TextRow, TextTagNamer, TextTagRoute, encode_latin, writable_text_name,
+};
+use crate::parsers::text::html::decode_latin;
 use crate::writers::atomic_writer::write_atomic;
 use crc::{CRC_32_ISO_HDLC, Crc};
 use std::collections::{HashMap, HashSet};
@@ -182,10 +185,10 @@ const EXIF_KEY_PREFIXES: &[&str] = &[
     "MakerNotes:",
 ];
 
-/// Text keywords whose payload is a hex-encoded EXIF profile
-/// (`%PNG::TextualData`, PNG.pm 13.59:691-716; ImageMagick writes EXIF as
-/// `Raw profile type exif`, and `APP1` may hold an `Exif\0\0` block).
-const RAW_EXIF_PROFILE_KEYWORDS: &[&[u8]] = &[b"Raw profile type exif", b"Raw profile type APP1"];
+/// `%PNG::TextualData` profile rows whose payload is a hex-encoded EXIF
+/// block (PNG.pm 13.59:691-716): ImageMagick writes EXIF as `Raw profile
+/// type exif`, and `Raw profile type APP1` may hold an `Exif\0\0` block.
+const RAW_EXIF_PROFILE_NAMES: &[&str] = &["EXIF_Profile", "APP1_Profile"];
 
 /// Chunks ExifTool never moves a text chunk across (`%noLeapFrog`, PNG.pm
 /// 13.59:96-97).
@@ -321,14 +324,23 @@ fn plan_exif(
              (ExifTool also refuses: IFD0 pointer references previous IFD0 directory)",
         ));
     }
+    // Keywords resolve exactly as the reader and ExifTool resolve them
+    // (`TextTagNamer`, with `FoundPNG`'s `ucfirst` fallback, PNG.pm
+    // 13.59:919-921): the oracle reads EXIF from a `raw profile type exif`
+    // chunk too, and refuses a set with one present, so a byte-exact match
+    // left a second, competing EXIF carrier beside the new eXIf chunk.
+    let mut namer = TextTagNamer::new();
     let raw_profile = chunks.iter().find_map(|chunk| {
         if !chunk.is_text_chunk() {
             return None;
         }
-        let keyword = chunk.data.split(|b| *b == 0).next().unwrap_or_default();
-        RAW_EXIF_PROFILE_KEYWORDS
-            .contains(&keyword)
-            .then(|| String::from_utf8_lossy(keyword).into_owned())
+        let record = parse_text_record(&chunk.chunk_type, &chunk.data)?;
+        let keyword = decode_latin(&record.keyword);
+        let lang = record.lang.as_deref().map(decode_latin);
+        match namer.resolve(&keyword, lang.as_deref()) {
+            TextTagRoute::Profile(name) if RAW_EXIF_PROFILE_NAMES.contains(&name) => Some(keyword),
+            _ => None,
+        }
     });
     if let Some(keyword) = raw_profile {
         return Err(ExifToolError::unsupported_format(format!(

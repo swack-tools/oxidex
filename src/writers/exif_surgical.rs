@@ -241,6 +241,22 @@ struct PlacedEntry {
     rowless: Option<(usize, u16)>,
 }
 
+/// Whether `key` names a class of entry the surgical writers carry raw and
+/// can neither add nor edit: IFD1, InteropIFD, MakerNotes.
+pub(crate) fn is_carried_only_key(key: &str) -> bool {
+    key.starts_with("IFD1:") || key.starts_with("InteropIFD:") || key.starts_with("MakerNotes:")
+}
+
+/// The refusal for an added or changed [`is_carried_only_key`] key.
+pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
+    ExifToolError::unsupported_format(format!(
+        "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
+         class (InteropIFD/IFD1/MakerNote) that this writer always raw-carries \
+         and cannot add to or edit",
+        key
+    ))
+}
+
 /// The IFD a group-qualified write key names, for the three IFDs this
 /// writer edits. `EXIF:` names the family, not an IFD, and has none.
 fn key_ifd(key: &str) -> Option<IfdKind> {
@@ -974,25 +990,18 @@ pub(crate) fn plan_exif_write_with_removals(
         );
     }
 
-    // An edit to a raw-carried InteropIFD entry the reader surfaces under
-    // `InteropIFD:<name>` -- every Interop row since decision D-1 of slice
-    // E-1 (the DCF tags were `EXIF:`-keyed before, which the Added loop below
-    // visits) -- is an error, never a silent drop: `exif_family_keys` does
-    // not visit the `InteropIFD:` prefix.
-    for key in carried_reader_keys
-        .iter()
-        .filter(|key| key.starts_with("InteropIFD:"))
-    {
-        if let (Some(original_value), Some(value)) = (original_map.get(key), desired.get(key))
-            && value != original_value
-        {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported: it belongs to an \
-                 unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
-                 writer always raw-carries",
-                key
-            )));
-        }
+    // An added or changed key of a raw-carried class (IFD1, InteropIFD,
+    // MakerNotes) is an error, never a silent drop: the Added loop below
+    // places new entries in IFD0/ExifIFD/GPS only, and `exif_family_keys`
+    // does not visit these prefixes. That covers an edit to a raw-carried
+    // InteropIFD entry the reader surfaces under `InteropIFD:<name>` (every
+    // Interop row since decision D-1 of slice E-1) and to an IFD1 entry, and
+    // a tag new to either directory, all of which pinned ExifTool 13.59
+    // writes (`-IFD1:PanasonicTitle=x` creates IFD1 when there is none).
+    if let Some(key) = desired.iter().find_map(|(key, value)| {
+        (is_carried_only_key(key) && original_map.get(key) != Some(value)).then_some(key)
+    }) {
+        return Err(carried_only_edit_refused(key));
     }
 
     // Added: desired EXIF-family keys not matched to any original entry
@@ -3385,5 +3394,51 @@ mod tests {
         assert_eq!(plan.gps.len(), 1);
         assert_eq!(plan.gps[0].tag_id, 0x000d);
         assert_eq!(plan.gps[0].value, speed);
+    }
+
+    #[test]
+    fn an_ifd1_or_interop_edit_is_refused_not_dropped() {
+        // IFD1 and InteropIFD are raw-carried; the Added loop places new
+        // keys in IFD0/ExifIFD/GPS only. A new `IFD1:PanasonicTitle`, a new
+        // `InteropIFD:RelatedImageWidth` or a changed `IFD1:Compression`
+        // (which pinned ExifTool 13.59 all write) used to leave a plan
+        // without them and a write that reported success.
+        let bo = ByteOrder::LittleEndian;
+        let scan = ExifScan {
+            byte_order: bo,
+            entries: vec![
+                RawEntry {
+                    ifd: IfdKind::Ifd0,
+                    tag_id: 0x013B,
+                    field_type: 2,
+                    count: 3,
+                    value: b"me\0".to_vec(),
+                },
+                RawEntry {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: 0x0103,
+                    field_type: 3,
+                    count: 1,
+                    value: 6u16.to_le_bytes().to_vec(),
+                },
+            ],
+            thumbnail: None,
+            makernote_offset: None,
+        };
+        let mut original = MetadataMap::new();
+        original.insert("IFD0:Artist", TagValue::new_string("me"));
+        original.insert("IFD1:Compression", TagValue::Integer(6));
+        for (key, value) in [
+            ("IFD1:PanasonicTitle", TagValue::new_string("x")),
+            ("InteropIFD:RelatedImageWidth", TagValue::Integer(5)),
+            ("IFD1:Compression", TagValue::Integer(1)),
+        ] {
+            let mut desired = original.clone();
+            desired.insert(key, value);
+            let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+            assert!(err.to_string().contains(key), "got: {err}");
+        }
+        // Unchanged rows of those classes are the carry-over, not edits.
+        assert!(plan_exif_write(&scan, &original, &original).is_ok());
     }
 }
