@@ -740,7 +740,8 @@ def _build_environment_receipt(build: Mapping[str, Any], release: str, checkout:
         raise Refused(f"{release} build environment is not the allowlisted, identified toolchain build")
     try:
         stage_adapter.validate_pinned_toolchain(
-            {"toolchain": toolchain, "toolchain_pin": recorded_pin, "rustc_path": recorded.get("rustc_path")},
+            {"toolchain": toolchain, "toolchain_pin": recorded_pin, "rustc_path": recorded.get("rustc_path"),
+             "pin_rustc": recorded.get("pin_rustc")},
             checkout)
         stage_adapter.check_binary_compilers(toolchain, compiled_by)
     except (stage_adapter.Refused, OSError) as exc:

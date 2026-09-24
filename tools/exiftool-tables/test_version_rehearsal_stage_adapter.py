@@ -108,6 +108,13 @@ class AdapterTests(unittest.TestCase):
         resolver = patch.object(adapter, "_resolve_executable",
                                 side_effect=lambda name, env: self.rustc_path if name == "rustc" else None)
         resolver.start(); self.addCleanup(resolver.stop)
+        # rustup's own answer for the pin (None: rustup cannot resolve it).
+        self.rustup_pin = {"release": "1.97.1", "commit_hash": PIN_COMMIT,
+                           "path": "/Users/test/.rustup/toolchains/1.97.1/bin/rustc"}
+        self.real_rustup_pin = adapter._rustup_pin
+        rustup = patch.object(adapter, "_rustup_pin", side_effect=lambda channel, checkout, env: (
+            dict(self.rustup_pin, release=channel) if self.rustup_pin else None))
+        rustup.start(); self.addCleanup(rustup.stop)
         (self.checkout / "tools/exiftool-tables").mkdir(parents=True)
         (self.checkout / "tools/exiftool-tables/regen-all.sh").write_text("#!/bin/sh\n")
         for item in artifacts.ARTIFACTS:
@@ -410,7 +417,7 @@ class AdapterTests(unittest.TestCase):
             "toolchain": {"rustc": fixture_rustc_vv("1.97.1", PIN_COMMIT).strip(),
                           "cargo": "cargo 1.97.1 (fixture 2026-01-01)"},
             "toolchain_pin": built["build_environment"]["toolchain_pin"],
-            "rustc_path": self.rustc_path})
+            "rustc_path": self.rustc_path, "pin_rustc": self.rustup_pin})
         argvs = [argv for argv, _env in self.seen[first:]]
         suite = argvs.index(list(adapter.TEST_COMMANDS[0]))
         # Probed with the suite's own environment, and nothing runs in between.
@@ -435,10 +442,54 @@ class AdapterTests(unittest.TestCase):
     def test_release_tests_refuse_a_pinned_release_from_another_rustc_than_the_build(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
-        self.rustc_commit = "1" * 40  # same release string, different compiler
+        # rustup's 1.97.1 was reinstalled between stages: the pin still
+        # proves itself, but it is not the compiler that built the binaries.
+        self.rustc_commit = "1" * 40
+        self.rustup_pin = dict(self.rustup_pin, commit_hash="1" * 40)
         with self.assertRaisesRegex(adapter.Refused, "differs from the build's"):
             adapter.run_release_tests(self.args("test"), run=self.fake_run)
         self.assertEqual(self.suite_calls, [])
+
+    def test_build_refuses_a_non_rustup_rustc_that_reports_the_pinned_release(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustc_commit = self.binary_commit = "2" * 40  # e.g. a distro rustc 1.97.1
+        self.assert_build_refused_before_cargo("is not the rustup-resolved pin")
+
+    def test_build_fails_closed_when_rustup_cannot_resolve_the_pin(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustup_pin = None
+        self.assert_build_refused_before_cargo("rustup cannot resolve the checkout's pinned toolchain 1.97.1")
+
+    def test_release_tests_refuse_a_non_rustup_rustc_before_the_suite(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        self.rustup_pin = dict(self.rustup_pin, commit_hash="3" * 40)  # the pin moved under rustup
+        with self.assertRaisesRegex(adapter.Refused, "is not the rustup-resolved pin"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+        shutil.rmtree(self.target / adapter.TEST_TARGET_SUBDIRECTORY)
+        self.rustup_pin = None
+        with self.assertRaisesRegex(adapter.Refused, "rustup cannot resolve"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+
+    def test_pinned_toolchain_records_rustups_answer(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        self.assertEqual(built["build_environment"]["pin_rustc"], self.rustup_pin)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["test_suite"]["compiler"]["pin_rustc"], self.rustup_pin)
+
+    def test_rustup_pin_asks_the_shared_rustup_only_resolver_with_the_stage_environment(self):
+        env = {"PATH": "/allowlisted/bin", "HOME": "/Users/test"}
+        identity = adapter.instrument.RustcIdentity("rustup run 1.97.1 rustc", "/r/bin/rustc",
+                                                    "rustc 1.97.1", "1.97.1", PIN_COMMIT)
+        with patch.object(adapter.instrument, "pinned_rustc_identity", return_value=identity) as resolver:
+            self.assertEqual(self.real_rustup_pin("1.97.1", self.checkout, env),
+                             {"release": "1.97.1", "commit_hash": PIN_COMMIT, "path": "/r/bin/rustc"})
+        resolver.assert_called_once_with("1.97.1", cwd=self.checkout, env=env)
+        with patch.object(adapter.instrument, "pinned_rustc_identity", return_value=None):
+            self.assertIsNone(self.real_rustup_pin("1.97.1", self.checkout, env))
 
     def test_rustc_must_resolve_on_the_allowlisted_path(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

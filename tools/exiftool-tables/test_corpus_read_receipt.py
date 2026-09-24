@@ -201,15 +201,25 @@ class BuildToolchainTests(unittest.TestCase):
         path.chmod(0o755)
         return path
 
-    def toolchain(self, release="1.97.1", commit=PIN_COMMIT, cargo="1.97.1") -> dict:
-        """A sysroot whose rustc reports ``release``, reached through a proxy, plus a cargo on PATH."""
+    def sysroot(self, release: str, commit: str) -> Path:
         sysroot = self.base / f"toolchains/{release}-{commit[:6]}"
         self.script(sysroot / "bin/rustc", f'printf "rustc {release} (x 2026-01-01)\\nbinary: rustc\\n'
                                            f'commit-hash: {commit}\\nrelease: {release}\\n"\n')
+        return sysroot
+
+    def toolchain(self, release="1.97.1", commit=PIN_COMMIT, cargo="1.97.1", pin_commit=PIN_COMMIT,
+                  rustup=True) -> dict:
+        """A sysroot whose rustc reports ``release``, reached through a proxy, a cargo on PATH, and
+        a rustup whose own 1.97.1 toolchain is ``pin_commit`` (``rustup=False``: it cannot resolve it)."""
+        sysroot = self.sysroot(release, commit)
         proxy = self.script(self.base / f"proxy-{release}-{commit[:6]}/rustc",
                             f'[ "$1" = --print ] && echo "{sysroot}"\n')
         self.script(self.bin / "cargo", f'echo "cargo {cargo} (x 2026-01-01)"\n')
-        env = {**os.environ, "RUSTC": str(proxy), "PATH": str(self.bin) + os.pathsep + os.environ["PATH"]}
+        pinned = self.sysroot("1.97.1", pin_commit) / "bin/rustc"
+        self.script(self.bin / "rustup", (f'[ "$1 $2 $3 $4" = "which --toolchain 1.97.1 rustc" ] && echo "{pinned}" '
+                                          '&& exit 0\n' if rustup else "") + "exit 1\n")
+        env = {**os.environ, "RUSTC": str(proxy), "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+               "HOME": str(self.base), "CARGO_HOME": str(self.base / "cargo-home")}
         return receipt_tool.build_toolchain(self.root, env)
 
     def proof(self, toolchain: dict, commits) -> dict:
@@ -242,6 +252,26 @@ class BuildToolchainTests(unittest.TestCase):
             self.toolchain(release="1.98.1", commit=BREW_COMMIT)
         with self.assertRaisesRegex(ValueError, "cargo is 1.98.1"):
             self.toolchain(cargo="1.98.1")
+
+    def test_non_rustup_rustc_reporting_the_pinned_release_refuses(self):
+        # e.g. a distro or Homebrew build that happens to be 1.97.1: same release, not the pin.
+        with self.assertRaisesRegex(ValueError, "is not the rustup-resolved pin"):
+            self.toolchain(commit="2" * 40)
+
+    def test_unresolvable_pin_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "rustup cannot resolve the pinned toolchain 1.97.1"):
+            self.toolchain(rustup=False)
+
+    def test_rustups_pin_identity_is_recorded_and_replayed(self):
+        record = self.toolchain()
+        self.assertEqual(record["pin_rustc"]["commit_hash"], PIN_COMMIT)
+        self.assertEqual(record["pin_rustc"]["release"], "1.97.1")
+        for label, mutate in (("absent", lambda r: r.pop("pin_rustc")),
+                              ("other commit", lambda r: r["pin_rustc"].update(commit_hash="3" * 40)),
+                              ("other release", lambda r: r["pin_rustc"].update(release="1.98.1"))):
+            broken = copy.deepcopy(record); mutate(broken)
+            with self.subTest(label), self.assertRaises(ValueError):
+                receipt_tool.toolchain_identity(broken, "1.97.1")
 
     def test_checkout_without_a_numeric_pin_refuses(self):
         (self.root / "rust-toolchain.toml").unlink()

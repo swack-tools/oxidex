@@ -478,7 +478,8 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
               "writer_binary": writer, "raw_report": raw,
               "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config,
                                     "toolchain_pin": compiler["toolchain_pin"],
-                                    "rustc_path": compiler["rustc_path"], "compiled_by": compiled_by}}
+                                    "rustc_path": compiler["rustc_path"], "pin_rustc": compiler["pin_rustc"],
+                                    "compiled_by": compiled_by}}
     _atomic(report, result); return result
 
 
@@ -510,7 +511,39 @@ def pinned_toolchain(checkout: Path, env: dict[str, str],
     rustc_path = _resolve_executable("rustc", env)
     if rustc_path is None:
         raise Refused("build toolchain rustc is not resolvable on the allowlisted PATH")
-    return {"toolchain": toolchain, "toolchain_pin": toolchain_pin, "rustc_path": rustc_path}
+    # A release string is not an identity: a non-rustup rustc can report the
+    # pinned release too. rustup's own answer for the pin, through the same
+    # allowlisted environment, must name the very compiler about to run.
+    pin_rustc = _rustup_pin(toolchain_pin["channel"], checkout, env)
+    if pin_rustc is None:
+        raise Refused(f"rustup cannot resolve the checkout's pinned toolchain {toolchain_pin['channel']} under the "
+                      "allowlisted environment; the compiler cannot be proven to be the pin")
+    record = {"toolchain": toolchain, "toolchain_pin": toolchain_pin, "rustc_path": rustc_path,
+              "pin_rustc": pin_rustc}
+    check_pin_identity(record)
+    return record
+
+
+def _rustup_pin(channel: str, checkout: Path, env: dict[str, str]) -> dict[str, Any] | None:
+    """rustup's identity for ``channel`` -- the instruments' rustup-only resolver, never PATH."""
+    identity = instrument.pinned_rustc_identity(channel, cwd=checkout, env=env)
+    if identity is None:
+        return None
+    return {"release": identity.release, "commit_hash": identity.commit_hash, "path": identity.path}
+
+
+def check_pin_identity(record: dict[str, Any]) -> None:
+    """The recorded rustc's commit must EQUAL rustup's commit for the pinned channel."""
+    channel = record["toolchain_pin"]["channel"]
+    used = check_toolchain_against_pin(record["toolchain"], channel)
+    pin = record.get("pin_rustc")
+    if (not isinstance(pin, dict) or instrument.channel_matches(channel, pin.get("release")) is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("commit_hash", "")))):
+        raise Refused("rustup's identity for the pinned toolchain is not recorded")
+    if used["commit_hash"] != pin["commit_hash"]:
+        raise Refused(f"rustc on the allowlisted PATH (rustc {used['release']}, commit {used['commit_hash'][:12]}) "
+                      f"is not the rustup-resolved pin (commit {pin['commit_hash'][:12]}): same release, "
+                      "different compiler")
 
 
 def validate_pinned_toolchain(record: Any, checkout: Path) -> dict[str, str]:
@@ -526,6 +559,7 @@ def validate_pinned_toolchain(record: Any, checkout: Path) -> dict[str, str]:
     pin = toolchain_pin_for(checkout)
     if recorded_pin != pin:
         raise Refused(f"recorded toolchain pin {recorded_pin} is not the checkout's {pin}")
+    check_pin_identity(record)
     return check_toolchain_against_pin(toolchain, pin["channel"])
 
 

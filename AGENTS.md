@@ -281,8 +281,12 @@ instrument keeps lying in a new way, not because the old ways stopped:
     tests must use the build's exact rustc. The qualification replays both.
     The build is also checked against the binaries' fingerprints. The pin's
     identity comes only from rustup (`rustup which`/`rustup run`), never from
-    a PATH compiler that merely reports the same release. See "Rust
-    toolchain pin" above.
+    a PATH compiler that merely reports the same release. A matching
+    release string is not an identity: the corpus receipt build and both
+    rehearsal stages require the running rustc's `commit-hash` to equal the
+    commit rustup reports for the pin. They refuse, failing closed, when
+    rustup cannot resolve the pin. Instrument headers report `unverified`
+    in that case instead. See "Rust toolchain pin" above.
 
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header

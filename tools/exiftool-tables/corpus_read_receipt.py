@@ -7,8 +7,10 @@ Three explicit steps, each refusing a dirty checkout:
            (Cargo stdout/stderr bytes, the identified executable and its hash,
            and the compiler: the checkout's rust-toolchain.toml channel, the
            exact rustc passed to Cargo as $RUSTC with its `-vV` transcript,
-           `cargo -V`, and the /rustc/<commit> fingerprint std embeds in the
-           binary). Anything but the pinned toolchain refuses.
+           `cargo -V`, rustup's own identity for the pin, and the
+           /rustc/<commit> fingerprint std embeds in the binary). A rustc
+           whose commit is not rustup's pin refuses, and so does a pin
+           rustup cannot resolve.
   observe  For every corpus file, record raw transcripts of pinned ExifTool
            (`-j -a -G1:4 -s`, and `-n`), of the proven OxiDex binary (`-j -a
            -G1`, and `--no-print-conv`), and of capture_corpus_sources.pl, which
@@ -122,11 +124,21 @@ def build_toolchain(root=ROOT, env=None) -> dict:
               "rustc": file_fact(rustc),
               "rustc_version": transcript([str(rustc.resolve()), "-vV"], env=env, cwd=root),
               "cargo_version": transcript(["cargo", "-V"], env=env, cwd=root)}
+    # A release string is not an identity: a non-rustup rustc (distro,
+    # Homebrew) can report 1.97.1 too. Ask rustup -- the same rustup-only
+    # resolver the instrument headers use, never PATH -- for the pin's own
+    # commit, and fail closed when it cannot answer.
+    toolchain_identity(record, channel, require_pin=False)  # off-release refuses before asking rustup
+    pinned = instrument.pinned_rustc_identity(channel, cwd=root, env=env)
+    if pinned is None:
+        raise ValueError(f"rustup cannot resolve the pinned toolchain {channel}; the build compiler cannot be "
+                         f"proven to be the pin (install it: rustup toolchain install {channel})")
+    record["pin_rustc"] = {"release": pinned.release, "commit_hash": pinned.commit_hash, "path": pinned.path}
     toolchain_identity(record, channel)
     return record
 
 
-def toolchain_identity(record: dict, expected_channel: str) -> dict:
+def toolchain_identity(record: dict, expected_channel: str, *, require_pin: bool = True) -> dict:
     """The recorded compiler, replayed from its transcripts; refuses anything but the pin.
 
     -> {"release", "commit_hash", "cargo_release"}.
@@ -148,6 +160,16 @@ def toolchain_identity(record: dict, expected_channel: str) -> dict:
         raise ValueError(f"build cargo is {cargo or '?'}, not the pinned {expected_channel}")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("build compiler commit hash is missing or malformed")
+    if not require_pin:
+        return {"release": release, "commit_hash": commit, "cargo_release": cargo}
+    pin = record.get("pin_rustc")
+    if (not isinstance(pin, dict) or instrument.channel_matches(expected_channel, pin.get("release")) is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("commit_hash", "")))):
+        raise ValueError("build proof lacks rustup's identity for the pinned toolchain")
+    if commit != pin["commit_hash"]:
+        raise ValueError(f"build compiler {rustc['path']} (rustc {release}, commit {commit[:12]}) is not the "
+                         f"rustup-resolved pin (commit {pin['commit_hash'][:12]}): it reports the pinned "
+                         "release but is a different compiler")
     return {"release": release, "commit_hash": commit, "cargo_release": cargo}
 
 
