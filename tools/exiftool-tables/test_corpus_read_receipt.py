@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 import corpus_read_receipt as receipt_tool
 
@@ -173,6 +176,143 @@ class NativeIdentityTests(unittest.TestCase):
                                 (self.facts(capability="ZIP"), "13.59"), (self.facts(perl="v5.34.1"), "13.59")):
             with self.subTest(expected=expected), self.assertRaises(ValueError):
                 receipt_tool.validate_native(facts, expected)
+
+
+PIN_COMMIT = "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+BREW_COMMIT = "48a229ceaefd4985c50990b14116b6d856af0985"
+
+
+class BuildToolchainTests(unittest.TestCase):
+    """The build proof names the compiler, and only the pinned one passes."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.root = self.base / "checkout"
+        self.root.mkdir()
+        (self.root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.97.1"\n')
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+
+    def script(self, path: Path, body: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return path
+
+    def sysroot(self, release: str, commit: str) -> Path:
+        sysroot = self.base / f"toolchains/{release}-{commit[:6]}"
+        self.script(sysroot / "bin/rustc", f'printf "rustc {release} (x 2026-01-01)\\nbinary: rustc\\n'
+                                           f'commit-hash: {commit}\\nrelease: {release}\\n"\n')
+        return sysroot
+
+    def toolchain(self, release="1.97.1", commit=PIN_COMMIT, cargo="1.97.1", pin_commit=PIN_COMMIT,
+                  rustup=True) -> dict:
+        """A sysroot whose rustc reports ``release``, reached through a proxy, a cargo on PATH, and
+        a rustup whose own 1.97.1 toolchain is ``pin_commit`` (``rustup=False``: it cannot resolve it)."""
+        sysroot = self.sysroot(release, commit)
+        proxy = self.script(self.base / f"proxy-{release}-{commit[:6]}/rustc",
+                            f'[ "$1" = --print ] && echo "{sysroot}"\n')
+        self.script(self.bin / "cargo", f'echo "cargo {cargo} (x 2026-01-01)"\n')
+        pinned = self.sysroot("1.97.1", pin_commit) / "bin/rustc"
+        self.script(self.bin / "rustup", (f'[ "$1 $2 $3 $4" = "which --toolchain 1.97.1 rustc" ] && echo "{pinned}" '
+                                          '&& exit 0\n' if rustup else "") + "exit 1\n")
+        env = {**os.environ, "RUSTC": str(proxy), "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+               "HOME": str(self.base), "CARGO_HOME": str(self.base / "cargo-home")}
+        return receipt_tool.build_toolchain(self.root, env)
+
+    def proof(self, toolchain: dict, commits) -> dict:
+        (self.root / "Cargo.toml").write_text("[package]\n")
+        binary = self.base / "oxidex"
+        binary.write_bytes(b"".join(b"/rustc/" + c.encode() + b"/library/core/src/lib.rs\0" for c in commits))
+        artifact = {"reason": "compiler-artifact", "manifest_path": str(self.root / "Cargo.toml"),
+                    "target": {"name": "oxidex", "kind": ["bin"]}, "profile": {"test": False},
+                    "executable": str(binary)}
+        stdout = (json.dumps(artifact) + "\n" + json.dumps({"reason": "build-finished", "success": True})).encode()
+        snapshot = {"source_commit": "a" * 40, "source_fingerprint": "b" * 64,
+                    "runtime_input_manifest_sha256": "c" * 64, "source_dirty": False}
+        toolchain = {**toolchain, "binary_rustc_commits": receipt_tool.instrument.embedded_rustc_commits(binary)}
+        return {"schema": receipt_tool.BUILD_SCHEMA, "snapshot": snapshot, "source_root": str(self.root),
+                "command": receipt_tool.BUILD_COMMAND, "returncode": 0, "cargo_artifact": artifact,
+                "binary": receipt_tool.file_fact(binary), "toolchain": toolchain,
+                "cargo_stdout_hex": stdout.hex(), "cargo_stdout_sha256": receipt_tool.sha(stdout),
+                "cargo_stderr_hex": "", "cargo_stderr_sha256": receipt_tool.sha(b"")}
+
+    def test_pinned_compiler_is_recorded_by_its_real_executable(self):
+        record = self.toolchain()
+        self.assertEqual(record["channel"], "1.97.1")
+        self.assertTrue(record["rustc"]["path"].endswith("/bin/rustc"))
+        self.assertNotIn("proxy", record["rustc"]["path"])
+        self.assertEqual(receipt_tool.toolchain_identity(record, "1.97.1"),
+                         {"release": "1.97.1", "commit_hash": PIN_COMMIT, "cargo_release": "1.97.1"})
+
+    def test_off_pin_rustc_or_cargo_refuses_before_building(self):
+        with self.assertRaisesRegex(ValueError, "rustc 1.98.1 .* not the pinned 1.97.1"):
+            self.toolchain(release="1.98.1", commit=BREW_COMMIT)
+        with self.assertRaisesRegex(ValueError, "cargo is 1.98.1"):
+            self.toolchain(cargo="1.98.1")
+
+    def test_non_rustup_rustc_reporting_the_pinned_release_refuses(self):
+        # e.g. a distro or Homebrew build that happens to be 1.97.1: same release, not the pin.
+        with self.assertRaisesRegex(ValueError, "is not the rustup-resolved pin"):
+            self.toolchain(commit="2" * 40)
+
+    def test_unresolvable_pin_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "rustup cannot resolve the pinned toolchain 1.97.1"):
+            self.toolchain(rustup=False)
+
+    def test_rustups_pin_identity_is_recorded_and_replayed(self):
+        record = self.toolchain()
+        self.assertEqual(record["pin_rustc"]["commit_hash"], PIN_COMMIT)
+        self.assertEqual(record["pin_rustc"]["release"], "1.97.1")
+        for label, mutate in (("absent", lambda r: r.pop("pin_rustc")),
+                              ("other commit", lambda r: r["pin_rustc"].update(commit_hash="3" * 40)),
+                              ("other release", lambda r: r["pin_rustc"].update(release="1.98.1"))):
+            broken = copy.deepcopy(record); mutate(broken)
+            with self.subTest(label), self.assertRaises(ValueError):
+                receipt_tool.toolchain_identity(broken, "1.97.1")
+
+    def test_checkout_without_a_numeric_pin_refuses(self):
+        (self.root / "rust-toolchain.toml").unlink()
+        with self.assertRaisesRegex(ValueError, "no rust-toolchain.toml"):
+            self.toolchain()
+        (self.root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "stable"\n')
+        with self.assertRaisesRegex(ValueError, "not the pinned stable"):
+            self.toolchain()
+
+    def test_build_proof_requires_the_binary_to_carry_the_pinned_compiler(self):
+        record = self.toolchain()
+        good = self.proof(record, [PIN_COMMIT])
+        receipt_tool.validate_build_proof(good, good["snapshot"], expected_channel="1.97.1")
+        receipt_tool.check_binary_compiler(good)
+        for label, commits in (("built by Homebrew", [BREW_COMMIT]), ("two toolchains", [BREW_COMMIT, PIN_COMMIT]),
+                               ("no fingerprint", [])):
+            bad = self.proof(record, commits)
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "not compiled by the recorded pinned"):
+                receipt_tool.validate_build_proof(bad, bad["snapshot"], expected_channel="1.97.1")
+
+    def test_build_proof_is_checked_against_the_validating_checkouts_pin(self):
+        good = self.proof(self.toolchain(), [PIN_COMMIT])
+        with self.assertRaisesRegex(ValueError, "pinned channel '1.98.1'"):
+            receipt_tool.validate_build_proof(good, good["snapshot"], expected_channel="1.98.1")
+        mutations = (
+            lambda p: p.pop("toolchain"),
+            lambda p: p["toolchain"]["rustc_version"].update(stdout_hex=b"rustc 1.97.1\nrelease: 1.97.1\n".hex()),
+            lambda p: p["toolchain"]["rustc"].update(path="/opt/homebrew/bin/rustc"),
+            lambda p: p["toolchain"]["cargo_version"].update(returncode=1),
+            lambda p: p["toolchain"].update(binary_rustc_commits=[BREW_COMMIT]),
+        )
+        for index, mutate in enumerate(mutations):
+            broken = copy.deepcopy(good); mutate(broken)
+            with self.subTest(mutation=index), self.assertRaises(ValueError):
+                receipt_tool.validate_build_proof(broken, broken["snapshot"], expected_channel="1.97.1")
+
+    def test_on_disk_binary_must_still_carry_the_recorded_fingerprint(self):
+        proof = self.proof(self.toolchain(), [PIN_COMMIT])
+        Path(proof["binary"]["path"]).write_bytes(b"/rustc/" + BREW_COMMIT.encode() + b"/library\0")
+        with self.assertRaisesRegex(ValueError, "fingerprint differs"):
+            receipt_tool.check_binary_compiler(proof)
 
 
 if __name__ == "__main__":

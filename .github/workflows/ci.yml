@@ -515,7 +515,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           CHANGED=$(git diff --name-only HEAD^1 HEAD)
-          if printf '%s\n' "$CHANGED" | grep -qE '^(src/|\.cargo/|oxidex-tags[^/]*/|Cargo\.(toml|lock)$|build\.rs$|\.exiftool-version$|scripts/instrument\.py$|tools/ci/read_regression_gate\.py$|tools/exiftool-tables/(corpus_read_receipt\.py|capture_corpus_sources\.pl|catalog_corpus_reads\.py|runtime_evidence_inputs\.py|native_write_matrix\.py|verify_quicktime_userdata_reader\.py|quicktime_baseline\.py)$|docs/public/measurements/catalog-(corpus-observed|source)-[0-9.]+\.json$|\.github/(workflows/ci\.yml|actions/pinned-exiftool/))'; then
+          if printf '%s\n' "$CHANGED" | grep -qE '^(src/|\.cargo/|oxidex-tags[^/]*/|Cargo\.(toml|lock)$|build\.rs$|rust-toolchain(\.toml)?$|\.exiftool-version$|scripts/instrument\.py$|tools/ci/read_regression_gate\.py$|tools/exiftool-tables/(corpus_read_receipt\.py|capture_corpus_sources\.pl|catalog_corpus_reads\.py|runtime_evidence_inputs\.py|native_write_matrix\.py|verify_quicktime_userdata_reader\.py|quicktime_baseline\.py)$|docs/public/measurements/catalog-(corpus-observed|source)-[0-9.]+\.json$|\.github/(workflows/ci\.yml|actions/pinned-exiftool/))'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
