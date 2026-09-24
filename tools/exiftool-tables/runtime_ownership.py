@@ -159,20 +159,57 @@ def _has_enabled_exif_main(text: str) -> bool:
     return False
 
 
+# How a live Exif::Main residual array produces its ids:
+# * "hand-kept": the hand arm is the id's only producer in that directory,
+#   although the generated table reports it (`DirEngineRows::keep_hand`);
+# * "complement": the ids the generated table leaves over (IFD1);
+# * "fallback-on-decline": the generated arm owns the id, and the hand arm
+#   produces it in a directory where that arm declined an entry
+#   (`DirEngineRows::keep_hand_on_decline`). Such a row fences a live
+#   fallback, so its id must also have a generated owner.
+RESIDUAL_DISPOSITIONS = {"hand-kept", "complement", "fallback-on-decline"}
+
+
 def _expected_residual_rows(root: Path) -> list[dict]:
     exif_engine = root / "src/core/exif_dir_engine.rs"
     tiff = root / "src/core/tiff_helpers.rs"
     e_text, t_text = exif_engine.read_text(), tiff.read_text()
     constants = {name: f"0x{int(value, 16):04x}" for name, value in re.findall(r"const (TAG_[A-Z_]+): u16 = (0x[0-9A-Fa-f]+);", _rust_code(t_text))}
-    groups = (("IFD0", exif_engine, "IFD0_HAND_KEPT"), ("ExifIFD", tiff, "EXIF_IFD_HAND_KEPT"), ("IFD1", tiff, "IFD1_RESIDUAL_IDS"))
+    groups = (
+        ("IFD0", exif_engine, "IFD0_HAND_KEPT", "hand-kept"),
+        ("IFD0", exif_engine, "IFD0_HAND_ON_DECLINE", "fallback-on-decline"),
+        ("ExifIFD", tiff, "EXIF_IFD_HAND_KEPT", "hand-kept"),
+        ("IFD1", tiff, "IFD1_RESIDUAL_IDS", "complement"),
+    )
     rows = []
-    for directory, path, symbol in groups:
+    for directory, path, symbol, disposition in groups:
         values = _array_values(path.read_text(), symbol, constants)
         for value in values:
             rows.append({"module": "Exif", "table": "Main", "field": {"kind": "index", "value": f"{directory}/{value}"},
                          "owner": "residual", "symbol": f"{path.relative_to(root)}::{symbol}", "source_release": "13.59",
-                         "source_sha256": _source_hash(path), "refusal": None, "fixture": str(path.relative_to(root))})
+                         "source_sha256": _source_hash(path), "refusal": None, "fixture": str(path.relative_to(root)),
+                         "residual_disposition": disposition})
     return rows
+
+
+def _validate_residual_dispositions(rows: Sequence[dict]) -> None:
+    """Every Exif::Main residual row names how it produces; a decline fallback
+    must sit behind a generated owner of the same id, or it fences nothing."""
+    generated = {
+        row["field"]["value"]
+        for row in rows
+        if row["module"] == "Exif" and row["table"] == "Main"
+        and row["field"]["kind"] == "numeric" and row["owner"] == "generated"
+    }
+    for row in rows:
+        if row["module"] != "Exif" or row["table"] != "Main" or row["field"]["kind"] != "index":
+            continue
+        identity = StableFieldId.from_row(row)
+        disposition = row.get("residual_disposition")
+        if disposition not in RESIDUAL_DISPOSITIONS:
+            raise Refused(f"invalid residual disposition for {identity.text()}: {disposition!r}")
+        if disposition == "fallback-on-decline" and identity.value.split("/", 1)[-1] not in generated:
+            raise Refused(f"fallback-on-decline residual {identity.text()} has no generated owner")
 
 
 def _portable_relative(value: object, label: str) -> str:
@@ -528,6 +565,7 @@ def build_inventory(root: Path, ops_root: Path | None = None) -> dict:
     ]
     rows = _base_rows(root) + fragment_rows
     checked = verify_rows(rows)
+    _validate_residual_dispositions(rows)
     _validate_paths_and_symbols(root, rows, ops_root)
     _validate_candidates(root, fragments.candidate_documents, rows, ops_root)
     ledger = json.loads((root / "tools/exiftool-tables/conv_exif_main_ledger.json").read_text())
