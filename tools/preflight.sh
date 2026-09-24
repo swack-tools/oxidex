@@ -29,7 +29,9 @@
 # Always checked when the checkout has a rust-toolchain.toml: the compiler
 # cargo would use here ($RUSTC, else `rustc` on PATH, run from the worktree
 # root so a rustup proxy honours the pin) and `cargo` itself must be the
-# pinned channel. A mismatch fails with exit 6; set
+# pinned channel, and rustc's commit-hash must equal the one rustup reports
+# for the pin (a release string alone is not an identity; a pin rustup cannot
+# resolve is not proven). A mismatch fails with exit 6; set
 # OXIDEX_ALLOW_TOOLCHAIN_SKEW=1 to downgrade it to a printed warning (for work
 # that builds nothing -- every binary built under the override is off-pin).
 #
@@ -51,7 +53,7 @@ while [ $# -gt 0 ]; do
     --k8s)      CHECK_K8S=1 ;;
     --host)     shift; [ $# -gt 0 ] || { echo "preflight: --host needs a value" >&2; exit 64; }; HOSTS+=("$1") ;;
     --all)      CHECK_UPSTREAM=1; CHECK_GH=1; CHECK_K8S=1 ;;
-    -h|--help)  sed -n '2,38p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "preflight: unknown argument '$1'" >&2; exit 64 ;;
   esac
   shift
@@ -127,6 +129,36 @@ if [ -n "$TOOLCHAIN_FILE" ]; then
   say "rustc    : ${RUSTC_PATH:-$RUSTC_CMD (not found)} -> $(printf '%s\n' "$RUSTC_VV" | head -n 1)${RUSTC:+  [\$RUSTC]}"
   say "sysroot  : $RUSTC_SYSROOT"
   say "cargo    : ${CARGO_PATH:-cargo (not found)} -> ${CARGO_V:-?}"
+  # A release string is not an identity: a non-rustup rustc (distro,
+  # Homebrew) can report the pinned release too. Ask rustup -- never PATH --
+  # which commit the pin is: `rustup which` (run that executable), then
+  # `rustup run`, with auto-install off and no RUSTUP_TOOLCHAIN override.
+  RUSTC_COMMIT=$(printf '%s\n' "$RUSTC_VV" | sed -n 's/^commit-hash: *//p')
+  PIN_RUSTC="" PIN_VV="" PIN_COMMIT=""
+  RUSTUP_BIN=$(command -v rustup 2>/dev/null || true)
+  if [ -z "$RUSTUP_BIN" ] && [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/rustup" ]; then
+    RUSTUP_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/rustup"
+  fi
+  if [ -n "$PIN_CHANNEL" ] && [ -n "$RUSTUP_BIN" ]; then
+    PIN_RUSTC=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 \
+                "$RUSTUP_BIN" which --toolchain "$PIN_CHANNEL" rustc 2>/dev/null) || PIN_RUSTC=""
+    if [ -n "$PIN_RUSTC" ] && [ -x "$PIN_RUSTC" ]; then
+      PIN_VV=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 "$PIN_RUSTC" -vV 2>/dev/null) || PIN_VV=""
+    fi
+    if [ -z "$PIN_VV" ]; then
+      PIN_RUSTC="rustup run $PIN_CHANNEL rustc"
+      PIN_VV=$(cd "$ROOT" && env -u RUSTUP_TOOLCHAIN RUSTUP_AUTO_INSTALL=0 \
+               "$RUSTUP_BIN" run "$PIN_CHANNEL" rustc -vV 2>/dev/null) || PIN_VV=""
+    fi
+    PIN_COMMIT=$(printf '%s\n' "$PIN_VV" | sed -n 's/^commit-hash: *//p')
+    release_matches "$PIN_CHANNEL" "$(printf '%s\n' "$PIN_VV" | sed -n 's/^release: *//p')"
+    [ "$?" = "1" ] && PIN_COMMIT=""  # rustup answered with another release: not the pin
+  fi
+  if [ -n "$PIN_COMMIT" ]; then
+    say "pin rustc: $PIN_RUSTC -> $(printf '%s\n' "$PIN_VV" | head -n 1), commit $(printf '%.12s' "$PIN_COMMIT")"
+  else
+    say "pin rustc: UNRESOLVED (${RUSTUP_BIN:-no rustup} could not resolve toolchain '${PIN_CHANNEL:-?}')"
+  fi
   SKEW=()
   if [ -z "$PIN_CHANNEL" ]; then
     SKEW+=("cannot read the channel from ${TOOLCHAIN_FILE##*/}")
@@ -138,6 +170,13 @@ if [ -n "$TOOLCHAIN_FILE" ]; then
         say "toolchain: channel '$PIN_CHANNEL' is symbolic -- $tool ${rel:-?} not checked against it"
       elif [ "$m" != "0" ]; then
         SKEW+=("$tool is ${rel:-UNRESOLVABLE}, pin is $PIN_CHANNEL")
+      elif [ "$tool" = "rustc" ]; then
+        # The release matches; now the identity must too.
+        if [ -z "$PIN_COMMIT" ]; then
+          SKEW+=("rustup cannot resolve the pinned toolchain $PIN_CHANNEL, so rustc ${RUSTC_PATH:-$RUSTC_CMD} cannot be proven to be the pin (rustup toolchain install $PIN_CHANNEL)")
+        elif [ "$RUSTC_COMMIT" != "$PIN_COMMIT" ]; then
+          SKEW+=("rustc ${RUSTC_PATH:-$RUSTC_CMD} reports $rel but is commit $(printf '%.12s' "${RUSTC_COMMIT:-?}"), not the rustup-resolved pin (commit $(printf '%.12s' "$PIN_COMMIT"))")
+        fi
       fi
     done
   fi

@@ -59,7 +59,9 @@ preflight, the corpus receipt and the rehearsal stages all check
 `RUSTC="$(rustup which --toolchain 1.97.1 rustc)" "$(rustup which --toolchain 1.97.1 cargo)" …`.
 Check with
 `tools/preflight.sh`, which exits 6 when `rustc` (or `$RUSTC`) or `cargo`
-resolves to anything but the pinned channel. `OXIDEX_ALLOW_TOOLCHAIN_SKEW=1`
+resolves to anything but the pinned channel. It also exits 6 when that
+rustc's `commit-hash` is not the one rustup reports for the pin, or when
+rustup cannot resolve the pin at all. `OXIDEX_ALLOW_TOOLCHAIN_SKEW=1`
 turns that failure into a printed warning. Use it only for work that builds
 nothing you will measure.
 
@@ -268,7 +270,8 @@ instrument keeps lying in a new way, not because the old ways stopped:
     ignored it. Every local binary and corpus measurement on 2026-09-23 came
     from 1.98.1 while CI used the pin. Nothing reported it, because nothing
     asked which compiler ran. Fix: `tools/preflight.sh` fails (exit 6) on a
-    `rustc`/`cargo` that is not the pinned channel. Every instrument header
+    `rustc`/`cargo` that is not the pinned channel, or on a rustc whose
+    commit is not rustup's pin. Every instrument header
     names the compiler that built the binary under test. It reads the
     `/rustc/<commit>/` std paths embedded in the binary, because the
     compiler on `PATH` today may not be the one that built a prebuilt binary,
@@ -282,7 +285,7 @@ instrument keeps lying in a new way, not because the old ways stopped:
     The build is also checked against the binaries' fingerprints. The pin's
     identity comes only from rustup (`rustup which`/`rustup run`), never from
     a PATH compiler that merely reports the same release. A matching
-    release string is not an identity: the corpus receipt build and both
+    release string is not an identity: preflight, the corpus receipt build and both
     rehearsal stages require the running rustc's `commit-hash` to equal the
     commit rustup reports for the pin. They refuse, failing closed, when
     rustup cannot resolve the pin. Instrument headers report `unverified`

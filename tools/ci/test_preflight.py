@@ -47,8 +47,10 @@ class PreflightHarness(unittest.TestCase):
         self.run_git(repo, "-c", "commit.gpgsign=false", "commit", "-m", "initial")
         return repo
 
+    BASH = "bash"
+
     def run_preflight(self, repo: Path, env: dict | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["bash", str(PREFLIGHT)], cwd=repo, text=True,
+        return subprocess.run([self.BASH, str(PREFLIGHT)], cwd=repo, text=True,
                               capture_output=True, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", **(env or {})})
 
 
@@ -82,11 +84,16 @@ class PreflightDiagnosticsTests(PreflightHarness):
 class PreflightToolchainTests(PreflightHarness):
     """A compiler resolved implicitly from PATH instead of the pin is exit 6."""
 
-    def fake_tools(self, name: str, rustc: str | None, cargo: str | None) -> Path:
-        """A bin directory whose `rustc`/`cargo` report the given releases.
+    def fake_tools(self, name: str, rustc: str | None, cargo: str | None, *,
+                   commit: str = "f" * 40, pin_commit: str | None = "f" * 40, pin_via: str = "which") -> Path:
+        """A bin directory whose `rustc`/`cargo` report the given releases, plus a `rustup`.
 
         None installs a tool that cannot run (exit 127), so whatever real
-        toolchain the host has is always shadowed, never consulted.
+        toolchain the host has is always shadowed, never consulted. The fake
+        rustup resolves the pin to a rustc of the channel's release and
+        ``pin_commit`` via ``pin_via`` (`which` or `run`); ``pin_commit=None``
+        means rustup cannot resolve the pin. It refuses to answer unless
+        auto-install is off and no RUSTUP_TOOLCHAIN override leaks in.
         """
         directory = self.root / name
         directory.mkdir()
@@ -96,11 +103,26 @@ class PreflightToolchainTests(PreflightHarness):
             tools["rustc"] = (
                 'case "$1" in\n'
                 f'  -vV) printf "rustc {rustc} (fake 2026-01-01)\\nbinary: rustc\\n'
-                f'commit-hash: {"f" * 40}\\nrelease: {rustc}\\n" ;;\n'
+                f'commit-hash: {commit}\\nrelease: {rustc}\\n" ;;\n'
                 f'  --print) echo "/fake/toolchains/{rustc}" ;;\n'
                 "esac\n")
         if cargo is not None:
             tools["cargo"] = f'echo "cargo {cargo} (fake 2026-01-01)"\n'
+        pinned = directory / "pinned" / "rustc"
+        pinned.parent.mkdir()
+        pinned.write_text('#!/bin/sh\nprintf "rustc $PIN_RELEASE (pin 2026-01-01)\\nbinary: rustc\\n'
+                          f'commit-hash: {pin_commit}\\nrelease: $PIN_RELEASE\\n"\n', encoding="utf-8")
+        pinned.chmod(0o755)
+        guard = ('[ "${RUSTUP_AUTO_INSTALL:-}" = 0 ] || { echo "would auto-install" >&2; exit 99; }\n'
+                 '[ -z "${RUSTUP_TOOLCHAIN:-}" ] || exit 98\n')
+        if pin_commit is None:
+            tools["rustup"] = guard + "echo \"error: toolchain '$3' is not installed\" >&2\nexit 1\n"
+        elif pin_via == "which":
+            tools["rustup"] = guard + f'[ "$1" = which ] && [ "$2" = --toolchain ] && [ "$4" = rustc ] && ' \
+                                      f'{{ echo "{pinned}"; exit 0; }}\nexit 1\n'
+        else:
+            tools["rustup"] = guard + f'[ "$1" = run ] && [ "$3 $4" = "rustc -vV" ] && ' \
+                                      f'{{ PIN_RELEASE="$2" exec "{pinned}"; }}\nexit 1\n'
         for tool, body in tools.items():
             script = directory / tool
             script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
@@ -109,7 +131,8 @@ class PreflightToolchainTests(PreflightHarness):
 
     def env_for(self, *first: Path, **extra: str) -> dict:
         path = os.pathsep.join([*(str(entry) for entry in first), os.environ.get("PATH", os.defpath)])
-        env = {"PATH": path, "RUSTC": "", "OXIDEX_ALLOW_TOOLCHAIN_SKEW": ""}
+        env = {"PATH": path, "RUSTC": "", "OXIDEX_ALLOW_TOOLCHAIN_SKEW": "", "RUSTUP_TOOLCHAIN": "",
+               "PIN_RELEASE": extra.pop("PIN_RELEASE", "1.97.1")}
         env.update(extra)
         return env
 
@@ -183,11 +206,62 @@ class PreflightToolchainTests(PreflightHarness):
         self.assertEqual(sym.returncode, 0, sym.stderr)
         self.assertIn("channel 'stable' is symbolic", sym.stdout)
 
+    def test_same_release_from_a_non_rustup_rustc_is_exit_six(self):
+        repo = self.make_repo("impostor", "staging/pin", toolchain="1.97.1")
+        tools = self.fake_tools("distro", "1.97.1", "1.97.1", commit="2" * 40, pin_commit="8" * 40)
+        result = self.run_preflight(repo, self.env_for(tools))
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertIn(f"is commit {'2' * 12}, not the rustup-resolved pin (commit {'8' * 12})", result.stderr)
+        self.assertNotIn("preflight: OK", result.stdout)
+
+    def test_rustup_run_is_the_fallback_resolution(self):
+        repo = self.make_repo("via-run", "staging/pin", toolchain="1.97.1")
+        ok = self.run_preflight(repo, self.env_for(self.fake_tools("run-ok", "1.97.1", "1.97.1", pin_via="run")))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn(f"pin rustc: rustup run 1.97.1 rustc -> rustc 1.97.1 (pin 2026-01-01), commit {'f' * 12}",
+                      ok.stdout)
+        bad = self.run_preflight(repo, self.env_for(self.fake_tools("run-bad", "1.97.1", "1.97.1",
+                                                                    pin_commit="8" * 40, pin_via="run")))
+        self.assertEqual(bad.returncode, 6, bad.stderr)
+
+    def test_rustup_unable_to_resolve_the_pin_is_exit_six(self):
+        repo = self.make_repo("unresolved", "staging/pin", toolchain="1.97.1")
+        result = self.run_preflight(repo, self.env_for(self.fake_tools("nopin", "1.97.1", "1.97.1", pin_commit=None)))
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertIn("rustup cannot resolve the pinned toolchain 1.97.1", result.stderr)
+        self.assertIn("pin rustc: UNRESOLVED", result.stdout)
+
+    def test_override_downgrades_identity_failures_to_warnings(self):
+        repo = self.make_repo("override-identity", "staging/pin", toolchain="1.97.1")
+        for index, kwargs in enumerate(({"commit": "2" * 40, "pin_commit": "8" * 40}, {"pin_commit": None})):
+            with self.subTest(**{key: str(value) for key, value in kwargs.items()}):
+                result = self.run_preflight(repo, self.env_for(
+                    self.fake_tools(f"override-{index}", "1.97.1", "1.97.1", **kwargs),
+                    OXIDEX_ALLOW_TOOLCHAIN_SKEW="1"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("TOOLCHAIN MISMATCH", result.stderr)
+                self.assertIn("MISMATCH OVERRIDDEN (OXIDEX_ALLOW_TOOLCHAIN_SKEW=1)", result.stdout)
+
+    def test_help_prints_the_whole_header_including_every_exit_code(self):
+        result = subprocess.run([self.BASH, str(PREFLIGHT), "--help"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("6 toolchain differs from the pin", result.stdout)
+        self.assertIn("64 usage", result.stdout)
+        self.assertNotIn("set -uo pipefail", result.stdout)
+
     def test_checkout_without_a_pin_skips_the_check(self):
         repo = self.make_repo("unpinned", "staging/pin")
         result = self.run_preflight(repo, self.env_for(self.fake_tools("brew", "1.98.1", "1.98.1")))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("toolchain: no rust-toolchain.toml (skipped)", result.stdout)
+
+
+
+@unittest.skipUnless(Path("/bin/bash").is_file(), "no /bin/bash")
+class PreflightToolchainSystemBashTests(PreflightToolchainTests):
+    """The same cases under /bin/bash (3.2 on macOS): preflight must stay 3.2-compatible."""
+
+    BASH = "/bin/bash"
 
 
 if __name__ == "__main__":
