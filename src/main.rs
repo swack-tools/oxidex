@@ -106,7 +106,9 @@ fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
     match result {
         Ok(stats) => {
             let is_read_mode = modifications.is_empty();
-            if !(is_read_mode && (args.json || args.csv || args.short_format)) {
+            // ExifTool prints its read summary after text output at every
+            // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
+            if !(is_read_mode && (args.json || args.csv)) {
                 stats.print();
             }
 
@@ -347,7 +349,7 @@ fn print_resolved_metadata(
             !args.exiftool_compat(),
         );
         println!("{}", output);
-    } else if args.short_format {
+    } else if args.short_level > 0 {
         let formatter = ShortFormatter;
         let output = formatter.format_with_mode(metadata, None, !args.exiftool_compat());
         print!("{}", output);
@@ -368,7 +370,9 @@ fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
     match batch_processor::batch_process(path, args) {
         Ok(stats) => {
             let is_read_mode = args.tag_modifications().is_empty();
-            if !(is_read_mode && (args.json || args.csv || args.short_format)) {
+            // ExifTool prints its read summary after text output at every
+            // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
+            if !(is_read_mode && (args.json || args.csv)) {
                 stats.print();
             }
 

@@ -128,12 +128,21 @@ fn test_cli_short_format_output() {
     let (stdout, stderr, exit_code) = run_oxidex_command(&["-s"], &test_file);
     assert_eq!(exit_code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
 
-    // Verify output format: "TagName: Value" (no family prefix, shortened names for some tags)
-    // and long values are truncated.
-    // We expect some common tags to be present in short format.
-    assert!(stdout.contains("Make:"));
-    assert!(stdout.contains("Model:"));
-    assert!(stdout.contains("Creator:"));
+    // ExifTool's `-s` layout: the tag name (no family prefix) padded to 32
+    // columns, then ": value" -- pinned 13.59 prints
+    // `Make                            : TestCamera` for this fixture.
+    assert!(
+        stdout.contains("Make                            : TestCamera\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Model                           : TM\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Creator                         : John Doe\n"),
+        "{stdout}"
+    );
     // Check for truncation if an XMP tag with long value exists
     assert!(!stdout.contains("IFD0:")); // No family prefix
     assert!(!stdout.contains("Found metadata tag(s):")); // No header
