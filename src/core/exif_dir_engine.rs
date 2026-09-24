@@ -427,12 +427,6 @@ impl DirEngineRows {
         self.finish(metadata, ifd0_key, |_, _| true);
     }
 
-    /// Compatibility entry point for the unleased embedded-EXIF adapter.
-    /// JPEG and standalone TIFF use the exact-once route directly.
-    pub(crate) fn drain_ifd0(self, metadata: &mut MetadataMap) {
-        self.finish_ifd0(metadata);
-    }
-
     /// The table this walk read.
     pub(crate) fn table(&self) -> &'static IfdTable {
         self.table
