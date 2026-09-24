@@ -2122,7 +2122,7 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
 }
 
 /// A FileReader over an in-memory byte slice (same shape as exif_inplace's).
-struct SliceReader<'a>(&'a [u8]);
+pub(crate) struct SliceReader<'a>(pub(crate) &'a [u8]);
 
 impl FileReader for SliceReader<'_> {
     fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
@@ -2393,6 +2393,38 @@ pub(crate) fn jpeg_exif_payload(file_bytes: &[u8]) -> Result<Option<Vec<u8>>> {
         .iter()
         .find(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
         .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec()))
+}
+
+/// A JPEG without its Canon CIFF APP0 segments (`(II|MM)....HEAPJPGM`), or
+/// `None` when it has none. Pinned ExifTool 13.59 files every CIFF tag under
+/// MakerNotes and so drops the whole segment on `MakerNotes:All`
+/// (Writer.pl `%excludeGroups` CIFF => MakerNotes; WriteCRW leaves it
+/// empty): t/images ExifTool.jpg loses only that segment, every other one
+/// byte-identical.
+pub(crate) fn jpeg_without_ciff(file_bytes: &[u8]) -> Option<Vec<u8>> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader).ok()?;
+    let spans: Vec<(usize, usize)> = segments
+        .iter()
+        .filter(|s| {
+            s.marker == 0xFFE0
+                && s.data.len() >= 14
+                && matches!(&s.data[..2], b"II" | b"MM")
+                && &s.data[6..14] == b"HEAPJPGM"
+        })
+        .map(|s| (s.offset as usize, s.offset as usize + 4 + s.data.len()))
+        .collect();
+    if spans.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(file_bytes.len());
+    let mut at = 0;
+    for (start, end) in spans {
+        out.extend_from_slice(&file_bytes[at..start]);
+        at = end;
+    }
+    out.extend_from_slice(&file_bytes[at..]);
+    Some(out)
 }
 
 /// The (IFD, tag id) addresses a write key can name: its group's IFD (every

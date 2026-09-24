@@ -1889,3 +1889,61 @@ fn carrier_removals_drop_a_malformed_exif_carrier() {
         }
     }
 }
+
+/// `MakerNotes:All` on a JPEG holding a Canon CIFF APP0 segment: pinned
+/// ExifTool 13.59 drops that segment (its tags are MakerNotes; t/images
+/// ExifTool.jpg, "1 image files updated", every other segment
+/// byte-identical). c175e36b reported success with the segment kept; tip
+/// e4edc55c also kept it and rewrote the EXIF APP1.
+#[test]
+fn makernotes_removal_drops_a_ciff_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let plain = jpeg_with(&full(order).build(order));
+        let ciff = [
+            match order {
+                Order::Ii => b"II".as_slice(),
+                Order::Mm => b"MM".as_slice(),
+            },
+            &order.u32(26),
+            b"HEAPJPGM",
+            &[0; 16],
+        ]
+        .concat();
+        let mut jpeg = plain[..2].to_vec();
+        jpeg.extend([0xFF, 0xE0]);
+        jpeg.extend(((ciff.len() + 2) as u16).to_be_bytes());
+        jpeg.extend(&ciff);
+        jpeg.extend(&plain[2..]);
+        let path = write(dir.path(), "ciff.jpg", &jpeg);
+        remove_tag(&path, "MakerNotes:All").unwrap_or_else(|e| panic!("{order:?}: {e}"));
+        let out = std::fs::read(&path).unwrap();
+        assert!(
+            !out.windows(8).any(|w| w == b"HEAPJPGM"),
+            "{order:?}: CIFF left"
+        );
+        // Only the CIFF segment went: the rest is the file without it, but
+        // for the EXIF APP1 when the block held a maker note.
+        let path = write(dir.path(), "plain.jpg", &plain);
+        remove_tag(&path, "MakerNotes:All").unwrap();
+        assert_eq!(out, std::fs::read(&path).unwrap(), "{order:?}");
+    }
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("ExifTool.jpg") else {
+        return;
+    };
+    let original = std::fs::read(&sample).unwrap();
+    let path = write(dir.path(), "ExifTool.jpg", &original);
+    remove_tag(&path, "MakerNotes:All").unwrap();
+    let out = std::fs::read(&path).unwrap();
+    // The output is the input without its CIFF APP0 segment (marker,
+    // length, `II` + header length, then `HEAPJPGM`).
+    let start = original
+        .windows(8)
+        .position(|w| w == b"HEAPJPGM")
+        .expect("CIFF APP0")
+        - 10;
+    assert_eq!(original[start..start + 2], [0xFF, 0xE0]);
+    let len = u16::from_be_bytes([original[start + 2], original[start + 3]]) as usize;
+    let expected = [&original[..start], &original[start + 2 + len..]].concat();
+    assert_eq!(out, expected);
+}
