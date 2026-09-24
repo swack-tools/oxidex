@@ -64,10 +64,18 @@ fn single_dash_short_option_cluster_still_reaches_lexopt() {
         "expected -sr to succeed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // The cluster still reaches lexopt, so its `-r` is honoured and the
+    // directory is read. Its `s` does not change the short level: ExifTool
+    // has no single-letter clustering (pinned 13.59 reads `-sr` as an
+    // unknown tag name, never as `-s`), so the default layout is printed.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("======== tests/fixtures/jpeg/simple/"));
     assert!(stdout.contains("image files read"));
-    assert!(!stdout.lines().any(|line| line.starts_with("File: ")));
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("File: tests/fixtures/jpeg/simple/"))
+    );
+    assert!(!stdout.contains("======== "));
 }
 
 #[test]

@@ -341,10 +341,28 @@ impl CliArgs {
         let mut tag_modifications = Vec::new();
         let mut next_arg_is_lexopt_value = false;
 
+        let mut options_ended = false;
+
         for raw_arg in raw_args {
             if next_arg_is_lexopt_value {
                 lexopt_args.push(raw_arg);
                 next_arg_is_lexopt_value = false;
+                continue;
+            }
+
+            // `--` ends option recognition: everything after it is a path,
+            // however it is spelled (pinned 13.59 `exiftool -Make -- -s`
+            // reads a file named `-s`). lexopt applies the same rule to
+            // what it is handed, so pass `--` and the rest straight through
+            // rather than letting the option/tag recognition below claim an
+            // argument like `-s` or `-G1` first.
+            if options_ended {
+                lexopt_args.push(raw_arg);
+                continue;
+            }
+            if raw_arg == "--" {
+                options_ended = true;
+                lexopt_args.push(raw_arg);
                 continue;
             }
 
@@ -355,9 +373,9 @@ impl CliArgs {
             // lexopt clusters and used to fall through to the specific-tag
             // branch below as requests for tags literally named `s3`, `S`,
             // ... -- `-s3 -Make` printed the full `Group:Tag: value` line
-            // instead of the value alone. A bare `-s` is handled here too so
-            // `-s -S` and `-S -s` both reach level 3; `-s` inside a cluster
-            // (`-sa`) still reaches lexopt's `Short('s')` below.
+            // instead of the value alone. Every spelling that sets the level
+            // is handled here, in this one ordered pass, so `-s -S` and
+            // `-S -s` both reach level 3 and a later `-s1` always wins.
             if let Some(option) = parse_short_level_option(&arg) {
                 short_level = option.apply(short_level);
                 continue;
@@ -461,11 +479,14 @@ impl CliArgs {
                 Long("csv") => {
                     csv = true;
                 }
-                // Short format, inside an option cluster (`-sa`); standalone
-                // spellings are counted during pre-processing above.
-                Short('s') => {
-                    short_level = short_level.saturating_add(1);
-                }
+                // An `s` inside an option cluster (`-sa`, `-ss`, `-sr`) never
+                // changes the short level. ExifTool has no single-letter
+                // clustering: pinned 13.59 reads `-sa`/`-ss`/`-sS` as unknown
+                // tag names, so `-sa -s1` is level 1 and `-s2 -ss` level 2.
+                // Counting it here, after pre-processing had already applied
+                // every standalone spelling, also replayed it out of order.
+                // The cluster's other letters keep their OxiDex meaning.
+                Short('s') => {}
                 // All tags
                 Short('a') => {
                     all_tags = true;

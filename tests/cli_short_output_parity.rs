@@ -334,3 +334,51 @@ fn multiple_files_print_headers_and_summary() {
         )
     );
 }
+
+// ---------------------------------------------------------------------------
+// Option-order edge cases. ExifTool has no single-letter option clustering:
+// `-sa`, `-ss`, `-sS` are unknown tag names to it, so they never change the
+// short level, and the level is whatever the standalone spellings produce in
+// argument order. Pinned 13.59 on this fixture, `-Make -FileType`:
+//
+//   -sa -s1  / -s1 -sa  -> level 1
+//   -ss -s2  / -s2 -ss  -> level 2
+//   -sS -s3             -> level 3
+//   -s2 -Make -Model -- -s      (a file named `-s`) -> level 2, reads `-s`
+// ---------------------------------------------------------------------------
+
+fn repo_make_file_type(options: &[&str]) -> String {
+    run_with(options, &["-Make", "-FileType"], &[Path::new(REPO_FIXTURE)])
+}
+
+#[test]
+fn a_clustered_s_never_changes_the_short_level() {
+    let level1 = "Make                            : TestCamera\n\
+                  FileType                        : JPEG\n";
+    assert_eq!(repo_make_file_type(&["-sa", "-s1"]), level1);
+    assert_eq!(repo_make_file_type(&["-s1", "-sa"]), level1);
+    let level2 = "Make: TestCamera\nFileType: JPEG\n";
+    assert_eq!(repo_make_file_type(&["-ss", "-s2"]), level2);
+    assert_eq!(repo_make_file_type(&["-s2", "-ss"]), level2);
+    assert_eq!(repo_make_file_type(&["-sS", "-s3"]), "TestCamera\nJPEG\n");
+}
+
+#[test]
+fn double_dash_ends_option_recognition() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    std::fs::copy(REPO_FIXTURE, dir.path().join("-s")).expect("copy fixture to `-s`");
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .current_dir(dir.path())
+        .args(["-s2", "-Make", "-Model", "--", "-s"])
+        .output()
+        .expect("run oxidex");
+    assert!(
+        output.status.success(),
+        "`-- -s` must read the file named `-s`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Make: TestCamera\nModel: TM\n"
+    );
+}
