@@ -968,6 +968,13 @@ pub(crate) fn write_metadata_with_removals(
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
+        // Group-wide `<group>:All` removals pinned ExifTool 13.59 makes no
+        // change for here (IFD0 of any TIFF; ExifIFD and MakerNotes of a raw
+        // type) are no-ops; the rest are refused
+        // (`exif_surgical::resolve_tiff_group_removals`).
+        let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
+            file_bytes, &original, removed,
+        )?;
         if !whole_clear
             && crate::writers::exif_surgical::exif_request_is_no_op(
                 &[file_bytes],
@@ -1027,8 +1034,12 @@ pub(crate) fn write_metadata_with_removals(
                 &reader, &original, plan,
             )?;
             let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
-            if whole_clear {
-                // The clear's only post-condition: no EXIF APP1 is left.
+            if whole_clear
+                || (crate::writers::exif_surgical::removes_carrier(removed) && after.len() > 1)
+            {
+                // The clear's only post-condition, and one of `IFD0:All` /
+                // `EXIF:All` (every EXIF APP1 goes): no second EXIF APP1 is
+                // left, nor any after a clear.
                 if !after.is_empty() {
                     return Err(ExifToolError::unsupported_format(
                         "EXIF write verification failed: the EXIF block was to be \

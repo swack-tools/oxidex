@@ -1747,10 +1747,11 @@ fn a_family_alias_removal_of_a_surfaced_entry_deletes_it() {
     }
 }
 
-/// A TIFF-structured file: a group removal of a group the file does not
-/// hold is a no-op; one that would delete a directory is refused, file
-/// untouched (the in-place TIFF writer cannot delete directories; pinned
-/// ExifTool 13.59 cannot delete IFD0 from a TIFF either).
+/// On a TIFF-structured file pinned ExifTool 13.59 never deletes IFD0
+/// ("Can't delete IFD0 from TIFF", file unchanged, exit 0), so `IFD0:All` is
+/// a no-op, not the refusal c175e36b made it; `EXIF:All` deletes only
+/// ExifIFD there, and a group with content is a directory deletion this
+/// in-place writer refuses. A group the file lacks is a no-op.
 #[test]
 fn group_wide_removals_on_a_tiff_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -1766,15 +1767,125 @@ fn group_wide_removals_on_a_tiff_file() {
             ifd1: None,
         }
         .build(order);
-        for group in ["GPS:All", "IFD1:All", "InteropIFD:All", "MakerNotes:All"] {
+        for group in [
+            "IFD0:All",
+            "GPS:All",
+            "IFD1:All",
+            "InteropIFD:All",
+            "MakerNotes:All",
+        ] {
             let path = write(dir.path(), "g.tif", &tiff);
             remove_tag(&path, group).unwrap_or_else(|e| panic!("{order:?} {group}: {e}"));
             assert_eq!(std::fs::read(&path).unwrap(), tiff, "{order:?} {group}");
         }
-        for group in ["IFD0:All", "EXIF:All", "ExifIFD:All"] {
+        for group in ["EXIF:All", "ExifIFD:All"] {
             let path = write(dir.path(), "g.tif", &tiff);
             assert!(remove_tag(&path, group).is_err(), "{order:?} {group}");
             assert_eq!(std::fs::read(&path).unwrap(), tiff, "{order:?} {group}");
+        }
+
+        let gps = Tiff {
+            ifd0: vec![(0x010F, 2, 5, b"Acme\0".to_vec())],
+            exif: None,
+            interop: None,
+            gps: Some(vec![(0x0000, 1, 4, vec![2, 3, 0, 0])]),
+            ifd1: None,
+        }
+        .build(order);
+        for (group, deletes) in [("GPS:All", true), ("EXIF:All", false), ("IFD0:All", false)] {
+            let path = write(dir.path(), "gps.tif", &gps);
+            assert_eq!(
+                remove_tag(&path, group).is_err(),
+                deletes,
+                "{order:?} {group}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), gps, "{order:?} {group}");
+        }
+    }
+}
+
+/// The pinned t/images TIFF-structured files under every `<group>:All`,
+/// against pinned ExifTool 13.59 (`sweep2.py`, review-head-c175e36b): where
+/// the oracle leaves the file unchanged -- IFD0 of any TIFF; ExifIFD,
+/// MakerNotes and `EXIF:All` of a raw type ("Can't delete ExifIFD from
+/// CR2"); a group the file lacks -- the write is a no-op success; where it
+/// deletes a directory (InteropIFD of the CR2; ExifIFD and the
+/// DNGPrivateData maker note of the DNG; IFD1, InteropIFD and the whole
+/// EXIF of the RW2's embedded JpgFromRaw) or errors (IFD1 of the CR2 and
+/// IIQ), it is refused. Either way the file is untouched. c175e36b refused
+/// eighteen of the no-op cases.
+#[test]
+fn group_wide_removals_on_tiff_structured_files_follow_the_oracle() {
+    const GROUPS: [&str; 7] = [
+        "IFD0:All",
+        "ExifIFD:All",
+        "GPS:All",
+        "IFD1:All",
+        "InteropIFD:All",
+        "MakerNotes:All",
+        "EXIF:All",
+    ];
+    // Refused (true) or a no-op (false), in GROUPS order.
+    let cases: [(&str, [bool; 7]); 6] = [
+        (
+            "CanonRaw.cr2",
+            [false, false, false, true, true, false, false],
+        ),
+        ("DNG.dng", [false, true, false, false, false, true, true]),
+        ("ExifTool.tif", [false; 7]),
+        ("GeoTiff.tif", [false; 7]),
+        (
+            "Panasonic.rw2",
+            [true, false, false, true, true, false, true],
+        ),
+        (
+            "PhaseOne.iiq",
+            [false, false, false, true, false, false, false],
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for (name, refused) in cases {
+        let Some(sample) = fixtures::pinned_t_images_fixture_path(name) else {
+            continue;
+        };
+        let original = std::fs::read(&sample).unwrap();
+        for (group, refused) in GROUPS.iter().zip(refused) {
+            let path = write(dir.path(), name, &original);
+            let result = remove_tag(&path, group);
+            assert_eq!(result.is_err(), refused, "{name} {group}: {result:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{name} {group}");
+        }
+    }
+}
+
+/// `IFD0:All` and `EXIF:All` delete the EXIF carrier wholesale, as pinned
+/// ExifTool 13.59 does even for one it cannot read ("1 image files
+/// updated", the APP1 / eXIf gone). c175e36b judged an unreadable block
+/// to hold nothing and reported success with it left in place.
+#[test]
+fn carrier_removals_drop_a_malformed_exif_carrier() {
+    let dir = tempfile::tempdir().unwrap();
+    for (label, payload) in malformed_exif_payloads() {
+        for group in ["IFD0:All", "EXIF:All"] {
+            let path = write(dir.path(), "bad.jpg", &jpeg_with(&payload));
+            remove_tag(&path, group).unwrap_or_else(|e| panic!("{label} jpg {group}: {e}"));
+            let out = std::fs::read(&path).unwrap();
+            assert!(
+                !out.windows(6).any(|w| w == b"Exif\0\0"),
+                "{label} {group}: EXIF APP1 left"
+            );
+
+            let path = write(
+                dir.path(),
+                "bad.png",
+                &png(&[(b"eXIf", payload.clone())], &[]),
+            );
+            remove_tag(&path, group).unwrap_or_else(|e| panic!("{label} png {group}: {e}"));
+            assert_eq!(
+                kinds(&std::fs::read(&path).unwrap()),
+                ["IHDR", "IDAT", "IEND"],
+                "{label} {group}"
+            );
         }
     }
 }
