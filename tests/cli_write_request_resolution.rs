@@ -444,3 +444,75 @@ fn a_value_the_file_does_not_hold_is_never_proven() {
     assert_ne!(sha(&file), before, "the case change must be written");
     assert_eq!(read_back(&file, "IFD0:Make"), "synthetic camera co");
 }
+
+/// Bare Windows XP tags go through the same resolution to IFD0 and are
+/// encoded by #942's `xp_strings` exactly as the pinned oracle stores them.
+/// ExifTool 13.59, `-XPComment='héllo wörld'` (and XPTitle/XPAuthor/
+/// XPKeywords/XPSubject) on synthetic_001.jpg and sample.tif, `-v3`:
+/// `Tag 0x9c9c (24 bytes, int8u[24] ...)` = UCS-2LE text plus a NUL pair,
+/// read back as `[IFD0] XPComment : héllo wörld`.
+#[test]
+fn bare_xp_tags_write_ifd0_bytes_identical_to_the_oracle() {
+    use oxidex::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    const BYTE: u16 = 1;
+    let text = "héllo wörld";
+    let mut expected: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    expected.extend_from_slice(&[0, 0]);
+    for (fixture, name) in [(JPEG, "a.jpg"), (TIFF, "a.tif")] {
+        for (tag, id) in [
+            ("XPTitle", 0x9c9b_u16),
+            ("XPComment", 0x9c9c),
+            ("XPAuthor", 0x9c9d),
+            ("XPKeywords", 0x9c9e),
+            ("XPSubject", 0x9c9f),
+        ] {
+            let dir = TempDir::new().unwrap();
+            let file = copy_into(&dir, fixture, name);
+            let out = write(&file, &[&format!("-{tag}={text}")]);
+            assert_eq!(out.status.code(), Some(0), "{name} {tag}: {}", stderr(&out));
+            assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
+            assert_eq!(
+                read_back(&file, &format!("IFD0:{tag}")),
+                text,
+                "{name} {tag}"
+            );
+
+            let bytes = fs::read(&file).unwrap();
+            let tiff = match bytes.windows(6).position(|w| w == b"Exif\0\0") {
+                Some(at) if name.ends_with(".jpg") => &bytes[at + 6..],
+                _ => &bytes[..],
+            };
+            let entry = scan_exif_entries(tiff)
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|e| e.ifd == IfdKind::Ifd0 && e.tag_id == id)
+                .unwrap_or_else(|| panic!("{name} {tag}: no IFD0 0x{id:04x}"));
+            assert_eq!(entry.field_type, BYTE, "{name} {tag}: int8u");
+            assert_eq!(entry.count as usize, expected.len(), "{name} {tag}");
+            assert_eq!(entry.value, expected, "{name} {tag}: UCS-2LE + NUL pair");
+
+            // The same value again is ExifTool's `updated` without a rewrite.
+            let before = sha(&file);
+            let out = write(&file, &[&format!("-{tag}={text}")]);
+            assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
+            assert_eq!(sha(&file), before, "{name} {tag}");
+            // A bare deletion removes it from the JPEG. The in-place TIFF
+            // writer cannot shrink an IFD (pre-existing, grouped spellings
+            // too): it must refuse loudly and leave the file alone.
+            let out = write(&file, &[&format!("-{tag}=")]);
+            if name.ends_with(".jpg") {
+                assert_eq!(out.status.code(), Some(0), "{name} {tag}: {}", stderr(&out));
+                assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
+                assert_eq!(read_back(&file, &format!("IFD0:{tag}")), "", "{name} {tag}");
+            } else {
+                assert_eq!(out.status.code(), Some(1), "{name} {tag}");
+                assert!(
+                    !stdout(&out).contains("image files updated"),
+                    "{name} {tag}"
+                );
+                assert_eq!(sha(&file), before, "{name} {tag}");
+            }
+        }
+    }
+}
