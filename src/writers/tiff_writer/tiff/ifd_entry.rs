@@ -97,6 +97,16 @@ pub fn convert_tag_value_to_entry(
     tag_value: &TagValue,
     byte_order: ByteOrder,
 ) -> Result<Option<IfdEntryData>> {
+    // The Windows XP strings hold the decoded text in the map; ExifTool
+    // stores `ValueConvInv` of it, UCS-2LE plus a NUL pair as `int8u`
+    // (Exif.pm 13.59:2629-2676). This builder has no existing entry to
+    // keep an `undef` format from, so it writes the tag's `Writable`.
+    if crate::writers::xp_strings::is_xp_tag_id(tag_id) {
+        let (field_type, count, bytes) = crate::writers::xp_strings::xp_field(tag_value, None)?;
+        let field_type = ExifType::from_u16(field_type).expect("int8u is a TIFF type");
+        return Ok(Some(IfdEntryData::new(tag_id, field_type, count, bytes)));
+    }
+
     if tag_id == 0x8827
         && let TagValue::Array(values) = tag_value
     {
