@@ -10,9 +10,13 @@ use std::collections::HashMap;
 use crate::core::TagValue;
 use crate::io::ByteOrder;
 
-use super::IfdFlags;
+use super::PrintConv;
 use super::cond::Ctx;
 use super::engine::{self, Emitted};
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
+};
 use super::runtime::{self, DecodedValue};
 use super::serial_schema::{SerialCount, SerialEntry, SerialPrintConv, SerialTable, SerialTag};
 
@@ -312,8 +316,22 @@ fn count_for(
     }
 }
 
+/// `ProcessSerialData`'s explicit conversion policy for the shared stage.
+/// Unrepresentable state and an unmodeled `RawConv` both taint the rest of
+/// the directory: a later slot's count or Condition could observe it.
+const SERIAL_POLICY: Policy = Policy {
+    member_value: engine::member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Taint,
+    set_member_clears_omission: true,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Taint,
+    perl_length: pipeline::scalar_perl_length,
+    scalar_form: runtime::to_exiftool_value,
+};
+
+/// Hand one selected, read serial slot to the shared `FoundTag` stage.
 /// Returns true when a state-affecting refusal makes the remaining directory
 /// unsafe to interpret.
+#[allow(clippy::too_many_arguments)]
 fn emit_selected(
     table: &'static SerialTable,
     tag: &'static SerialTag,
@@ -325,93 +343,64 @@ fn emit_selected(
     sink: &mut dyn SerialEmissionSink,
     result: &mut SerialWalkResult,
 ) -> bool {
-    let mut omitted = tag.omitted;
-    if condition_resolved {
-        omitted.condition = false;
-    }
-    match tag.raw_conv {
-        Some(super::RawConvEffect::SetMember { member }) => {
-            let Some(value) = engine::member_value(&raw) else {
-                result.omitted += 1;
-                result.tainted = true;
-                return true;
-            };
-            ctx.members.insert(member, value);
-            omitted.raw_conv = false;
-        }
-        Some(super::RawConvEffect::ValueLocal) | None => {}
-    }
-    if omitted.raw_conv && tag.raw_conv.is_none() {
-        result.omitted += 1;
-        result.tainted = true;
-        return true;
-    }
-    if omitted.any() {
-        result.omitted += 1;
-        return false;
-    }
-    let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-        result.omitted += 1;
-        return false;
-    };
-    let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
-        let Some(length) = perl_length(&raw) else {
-            result.omitted += 1;
-            return false;
-        };
-        (
-            TagValue::String(format!(
-                "(Binary data {length} bytes, use -b option to extract)"
-            )),
-            None,
-        )
-    } else {
-        let unconverted = || {
-            if tag.flags.list {
-                runtime::to_tag_value(&converted)
-            } else {
-                runtime::to_exiftool_value(&converted)
-            }
-        };
-        match render_serial(tag.print_conv, &converted) {
-            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
-            None => (unconverted(), None),
+    // `DecodeBitsWords` stays serial-local: its native input is
+    // ProcessSerialData's space-joined multiword scalar, not a general
+    // binary-table BITMASK.
+    let decode_bits;
+    let print_conv = match tag.print_conv {
+        SerialPrintConv::None => PrintStage::Shared(PrintConv::None),
+        SerialPrintConv::Shared(conv) => PrintStage::Shared(conv),
+        SerialPrintConv::DecodeBitsWords { bits_per_word } => {
+            decode_bits = move |value: &DecodedValue| decode_bits_words(value, bits_per_word);
+            PrintStage::Adapter(&decode_bits)
         }
     };
-    if !super::attribution::silenced(super::attribution::Token::Serial) {
-        sink.emit(Emitted {
+    let input = PipelineInput {
+        identity: StableFieldIdentity::SerialIndex(serial_index),
+        provenance: Provenance {
             module: table.module,
             table: table.table,
-            group0: tag.groups.g0.unwrap_or(table.group0),
-            group1: tag.groups.g1.unwrap_or(table.group1),
-            group2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        groups: Groups {
+            g0: tag.groups.g0.unwrap_or(table.group0),
+            g1: Some(tag.groups.g1.unwrap_or(table.group1)),
+            g2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        reporting: Reporting {
             name: tag.name,
-            source_id: u16::try_from(serial_index).map_or_else(
-                |_| oxidex_tags::TagId::Named(serial_index.to_string()),
-                oxidex_tags::TagId::Numeric,
-            ),
-            stored,
-            value,
-            value_conv,
-            low_priority: low_priority(tag.flags),
+            low_priority: pipeline::effective_priority(tag.flags.priority, None, tag.flags.avoid)
+                == Some(0),
             avoid: tag.flags.avoid,
-            rational: None,
             is_list: tag.flags.list,
-        });
-    }
-    result.emitted += 1;
-    false
-}
-
-/// Render the serial-only conversion arm after ValueConv.  This is kept at
-/// the ProcessSerialData boundary because the native input is its scalar or
-/// space-joined list of words, not a general binary-table BITMASK.
-fn render_serial(conv: SerialPrintConv, value: &DecodedValue) -> Option<String> {
-    match conv {
-        SerialPrintConv::None => None,
-        SerialPrintConv::Shared(conv) => runtime::render(conv, value),
-        SerialPrintConv::DecodeBitsWords { bits_per_word } => {
-            decode_bits_words(value, bits_per_word)
+        },
+        conversions: Conversions {
+            omitted: tag.omitted,
+            condition_resolved,
+            raw_conv: tag.raw_conv,
+            value_conv: tag.value_conv,
+            print_conv,
+            binary: tag.flags.binary,
+        },
+        raw,
+        stored,
+        rational: None,
+    };
+    match pipeline::execute(input, &SERIAL_POLICY, ctx.members, None) {
+        Outcome::Report(row) => {
+            if !super::attribution::silenced(super::attribution::Token::Serial) {
+                sink.emit(row);
+            }
+            result.emitted += 1;
+            false
+        }
+        Outcome::Omitted | Outcome::Declined => {
+            result.omitted += 1;
+            false
+        }
+        Outcome::Tainted => {
+            result.omitted += 1;
+            result.tainted = true;
+            true
         }
     }
 }
@@ -449,18 +438,6 @@ fn decode_bits_words(value: &DecodedValue, bits_per_word: u8) -> Option<String> 
     } else {
         labels.join(",")
     })
-}
-
-fn low_priority(flags: IfdFlags) -> bool {
-    flags.priority.or(if flags.avoid { Some(0) } else { None }) == Some(0)
-}
-
-fn perl_length(value: &DecodedValue) -> Option<usize> {
-    match value {
-        DecodedValue::Undefined(bytes) | DecodedValue::StringBytes(bytes) => Some(bytes.len()),
-        DecodedValue::String(value) => Some(value.len()),
-        other => other.perl_string().map(|value| value.len()),
-    }
 }
 
 #[cfg(test)]

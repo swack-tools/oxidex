@@ -154,7 +154,11 @@ use super::enabled_serial;
 use super::engine::{self, Dir, Emitted};
 use super::exprs;
 use super::ifd_schema::{
-    IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
+    IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag,
+};
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
 };
 use super::runtime::{self, DecodedValue, decode_value_of};
 use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
@@ -1264,6 +1268,23 @@ fn walk_scoped(
     Some(())
 }
 
+/// `ProcessExif`'s explicit conversion policy for the shared stage.
+///
+/// Unlike the other walkers, a member the model cannot hold skips only this
+/// entry (later entries still walk), a modeled `RawConv` keeps its omission
+/// flag (the IFD generator never sets one beside a modeled effect), and an
+/// unmodeled `RawConv` is an ordinary omission. The Perl length and
+/// unconverted form are the 64-bit-rational spellings this engine alone may
+/// assume ([`ifd_perl_string`]).
+const IFD_POLICY: Policy = Policy {
+    member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Decline,
+    set_member_clears_omission: false,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Withhold,
+    perl_length,
+    scalar_form: ifd_exiftool_value,
+};
+
 /// The existing per-entry producer, invoked only when no generated arm owns
 /// the entry or after a generated decline has discarded its staged effects.
 /// Keeping this as one named residual is the production seam used by the
@@ -1290,88 +1311,64 @@ fn process_residual_entry(
     // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
     // that number, not the exact quotient. See `round_rationals`.
     let raw = round_rationals(raw);
-    // ExifTool.pm:9484-9505: `FoundTag` runs `RawConv` before any
-    // conversion; the one shape carried as data stores the raw value
-    // and returns it unchanged (the assignment's value).
-    if let Some(RawConvEffect::SetMember { member }) = tag.raw_conv {
-        let Some(value) = member_value(&raw) else {
-            return;
-        };
-        ctx.members.insert(member, value.clone());
-        let session_value = match value {
-            MemberValue::Str(s) => MemberVal::Str(s),
-            MemberValue::Bytes(bytes) => MemberVal::from_bytes(bytes),
-            MemberValue::Num(n) => MemberVal::Int(n),
-        };
-        let _ = session.set_member(member, session_value);
-    }
-    // A `Binary` tag with a refused `PrintConv` is withheld here too,
-    // although ExifTool never runs a PrintConv on a scalar-ref value
-    // (ExifTool.pm:3533): over-refusing is the safe direction.
-    if omitted.any() {
-        // A field whose generated arm declined this entry and whose static
-        // conversion is withheld: the engine cannot vouch for the absence,
-        // so the caller's hand arm runs (`EntryRead::Unread`).
-        if generated_declined && let Some(reads) = decoded.as_deref_mut() {
-            reads.entries[index] = EntryRead::Unread;
-        }
-        return;
-    }
-    let binary = tag.flags.binary && tag.value_conv.is_none();
-    let (value, value_conv) = if binary {
-        // ExifTool.pm:3535-3539: `Binary` with no `ValueConv` gets `\$val`.
-        let Some(len) = perl_length(&raw) else {
-            return;
-        };
-        (
-            TagValue::String(format!(
-                "(Binary data {len} bytes, use -b option to extract)"
-            )),
-            None,
-        )
-    } else {
-        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-            return;
-        };
-        let unconverted = || {
-            if tag.flags.list {
-                runtime::to_tag_value(&converted)
-            } else {
-                ifd_exiftool_value(&converted)
-            }
-        };
-        match runtime::render(tag.print_conv, &converted) {
-            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
-            None => (unconverted(), None),
-        }
-    };
-    let Some(group1) = group1_of(table, tag, dir) else {
-        return;
-    };
-    let emitted_at = out.len();
-    if !super::attribution::silenced(super::attribution::Token::Engine) {
-        out.push(Emitted {
+    let input = PipelineInput {
+        identity: StableFieldIdentity::IfdNumeric(tag.id),
+        provenance: Provenance {
             module: table.module,
             table: table.table,
-            group0: tag.groups.g0.unwrap_or(table.group0),
-            group1,
-            group2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        groups: Groups {
+            g0: tag.groups.g0.unwrap_or(table.group0),
+            // `None` withholds the row, but only after its RawConv ran.
+            g1: group1_of(table, tag, dir),
+            g2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        reporting: Reporting {
             name: tag.name,
-            source_id: oxidex_tags::TagId::Numeric(tag.id),
-            stored,
-            value,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
-            rational: fraction
-                .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
-            value_conv,
             is_list: tag.flags.list,
-        });
-    }
-    if out.len() > emitted_at
-        && let Some(reads) = decoded.as_deref_mut()
-    {
-        reads.rows.push((out.len() - 1, index));
+        },
+        conversions: Conversions {
+            // `walk_scoped` already cleared a resolved Condition and skipped
+            // an unresolved one.
+            omitted,
+            condition_resolved: false,
+            raw_conv: tag.raw_conv,
+            value_conv: tag.value_conv,
+            // A `Binary` tag with a refused `PrintConv` is withheld too,
+            // although ExifTool never runs a PrintConv on a scalar-ref value
+            // (ExifTool.pm:3533): over-refusing is the safe direction.
+            print_conv: PrintStage::Shared(tag.print_conv),
+            binary: tag.flags.binary,
+        },
+        raw,
+        stored,
+        rational: fraction,
+    };
+    match pipeline::execute(input, &IFD_POLICY, ctx.members, Some(session)) {
+        Outcome::Report(row) => {
+            let emitted_at = out.len();
+            if !super::attribution::silenced(super::attribution::Token::Engine) {
+                out.push(row);
+            }
+            if out.len() > emitted_at
+                && let Some(reads) = decoded.as_deref_mut()
+            {
+                reads.rows.push((out.len() - 1, index));
+            }
+        }
+        Outcome::Omitted => {
+            // A field whose generated arm declined this entry and whose static
+            // conversion is withheld: the engine cannot vouch for the absence,
+            // so the caller's hand arm runs (`EntryRead::Unread`).
+            if generated_declined && let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Unread;
+            }
+        }
+        // `IFD_POLICY` never taints: an unrepresentable member declines this
+        // entry only, and an unmodeled RawConv is an ordinary omission.
+        Outcome::Declined | Outcome::Tainted => {}
     }
 }
 
@@ -1667,10 +1664,7 @@ fn single_rational(raw: &DecodedValue) -> Option<(i64, i64)> {
 /// `PRIORITY => 0` table is NOT low priority -- and `Avoid` only supplies the
 /// default when neither declares one.
 fn effective_priority(table: &IfdTable, tag: &IfdTag) -> Option<i64> {
-    tag.flags
-        .priority
-        .or(table.priority)
-        .or(if tag.flags.avoid { Some(0) } else { None })
+    pipeline::effective_priority(tag.flags.priority, table.priority, tag.flags.avoid)
 }
 
 /// The family-1 group `GetGroup` (ExifTool.pm:3810-3860) reports:
@@ -2446,7 +2440,7 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::cond::{CmpOp, Cond, Ctx, EffectSource};
-    use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
+    use crate::exiftool_tables::ifd_schema::{IfdVariantGroup, RawConvEffect};
     use crate::exiftool_tables::{
         ExprId, GateA, IfdFlags, Omitted, PrintConv, SizeExpectation, TagGroups, U16SizeCheck,
     };

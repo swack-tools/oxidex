@@ -63,6 +63,7 @@ pub mod ifd_tables;
 pub mod keyed_engine;
 pub mod keyed_schema;
 pub mod keyed_tables;
+pub mod pipeline;
 pub mod runtime;
 pub mod serial_engine;
 pub mod serial_schema;
