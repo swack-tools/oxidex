@@ -6428,6 +6428,45 @@ mod ifd1_tests {
         assert!(metadata.get("IFD1:Compression").is_none());
     }
 
+    /// An IFD1 whose entry count runs past the data: `parse_ifd` refuses it,
+    /// so `parse_ifd1_with_session` takes its hand-collector fallback
+    /// (`Ifd1Hand::Thumbnail`), whose own `parse_ifd` refuses it too -- no
+    /// IFD1 row, and no panic, with the generated table in force.
+    #[test]
+    fn a_truncated_ifd1_takes_the_hand_fallback_and_emits_nothing() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // IFD0: no entries
+        data.extend_from_slice(&14u32.to_le_bytes()); // IFD1 at 14
+        data.extend_from_slice(&40u16.to_le_bytes()); // 40 entries, 0 present
+        data.extend_from_slice(&[0u8; 6]);
+        let reader = TestReader::new(data.clone());
+        let mut metadata = MetadataMap::new();
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
+        assert!(
+            crate::exiftool_tables::find_ifd_table("Exif", "Main")
+                .is_some_and(|table| table.enabled()),
+            "the generated Exif::Main table is in force"
+        );
+        assert!(
+            metadata
+                .all_occurrences()
+                .all(|(key, _)| !key.starts_with("IFD1:")),
+            "no IFD1 row from a directory neither producer can parse"
+        );
+    }
+
     // ---------------------------------------------------------------------
     // IFD1 through the generated `Exif::Main` table (engine + residual)
     // ---------------------------------------------------------------------
