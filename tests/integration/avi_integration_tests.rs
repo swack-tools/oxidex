@@ -96,8 +96,7 @@ fn test_avi_metadata_parity_with_exiftool() {
     // -G0 is required: the tags compared below are group-qualified
     // ("RIFF:FrameRate"), and a plain `-json` emits bare tag names, so every
     // lookup would miss and the comparison would silently pass on nothing.
-    let oracle =
-        exiftool_oracle::shared().unwrap_or_else(|e| panic!("No usable ExifTool oracle: {e}"));
+    let oracle = exiftool_oracle::required();
     let exiftool_output = oracle
         .command()
         .arg("-G0")

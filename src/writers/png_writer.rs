@@ -360,6 +360,20 @@ enum ExifFate {
     /// it when empty; with no original chunk, add one before the first IDAT
     /// when non-empty.
     Replace(Vec<u8>),
+    /// A carrier-wide removal with nothing set, on a PNG with more than one
+    /// `eXIf` chunk: every chunk goes, unparsed -- except, when `keep_short`
+    /// (`IFD0:All` without `EXIF:All`), one `II`/`MM`-led and too short for
+    /// a TIFF header, which has no IFD0 to delete ([`MalformedExif::Short`]).
+    Delete { keep_short: bool },
+}
+
+/// The TIFF payload of an `eXIf` chunk: its data less any improper
+/// `Exif\0\0` header (PNG.pm 13.59:1367-1372).
+fn exif_block(chunk: &PngChunk) -> &[u8] {
+    chunk
+        .data
+        .strip_prefix(b"Exif\0\0".as_slice())
+        .unwrap_or(&chunk.data)
 }
 
 /// An `eXIf` payload (after any `Exif\0\0` header) whose TIFF structure this
@@ -557,6 +571,32 @@ fn plan_exif(
             )
     {
         return Ok(ExifFate::Carry);
+    }
+    // A carrier-wide removal that sets nothing deletes every eXIf chunk,
+    // however many, and parses none: several chunks cannot yield a duplicate
+    // IFD0 when nothing is written. Pinned ExifTool 13.59 drops each chunk on
+    // `EXIF:All`, and on `IFD0:All` each but a too-short `II`/`MM` one
+    // (PNG.pm 13.59:1365, 1376-1380 delete a chunk with no byte-order mark
+    // first; 1395-1401 delete the IFD0 of the rest). Measured on two-chunk
+    // PNGs of every malformed shape and a valid block (evidence multi.sh).
+    let sets_something = metadata
+        .iter()
+        .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
+        || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty();
+    if exif_chunks.len() > 1
+        && raw_profiles.is_empty()
+        && !sets_something
+        && crate::writers::exif_surgical::removes_carrier(removed)
+    {
+        let exif_all = removed.iter().any(|key| {
+            crate::writers::exif_surgical::removes_carrier(std::slice::from_ref(key))
+                && key
+                    .split_once(':')
+                    .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
+        });
+        return Ok(ExifFate::Delete {
+            keep_short: !exif_all,
+        });
     }
     if exif_chunks.len() > 1 {
         return Err(ExifToolError::unsupported_format(
@@ -1014,6 +1054,13 @@ pub(crate) fn write_png_metadata_with_removals(
                 // Nothing left in the EXIF block: the chunk goes.
                 ExifFate::Replace(payload) if payload.is_empty() => {}
                 ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
+                ExifFate::Delete { keep_short } => {
+                    if *keep_short
+                        && MalformedExif::of(exif_block(chunk)) == Some(MalformedExif::Short)
+                    {
+                        write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
+                    }
+                }
             },
             _ => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
         }

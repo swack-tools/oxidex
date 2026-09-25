@@ -660,10 +660,7 @@ fn uneditable_exif_carriers_are_refused_untouched() {
 /// The warnings pinned ExifTool 13.59's `-validate` gives for `path`, or
 /// `None` when no usable oracle is resolved (the test then skips the check).
 fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
-    if !exiftool_oracle::available() {
-        return None;
-    }
-    let oracle = exiftool_oracle::shared().ok()?;
+    let oracle = exiftool_oracle::graded()?;
     let out = oracle
         .command()
         .args(["-a", "-s3", "-validate", "-Warning"])
@@ -693,10 +690,7 @@ fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
 /// structural damage -- a directory placed out of order, an orphaned table,
 /// a short directory -- that one misses.
 fn assert_validate_parity(original: &[u8], name: &str, args: &[&str], ours: &Path, label: &str) {
-    let Some(oracle) = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)
-    else {
+    let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping -validate parity ({label}): no usable ExifTool oracle");
         return;
     };
@@ -2004,9 +1998,7 @@ fn byte_order_less_payloads() -> [(&'static str, Vec<u8>); 3] {
 /// `name`: its output bytes and its stdout + stderr, or `None` when no
 /// usable oracle is resolved (the caller then skips the comparison).
 fn oracle_edit(original: &[u8], name: &str, args: &[&str]) -> Option<(Vec<u8>, String)> {
-    let oracle = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)?;
+    let oracle = exiftool_oracle::graded()?;
     let dir = tempfile::tempdir().unwrap();
     let path = write(dir.path(), name, original);
     let out = oracle
@@ -2027,7 +2019,7 @@ fn oracle_edit(original: &[u8], name: &str, args: &[&str]) -> Option<(Vec<u8>, S
 
 /// Pinned ExifTool 13.59's `-a -G1 -s -EXIF:all` read-back of `path`.
 fn oracle_exif_rows(path: &Path) -> Vec<String> {
-    let oracle = exiftool_oracle::shared().unwrap();
+    let oracle = exiftool_oracle::required();
     let out = oracle
         .command()
         .args(["-a", "-G1", "-s", "-EXIF:all"])
@@ -2165,6 +2157,53 @@ fn removals_on_a_malformed_exif_chunk_match_the_oracle() {
             };
             assert_eq!(ours, theirs, "{label} {arg}: not the oracle's output");
             assert_validate_parity(&original, "bad.png", &[arg], &path, label);
+        }
+    }
+}
+
+/// A carrier-wide removal on a PNG with two eXIf chunks deletes them without
+/// parsing either, byte for byte as pinned ExifTool 13.59 does: `EXIF:All`
+/// drops every chunk, `IFD0:All` every one but an `II`/`MM` chunk too short
+/// for a TIFF header, and `-all=` all of them. 9857fdd4 refused all but the
+/// last with "more than one eXIf chunk" -- a refusal about writing a second
+/// IFD0, when a deletion writes none -- and `-IFD0:All=` on two short chunks
+/// was already the oracle's no-op. `-validate` parity with the oracle's own
+/// edit too.
+#[test]
+fn carrier_removals_drop_every_exif_chunk_of_a_multi_chunk_png() {
+    let dir = tempfile::tempdir().unwrap();
+    let valid = Tiff {
+        ifd0: vec![(0x013B, 2, 3, b"me\0".to_vec())],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: None,
+    }
+    .build(Order::Mm);
+    let shapes: Vec<(&str, Vec<u8>)> = malformed_exif_payloads()
+        .into_iter()
+        .chain(byte_order_less_payloads())
+        .chain([("valid", valid)])
+        .collect();
+    for (a, first) in &shapes {
+        for (b, second) in &shapes {
+            let label = format!("{a}+{b}");
+            let original = png(&[(b"eXIf", first.clone()), (b"eXIf", second.clone())], &[]);
+            for arg in ["-EXIF:All=", "-IFD0:All=", "-all="] {
+                let path = write(dir.path(), "multi.png", &original);
+                match arg {
+                    "-all=" => clear_all_metadata(&path),
+                    _ => remove_tag(&path, &arg[1..arg.len() - 1]),
+                }
+                .unwrap_or_else(|e| panic!("{label} {arg}: {e}"));
+                let ours = std::fs::read(&path).unwrap();
+                let Some((theirs, _)) = oracle_edit(&original, "multi.png", &[arg]) else {
+                    eprintln!("skipping the oracle's {arg} ({label}): no oracle may grade output");
+                    continue;
+                };
+                assert_eq!(ours, theirs, "{label} {arg}: not the oracle's output");
+                assert_validate_parity(&original, "multi.png", &[arg], &path, &label);
+            }
         }
     }
 }
