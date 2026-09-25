@@ -2671,3 +2671,148 @@ fn cli_group_removal_and_set_follow_argument_order() {
         }
     }
 }
+
+/// A decoded maker-note row that a write changes or adds --
+/// `modify_tag(path, "Canon:MacroMode", ...)`, or the same through a map --
+/// cannot be applied: the MakerNote is carried byte-for-byte. The EXIF no-op
+/// checks looked only at EXIF-family keys, so the call reported success with
+/// nothing changed (e4f512d4, JPEG, PNG and TIFF). It is refused now, the key
+/// named, the file untouched, from the library and the CLI. Pinned ExifTool
+/// 13.59 does write it (`-Canon:MacroMode=Normal` on Canon.jpg: Unknown (0)
+/// -> Normal): a fail-closed divergence, listed in the PR.
+#[test]
+fn a_changed_decoded_makernote_row_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for (sample, key, value, cli_arg) in [
+        (
+            "Canon.jpg",
+            "Canon:MacroMode",
+            TagValue::new_integer(1),
+            "-Canon:MacroMode=1",
+        ),
+        (
+            "Pentax.jpg",
+            "Pentax:AEAperture",
+            TagValue::new_string("8.0"),
+            "-Pentax:AEAperture=8",
+        ),
+    ] {
+        let Some(path) = fixtures::pinned_t_images_fixture_path(sample) else {
+            continue;
+        };
+        let jpeg = std::fs::read(&path).unwrap();
+        let (tiff, _) = tiff_and_rest("x.jpg", &jpeg);
+        for (name, original) in [
+            ("mn.jpg", jpeg.clone()),
+            ("mn.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("mn.tif", tiff.clone()),
+        ] {
+            let label = format!("{sample} {name} {key}");
+            let path = write(dir.path(), name, &original);
+            if !read_metadata(&path).unwrap().contains_key(key) {
+                // The bare TIFF's maker note is not decoded by the reader.
+                assert!(!name.ends_with(".jpg"), "{label}: row not surfaced");
+                continue;
+            }
+            let err =
+                modify_tag(&path, key, value.clone()).expect_err(&format!("{label}: reported set"));
+            assert!(err.to_string().contains(key), "{label}: {err}");
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                original,
+                "{label} modify_tag"
+            );
+
+            let mut map = read_metadata(&path).unwrap();
+            map.insert(key, value.clone());
+            assert!(write_metadata(&path, &map).is_err(), "{label} map");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} map");
+
+            let out = std::process::Command::new(cli)
+                .arg(cli_arg)
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(!out.status.success(), "{label} CLI: {out:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} CLI");
+        }
+    }
+}
+
+/// Group and tag names are case-insensitive, as they are to ExifTool: the
+/// write transaction canonicalizes every key once, at its entry, so
+/// `exif:All`, `Exif:all`, `ifd0:ALL`, `ExifIFD:iso`, `gps:all`,
+/// `makernotes:all`, `exififd:ISO=200` and `ifd0:artist=you` do exactly what
+/// their canonical spellings do. `is_exif_key` and the other gates are
+/// case-sensitive prefix tests, so `remove_tag(path, "exif:All")` on a PNG
+/// was carried as unchanged and reported success with the eXIf chunk kept;
+/// a lowercase set changed nothing (e4f512d4). Library and CLI; JPEG, PNG
+/// and a TIFF file, II and MM: the same exit status and the same bytes as
+/// the canonical spelling.
+#[test]
+fn group_and_tag_names_are_case_insensitive() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    let pairs: [(&str, &str, Option<&str>); 10] = [
+        ("exif:All", "EXIF:All", None),
+        ("Exif:all", "EXIF:All", None),
+        ("ifd0:ALL", "IFD0:All", None),
+        ("ExifIFD:iso", "ExifIFD:ISO", None),
+        ("gps:all", "GPS:All", None),
+        ("makernotes:all", "MakerNotes:All", None),
+        ("exififd:all", "ExifIFD:All", None),
+        ("interopifd:ALL", "InteropIFD:All", None),
+        ("exififd:ISO", "ExifIFD:ISO", Some("200")),
+        ("ifd0:artist", "IFD0:Artist", Some("you")),
+    ];
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("case.jpg", jpeg_with(&tiff)),
+            ("case.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("case.tif", tiff.clone()),
+        ] {
+            for (spelled, canonical, value) in pairs {
+                let label = format!("{order:?} {name} {spelled}");
+                let run = |key: &str| {
+                    let path = write(dir.path(), name, &original);
+                    let ok = match value {
+                        None => remove_tag(&path, key).is_ok(),
+                        Some(v) => {
+                            let value = if v == "200" {
+                                TagValue::new_integer(200)
+                            } else {
+                                TagValue::new_string(v)
+                            };
+                            modify_tag(&path, key, value).is_ok()
+                        }
+                    };
+                    (ok, std::fs::read(&path).unwrap())
+                };
+                let (ok, bytes) = run(spelled);
+                let (canonical_ok, canonical_bytes) = run(canonical);
+                assert_eq!(ok, canonical_ok, "{label}: library status");
+                assert_eq!(bytes, canonical_bytes, "{label}: library bytes");
+                if canonical_ok && canonical != "MakerNotes:All" && !name.ends_with(".tif") {
+                    // Not silently nothing: the canonical write changes this
+                    // JPEG/PNG fixture (it has every group but a maker note;
+                    // on a TIFF file `IFD0:All` is the oracle's no-op).
+                    assert_ne!(bytes, original, "{label}: nothing changed");
+                }
+
+                let cli_run = |key: &str| {
+                    let path = write(dir.path(), name, &original);
+                    let arg = format!("-{key}={}", value.unwrap_or(""));
+                    let out = std::process::Command::new(cli)
+                        .arg(&arg)
+                        .arg(&path)
+                        .output()
+                        .unwrap();
+                    (out.status.success(), std::fs::read(&path).unwrap())
+                };
+                assert_eq!(cli_run(spelled), cli_run(canonical), "{label}: CLI");
+            }
+        }
+    }
+}

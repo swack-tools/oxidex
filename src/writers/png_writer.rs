@@ -230,6 +230,7 @@ fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[Strin
     // A decoded maker-note row (`Canon:MacroMode`) left out of the map is an
     // EXIF change too, whatever its family-1 group.
     !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
+        || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty()
         || removed.iter().any(|key| is_exif_key(key))
         || metadata
             .iter()
@@ -315,6 +316,13 @@ fn rewrite_exif_payload(
     crate::writers::exif_surgical::verify_dropped_rows_gone(
         full_baseline,
         full_desired,
+        &payload,
+        crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+    )?;
+    crate::writers::exif_surgical::verify_makernote_rows_set(
+        full_baseline,
+        full_desired,
+        original,
         &payload,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
@@ -461,7 +469,9 @@ fn plan_exif(
     // A dropped maker-note row is never a no-op: the write goes on to the
     // post-condition (`verify_dropped_rows_gone`), which refuses it.
     let drops_makernote_rows =
-        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty();
+        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
+            || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata)
+                .is_empty();
     if !exif_changed(metadata, baseline, removed)
         || !drops_makernote_rows
             && crate::writers::exif_surgical::exif_request_is_no_op(
