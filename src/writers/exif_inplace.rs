@@ -110,7 +110,14 @@ fn scan_ifd(
         let value_or_offset = read_u32(&entry[8..12], byte_order) as usize;
 
         if which == Ifd::Ifd0 && tag_id == EXIF_IFD_POINTER {
-            exif_ifd_offset = Some(value_or_offset);
+            // Decoded by TIFF type: a SHORT pointer is the field's first two
+            // bytes (`exif_surgical::inline_unsigned`).
+            exif_ifd_offset = Some(crate::writers::exif_surgical::inline_unsigned(
+                value_type,
+                value_count,
+                &entry[8..12],
+                byte_order,
+            ));
             continue;
         }
         let date_tag = match (which, tag_id) {

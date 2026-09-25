@@ -6956,6 +6956,62 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
     )
 }
 
+/// Every registered `Group:Name` spelling, indexed by the lowercased name:
+/// (group, name) pairs in their canonical case.
+static TAG_NAME_SPELLINGS: LazyLock<HashMap<String, Vec<(String, String)>>> = LazyLock::new(|| {
+    let mut index: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let keys = TAG_REGISTRY
+        .keys()
+        .map(|key| key.to_string())
+        .chain(GENERATED_TAG_REGISTRY.keys().cloned())
+        .chain(
+            GENERATED_SCALAR_DESCRIPTOR_ENTRIES
+                .as_ref()
+                .into_iter()
+                .flat_map(|entries| entries.keys().cloned()),
+        )
+        .chain(YAML_TAG_ENTRIES.keys().cloned());
+    for key in keys {
+        if let Some((group, name)) = key.split_once(':') {
+            let spellings = index.entry(name.to_ascii_lowercase()).or_default();
+            let pair = (group.to_string(), name.to_string());
+            if !spellings.contains(&pair) {
+                spellings.push(pair);
+            }
+        }
+    }
+    index
+});
+
+/// The canonical spelling of tag `name` in `group`, matched without regard
+/// to case as ExifTool matches tag names (`-exififd:iso=` is ExifIFD:ISO):
+/// the registered spelling in that group, else in `EXIF` for an EXIF-family
+/// group (IFD0, IFD1, ExifIFD, InteropIFD, GPS), else the one spelling every
+/// group agrees on. `None` when the name is unregistered or its spelling is
+/// ambiguous.
+pub fn canonical_tag_name_spelling(group: &str, name: &str) -> Option<&'static str> {
+    let spellings = TAG_NAME_SPELLINGS.get(&name.to_ascii_lowercase())?;
+    let exif_family = ["IFD0", "IFD1", "ExifIFD", "InteropIFD", "GPS"]
+        .iter()
+        .any(|g| g.eq_ignore_ascii_case(group));
+    let pick = spellings
+        .iter()
+        .find(|(g, _)| g.eq_ignore_ascii_case(group))
+        .or_else(|| {
+            exif_family
+                .then(|| spellings.iter().find(|(g, _)| g == "EXIF"))
+                .flatten()
+        })
+        .or_else(|| {
+            let first = &spellings.first()?.1;
+            spellings
+                .iter()
+                .all(|(_, n)| n == first)
+                .then(|| &spellings[0])
+        })?;
+    Some(pick.1.as_str())
+}
+
 pub(crate) fn has_reliable_value_type(name: &str) -> bool {
     if generated_scalar_descriptor_terminal(name) {
         return false;

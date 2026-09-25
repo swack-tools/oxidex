@@ -143,6 +143,67 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
     Ok(out)
 }
 
+/// Re-append the directory tables IFD0's next-IFD chain links (IFD1, IFD2,
+/// ...) after IFD0 when any of them lies before it, records verbatim --
+/// only the tables move, the data their records locate stays put -- and
+/// repoint the links. A grown IFD0 is appended at the end ([`rewrite_directory`])
+/// and so lands after IFD1; pinned ExifTool 13.59 sizes every directory of
+/// that chain by the room left after IFD0 (Exif.pm `ProcessExif` copies
+/// IFD0's `DirLen` to each next IFD), so a chained table larger than that
+/// drew "Short directory size for IFD1 (missing N bytes)" under
+/// `-validate`, which ExifTool's own edit, IFD0 first, never does.
+pub(crate) fn chain_tables_after_ifd0(file: &[u8]) -> Result<Vec<u8>> {
+    let scan = scan_tiff(file)?;
+    let bo = scan.byte_order;
+    let ifd0 = scan.ifd0_offset;
+    let (_, first) = directory_records(file, ifd0, bo)?;
+    // The valid tables of the chain; a link to no table (out of range, into
+    // the header) ends it and is carried as it is.
+    let mut chain = Vec::new();
+    let mut next = nonzero_offset(&first, bo);
+    while let Some(at) = next {
+        if at == ifd0 || chain.contains(&at) || chain.len() >= 64 {
+            break;
+        }
+        let Ok((_, link)) = directory_records(file, at, bo) else {
+            break;
+        };
+        chain.push(at);
+        next = nonzero_offset(&link, bo);
+    }
+    // ExifTool's own test: a chained table larger than the room after IFD0.
+    let room = file.len() - ifd0;
+    let too_big_for_room =
+        |at: &usize| directory_span(file, *at, bo).is_ok_and(|span| span.end - 4 - *at > room);
+    if !chain.iter().any(too_big_for_room) {
+        return Ok(file.to_vec());
+    }
+    let mut out = file.to_vec();
+    let mut link_at = directory_span(file, ifd0, bo)?.end - 4;
+    for at in chain {
+        let (records, next) = directory_records(file, at, bo)?;
+        let mut table = vec![0; 2];
+        put_u16(
+            &mut table,
+            u16::try_from(records.len())
+                .map_err(|_| invalid("IFD exceeds its entry-count limit"))?,
+            bo,
+        );
+        for record in &records {
+            table.extend_from_slice(record);
+        }
+        table.extend_from_slice(&next);
+        let new_at = append_checked(&mut out, &table)?;
+        put_u32(
+            &mut out[link_at..link_at + 4],
+            u32::try_from(new_at).map_err(too_big)?,
+            bo,
+        );
+        link_at = new_at + table.len() - 4;
+    }
+    Ok(out)
+}
+
 /// Return the first linked IFD1's physical entry count.  This is structural
 /// carrier state, used by the public transaction to apply source mandatory
 /// defaults only while native would be creating that directory.
