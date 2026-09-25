@@ -1119,7 +1119,9 @@ pub(crate) fn write_metadata_with_removals(
                     after.first().map(Vec::as_slice).unwrap_or_default(),
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
-                if let (Some(before), Some(after), Some(header)) = (
+                // A deleted carrier is not read (its chain went with it).
+                if let (false, Some(before), Some(after), Some(header)) = (
+                    crate::writers::exif_surgical::removes_carrier(removed),
                     before.as_deref(),
                     after.first(),
                     crate::writers::exif_surgical::jpeg_exif_header_offset(file_bytes),
@@ -2811,6 +2813,16 @@ mod removal_then_set_tests {
                         if !sets.iter().any(|s| s.0 == "IFD0:Artist") {
                             assert!(!after.contains_key("IFD0:Artist"), "{label}: Artist kept");
                         }
+                        // The new block's byte order, as the oracle's: MM,
+                        // but for a PNG's IFD0:All, which keeps its header.
+                        let written =
+                            payload_of(&std::fs::read(dir.path().join(carrier)).unwrap()).unwrap();
+                        let expected: &[u8] = if carrier == "b.png" && group == "IFD0:All" {
+                            &tiff[..2]
+                        } else {
+                            b"MM"
+                        };
+                        assert_eq!(&written[..2], expected, "{label}: byte order");
                     }
                 }
             }
@@ -2845,6 +2857,84 @@ mod removal_then_set_tests {
                 &[("IFD0:Make", TagValue::new_string("xy"))],
             );
             assert!(result.is_err(), "{bo:?} EXIF:All");
+        }
+    }
+
+    /// The TIFF payload of a carrier's first EXIF block (JPEG APP1 or PNG
+    /// eXIf), or `None`.
+    fn payload_of(file: &[u8]) -> Option<Vec<u8>> {
+        if file.starts_with(b"\x89PNG") {
+            let mut at = 8;
+            while at + 8 <= file.len() {
+                let len = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+                if &file[at + 4..at + 8] == b"eXIf" {
+                    return Some(file[at + 8..at + 8 + len].to_vec());
+                }
+                at += 12 + len;
+            }
+            None
+        } else {
+            crate::writers::exif_surgical::jpeg_exif_payload(file).unwrap()
+        }
+    }
+
+    /// A carrier the transaction deletes (`IFD0:All` / `EXIF:All`) is never
+    /// parsed: an unreadable APP1 / eXIf payload (too short, a bad byte-order
+    /// mark, a bad magic number, an empty IFD0) no longer fails the write in
+    /// `ifd0_state` or a scan before the fresh block is built (890fca8e
+    /// refused every one with a generated set, "IFD count is outside the
+    /// file" and the like). Pinned ExifTool 13.59, `-EXIF:All= -IFD0:Artist=x`
+    /// on the same payloads (review-head evidence `carrier-malformed-oracle
+    /// .txt`): Artist written into a new block, big-endian for a JPEG and
+    /// for a PNG under `EXIF:All`; a PNG under `IFD0:All` keeps a readable
+    /// `II` mark. One exception, the oracle's: `IFD0:All` keeps a PNG eXIf
+    /// too short for a TIFF header, and ExifTool then writes nothing
+    /// ("unchanged"); this writer refuses the set there instead of dropping
+    /// it. Known difference: no mandatory YCbCrPositioning yet (#955).
+    #[test]
+    fn a_deleted_unreadable_carrier_is_never_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let payloads: [(&str, Vec<u8>); 5] = [
+            ("short", b"II*".to_vec()),
+            ("byte-order", b"XX*\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("magic", b"II\x2b\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("empty-II", b"II*\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("empty-MM", b"MM\0*\0\0\0\x08\0\0\0\0\0\0".to_vec()),
+        ];
+        for (label, payload) in payloads {
+            for (carrier, original) in [("u.jpg", jpeg(&payload)), ("u.png", png(&payload))] {
+                for group in ["EXIF:All", "IFD0:All"] {
+                    for sets in [
+                        vec![("IFD0:Artist", TagValue::new_string("x"))],
+                        vec![("IFD0:Make", TagValue::new_string("x"))],
+                        vec![
+                            ("IFD0:Artist", TagValue::new_string("x")),
+                            ("IFD0:Make", TagValue::new_string("x")),
+                        ],
+                    ] {
+                        let case = format!(
+                            "{label} {carrier} {group} {:?}",
+                            sets.iter().map(|s| s.0).collect::<Vec<_>>()
+                        );
+                        let (result, after) =
+                            batch(dir.path(), carrier, &original, &[group], &sets);
+                        if carrier == "u.png" && group == "IFD0:All" && label == "short" {
+                            assert!(result.is_err(), "{case}: the oracle writes nothing here");
+                            continue;
+                        }
+                        result.unwrap_or_else(|e| panic!("{case}: {e}"));
+                        for (key, value) in &sets {
+                            assert_eq!(after.get_string(key), value.as_string(), "{case}: {key}");
+                        }
+                        let written = payload_of(&std::fs::read(dir.path().join(carrier)).unwrap())
+                            .unwrap_or_else(|| panic!("{case}: no EXIF block"));
+                        let keeps_ii =
+                            carrier == "u.png" && group == "IFD0:All" && payload.starts_with(b"II");
+                        let expected: &[u8] = if keeps_ii { b"II" } else { b"MM" };
+                        assert_eq!(&written[..2], expected, "{case}: byte order");
+                    }
+                }
+            }
         }
     }
 

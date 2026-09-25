@@ -264,6 +264,19 @@ fn rewrite_exif_payload(
     let removed: Vec<String> = removed.iter().filter(|k| is_exif_key(k)).cloned().collect();
     let plan =
         crate::writers::generated_public_write::plan_public_write(&baseline, &desired, &removed)?;
+    // A carrier-wide removal's sets go into a fresh block (`FreshOrder`):
+    // `EXIF:All` deletes the eXIf chunk and a new one is big-endian;
+    // `IFD0:All` deletes IFD0 inside it and keeps a readable header's order.
+    let fresh = if removed.iter().any(|key| {
+        crate::writers::exif_surgical::removes_carrier(std::slice::from_ref(key))
+            && key
+                .split_once(':')
+                .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
+    }) {
+        crate::writers::exif_surgical::FreshOrder::BigEndian
+    } else {
+        crate::writers::exif_surgical::FreshOrder::KeepReadableMark
+    };
     let payload = if plan.whole_exif_clear {
         Vec::new()
     } else if plan.generated.is_empty() {
@@ -272,6 +285,7 @@ fn rewrite_exif_payload(
             &baseline,
             &plan.legacy_metadata,
             &plan.legacy_removed,
+            fresh,
         )?
     } else {
         // A PNG has no JFIF segment, so `WriteExif` seeds no resolution
@@ -284,6 +298,7 @@ fn rewrite_exif_payload(
             &|| Ok(std::collections::BTreeMap::new()),
             &baseline,
             plan,
+            fresh,
         )?
     };
     // Every removal gone, every set present, before anything is written.

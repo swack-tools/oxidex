@@ -167,23 +167,45 @@ fn fresh_scan(byte_order: ByteOrder) -> ExifScan {
     }
 }
 
+/// The byte order of the block a carrier-wide removal's sets are written
+/// to, as pinned ExifTool 13.59 picks it (measured on II/MM, readable and
+/// malformed APP1 and eXIf payloads, `-EXIF:All= -IFD0:Artist=x`):
+/// a new JPEG APP1, and a new PNG eXIf chunk after `EXIF:All`, are
+/// big-endian (`SetPreferredByteOrder`'s MM); `IFD0:All` on a PNG deletes
+/// IFD0 inside the chunk and keeps its TIFF header's order when that mark
+/// is readable, MM otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FreshOrder {
+    /// Big-endian, whatever the deleted block was.
+    BigEndian,
+    /// The deleted block's `II` mark if it has one, else big-endian.
+    KeepReadableMark,
+}
+
+/// [`FreshOrder`] resolved against the deleted block: only its first two
+/// bytes are read, never the rest (it may be unreadable).
+pub(crate) fn fresh_byte_order(deleted: &[u8], order: FreshOrder) -> ByteOrder {
+    match (order, deleted.get(..2)) {
+        (FreshOrder::KeepReadableMark, Some(b"II")) => ByteOrder::LittleEndian,
+        _ => ByteOrder::BigEndian,
+    }
+}
+
 /// The payload a carrier-wide removal (`IFD0:All` / `EXIF:All`) leaves:
 /// nothing when the write sets nothing, else a fresh block holding the
-/// sets, in the deleted block's byte order when it had a readable one.
-/// The deleted block is never parsed beyond its byte-order mark.
+/// sets, in the byte order [`FreshOrder`] gives. The deleted block is never
+/// parsed beyond its byte-order mark.
 fn fresh_block_for_sets(
     deleted: &[u8],
     original_map: &MetadataMap,
     desired: &MetadataMap,
+    order: FreshOrder,
 ) -> Result<Vec<u8>> {
     let sets = requested_sets(original_map, desired);
     if sets.is_empty() {
         return Ok(Vec::new());
     }
-    let byte_order = match deleted.get(..2) {
-        Some(b"MM") => ByteOrder::BigEndian,
-        _ => ByteOrder::LittleEndian,
-    };
+    let byte_order = fresh_byte_order(deleted, order);
     let plan = plan_exif_write_inner(
         &fresh_scan(byte_order),
         &MetadataMap::new(),
@@ -2302,8 +2324,13 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
-    let tiff_out =
-        rewrite_tiff_exif_with_removals(tiff.as_deref(), &original_map, desired, removed)?;
+    let tiff_out = rewrite_tiff_exif_with_removals(
+        tiff.as_deref(),
+        &original_map,
+        desired,
+        removed,
+        FreshOrder::BigEndian,
+    )?;
     if tiff_out.is_empty() {
         return Ok(Vec::new());
     }
@@ -2328,13 +2355,14 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
     original_map: &MetadataMap,
     desired: &MetadataMap,
     removed: &[String],
+    fresh: FreshOrder,
 ) -> Result<Vec<u8>> {
     // `IFD0:All` / `EXIF:All` delete the carrier without reading it; what
     // the same write sets goes into a fresh block.
     if let Some(deleted) = tiff
         && removes_carrier(removed)
     {
-        return fresh_block_for_sets(deleted, original_map, desired);
+        return fresh_block_for_sets(deleted, original_map, desired, fresh);
     }
     let empty = MetadataMap::new();
     let (scan, original_map) = match tiff {
@@ -2484,6 +2512,10 @@ pub(crate) fn exif_request_is_no_op(
         .iter()
         .any(|key| is_planned_key(key) && baseline.contains_key(key.as_str()))
     {
+        return false;
+    }
+    // A carrier the write deletes is not read, and deleting one is a change.
+    if removes_carrier(removed) && !group_blocks.is_empty() {
         return false;
     }
     blocks
@@ -2717,9 +2749,10 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     original_map: &MetadataMap,
     desired: &MetadataMap,
     removed: &[String],
+    fresh: FreshOrder,
 ) -> Result<Vec<u8>> {
     if removes_carrier(removed) {
-        return fresh_block_for_sets(tiff, original_map, desired);
+        return fresh_block_for_sets(tiff, original_map, desired, fresh);
     }
     let scan = scan_exif_entries(tiff)?;
     if is_no_op(&scan, original_map, desired, removed) {
