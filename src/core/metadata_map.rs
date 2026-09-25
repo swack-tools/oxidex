@@ -153,6 +153,17 @@ impl MetadataMap {
         }
     }
 
+    /// Every key whose winning occurrence the caller assigned
+    /// ([`Self::assigned_after_read`]), in file order: the one record of
+    /// what a write transaction explicitly sets, whatever the value.
+    pub(crate) fn assigned_keys(&self) -> Vec<String> {
+        self.iter()
+            .map(|(key, _)| key)
+            .filter(|key| self.assigned_after_read(key))
+            .cloned()
+            .collect()
+    }
+
     /// Uninterpreted blocks in parser encounter order, separate from named tags.
     pub fn raw_blocks(&self) -> &[RawMetadataBlock] {
         &self.raw_blocks
