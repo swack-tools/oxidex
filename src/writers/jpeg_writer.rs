@@ -561,7 +561,7 @@ fn mandatory_default_edits(
         })
 }
 
-fn validate_creation_sources() -> Result<()> {
+pub(crate) fn validate_creation_sources() -> Result<()> {
     let address =
         crate::writers::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
             .ok_or_else(|| {
@@ -587,7 +587,8 @@ fn validate_creation_sources() -> Result<()> {
     Ok(())
 }
 
-fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
+pub(crate) fn source_fresh_byte_order()
+-> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
     use crate::writers::generated_fresh_jpeg_byte_order::*;
     use crate::writers::mandatory_defaults_runtime::TiffByteOrder;
     validate_creation_sources()?;
@@ -606,7 +607,9 @@ fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtim
     })
 }
 
-fn source_raw_properties(head: &[Segment<'_>]) -> Result<std::collections::BTreeMap<String, i64>> {
+pub(crate) fn source_raw_properties(
+    head: &[Segment<'_>],
+) -> Result<std::collections::BTreeMap<String, i64>> {
     let mut properties = std::collections::BTreeMap::new();
     for segment in head {
         if let Some(found) = crate::writers::raw_segment_properties::decode_raw_segment(
@@ -1570,10 +1573,12 @@ mod tests {
         // Should start with EXIF identifier
         assert_eq!(&segment_data[0..6], EXIF_IDENTIFIER);
 
-        // Should have TIFF header
-        assert_eq!(&segment_data[6..8], &[0x49, 0x49]); // Little-endian
-        assert_eq!(&segment_data[8..10], &[0x2A, 0x00]); // Magic
-        assert_eq!(&segment_data[10..14], &[0x08, 0x00, 0x00, 0x00]); // IFD offset
+        // Should have TIFF header, big-endian: pinned ExifTool 13.59 creates
+        // a new block in `SetPreferredByteOrder`'s default order
+        // (Writer.pl 13.59:5183-5195), MM with no option or ExifByteOrder.
+        assert_eq!(&segment_data[6..8], &[0x4D, 0x4D]); // Big-endian
+        assert_eq!(&segment_data[8..10], &[0x00, 0x2A]); // Magic
+        assert_eq!(&segment_data[10..14], &[0x00, 0x00, 0x00, 0x08]); // IFD offset
 
         // The segment must actually parse and contain the tag we asked for
         let tiff = &segment_data[EXIF_IDENTIFIER.len()..];
@@ -1584,6 +1589,17 @@ mod tests {
             .find(|e| e.tag_id == 0x010F)
             .expect("Make tag must be present");
         assert_eq!(make.value, b"Canon\0");
+        // The IFD0 it creates carries WriteExif's mandatory YCbCrPositioning
+        // (WriteExif.pl 13.59:25-32, 714-719).
+        let positioning = scan
+            .entries
+            .iter()
+            .find(|e| e.tag_id == 0x0213)
+            .expect("YCbCrPositioning must be present");
+        assert_eq!(
+            (positioning.field_type, positioning.value.as_slice()),
+            (3, &[0, 1][..])
+        );
     }
 
     #[test]

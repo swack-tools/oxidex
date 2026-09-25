@@ -2419,3 +2419,276 @@ fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
         }
     }
 }
+
+/// The EXIF block (TIFF bytes) of `path`, `None` when it has none.
+fn exif_block_at(path: &Path) -> Option<Vec<u8>> {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    exif_payload(name, &std::fs::read(path).unwrap())
+}
+
+/// Pinned ExifTool 13.59's read-back of `path`'s EXIF: every EXIF tag with
+/// its family-1 group, raw (`-n`), plus the block's byte order.
+fn oracle_exif_readback(path: &Path) -> Option<String> {
+    let oracle = exiftool_oracle::available()
+        .then(exiftool_oracle::shared)
+        .and_then(Result::ok)?;
+    let out = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-n", "-EXIF:all", "-ExifByteOrder"])
+        .arg(path)
+        .output()
+        .unwrap();
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// WriteExif adds a directory's `%mandatory` entries (WriteExif.pl
+/// 13.59:25-50) exactly when it writes a directory that had no entries
+/// (`unless ($numEntries)`, 13.59:714-719), and creates a new EXIF block in
+/// big-endian order (`SetPreferredByteOrder`, Writer.pl 13.59:5183-5195).
+/// The legacy writer created ExifIFD without ExifVersion,
+/// ComponentsConfiguration and ColorSpace, a GPS IFD without GPSVersionID
+/// unless the edit was one of six GPS tags, and a new block's IFD0 without
+/// YCbCrPositioning (or a JPEG's JFIF resolution), little-endian: pinned
+/// ExifTool's `-validate` flagged each missing entry on a JPEG, as it does
+/// not on the oracle's own edit. A directory that already exists gains
+/// nothing, whatever it lacks. InteropIFD, which ExifTool creates for
+/// `-InteropIFD:InteropIndex=R98`, is not writable here: refused, file
+/// untouched.
+///
+/// Each case runs the same arguments through the oxidex CLI and the pinned
+/// oracle, then requires -validate parity, an identical oracle read-back,
+/// and the same entries (type, count, bytes) in every directory.
+#[test]
+fn created_directories_get_the_writeexif_mandatory_entries() {
+    let Some(oracle) = exiftool_oracle::available()
+        .then(exiftool_oracle::shared)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipping: no usable ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    let jfif = [
+        &[0xFF, 0xE0, 0x00, 0x10][..],
+        b"JFIF\0\x01\x01\x01",
+        &300u16.to_be_bytes(),
+        &300u16.to_be_bytes(),
+        &[0, 0],
+    ]
+    .concat();
+    let mut fixtures: Vec<(String, Vec<u8>, Vec<&str>)> = Vec::new();
+    let carriers = |tag: &str, tiff: Option<Vec<u8>>| -> Vec<(String, Vec<u8>)> {
+        let bare = jpeg_without_exif();
+        let jpg = match &tiff {
+            Some(tiff) => jpeg_with(tiff),
+            None => bare.clone(),
+        };
+        let mut jfif_jpg = bare[..2].to_vec();
+        jfif_jpg.extend(&jfif);
+        jfif_jpg.extend(&jpg[2..]);
+        let png = match &tiff {
+            Some(tiff) => png(&[(b"eXIf", tiff.clone())], &[]),
+            None => png(&[], &[]),
+        };
+        vec![
+            (format!("{tag}.jpg"), jpg),
+            (format!("{tag}-jfif.jpg"), jfif_jpg),
+            (format!("{tag}.png"), png),
+        ]
+    };
+    for order in [Order::Ii, Order::Mm] {
+        let make = (0x010F, 2, 4, b"Cam\0".to_vec());
+        let iso = (0x8827, 3, 1, order.u16(100).to_vec());
+        let alt = (0x0006, 5, 1, [order.u32(1), order.u32(1)].concat());
+        let ifd0_only = Tiff {
+            ifd0: vec![make.clone()],
+            exif: None,
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        let with_exif = Tiff {
+            ifd0: vec![make.clone()],
+            exif: Some(vec![iso.clone()]),
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        // ExifIFD without ExifVersion/ComponentsConfiguration/ColorSpace and
+        // GPS without GPSVersionID: existing, so never given them.
+        let lacking = Tiff {
+            ifd0: vec![make.clone()],
+            exif: Some(vec![iso.clone()]),
+            interop: None,
+            gps: Some(vec![alt.clone()]),
+            ifd1: None,
+        }
+        .build(order);
+        for (tag, tiff, edits) in [
+            ("ifd0only", &ifd0_only, vec!["-ExifIFD:ISO=200"]),
+            ("ifd0only", &ifd0_only, vec!["-GPS:GPSAltitude=50"]),
+            (
+                "ifd0only",
+                &ifd0_only,
+                vec!["-ExifIFD:ISO=200", "-GPS:GPSAltitude=50"],
+            ),
+            ("withexif", &with_exif, vec!["-GPS:GPSMapDatum=WGS-84"]),
+            ("withexif", &with_exif, vec!["-GPS:GPSLatitudeRef=N"]),
+            ("lacking", &lacking, vec!["-ExifIFD:ISO=200"]),
+            ("lacking", &lacking, vec!["-GPS:GPSAltitude=50"]),
+        ] {
+            let tag = format!("{tag}-{order:?}");
+            for (name, bytes) in carriers(&tag, Some(tiff.clone())) {
+                fixtures.push((name, bytes, edits.clone()));
+            }
+        }
+    }
+    // A whole new block, IFD0 included.
+    for edits in [
+        vec!["-ExifIFD:ISO=200"],
+        vec!["-GPS:GPSAltitude=50"],
+        vec!["-ExifIFD:ISO=200", "-GPS:GPSMapDatum=WGS-84"],
+    ] {
+        for (name, bytes) in carriers("bare", None) {
+            fixtures.push((name, bytes, edits.clone()));
+        }
+    }
+    for (name, original, edits) in &fixtures {
+        let label = format!("{name} {edits:?}");
+        let ours = write(dir.path(), &format!("ours-{name}"), original);
+        let theirs = write(dir.path(), &format!("theirs-{name}"), original);
+        let status = std::process::Command::new(cli)
+            .args(edits)
+            .arg(&ours)
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let oracle_status = oracle
+            .command()
+            .args(["-q", "-q", "-overwrite_original"])
+            .args(edits)
+            .arg(&theirs)
+            .status()
+            .unwrap();
+        assert!(oracle_status.success(), "{label}: oracle failed");
+        assert_validate_parity(original, name, edits, &ours, &label);
+        assert_eq!(
+            oracle_exif_readback(&ours),
+            oracle_exif_readback(&theirs),
+            "{label}: pinned ExifTool reads back a different EXIF block"
+        );
+        let (ours_block, theirs_block) = (exif_block_at(&ours), exif_block_at(&theirs));
+        assert_eq!(
+            ours_block.as_ref().map(|t| t[..2].to_vec()),
+            theirs_block.as_ref().map(|t| t[..2].to_vec()),
+            "{label}: byte order"
+        );
+        assert_eq!(
+            ours_block.as_deref().map(dump),
+            theirs_block.as_deref().map(dump),
+            "{label}: entries"
+        );
+    }
+
+    // InteropIFD is created by the oracle but is not writable here.
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![(0x010F, 2, 4, b"Cam\0".to_vec())],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(100).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        for (name, original) in [
+            ("interop.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("interop.jpg", jpeg_with(&tiff)),
+        ] {
+            let path = write(dir.path(), name, &original);
+            let status = std::process::Command::new(cli)
+                .arg("-InteropIFD:InteropIndex=R98")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(status.status.code(), Some(1), "{order:?} {name}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{order:?} {name}");
+        }
+    }
+}
+
+/// One write mixing a generated IFD0 set (`IFD0:Artist`) with a legacy
+/// ExifIFD set. With a legacy deletion the legacy half is re-laid out by
+/// the legacy planner first, and the ExifIFD it creates gets its mandatory
+/// entries, as the oracle's single invocation with the same arguments does.
+/// Without one, the legacy half goes through the in-place payload writer,
+/// which creates no directory: it refuses, file untouched (unchanged here),
+/// rather than create ExifIFD without them.
+#[test]
+fn a_mixed_write_seeds_the_directories_it_creates() {
+    let Some(oracle) = exiftool_oracle::available()
+        .then(exiftool_oracle::shared)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipping: no usable ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = Tiff {
+            ifd0: vec![
+                (0x010F, 2, 4, b"Cam\0".to_vec()),
+                (0x0110, 2, 4, b"M1\0\0".to_vec()),
+            ],
+            exif: None,
+            interop: None,
+            gps: None,
+            ifd1: None,
+        }
+        .build(order);
+        for (name, original) in [
+            ("mixed.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("mixed.jpg", jpeg_with(&tiff)),
+        ] {
+            for delete_model in [false, true] {
+                let label = format!("{order:?} {name} delete_model={delete_model}");
+                let ours = write(dir.path(), &format!("ours-{name}"), &original);
+                let theirs = write(dir.path(), &format!("theirs-{name}"), &original);
+                let mut map = read_metadata(&ours).unwrap();
+                map.insert("IFD0:Artist", TagValue::new_string("you"));
+                map.insert("ExifIFD:ISO", TagValue::Integer(200));
+                let mut args = vec!["-IFD0:Artist=you", "-ExifIFD:ISO=200"];
+                if delete_model {
+                    map.remove("IFD0:Model");
+                    args.push("-IFD0:Model=");
+                }
+                if !delete_model {
+                    assert!(write_metadata(&ours, &map).is_err(), "{label}");
+                    assert_eq!(std::fs::read(&ours).unwrap(), original, "{label}");
+                    continue;
+                }
+                write_metadata(&ours, &map).unwrap_or_else(|e| panic!("{label}: {e}"));
+                let status = oracle
+                    .command()
+                    .args(["-q", "-q", "-overwrite_original"])
+                    .args(&args)
+                    .arg(&theirs)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "{label}: oracle failed");
+                assert_validate_parity(&original, name, &args, &ours, &label);
+                assert_eq!(
+                    exif_block_at(&ours).as_deref().map(dump),
+                    exif_block_at(&theirs).as_deref().map(dump),
+                    "{label}: entries"
+                );
+            }
+        }
+    }
+}
