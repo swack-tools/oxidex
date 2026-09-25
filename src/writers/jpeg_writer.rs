@@ -178,7 +178,9 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     let output = reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)?;
 
     // Step 6: the verbatim tail moved by the length change; re-base the
-    // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217).
+    // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217)
+    // and re-point a Leica IFD2 PreviewImage after the image as ExifTool
+    // re-points it (Writer.pl 13.59:6177-6226).
     let tail_start = file_size - raw_tail.len();
     crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, tail_start, tail_start, output)
 }
@@ -756,8 +758,9 @@ fn transform_exif<T>(
     }
     out.extend_from_slice(&bytes[end..]);
     // Everything from `end` moved by the length change, including any AFCP
-    // trailer and its absolute offsets (AFCP.pm 13.59:205-217). Its EOI is
-    // searched from the end of the SOS header, or is the EOI marker itself.
+    // trailer and its absolute offsets (AFCP.pm 13.59:205-217) and a Leica
+    // IFD2 PreviewImage after the image (Writer.pl 13.59:6177-6226). Its EOI
+    // is searched from the end of the SOS header, or is the EOI marker itself.
     let boundary = &head[end_index];
     let scan_from = usize::try_from(boundary.offset)
         .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?

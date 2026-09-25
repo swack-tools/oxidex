@@ -290,6 +290,12 @@ fn rewrite_exif_payload(
         &removed,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
+    // A chain past IFD1 that locates data outside the chunk is kept by no
+    // write: pinned ExifTool 13.59 refuses it ("Error reading StripOffsets
+    // data in IFD2"), and nothing past an `eXIf` chunk belongs to it.
+    if let Some(original) = original {
+        crate::writers::ifd_chain::refuse_unmovable_outside(original, &payload, false)?;
+    }
     Ok(payload)
 }
 

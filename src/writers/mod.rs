@@ -45,6 +45,9 @@ pub mod tiff_surgical;
 pub mod tiff_writer;
 // Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
 pub(crate) mod xp_strings;
+// The directory chain past IFD1 (IFD2 on): carried, and a JPEG's IFD2
+// preview re-pointed, through a re-laid-out EXIF block.
+pub mod ifd_chain;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {

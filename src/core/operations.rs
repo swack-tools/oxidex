@@ -1082,17 +1082,10 @@ pub(crate) fn write_metadata_with_removals(
                     removed,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
-                if let (Some(before), Some(after), Some(header)) = (
-                    before.as_deref(),
-                    after.first(),
-                    crate::writers::exif_surgical::jpeg_exif_header_offset(file_bytes),
-                ) {
-                    crate::writers::exif_surgical::verify_chain_data_after_block(
-                        before,
-                        after,
-                        &file_bytes[header..],
-                    )?;
-                }
+                // The chain past IFD1 on the whole files: its IFD2 preview
+                // after the image re-pointed as ExifTool re-points it, and
+                // no other data outside the block kept (`verify_jpeg_chain`).
+                crate::writers::exif_surgical::verify_jpeg_chain(file_bytes, &serialized_bytes)?;
             }
             if without_ciff.is_some()
                 && !matches!(
