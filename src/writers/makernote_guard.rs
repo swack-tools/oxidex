@@ -350,8 +350,11 @@ struct Links {
 /// * a candidate is a plausible directory: 1..=512 entries, the table inside
 ///   the note, every entry of a TIFF type 1..=13;
 /// * its offsets are read from the TIFF header, from the note's start, or
-///   from the note's own TIFF header, whichever puts the most values inside
-///   the note, where a note keeps its value data (ExifTool's expectation too).
+///   from the note's own TIFF header; the reading kept is the one whose
+///   values all land inside the block and most of them inside the note,
+///   where a note keeps its value data (ExifTool's expectation too), then
+///   the one with the most entries. None landing in the block: no reading;
+/// * a zero offset is "no data", and the TIFF header is never a reference.
 ///
 /// A note that is no such directory yields nothing. The ranges tell the
 /// serializer which bytes outside the note to keep where they are when the
@@ -415,40 +418,67 @@ pub(crate) fn note_references(
         }
         Some(values)
     };
-    let Some((values, order_base)) = candidates
-        .iter()
-        .find_map(|(ifd, order, base)| valid(*ifd, *order).map(|v| (v, *base)))
-    else {
-        return Vec::new();
-    };
-    let bases: Vec<usize> = match order_base {
-        Some(own) => vec![own],
-        None => vec![0, note_at],
-    };
-    let inside = |base: usize| {
-        values
+    // How many values land inside the note, and whether every value lands
+    // inside the block at all, reading offsets from `base`.
+    let fit = |values: &[(u16, usize, usize)], base: usize| {
+        let lands = |off: usize, size: usize, lo: usize, hi: usize| {
+            base.checked_add(off)
+                .is_some_and(|s| s >= lo && s.saturating_add(size) <= hi)
+        };
+        let inside = values
             .iter()
-            .filter(|(_, off, size)| {
-                base.checked_add(*off)
-                    .is_some_and(|s| s >= note_at && s.saturating_add(*size) <= note_end)
-            })
-            .count()
+            .filter(|(_, off, size)| lands(*off, *size, note_at, note_end))
+            .count();
+        let all_in_block = values
+            .iter()
+            .all(|(_, off, size)| *off == 0 || lands(*off, *size, 0, tiff.len()));
+        (all_in_block, inside)
     };
-    // the first base wins a tie: TIFF-relative, as most notes are
-    let base = bases
-        .iter()
-        .copied()
-        .fold(None::<(usize, usize)>, |best, b| match best {
-            Some((_, n)) if n >= inside(b) => best,
-            _ => Some((b, inside(b))),
-        })
-        .map_or(0, |(b, _)| b);
-    let mut out = Vec::new();
-    for (_, off, size) in values {
-        let Some(start) = base.checked_add(off) else {
+    // The best-fitting reading: a directory whose values all land inside the
+    // block, then the most values inside the note, then the most entries --
+    // not merely the first plausible table (Apple's `Apple iOS\0\0\x01MM`
+    // header reads as a one-entry directory at +10).
+    let mut best: Option<((bool, usize, usize), Vec<(u16, usize, usize)>, usize)> = None;
+    // A note carrying its own TIFF header says where its IFD is and what its
+    // offsets count from: that reading is taken as it stands.
+    if let Some((ifd, order, Some(own))) = candidates.first()
+        && let Some(values) = valid(*ifd, *order)
+    {
+        best = Some(((true, usize::MAX, 0), values, *own));
+    }
+    for (ifd, order, own) in &candidates {
+        let Some(values) = valid(*ifd, *order) else {
             continue;
         };
-        let end = start.saturating_add(size).min(tiff.len());
+        let rows = u16_at(tiff, *ifd, *order).unwrap_or(0) as usize;
+        let bases: Vec<usize> = match own {
+            Some(own) => vec![*own],
+            None => vec![0, note_at],
+        };
+        for base in bases {
+            let (all_in_block, inside) = fit(&values, base);
+            let score = (all_in_block, inside, rows);
+            if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
+                best = Some((score, values.clone(), base));
+            }
+        }
+    }
+    let Some(((true, _, _), values, base)) = best else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (_, off, size) in values {
+        // A zero offset is TIFF's "no data" (Canon writes one for an empty
+        // tag 0x0000), not a reference to the header.
+        if off == 0 {
+            continue;
+        }
+        let Some(at) = base.checked_add(off) else {
+            continue;
+        };
+        let end = at.saturating_add(size).min(tiff.len());
+        // The TIFF header is always rewritten.
+        let start = at.max(8);
         for (s, e) in [(start, end.min(note_at)), (start.max(note_end), end)] {
             if s < e {
                 out.push((s, e));
