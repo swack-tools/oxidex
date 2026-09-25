@@ -660,3 +660,211 @@ fn deleting_the_maker_note_or_its_block_is_never_refused_by_the_guard() {
         }
     }
 }
+
+/// A value of one directory entry in [`pentax_shaped_block`]'s builder.
+enum Val {
+    /// Raw bytes (inline when 4 or fewer).
+    Bytes(Vec<u8>),
+    /// A LONG pointer to directory `n`.
+    Dir(usize),
+    /// A LONG offset / length of blob `n`.
+    BlobAt(usize),
+    BlobLen(usize),
+}
+
+/// t/images Pentax.jpg's shape, synthetically: every directory (IFD0,
+/// ExifIFD, InteropIFD, GPS, IFD1 with a thumbnail) laid out first and the
+/// maker-note preview as the very last bytes of the block, after IFD1's
+/// thumbnail -- so any edit that shortens the block (`-IFD1:All=`,
+/// `-InteropIFD:All=`, `-GPS:All=`) cuts it off unless it is kept where it
+/// is. The note is a Casio Type2 (`QVC\0`, TIFF-relative offsets) whose
+/// 0x2000 PreviewImage and 0x0004/0x0003 PreviewImageStart/Length locate
+/// the preview. Pinned ExifTool 13.59 relocates such a preview and shifts
+/// the pointer (Pentax.jpg under `-IFD1:All=`: PreviewImageStart 2446 ->
+/// 2324, preview byte-identical, `-validate` clean). Returns the block and
+/// the preview's TIFF offset.
+fn pentax_shaped_block(order: Order) -> (Vec<u8>, usize) {
+    const THUMB: &[u8] = &[0xFF, 0xD8, 0xFF, 0xDB, 1, 2, 3, 4, 5, 6, 0xFF, 0xD9];
+    // blobs: 0 = maker note, 1 = thumbnail, 2 = preview
+    let note_len = 6 + 2 + 12 * 5 + 4 + 18;
+    let blobs_len = [note_len, THUMB.len(), PREVIEW.len()];
+    let rational = |n: u32, d: u32| [order.u32(n), order.u32(d)].concat();
+    let dirs = |note: Vec<u8>| -> Vec<Vec<(u16, u16, u32, Val)>> {
+        vec![
+            // 0: IFD0 (next: IFD1 = dir 4)
+            vec![
+                (0x010F, 2, 23, Val::Bytes(ascii("CASIO COMPUTER CO.,LTD"))),
+                (0x0110, 2, 7, Val::Bytes(ascii("EX-Z55"))),
+                (0x0131, 2, 46, Val::Bytes(ascii(SOFTWARE))),
+                (0x0132, 2, 20, Val::Bytes(ascii("2003:02:28 09:45:00"))),
+                (0x8769, 4, 1, Val::Dir(1)),
+                (0x8825, 4, 1, Val::Dir(3)),
+            ],
+            // 1: ExifIFD
+            vec![
+                (0x829A, 5, 1, Val::Bytes(rational(1, 60))),
+                (0x927C, 7, note.len() as u32, Val::BlobAt(0)),
+                (0xA005, 4, 1, Val::Dir(2)),
+            ],
+            // 2: InteropIFD
+            vec![(0x0001, 2, 4, Val::Bytes(b"R98\0".to_vec()))],
+            // 3: GPS
+            vec![
+                (0x0000, 1, 4, Val::Bytes(vec![2, 2, 0, 0])),
+                (0x0006, 5, 1, Val::Bytes(rational(50, 1))),
+            ],
+            // 4: IFD1
+            vec![
+                (0x0103, 3, 1, Val::Bytes(order.u16(6).to_vec())),
+                (0x0201, 4, 1, Val::BlobAt(1)),
+                (0x0202, 4, 1, Val::BlobLen(1)),
+            ],
+        ]
+    };
+    // Pass 1: table and value offsets, then the blobs in order at the end.
+    let layout = |dirs: &[Vec<(u16, u16, u32, Val)>]| -> (Vec<usize>, Vec<usize>, usize) {
+        let mut at = 8;
+        let mut dir_at = Vec::new();
+        for d in dirs {
+            dir_at.push(at);
+            at += 2 + 12 * d.len() + 4;
+            for (_, _, _, v) in d {
+                if let Val::Bytes(b) = v
+                    && b.len() > 4
+                {
+                    at += b.len() + b.len() % 2;
+                }
+            }
+        }
+        let mut blob_at = Vec::new();
+        for len in blobs_len {
+            blob_at.push(at);
+            at += len + len % 2;
+        }
+        (dir_at, blob_at, at)
+    };
+    let (dir_at, blob_at, _) = layout(&dirs(vec![0; note_len]));
+    let preview_at = blob_at[2];
+    // The note, now that the preview's offset is known.
+    let mut note = b"QVC\0\0\0".to_vec();
+    note.extend(ifd(
+        order,
+        blob_at[0] + 6,
+        &[
+            entry(0x0002, 3, 2, [order.u16(320), order.u16(240)].concat()),
+            entry(0x0003, 4, 1, order.u32(PREVIEW.len() as u32).to_vec()),
+            entry(0x0004, 4, 1, order.u32(preview_at as u32).to_vec()),
+            entry(0x2000, 7, PREVIEW.len() as u32, vec![0; PREVIEW.len()]),
+            entry(0x2001, 7, 18, b"0302\0\x0028\0\x0009\0\x0045\0\0".to_vec()),
+        ],
+        &[(0x2000, preview_at as u32)],
+    ));
+    assert_eq!(note.len(), note_len);
+    let dirs = dirs(note.clone());
+    // Pass 2: emit.
+    let mut tiff = order.mark().to_vec();
+    tiff.extend(order.u16(42));
+    tiff.extend(order.u32(8));
+    for (i, d) in dirs.iter().enumerate() {
+        assert_eq!(tiff.len(), dir_at[i]);
+        let table = 2 + 12 * d.len() + 4;
+        let mut values = Vec::new();
+        tiff.extend(order.u16(d.len() as u16));
+        for (tag, kind, count, v) in d {
+            tiff.extend(order.u16(*tag));
+            tiff.extend(order.u16(*kind));
+            tiff.extend(order.u32(*count));
+            match v {
+                Val::Dir(n) => tiff.extend(order.u32(dir_at[*n] as u32)),
+                Val::BlobAt(n) => tiff.extend(order.u32(blob_at[*n] as u32)),
+                Val::BlobLen(n) => tiff.extend(order.u32(blobs_len[*n] as u32)),
+                Val::Bytes(b) if b.len() <= 4 => {
+                    let mut f = b.clone();
+                    f.resize(4, 0);
+                    tiff.extend(f);
+                }
+                Val::Bytes(b) => {
+                    tiff.extend(order.u32((dir_at[i] + table + values.len()) as u32));
+                    values.extend(b);
+                    if values.len() % 2 == 1 {
+                        values.push(0);
+                    }
+                }
+            }
+        }
+        tiff.extend(order.u32(if i == 0 { dir_at[4] as u32 } else { 0 }));
+        tiff.extend(values);
+    }
+    for (n, bytes) in [note.as_slice(), THUMB, PREVIEW].iter().enumerate() {
+        assert_eq!(tiff.len(), blob_at[n]);
+        tiff.extend(*bytes);
+        if bytes.len() % 2 == 1 {
+            tiff.push(0);
+        }
+    }
+    assert_eq!(&tiff[tiff.len() - PREVIEW.len()..], PREVIEW, "preview last");
+    (tiff, preview_at)
+}
+
+/// The Pentax shape under every block-shrinking group removal the surgical
+/// writers support. With the maker note kept (`IFD1:All`, `InteropIFD:All`,
+/// `GPS:All`) the preview is still where the note's pointers say, byte for
+/// byte, by a structural walk and by the reader; the edit is not refused.
+/// `ExifIFD:All` deletes the maker note with ExifIFD (as pinned ExifTool
+/// 13.59 does) and `IFD0:All` the whole block: no preview is read after.
+/// Red at #943's head e4f512d4: the compact re-layout of the shortened block
+/// cut the preview off (`IFD1:All` read back `MakerNotes:PreviewImage`
+/// changed; the PNG oracle warned "PreviewImageStart is past end of file").
+#[test]
+fn a_preview_at_the_end_of_the_block_survives_every_shrinking_group_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Mm, Order::Ii] {
+        let (tiff, preview_at) = pentax_shaped_block(order);
+        assert_eq!(casio_preview(&tiff), PREVIEW);
+        for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
+            let original = write(dir.path(), &format!("pentax.{carrier}"), &file);
+            let previews = reader_previews(&original);
+            assert!(
+                previews
+                    .iter()
+                    .any(|(_, v)| *v == TagValue::Binary(PREVIEW.to_vec())),
+                "{order:?} {carrier}: the reader must see the preview first: {previews:?}"
+            );
+            for group in ["IFD1:All", "InteropIFD:All", "GPS:All"] {
+                let path = write(dir.path(), &format!("shrink.{carrier}"), &file);
+                remove_tag(&path, group).unwrap_or_else(|e| {
+                    panic!("{order:?} {carrier} {group}: the preview can be kept: {e}")
+                });
+                let out = std::fs::read(&path).unwrap();
+                let block = tiff_of(&out);
+                assert_ne!(block, tiff, "{order:?} {carrier} {group}: nothing removed");
+                assert_eq!(
+                    block.get(preview_at..preview_at + PREVIEW.len()),
+                    Some(PREVIEW),
+                    "{order:?} {carrier} {group}: preview lost or mis-pointed (block now {} bytes)",
+                    block.len()
+                );
+                assert_eq!(
+                    casio_preview(&block),
+                    PREVIEW,
+                    "{order:?} {carrier} {group}: the note's PreviewImage no longer locates it"
+                );
+                assert_eq!(
+                    reader_previews(&path),
+                    previews,
+                    "{order:?} {carrier} {group}: reader's PreviewImage changed"
+                );
+            }
+            for group in ["ExifIFD:All", "IFD0:All"] {
+                let path = write(dir.path(), &format!("drop.{carrier}"), &file);
+                remove_tag(&path, group).unwrap_or_else(|e| {
+                    panic!("{order:?} {carrier} {group}: deletion refused: {e}")
+                });
+                assert!(
+                    reader_previews(&path).is_empty(),
+                    "{order:?} {carrier} {group}: the maker note's preview is still read"
+                );
+            }
+        }
+    }
+}

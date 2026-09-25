@@ -115,6 +115,9 @@ pub(crate) struct OriginalLayout {
     pub(crate) values: Vec<(IfdKind, u16, usize, usize)>,
     /// `(offset, length)` of IFD1's thumbnail, when it lies inside the block.
     pub(crate) thumbnail: Option<(usize, usize)>,
+    /// `(offset, length)` of every table, out-of-line value and located data
+    /// of the directory chain past IFD1 ([`OriginalLayout::walk_chain`]).
+    pub(crate) chain: Vec<(usize, usize)>,
 }
 
 impl OriginalLayout {
@@ -130,6 +133,7 @@ impl OriginalLayout {
             tables: Vec::new(),
             values: Vec::new(),
             thumbnail: None,
+            chain: Vec::new(),
         };
         let ifd0 = u32_at(tiff, 4, bo)? as usize;
         let ifd0_links = layout.walk(tiff, bo, ifd0, IfdKind::Ifd0);
@@ -148,6 +152,9 @@ impl OriginalLayout {
                 && at.checked_add(len).is_some_and(|end| end <= tiff.len())
             {
                 layout.thumbnail = Some((at, len));
+            }
+            if let Some(first) = ifd1_links.next {
+                layout.walk_chain(tiff, bo, first, &[ifd0, ifd1]);
             }
         }
         Some(layout)
@@ -171,12 +178,21 @@ impl OriginalLayout {
                 return links;
             };
             let field = field as usize;
+            // A pointer or length held inline is decoded by its TIFF type,
+            // as the scanner decodes it (`exif_surgical::inline_unsigned`):
+            // a big-endian SHORT `00 dc 00 00` is 0xdc.
+            let inline = crate::writers::exif_surgical::inline_unsigned(
+                kind,
+                count,
+                &tiff[entry + 8..entry + 12],
+                bo,
+            );
             match (ifd, tag) {
-                (IfdKind::Ifd0, EXIF_IFD_POINTER) => links.exif = Some(field),
-                (IfdKind::Ifd0, GPS_IFD_POINTER) => links.gps = Some(field),
-                (IfdKind::ExifIfd, INTEROP_POINTER) => links.interop = Some(field),
-                (IfdKind::Ifd1, 0x0201) => links.thumb_at = Some(field),
-                (IfdKind::Ifd1, 0x0202) => links.thumb_len = Some(field),
+                (IfdKind::Ifd0, EXIF_IFD_POINTER) => links.exif = Some(inline),
+                (IfdKind::Ifd0, GPS_IFD_POINTER) => links.gps = Some(inline),
+                (IfdKind::ExifIfd, INTEROP_POINTER) => links.interop = Some(inline),
+                (IfdKind::Ifd1, 0x0201) => links.thumb_at = Some(inline),
+                (IfdKind::Ifd1, 0x0202) => links.thumb_len = Some(inline),
                 _ => {}
             }
             if let Some(size) = type_size(kind).checked_mul(count as usize)
@@ -186,13 +202,68 @@ impl OriginalLayout {
                 self.values.push((ifd, tag, field, size));
             }
         }
-        if ifd == IfdKind::Ifd0 {
+        if matches!(ifd, IfdKind::Ifd0 | IfdKind::Ifd1) {
             let next = u32_at(tiff, at + 2 + 12 * rows, bo).unwrap_or(0);
             if next != 0 {
                 links.next = Some(next as usize);
             }
         }
         links
+    }
+
+    /// Records, as owned, the directory chain IFD1's next pointer starts
+    /// (IFD2 on: a Leica JPEG's PreviewImage IFD): every table, every
+    /// out-of-line value and the data each JPEGInterchangeFormat/Length or
+    /// StripOffsets/StripByteCounts pair locates, inside the block. Owned,
+    /// they are no hole: a write that keeps the chain carries or refuses it
+    /// (`exif_surgical`, IFD1's next pointer), and `IFD1:All`, which deletes
+    /// it with IFD1 as pinned ExifTool 13.59 does, does not keep its bytes.
+    /// Walks at most 64 directories and stops at one already seen.
+    fn walk_chain(&mut self, tiff: &[u8], bo: ByteOrder, first: usize, seen: &[usize]) {
+        let mut seen = seen.to_vec();
+        let mut at = first;
+        while at != 0 && !seen.contains(&at) && seen.len() < 66 {
+            seen.push(at);
+            let Some(rows) = u16_at(tiff, at, bo) else {
+                return;
+            };
+            let rows = rows as usize;
+            self.chain.push((at, 2 + 12 * rows + 4));
+            let mut inline: Vec<(u16, usize)> = Vec::new();
+            for i in 0..rows {
+                let entry = at + 2 + 12 * i;
+                let (Some(tag), Some(kind), Some(count), Some(field)) = (
+                    u16_at(tiff, entry, bo),
+                    u16_at(tiff, entry + 2, bo),
+                    u32_at(tiff, entry + 4, bo),
+                    u32_at(tiff, entry + 8, bo),
+                ) else {
+                    return;
+                };
+                if let Some(size) = type_size(kind).checked_mul(count as usize)
+                    && size > 4
+                {
+                    self.chain.push((field as usize, size));
+                } else {
+                    inline.push((
+                        tag,
+                        crate::writers::exif_surgical::inline_unsigned(
+                            kind,
+                            count,
+                            &tiff[entry + 8..entry + 12],
+                            bo,
+                        ),
+                    ));
+                }
+            }
+            for (offset_tag, length_tag) in [(0x0201u16, 0x0202u16), (0x0111, 0x0117)] {
+                let find = |tag: u16| inline.iter().find(|(t, _)| *t == tag).map(|(_, v)| *v);
+                if let (Some(start), Some(len)) = (find(offset_tag), find(length_tag)) {
+                    self.chain.push((start, len));
+                }
+            }
+            at = u32_at(tiff, at + 2 + 12 * rows, bo).unwrap_or(0) as usize;
+        }
     }
 
     /// Every `[start, end)` range a standard structure owns, the MakerNote
@@ -207,6 +278,9 @@ impl OriginalLayout {
         }
         if let Some((at, len)) = self.thumbnail {
             owned.push((at, at + len));
+        }
+        for (at, len) in &self.chain {
+            owned.push((*at, at.saturating_add(*len).min(self.len)));
         }
         owned.retain(|(start, end)| start < end);
         owned.sort_unstable();

@@ -384,20 +384,78 @@ def diff(a: dict, b: dict) -> dict:
     return {k: [a.get(k), b.get(k)] for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)}
 
 
-def edits_for(et: Oracle, src: str) -> dict[str, list[str]]:
-    rows = et.json(["-a", "-G1", "-n", "-IFD0:all", "-ExifIFD:all"], src)
-    edits = {"grow": [f"-IFD0:ImageDescription={GROW}"]}
-    present = [(len(str(rows[k])), k) for k in SHRINK_CANDIDATES if k in rows]
-    if present:
-        edits["shrink"] = [f"-{max(present)[1]}="]
-    if "IFD0:ModifyDate" in rows:
-        edits["same"] = [f"-IFD0:ModifyDate={SAME_DATE}"]
-    elif "ExifIFD:DateTimeOriginal" in rows:
-        edits["same"] = [f"-ExifIFD:DateTimeOriginal={SAME_DATE}"]
+GROUP_EDITS = {
+    # block-shrinking group removals that keep the maker note ...
+    "ifd1_all": ("IFD1", ["-IFD1:All="]),
+    "interop_all": ("InteropIFD", ["-InteropIFD:All="]),
+    "gps_all": ("GPS", ["-GPS:All="]),
+    # ... and the two that delete it (ExifIFD with its note; the whole block)
+    "exififd_all": (None, ["-ExifIFD:All="]),
+    "ifd0_all": (None, ["-IFD0:All="]),
+}
+
+
+def edits_for(et: Oracle, src: str, sets: str = "basic") -> dict[str, list[str]]:
+    """The edits of one source. ``basic``: grow / shrink / same. ``groups``:
+    the group removals of :data:`GROUP_EDITS` (a group only when the source
+    holds it). ``all``: both."""
+    rows = et.json(["-a", "-G1", "-n", "-IFD0:all", "-ExifIFD:all", "-IFD1:all",
+                    "-InteropIFD:all", "-GPS:all"], src)
+    edits: dict[str, list[str]] = {}
+    if sets in ("basic", "all", "survey"):
+        edits["grow"] = [f"-IFD0:ImageDescription={GROW}"]
+        present = [(len(str(rows[k])), k) for k in SHRINK_CANDIDATES if k in rows]
+        if present:
+            edits["shrink"] = [f"-{max(present)[1]}="]
+    if sets in ("basic", "all"):
+        if "IFD0:ModifyDate" in rows:
+            edits["same"] = [f"-IFD0:ModifyDate={SAME_DATE}"]
+        elif "ExifIFD:DateTimeOriginal" in rows:
+            edits["same"] = [f"-ExifIFD:DateTimeOriginal={SAME_DATE}"]
+    if sets in ("groups", "all", "survey"):
+        groups = {k.split(":")[0] for k in rows}
+        for name, (group, args) in GROUP_EDITS.items():
+            if group is None or group in groups:
+                edits[name] = args
     return edits
 
 
-def variants(et: Oracle, src: str, work: Path) -> tuple[list[dict], list[dict]]:
+def preview_state(et: Oracle, path: str) -> dict:
+    """``-m -b -PreviewImage`` sha (every instance), the raw maker-note
+    ``PreviewImageStart`` pointers, and the ``-validate`` warnings."""
+    rows = et.json(["-a", "-G1", "-n", "-m", "-b", "-PreviewImage", "-MakerNotes:PreviewImageStart"], path)
+    # without -m: a [minor] warning ("PreviewImageStart is past end of file")
+    # is exactly what this has to see
+    rows.update({f"W{k}": v for k, v in et.json(["-a", "-G1", "-validate", "-Warning"], path).items()
+                 if k.split(":")[-1] == "Warning"})
+    shas, starts, warnings = [], [], []
+    for key, value in rows.items():
+        name = key.split(":")[-1]
+        if name == "PreviewImage":
+            text = value if isinstance(value, str) else json.dumps(value)
+            shas.append(hashlib.sha256(text.encode()).hexdigest()[:16])
+        elif name == "PreviewImageStart":
+            starts.append(value)
+        elif name == "Warning":
+            warnings.extend(value if isinstance(value, list) else [value])
+    return {"preview": sorted(shas), "start": sorted(map(str, starts)),
+            "warnings": sorted(str(w) for w in warnings)}
+
+
+def preview_verdict(orig: dict, et_after: dict | None, ox_after: dict) -> str:
+    """kept / lost / mis-pointed against the original preview, where the
+    oracle's own edit kept it; as-oracle / differs-from-oracle where the
+    oracle's edit changed it (a deleted maker note); n/a without one."""
+    if not orig["preview"]:
+        return "n/a"
+    if et_after is None or et_after["preview"] == orig["preview"]:
+        if ox_after["preview"] == orig["preview"]:
+            return "kept"
+        return "lost" if not ox_after["preview"] else "mis-pointed"
+    return "as-oracle" if ox_after["preview"] == et_after["preview"] else "differs-from-oracle"
+
+
+def variants(et: Oracle, src: str, work: Path, flip: bool = True) -> tuple[list[dict], list[dict]]:
     """(order, carrier, path) sources for one input JPEG, each checked to carry
     the original's maker notes unchanged before any cell relies on it."""
     reference = readback(et, src)
@@ -408,10 +466,10 @@ def variants(et: Oracle, src: str, work: Path) -> tuple[list[dict], list[dict]]:
     flipped = work / "flip.jpg"
     data = Path(src).read_bytes()
     at, tiff = jpeg_exif(data)
+    other = None
     try:
-        other = flip_tiff(tiff)
+        other = flip_tiff(tiff) if flip else None
     except (ValueError, struct.error) as exc:
-        other = None
         notes.append({"variant": "flipped", "skipped": f"cannot flip byte order: {exc}"})
     if other is not None:
         flipped.write_bytes(data[:at] + other + data[at + len(tiff):])
@@ -441,70 +499,106 @@ def variants(et: Oracle, src: str, work: Path) -> tuple[list[dict], list[dict]]:
     return out, notes
 
 
-def run_cells(et: Oracle, oxidex: str, src: str, root: Path) -> list[dict]:
+def run_cells(et: Oracle, binaries: dict[str, str], src: str, root: Path, sets: str = "basic",
+              flip: bool = True) -> list[dict]:
+    """Every cell of one source; the oracle edits each cell once and every
+    oxidex binary (``label -> path``) is judged against that same edit."""
     work = root / re.sub(r"[^A-Za-z0-9._-]", "_", src.split("combined-samples/")[-1].split("t/images/")[-1])
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
-        sources, notes = variants(et, src, work)
+        sources, notes = variants(et, src, work, flip)
     except Exception as exc:  # a broken source is reported, never silently dropped
         return [{"file": src, "error": f"variant preparation failed: {exc!r}"}]
     records = [{"file": src, **n} for n in notes]
-    edits = edits_for(et, src)
+    edits = edits_for(et, src, sets)
     for s in sources:
         original = str(s["path"])
         before = readback(et, original)
+        orig_preview = preview_state(et, original)
         for edit, args in edits.items():
             stem = f"{s['variant']}-{s['carrier']}-{edit}"
             ext = "." + s["carrier"]
-            et_path, ox_path = work / f"{stem}-et{ext}", work / f"{stem}-ox{ext}"
+            et_path = work / f"{stem}-et{ext}"
             shutil.copy(original, et_path)
-            shutil.copy(original, ox_path)
             er = et.run(["-overwrite_original", *args, str(et_path)])
             et_ok = er.returncode == 0 and "1 image files updated" in er.stdout
-            orx = subprocess.run([oxidex, *args, str(ox_path)], capture_output=True, text=True,  # nosec B603
-                                 errors="replace", timeout=180)
-            rec = {"file": src, "variant": s["variant"], "order": s["order"], "carrier": s["carrier"],
-                   "edit": edit, "args": [a[:60] for a in args], "et_exit": er.returncode, "et_ok": et_ok,
-                   "ox_exit": orx.returncode}
-            if orx.returncode != 0:
-                untouched = sha(str(ox_path)) == sha(original)
-                rec["verdict"] = "refused-untouched" if untouched else "refused-modified"
-                rec["ox_msg"] = (orx.stdout + orx.stderr).strip()[-240:]
-            else:
-                ox_rb = readback(et, str(ox_path))
-                if et_ok:
-                    et_rb = readback(et, str(et_path))
-                    if ox_rb == et_rb:
-                        rec["verdict"] = "match"
-                    elif ox_rb == before:
-                        rec["verdict"] = "match-orig"
-                        rec["et_vs_orig"] = dict(list(diff(before, et_rb).items())[:6])
-                    else:
-                        rec["verdict"] = "corrupt"
-                        rec["diff_vs_et"] = dict(list(diff(et_rb, ox_rb).items())[:8])
+            et_rb = readback(et, str(et_path)) if et_ok else None
+            et_preview = preview_state(et, str(et_path)) if et_ok else None
+            for label, oxidex in binaries.items():
+                ox_path = work / f"{stem}-{label}{ext}"
+                shutil.copy(original, ox_path)
+                orx = subprocess.run([oxidex, *args, str(ox_path)], capture_output=True, text=True,  # nosec B603
+                                     errors="replace", timeout=180)
+                rec = {"file": src, "binary": label, "variant": s["variant"], "order": s["order"],
+                       "carrier": s["carrier"], "edit": edit, "args": [a[:60] for a in args],
+                       "et_exit": er.returncode, "et_ok": et_ok, "ox_exit": orx.returncode,
+                       "orig_preview": orig_preview}
+                if orx.returncode != 0:
+                    untouched = sha(str(ox_path)) == sha(original)
+                    rec["verdict"] = "refused-untouched" if untouched else "refused-modified"
+                    rec["preview_verdict"] = "refused"
+                    rec["ox_msg"] = (orx.stdout + orx.stderr).strip()[-240:]
                 else:
-                    rec["verdict"] = "match-orig" if ox_rb == before else "corrupt"
-                    rec["et_msg"] = (er.stdout + er.stderr).strip()[-200:]
-                    if rec["verdict"] == "corrupt":
-                        rec["diff_vs_orig"] = dict(list(diff(before, ox_rb).items())[:8])
-            records.append(rec)
+                    ox_rb = readback(et, str(ox_path))
+                    ox_preview = preview_state(et, str(ox_path))
+                    rec["preview_verdict"] = preview_verdict(orig_preview, et_preview, ox_preview)
+                    rec["ox_preview"], rec["et_preview"] = ox_preview, et_preview
+                    rec["validate_parity"] = et_preview is None or ox_preview["warnings"] == et_preview["warnings"]
+                    if et_ok:
+                        if ox_rb == et_rb:
+                            rec["verdict"] = "match"
+                        elif ox_rb == before:
+                            rec["verdict"] = "match-orig"
+                            rec["et_vs_orig"] = dict(list(diff(before, et_rb).items())[:6])
+                        else:
+                            rec["verdict"] = "corrupt"
+                            rec["diff_vs_et"] = dict(list(diff(et_rb, ox_rb).items())[:8])
+                    else:
+                        rec["verdict"] = "match-orig" if ox_rb == before else "corrupt"
+                        rec["et_msg"] = (er.stdout + er.stderr).strip()[-200:]
+                        if rec["verdict"] == "corrupt":
+                            rec["diff_vs_orig"] = dict(list(diff(before, ox_rb).items())[:8])
+                records.append(rec)
     shutil.rmtree(work, ignore_errors=True)
     return records
 
 
+VERDICTS = ("match", "match-orig", "refused-untouched", "refused-modified", "corrupt")
+
+
 def summarize(records: list[dict]) -> None:
     cells = [r for r in records if "verdict" in r]
-    verdicts = collections.Counter(r["verdict"] for r in cells)
-    print(f"cells={len(cells)}  " + "  ".join(f"{k}={verdicts[k]}" for k in
-          ("match", "match-orig", "refused-untouched", "refused-modified", "corrupt")))
+    labels = list(dict.fromkeys(r.get("binary", "ox") for r in cells))
+    for label in labels:
+        mine = [r for r in cells if r.get("binary", "ox") == label]
+        verdicts = collections.Counter(r["verdict"] for r in mine)
+        previews = collections.Counter(r.get("preview_verdict", "n/a") for r in mine)
+        parity = sum(1 for r in mine if r.get("validate_parity") is False)
+        print(f"[{label}] cells={len(mine)}  " + "  ".join(f"{k}={verdicts[k]}" for k in VERDICTS)
+              + f"  | preview: " + "  ".join(f"{k}={v}" for k, v in sorted(previews.items()))
+              + f"  | -validate differs from oracle: {parity}")
     by = collections.defaultdict(collections.Counter)
     for r in cells:
-        by[(vendor_of(r["file"]), r["carrier"], r["edit"])][r["verdict"]] += 1
-    print(f"{'vendor':<14}{'carrier':<8}{'edit':<8}{'match':>7}{'m-orig':>8}{'refused':>9}{'ref-mod':>9}{'corrupt':>9}")
-    for (vendor, carrier, edit), c in sorted(by.items()):
-        print(f"{vendor:<14}{carrier:<8}{edit:<8}{c['match']:>7}{c['match-orig']:>8}"
-              f"{c['refused-untouched']:>9}{c['refused-modified']:>9}{c['corrupt']:>9}")
+        key = (vendor_of(r["file"]), r["edit"], r["carrier"])
+        by[key]["cells:" + r.get("binary", "ox")] += 1
+        pv = r.get("preview_verdict")
+        if pv in ("lost", "mis-pointed", "differs-from-oracle"):
+            by[key][f"{pv}:{r.get('binary', 'ox')}"] += 1
+        if r["verdict"] in ("corrupt", "refused-modified"):
+            by[key][f"corrupt:{r.get('binary', 'ox')}"] += 1
+        if r["verdict"] == "refused-untouched":
+            by[key][f"refused:{r.get('binary', 'ox')}"] += 1
+    head = f"{'vendor':<14}{'edit':<12}{'carrier':<8}{'cells':>6}"
+    for label in labels:
+        head += f" | {label[:10]:>10} lost mis corrupt refused"
+    print(head)
+    for key, c in sorted(by.items()):
+        line = f"{key[0]:<14}{key[1]:<12}{key[2]:<8}{c['cells:' + labels[0]]:>6}"
+        for label in labels:
+            line += (f" | {'':>10} {c['lost:' + label]:>4} {c['mis-pointed:' + label] + c['differs-from-oracle:' + label]:>3}"
+                     f" {c['corrupt:' + label]:>7} {c['refused:' + label]:>7}")
+        print(line)
     skipped = [r for r in records if "skipped" in r or "error" in r]
     print(f"variants skipped (wrap/flip changed maker notes, or preparation error): {len(skipped)}")
 
@@ -532,7 +626,12 @@ def main() -> int:
     sel.add_argument("--include", nargs="*", default=[], help="always include these paths")
     m = sub.add_parser("matrix")
     m.add_argument("sources", help="file listing source JPEG paths, one per line")
-    m.add_argument("--oxidex", required=True)
+    m.add_argument("--oxidex", required=True, action="append",
+                   help="PATH, or LABEL=PATH; repeat to judge several binaries on the same oracle edits")
+    m.add_argument("--edits", choices=["basic", "groups", "all", "survey"], default="basic",
+                   help="basic: grow/shrink/same; groups: <group>:All removals; survey: grow, shrink "
+                        "and the group removals")
+    m.add_argument("--no-flip", action="store_true", help="skip the byte-order-flipped variant")
     m.add_argument("--out", required=True, help="JSONL of every cell")
     m.add_argument("--work", default=None)
     m.add_argument("--jobs", type=int, default=4)
@@ -560,8 +659,19 @@ def main() -> int:
     for f in files:
         if not Path(f).is_file():
             sys.exit(f"❌ source missing: {f}")
-    binary = instrument.resolve_binary(args.oxidex, kind="oxidex") if args.cmd == "matrix" else None
+    binaries: dict[str, str] = {}
+    binary = None
+    if args.cmd == "matrix":
+        for spec in args.oxidex:
+            label, _, path = spec.rpartition("=")
+            ident = instrument.resolve_binary(path, kind="oxidex")
+            binaries[label or "ox"] = str(ident.path)
+            binary = binary or ident
+        if len(binaries) != len(args.oxidex):
+            sys.exit("❌ --oxidex labels must be distinct")
+    extra = [f"oxidex[{k}]: {v}  sha256 {sha(v)[:16]}" for k, v in binaries.items()]
     instrument.print_header(tool=f"makernote_outofblob_matrix.py {args.cmd}", git=git, binary=binary,
+                            extra=extra,
                             dirty_overridden=dirty_overridden, oracle=oracle, corpus_paths=[args.files if args.cmd == "survey" else args.sources],
                             file_count=len(files))
     sys.stdout.flush()
@@ -584,12 +694,12 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=True)
     records: list[dict] = []
     with ThreadPoolExecutor(args.jobs) as ex, open(args.out, "w") as out:
-        for recs in ex.map(lambda f: run_cells(et, str(binary.path), f, root), files):
+        for recs in ex.map(lambda f: run_cells(et, binaries, f, root, args.edits, not args.no_flip), files):
             for r in recs:
                 out.write(json.dumps(r) + "\n")
                 out.flush()
             records.extend(recs)
-    cells = sum(1 for r in records if "verdict" in r)
+    cells = sum(1 for r in records if "verdict" in r) // max(1, len(binaries))
     summarize(records)
     if cells < args.min_cells:
         sys.exit(f"❌ only {cells} cells ran (< --min-cells {args.min_cells}); refusing to report a number")
