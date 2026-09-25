@@ -1952,6 +1952,11 @@ fn plan_exif_write_inner(
         }
     }
 
+    // WriteExif decides IFD0's seeding when it rewrites IFD0, before it
+    // reaches IFD1 -- so while an IFD1 a group-wide removal is about to
+    // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
+    let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
+
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the
     // entries this same write sets there: delete first, then set, as pinned
@@ -2006,7 +2011,7 @@ fn plan_exif_write_inner(
         })
         .copied()
         .collect();
-    add_mandatory_entries(scan, &deleted, &mut plan, seeding)?;
+    add_mandatory_entries(scan, &deleted, ifd0_at_rewrite, &mut plan, seeding)?;
 
     Ok(plan)
 }
@@ -2082,9 +2087,37 @@ fn directory_existed(scan: &ExifScan, ifd: IfdKind) -> bool {
 /// next IFD follows (WriteExif.pl 13.59:2079-2089); none arises here: a
 /// created ExifIFD/GPS holds the caller's entry, and a created IFD0 holds
 /// a sub-directory pointer or precedes IFD1.
+/// What WriteExif sees of IFD0 when it rewrites it: whether the write puts
+/// anything at all into the block, and whether a next IFD (IFD1) follows.
+/// Taken before group-wide removals, which WriteExif applies per directory
+/// as it reaches each one (pinned ExifTool 13.59 `-IFD1:All=` on a block
+/// whose IFD0 has no entries and whose IFD1 holds the thumbnail:
+/// "Rewriting IFD0 / + IFD0:YCbCrPositioning = '1' (mandatory) / Deleting
+/// IFD1", leaving IFD0 = {YCbCrPositioning}).
+#[derive(Clone, Copy)]
+struct Ifd0AtRewrite {
+    block_written: bool,
+    next_ifd: bool,
+}
+
+impl Ifd0AtRewrite {
+    fn of(plan: &WritePlan) -> Self {
+        let next_ifd = !plan.ifd1.is_empty() || plan.thumbnail.is_some();
+        Self {
+            block_written: next_ifd
+                || !(plan.ifd0.is_empty()
+                    && plan.exif_ifd.is_empty()
+                    && plan.gps.is_empty()
+                    && plan.interop.is_empty()),
+            next_ifd,
+        }
+    }
+}
+
 fn add_mandatory_entries(
     scan: &ExifScan,
     deleted: &[IfdKind],
+    ifd0_at_rewrite: Ifd0AtRewrite,
     plan: &mut WritePlan,
     seeding: MandatorySeeding<'_>,
 ) -> Result<()> {
@@ -2097,12 +2130,6 @@ fn add_mandatory_entries(
         ByteOrder::LittleEndian => TiffByteOrder::Little,
         ByteOrder::BigEndian => TiffByteOrder::Big,
     };
-    let block_written = !(plan.ifd0.is_empty()
-        && plan.exif_ifd.is_empty()
-        && plan.gps.is_empty()
-        && plan.interop.is_empty()
-        && plan.ifd1.is_empty())
-        || plan.thumbnail.is_some();
     let mut created = Vec::new();
     for ifd in [IfdKind::ExifIfd, IfdKind::Gps, IfdKind::Interop] {
         let bucket = match ifd {
@@ -2116,7 +2143,7 @@ fn add_mandatory_entries(
     }
     let ifd0_properties = match seeding {
         MandatorySeeding::All(properties)
-            if block_written && !directory_existed(scan, IfdKind::Ifd0) =>
+            if ifd0_at_rewrite.block_written && !directory_existed(scan, IfdKind::Ifd0) =>
         {
             created.push(IfdKind::Ifd0);
             Some(properties()?)
@@ -2141,6 +2168,7 @@ fn add_mandatory_entries(
             IfdKind::Gps => &mut plan.gps,
             _ => &mut plan.interop,
         };
+        let mut seeded = 0;
         for default in defaults {
             if bucket.iter().any(|entry| entry.tag_id == default.tag_id) {
                 continue;
@@ -2152,6 +2180,21 @@ fn add_mandatory_entries(
                 value: default.bytes,
                 native_endian: false,
             });
+            seeded += 1;
+        }
+        // The mandatory-only cleanup (WriteExif.pl 13.59:2079-2089): a
+        // created IFD0 left holding nothing but the entries seeded into it
+        // -- no caller entry, no sub-directory pointer -- is dropped unless
+        // a next IFD followed it when it was rewritten. (A created ExifIFD,
+        // GPS or InteropIFD always holds the caller's entry.)
+        if ifd == IfdKind::Ifd0
+            && plan.ifd0.len() == seeded
+            && plan.exif_ifd.is_empty()
+            && plan.gps.is_empty()
+            && plan.interop.is_empty()
+            && !ifd0_at_rewrite.next_ifd
+        {
+            plan.ifd0.clear();
         }
     }
     Ok(())

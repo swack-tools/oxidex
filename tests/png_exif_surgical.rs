@@ -3396,3 +3396,74 @@ fn a_mixed_write_seeds_the_directories_it_creates() {
         }
     }
 }
+
+/// WriteExif decides a created IFD0's mandatory entries when it rewrites
+/// IFD0, before it reaches -- and deletes -- IFD1; the mandatory-only
+/// cleanup spares IFD0 because a next IFD still follows it then
+/// (WriteExif.pl 13.59:714-719, 2072-2089). Pinned ExifTool 13.59
+/// `-IFD1:All=` on a block whose IFD0 has no entries and whose IFD1 holds
+/// the thumbnail (with or without other IFD1 entries), `-v3`: "Rewriting
+/// IFD0 / + IFD0:YCbCrPositioning = '1' (mandatory) / Deleting IFD1" --
+/// the block keeps an IFD0 holding YCbCrPositioning. d45478e2 seeded IFD0
+/// only after the removal, found nothing left and dropped the whole block.
+#[test]
+fn ifd1_removal_behind_an_empty_ifd0_leaves_the_mandatory_ifd0() {
+    let Some(oracle) = exiftool_oracle::available()
+        .then(exiftool_oracle::shared)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipping: no usable ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let thumb_only = Tiff {
+            ifd0: vec![],
+            exif: None,
+            interop: None,
+            gps: None,
+            ifd1: Some((vec![], vec![0xFF, 0xD8, 0xFF, 0xD9])),
+        }
+        .build(order);
+        for (tag, tiff) in [("thumbonly", thumb_only), ("ifd1only", ifd1_only(order))] {
+            for (name, original) in [
+                (format!("{tag}.jpg"), jpeg_with(&tiff)),
+                (format!("{tag}.png"), png(&[(b"eXIf", tiff.clone())], &[])),
+            ] {
+                let label = format!("{order:?} {name}");
+                let ours = write(dir.path(), &format!("ours-{name}"), &original);
+                let theirs = write(dir.path(), &format!("theirs-{name}"), &original);
+                let status = std::process::Command::new(cli)
+                    .arg("-IFD1:All=")
+                    .arg(&ours)
+                    .output()
+                    .unwrap();
+                assert!(status.status.success(), "{label}: {status:?}");
+                assert!(
+                    oracle
+                        .command()
+                        .args(["-q", "-q", "-overwrite_original", "-IFD1:All="])
+                        .arg(&theirs)
+                        .status()
+                        .unwrap()
+                        .success(),
+                    "{label}: oracle failed"
+                );
+                assert_validate_parity(&original, &name, &["-IFD1:All="], &ours, &label);
+                let expected =
+                    BTreeMap::from([("IFD0:0x0213".to_string(), (3, 1, order.u16(1).to_vec()))]);
+                assert_eq!(
+                    exif_block_at(&theirs).as_deref().map(dump),
+                    Some(expected),
+                    "{label}: oracle"
+                );
+                assert_eq!(
+                    exif_block_at(&ours).as_deref().map(dump),
+                    exif_block_at(&theirs).as_deref().map(dump),
+                    "{label}: entries"
+                );
+            }
+        }
+    }
+}
