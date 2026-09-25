@@ -2816,3 +2816,97 @@ fn group_and_tag_names_are_case_insensitive() {
         }
     }
 }
+
+/// IFD0 {Make "Acme", Model "M1", Artist "me", ThumbnailStripOffsets ->
+/// an 8-byte strip inside the block, ThumbnailStripByteCounts 8}.
+fn strip_tiff(order: Order) -> Vec<u8> {
+    let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(typ),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    // IFD0 at 8: 5 entries -> 8+2+60+4 = 74; "Acme\0" at 74 (+pad), strip at 80.
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(8));
+    t.extend(order.u16(5));
+    t.extend(entry(0x010F, 2, 5, order.u32(74)));
+    t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(entry(0x5028, 4, 1, order.u32(80)));
+    t.extend(entry(0x502C, 4, 1, order.u32(8)));
+    t.extend(order.u32(0));
+    t.extend(b"Acme\0\0");
+    assert_eq!(t.len(), 80);
+    t.extend(b"STRIPDAT");
+    t
+}
+
+/// IFD0 0x5028 ThumbnailStripOffsets (with 0x502c ThumbnailStripByteCounts)
+/// locates a strip inside the block. It was missing from the pointer
+/// refusal list, so a write that re-laid the block out (a legacy deletion)
+/// re-emitted the old offset without the strip and reported success
+/// (00f0c398). Such a block is now never re-laid out -- the write is
+/// refused, file untouched -- and an in-place edit keeps the strip where
+/// its pointer says. The post-write check follows every offset/length pair
+/// the scanner knows, so it refuses the dangling pointer on its own
+/// (review-head evidence: strip-refusal-reverted). Pinned ExifTool 13.59
+/// declares 0x5028 a plain tag; its own re-layout does not move the strip
+/// either (evidence `strip-oracle.txt`), so this refusal is on the
+/// fail-closed side. JPEG and PNG, II and MM.
+#[test]
+fn a_thumbnail_strip_pointer_is_never_left_dangling() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = strip_tiff(order);
+        for (name, original) in [
+            ("strip.jpg", jpeg_with(&tiff)),
+            ("strip.png", png(&[(b"eXIf", tiff.clone())], &[])),
+        ] {
+            let label = format!("{order:?} {name}");
+            let path = write(dir.path(), name, &original);
+            let err = remove_tag(&path, "IFD0:Model").expect_err(&format!("{label}: re-laid"));
+            assert!(err.to_string().contains("0x5028"), "{label}: {err}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label}");
+
+            // In place: the strip stays where the pointer says.
+            modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                .unwrap_or_else(|e| panic!("{label} Artist: {e}"));
+            let out = std::fs::read(&path).unwrap();
+            let (after, _) = tiff_and_rest(name, &out);
+            let d = dump(&after);
+            let offset = d.get("IFD0:0x5028").expect("pointer kept").2.clone();
+            let offset = order.read_u32(&offset) as usize;
+            assert_eq!(&after[offset..offset + 8], b"STRIPDAT", "{label}: strip");
+        }
+    }
+}
+
+/// `ExifIFD:All` and `MakerNotes:All` on t/images Panasonic.rw2,
+/// whose JpgFromRaw carries ExifIFD and a MakerNote: pinned ExifTool 13.59
+/// leaves the file unchanged for `ExifIFD:All` and `MakerNotes:All`, exit
+/// 0, with "Can't delete ExifIFD/MakerNotes from RW2" (its raw-file rule
+/// applies inside the embedded JPEG too: the embedded ExifIFD keeps all 90
+/// rows; evidence `rw2-oracle.txt`). So does this writer. Pinned here so a
+/// change to the embedded-directory check cannot make them refusals or
+/// deletions the oracle does not make.
+#[test]
+fn rw2_embedded_exififd_and_makernotes_removals_follow_the_oracle() {
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&sample).unwrap();
+    for group in ["ExifIFD:All", "MakerNotes:All"] {
+        let path = write(dir.path(), "p.rw2", &original);
+        remove_tag(&path, group).unwrap_or_else(|e| panic!("{group}: {e}"));
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{group}");
+    }
+}

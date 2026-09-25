@@ -59,16 +59,104 @@ const MAKERNOTE: u16 = 0x927C;
 /// The structural pointers the writer does model (0x8769, 0x8825, 0xa005,
 /// IFD1's 0x0201/0x0202) and the MakerNote, which it pins at its original
 /// offset, are not listed. GPS uses `GPS::Main`, which has none.
+///
+/// Derived from the pinned tree (`LoadAllTables`; every `Exif::Main` /
+/// `GPS::Main` id whose tag info has `IsOffset`, the offset side of
+/// `OffsetPair`, or a `SubDirectory` reached by offset) plus
+/// [`NAMED_POINTER_TAGS`]; `a_pointer_tag_the_exif_table_names_is_refused`
+/// cross-checks it against the repo's own `Exif::Main` table.
 const UNMODELLED_POINTER_TAGS: &[u16] = &[
     0x0111, 0x0120, 0x0144, 0x014a, 0x0190, 0x0201, 0x0207, 0x0208, 0x0209, 0x8290, 0x8781, 0x888a,
     0xa010, 0xbcc0, 0xbcc2, 0xc51b, 0xc634, 0xc6f5, 0xfe00,
 ];
 
-/// The first entry of `scan` that [`UNMODELLED_POINTER_TAGS`] names.
+/// Tags whose value locates bytes although pinned ExifTool 13.59 declares
+/// them plain (no `IsOffset`): 0x5028 ThumbnailStripOffsets, paired with
+/// 0x502c ThumbnailStripByteCounts (Exif.pm 13.59:1585-1589; "Offsets" in
+/// the repo's `Exif::Main`). A re-layout re-emitted the old offset without
+/// the strip.
+const NAMED_POINTER_TAGS: &[u16] = &[0x5028];
+
+/// The offset/length pairs whose located bytes the post-write check follows
+/// ([`located_bytes`]): the `OffsetPair`s of pinned ExifTool 13.59's
+/// `Exif::Main` (StripOffsets, FreeOffsets, TileOffsets, an IFD0/ExifIFD
+/// 0x0201/0x0202 preview pair, SamsungRawPointers, ImageOffset,
+/// AlphaOffset) and ThumbnailStripOffsets/ByteCounts. IFD1's thumbnail
+/// pair is structural and checked on its own (the thumbnail check).
+const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
+    (0x0111, 0x0117),
+    (0x0120, 0x0121),
+    (0x0144, 0x0145),
+    (0x0201, 0x0202),
+    (0x5028, 0x502c),
+    (0xa010, 0xa011),
+    (0xbcc0, 0xbcc1),
+    (0xbcc2, 0xbcc3),
+];
+
+/// The bytes each offset/length pair of `scan` locates in `tiff`, keyed by
+/// (IFD, offset tag): every (offset, length) element of the pair's arrays,
+/// SHORT or LONG, concatenated -- `None` for a pair any element of which
+/// lies outside the block (it cannot be followed here).
+fn located_bytes(scan: &ExifScan, tiff: &[u8]) -> Vec<((IfdKind, u16), Option<Vec<u8>>)> {
+    let values = |entry: &RawEntry| -> Vec<usize> {
+        let width = match entry.field_type {
+            3 => 2,
+            4 | 13 => 4,
+            _ => return Vec::new(),
+        };
+        entry
+            .value
+            .chunks_exact(width)
+            .map(|chunk| {
+                if width == 2 {
+                    read_u16(chunk, scan.byte_order) as usize
+                } else {
+                    read_u32(chunk, scan.byte_order) as usize
+                }
+            })
+            .collect()
+    };
+    let mut out = Vec::new();
+    for entry in &scan.entries {
+        let Some(&(_, length_tag)) = OFFSET_LENGTH_PAIRS
+            .iter()
+            .find(|(offset_tag, _)| *offset_tag == entry.tag_id)
+        else {
+            continue;
+        };
+        let Some(lengths) = scan
+            .entries
+            .iter()
+            .find(|e| e.ifd == entry.ifd && e.tag_id == length_tag)
+            .map(values)
+        else {
+            continue;
+        };
+        let offsets = values(entry);
+        let mut bytes = Some(Vec::new());
+        for (offset, length) in offsets.iter().zip(&lengths) {
+            let slice = offset
+                .checked_add(*length)
+                .and_then(|end| tiff.get(*offset..end));
+            match (bytes.as_mut(), slice) {
+                (Some(acc), Some(slice)) => acc.extend_from_slice(slice),
+                _ => bytes = None,
+            }
+        }
+        out.push(((entry.ifd, entry.tag_id), bytes));
+    }
+    out
+}
+
+/// The first entry of `scan` that [`UNMODELLED_POINTER_TAGS`] or
+/// [`NAMED_POINTER_TAGS`] names.
 fn unmodelled_pointer(scan: &ExifScan) -> Option<&RawEntry> {
-    scan.entries
-        .iter()
-        .find(|entry| entry.ifd != IfdKind::Gps && UNMODELLED_POINTER_TAGS.contains(&entry.tag_id))
+    scan.entries.iter().find(|entry| {
+        entry.ifd != IfdKind::Gps
+            && (UNMODELLED_POINTER_TAGS.contains(&entry.tag_id)
+                || NAMED_POINTER_TAGS.contains(&entry.tag_id))
+    })
 }
 
 /// A group-wide removal `<group>:All`, as pinned ExifTool 13.59 applies it to
@@ -2997,19 +3085,53 @@ pub(crate) fn normalize_write_request(
         .iter()
         .map(|key| canonical_write_key(key, baseline))
         .collect();
-    // A named removal of one of the file's rows deletes it: `remove_tag`
-    // takes the key out of the map as spelled, so `ExifIFD:iso` left
-    // `ExifIFD:ISO` in the map, unchanged, beside its own removal. The row
-    // goes unless the map sets it to something new.
-    for key in &removed {
-        if group_removal(key).is_none()
-            && baseline.contains_key(key.as_str())
-            && normalized.get(key.as_str()) == baseline.get(key.as_str())
-        {
-            normalized.remove(key.as_str());
+    // A named removal of one of the file's rows: the row goes -- `remove_tag`
+    // took the key out of the map only as spelled, so `ExifIFD:iso` left
+    // `ExifIFD:ISO` carried beside its own removal -- unless the map sets it
+    // to a value the file does not hold, which a carried row never is: then
+    // the set is the request (delete, then set). A set to the value the file
+    // already holds is told apart from a carried row only by the
+    // transaction's own record of what was assigned, which
+    // `core::operations::write_metadata_transaction` resolves before this.
+    let mut removed = removed;
+    removed.retain(|key| {
+        if group_removal(key).is_some() || !baseline.contains_key(key.as_str()) {
+            return true;
         }
-    }
+        match normalized.get(key.as_str()) {
+            Some(value) if baseline.get(key.as_str()) != Some(value) => false,
+            _ => {
+                normalized.remove(key.as_str());
+                true
+            }
+        }
+    });
     (normalized, removed)
+}
+
+/// Whether the removal `removal` (a canonical key, named or `<group>:All`)
+/// covers the canonical key `key`: the same key, or a group that holds it.
+pub(crate) fn removal_covers(removal: &str, key: &str, baseline: &MetadataMap) -> bool {
+    if removal == key {
+        return true;
+    }
+    let group = key.split_once(':').map_or("", |(group, _)| group);
+    match group_removal(removal) {
+        Some(GroupRemoval::Carrier) => {
+            matches!(
+                group,
+                "IFD0" | "ExifIFD" | "GPS" | "IFD1" | "InteropIFD" | "EXIF"
+            ) || is_makernote_row(baseline, key)
+        }
+        Some(GroupRemoval::ExifIfd) => {
+            matches!(group, "ExifIFD" | "InteropIFD") || is_makernote_row(baseline, key)
+        }
+        Some(GroupRemoval::Gps) => group == "GPS",
+        Some(GroupRemoval::Ifd1) => group == "IFD1",
+        Some(GroupRemoval::Interop) => group == "InteropIFD",
+        Some(GroupRemoval::MakerNotes) => is_makernote_row(baseline, key),
+        None => false,
+    }
 }
 
 /// Whether `key` of `baseline` is a row a maker-note decoder produced: its
@@ -3309,6 +3431,7 @@ pub(crate) fn verify_exif_write(
     }
 
     // (a) removals
+    let mut requested_gone: Vec<(IfdKind, u16)> = Vec::new();
     for entry in &before.entries {
         let native = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
         let mut keys = carried_class_reader_keys(entry);
@@ -3337,6 +3460,7 @@ pub(crate) fn verify_exif_write(
         let Some(key) = by_map.or(by_name) else {
             continue;
         };
+        requested_gone.push((entry.ifd, entry.tag_id));
         if kept.contains(&(entry.ifd, entry.tag_id)) {
             continue;
         }
@@ -3381,6 +3505,51 @@ pub(crate) fn verify_exif_write(
                     entry.tag_id
                 ))
             )));
+        }
+    }
+
+    // (c') every offset/length pair the scanner knows (StripOffsets,
+    // ThumbnailStripOffsets, ...), not only IFD1's thumbnail: the bytes it
+    // locates must still be there, byte-identical, through the pair in the
+    // output -- unless the request deleted the pair (by name, from the map,
+    // or with its group). A re-layout re-emitted such an offset unchanged
+    // without the bytes it located, and nothing checked.
+    if let Some(tiff) = original.filter(|tiff| !tiff.is_empty() && !carrier_deleted) {
+        let group_gone = |ifd: IfdKind| {
+            removed
+                .iter()
+                .filter_map(|key| group_removal(key))
+                .any(|group| match group {
+                    GroupRemoval::Carrier => true,
+                    GroupRemoval::ExifIfd => matches!(ifd, IfdKind::ExifIfd | IfdKind::Interop),
+                    GroupRemoval::Gps => ifd == IfdKind::Gps,
+                    GroupRemoval::Ifd1 => ifd == IfdKind::Ifd1,
+                    GroupRemoval::Interop => ifd == IfdKind::Interop,
+                    GroupRemoval::MakerNotes => false,
+                })
+        };
+        let after_located = located_bytes(&after, output);
+        for (address, located) in located_bytes(&before, tiff) {
+            let Some(located) = located else {
+                continue; // outside the block: nothing here to follow
+            };
+            if requested_gone.contains(&address) || group_gone(address.0) {
+                continue;
+            }
+            let now = after_located.iter().find(|(a, _)| *a == address);
+            if now.and_then(|(_, bytes)| bytes.as_ref()) != Some(&located) {
+                return Err(refused(format!(
+                    "the {} bytes {} tag 0x{:04X} locates were not asked to be deleted but are {}",
+                    located.len(),
+                    address.0.prefix(),
+                    address.1,
+                    if now.is_some() {
+                        "no longer there (a dangling pointer)"
+                    } else {
+                        "gone"
+                    }
+                )));
+            }
         }
     }
 
@@ -5151,6 +5320,61 @@ mod tests {
             err.to_string().contains("IFD1:PanasonicTitle"),
             "got: {err}"
         );
+    }
+
+    /// The pointer refusal list agrees with the repo's own transcription of
+    /// pinned ExifTool 13.59's `Exif::Main`: every tag there that reaches a
+    /// sub-directory by offset (`Start => '$val'`, a SubIFD), and every tag
+    /// its name says holds an offset or a start, is refused before a
+    /// re-layout, or is one the serializer models. 0x5028
+    /// ThumbnailStripOffsets was missing (ExifTool declares it plain). The
+    /// `IsOffset` / `OffsetPair` ids the pinned tree declares (the repo's
+    /// table withholds several, e.g. 0x0111's condition variants) are all in
+    /// the list too.
+    #[test]
+    fn a_pointer_tag_the_exif_table_names_is_refused() {
+        use crate::exiftool_tables::ifd_schema::IfdStart;
+        const MODELLED: &[u16] = &[0x8769, 0x8825, 0xa005];
+        // Named like an offset, but a value (Exif.pm 13.59): a time-zone
+        // offset in hours, a DNG exposure offset in EV.
+        const NOT_POINTERS: &[&str] = &["TimeZoneOffset", "BaselineExposureOffset"];
+        // `IsOffset` in `Exif::Main`, from the pinned tree (LoadAllTables).
+        const EXIFTOOL_IS_OFFSET: &[u16] = &[
+            0x0111, 0x0120, 0x0144, 0x014a, 0x0201, 0x0207, 0x0208, 0x0209, 0x8781, 0xa010, 0xbcc0,
+            0xbcc2,
+        ];
+        let refused = |id: u16| {
+            UNMODELLED_POINTER_TAGS.contains(&id)
+                || NAMED_POINTER_TAGS.contains(&id)
+                || MODELLED.contains(&id)
+        };
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").expect("Exif::Main");
+        let tags = table.tags.iter().chain(
+            table
+                .variants
+                .iter()
+                .flat_map(|group| group.alternatives.iter().map(|(_, tag)| tag)),
+        );
+        let mut missing = Vec::new();
+        for tag in tags {
+            let by_offset = tag
+                .subdir
+                .is_some_and(|edge| edge.sub_ifd || matches!(edge.start, IfdStart::Val(_)));
+            let named = ["Offset", "Offsets", "Start"]
+                .iter()
+                .any(|suffix| tag.name.ends_with(suffix))
+                && !NOT_POINTERS.contains(&tag.name);
+            if (by_offset || named) && !refused(tag.id) {
+                missing.push(format!("0x{:04x} {}", tag.id, tag.name));
+            }
+        }
+        assert!(missing.is_empty(), "pointer tags not refused: {missing:?}");
+        for id in EXIFTOOL_IS_OFFSET {
+            assert!(refused(*id), "IsOffset 0x{id:04x} not refused");
+        }
+        for (offset, _) in OFFSET_LENGTH_PAIRS {
+            assert!(refused(*offset), "pair 0x{offset:04x} not refused");
+        }
     }
 
     #[test]
