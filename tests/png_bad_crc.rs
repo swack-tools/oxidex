@@ -339,3 +339,71 @@ fn the_oracle_refuses_the_same_files() {
         }
     }
 }
+
+/// Requests that change nothing -- deleting an absent tag, setting a tag to
+/// the value it already has -- are refused over a bad CRC too, exactly as
+/// pinned ExifTool 13.59 refuses them: `ProcessPNG` checks every chunk's CRC
+/// while it copies the file, before `WriteInfo` learns whether anything
+/// changed, so without `-m` the result is "Error: [minor] Bad CRC for <type>
+/// chunk", exit 1, file untouched. Only with `-m` (which oxidex does not
+/// have) does ExifTool go on to report "1 image files unchanged". Oracle
+/// (`crc_matrix` probe, IDAT/tEXt/eXIf corruption): `-IFD0:Software=`,
+/// `-ExifIFD:ISO=`, `-PNG:Title=`, `-XMP-dc:Title=` (all absent) and
+/// `-IFD0:Artist=me` (the stored value) all exit 1 with the file unchanged.
+#[test]
+fn a_no_op_request_over_a_bad_crc_is_refused_like_exiftool() {
+    let no_ops = [
+        "-IFD0:Software=",
+        "-ExifIFD:ISO=",
+        "-PNG:Title=",
+        "-XMP-dc:Title=",
+        "-IFD0:Artist=me",
+    ];
+    let mut failures = Vec::new();
+    for label in ["IDAT", "tEXt", "eXIf", "IHDR"] {
+        let bytes = png(Some(label));
+        for edit in no_ops {
+            let dir = tempfile::tempdir().unwrap();
+            let path = write_png(dir.path(), &bytes);
+            let out = run(&[edit.as_ref(), path.as_os_str()]);
+            let untouched = std::fs::read(&path).unwrap() == bytes;
+            if out.status.code() != Some(1) || !untouched {
+                failures.push(format!(
+                    "bad {label} {edit}: exit {:?}, untouched {untouched}",
+                    out.status.code()
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    if !exiftool_oracle::available() {
+        eprintln!("skipping the oracle half: no usable ExifTool oracle");
+        return;
+    }
+    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    for label in ["IDAT", "tEXt", "eXIf", "IHDR"] {
+        let bytes = png(Some(label));
+        for edit in no_ops {
+            let dir = tempfile::tempdir().unwrap();
+            let path = write_png(dir.path(), &bytes);
+            let out = oracle
+                .command()
+                .args(["-overwrite_original", edit])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(1), "oracle, bad {label} {edit}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr)
+                    .contains(&format!("[minor] Bad CRC for {label} chunk")),
+                "oracle, bad {label} {edit}"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                bytes,
+                "oracle, bad {label} {edit}"
+            );
+        }
+    }
+}

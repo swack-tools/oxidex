@@ -607,3 +607,163 @@ fn oracle_writes_the_same_exif_text_bytes() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Non-ASCII GPS text oxidex writes reads back as the value written, in an
+/// II and an MM block alike. `EncodeExifText` packs the UTF-16 in the
+/// block's order with no byte-order mark, so a big-endian block holds
+/// big-endian text; ExifTool reads it back with `Decode($str,'UTF16',
+/// 'Unknown')`, which starts in the block's order (Charset.pm 13.59:190-232).
+/// The GPS reader used to decode every no-BOM value little-endian, so an MM
+/// block's `café` came back `挀愀昀`.
+#[test]
+fn gps_text_reads_back_as_written_in_both_byte_orders() {
+    let mut failures = Vec::new();
+    for key in ["GPS:GPSProcessingMethod", "GPS:GPSAreaInformation"] {
+        for container in CONTAINERS {
+            for order in ORDERS {
+                for value in ["café", "中文", "A😀B", "Hello world"] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = fixture(dir.path(), container, order);
+                    modify_tag(&path, key, TagValue::new_string(value)).unwrap();
+                    let metadata = read_metadata(&path).unwrap();
+                    let got = metadata.get_string(key).map(str::to_owned);
+                    if got.as_deref() != Some(value) {
+                        failures.push(format!(
+                            "{key} {container:?} {order:?} {value:?}: read {got:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// UNICODE GPS text with no byte-order mark, read by oxidex and by the pinned
+/// oracle from the same file. The values are ExifTool's own writes into an
+/// II and an MM block, plus stored bytes in the order opposite the block's
+/// (MicrosoftPhoto writes little-endian text into big-endian EXIF), where
+/// `Decode`'s `'Unknown'` check swaps the order. The sample corpus has no
+/// big-endian file with UNICODE GPS text (scan: `gps_unicode_scan.py` in the
+/// PR evidence); its little-endian ones are read-graded too when the pinned
+/// combined-samples tree is present.
+#[test]
+fn oracle_reads_unicode_gps_text_as_oxidex_does() {
+    if !exiftool_oracle::available() {
+        eprintln!("skipping: no usable ExifTool oracle");
+        return;
+    }
+    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    let et_value = |path: &Path, key: &str| -> Option<String> {
+        let out = oracle
+            .command()
+            .args(["-j", "-G1", &format!("-{key}")])
+            .arg(path)
+            .output()
+            .unwrap();
+        let text = String::from_utf8(out.stdout).unwrap();
+        let rows: Vec<std::collections::BTreeMap<String, serde_json::Value>> =
+            serde_json::from_str(&text).unwrap();
+        rows[0].get(key).map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+    };
+    let mut failures = Vec::new();
+    let mut graded = 0;
+    for key in ["GPS:GPSProcessingMethod", "GPS:GPSAreaInformation"] {
+        for container in CONTAINERS {
+            for order in ORDERS {
+                // ExifTool's own bytes.
+                for value in ["café", "中文", "A😀B"] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = fixture(dir.path(), container, order);
+                    let arg = format!("-{key}={value}");
+                    let out = oracle
+                        .command()
+                        .args(["-q", "-overwrite_original", &arg])
+                        .arg(&path)
+                        .output()
+                        .unwrap();
+                    assert!(out.status.success(), "oracle {arg}");
+                    let theirs = et_value(&path, key);
+                    let ours = read_metadata(&path)
+                        .unwrap()
+                        .get_string(key)
+                        .map(str::to_owned);
+                    graded += 1;
+                    if ours != theirs || theirs.as_deref() != Some(value) {
+                        failures.push(format!(
+                            "{key} {container:?} {order:?} oracle-written {value:?}: oxidex {ours:?} oracle {theirs:?}"
+                        ));
+                    }
+                }
+                // Stored bytes, big- and little-endian (one of them is the order
+                // opposite the block's), without and with their BOM.
+                for (label, units_be) in
+                    [("Hi", false), ("Hi", true), ("café", false), ("café", true)]
+                {
+                    let mut raw = b"UNICODE\0".to_vec();
+                    for unit in label.encode_utf16() {
+                        raw.extend_from_slice(&if units_be {
+                            unit.to_be_bytes()
+                        } else {
+                            unit.to_le_bytes()
+                        });
+                    }
+                    for bom in [None, Some(units_be)] {
+                        let mut raw = raw.clone();
+                        if let Some(be) = bom {
+                            let mark: &[u8] = if be { b"\xfe\xff" } else { b"\xff\xfe" };
+                            raw.splice(8..8, mark.iter().copied());
+                        }
+                        let dir = tempfile::tempdir().unwrap();
+                        let path = fixture(dir.path(), container, order);
+                        modify_tag(&path, key, TagValue::Binary(raw.clone())).unwrap();
+                        let theirs = et_value(&path, key);
+                        let ours = read_metadata(&path)
+                            .unwrap()
+                            .get_string(key)
+                            .map(str::to_owned);
+                        graded += 1;
+                        if ours != theirs {
+                            failures.push(format!(
+                                "{key} {container:?} {order:?} stored {}: oxidex {ours:?} oracle {theirs:?}",
+                                to_hex(&raw)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The corpus's UNICODE GPS text (all little-endian blocks).
+    let corpus = exiftool_oracle::cache_dir().join("combined-samples");
+    for name in [
+        "Olympus/OlympusSH-25MR.jpg",
+        "Olympus/OlympusTG-1.jpg",
+        "Leica/LeicaV-LUX40.jpg",
+        "Panasonic/PanasonicDMC-TS5.jpg",
+        "Panasonic/PanasonicDMC-TZ20.jpg",
+        "Panasonic/PanasonicDMC-TZ41.jpg",
+        "Panasonic/PanasonicDMC-ZS10.jpg",
+        "Panasonic/PanasonicDMC-ZS20.jpg",
+    ] {
+        let path = corpus.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let key = "GPS:GPSAreaInformation";
+        let theirs = et_value(&path, key);
+        let ours = read_metadata(&path)
+            .unwrap()
+            .get_string(key)
+            .map(str::to_owned);
+        graded += 1;
+        if ours != theirs {
+            failures.push(format!("{name}: oxidex {ours:?} oracle {theirs:?}"));
+        }
+    }
+    assert!(graded >= 88, "graded only {graded}");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
