@@ -2940,6 +2940,23 @@ fn a_thumbnail_strip_pointer_is_never_left_dangling() {
                     .clone();
                 let offset = order.read_u32(&offset) as usize;
                 assert_eq!(&after[offset..offset + 8], b"STRIPDAT", "{label}: strip");
+
+                // `IFD1:All` deletes the pair with its directory: nothing is
+                // left to dangle, so it is no refusal (sweep2 at 247a9f90
+                // caught the check refusing it; pinned ExifTool 13.59 and
+                // tip 8825f101 delete IFD1).
+                if ifd == "IFD1" {
+                    let path = write(dir.path(), name, &original);
+                    remove_tag(&path, "IFD1:All")
+                        .unwrap_or_else(|e| panic!("{label} IFD1:All: {e}"));
+                    let (after, _) = tiff_and_rest(name, &std::fs::read(&path).unwrap());
+                    let d = dump(&after);
+                    assert!(
+                        !d.keys().any(|k| k.starts_with("IFD1:")),
+                        "{label}: IFD1 kept"
+                    );
+                    assert!(d.contains_key("IFD0:0x010f"), "{label}: IFD0 lost");
+                }
             }
         }
     }

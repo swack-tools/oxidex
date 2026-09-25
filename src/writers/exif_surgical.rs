@@ -150,10 +150,21 @@ fn located_bytes(scan: &ExifScan, tiff: &[u8]) -> Vec<((IfdKind, u16), Option<Ve
 }
 
 /// The first entry of `scan` that [`UNMODELLED_POINTER_TAGS`] or
-/// [`NAMED_POINTER_TAGS`] names.
-fn unmodelled_pointer(scan: &ExifScan) -> Option<&RawEntry> {
+/// [`NAMED_POINTER_TAGS`] names, outside a directory the group-wide
+/// removals `groups` delete whole (`IFD1:All` takes an IFD1
+/// ThumbnailStripOffsets pair with it, so nothing is left to dangle).
+fn unmodelled_pointer<'a>(scan: &'a ExifScan, groups: &[GroupRemoval]) -> Option<&'a RawEntry> {
+    let deleted = |ifd: IfdKind| match ifd {
+        IfdKind::Ifd1 => groups.contains(&GroupRemoval::Ifd1),
+        IfdKind::ExifIfd => groups.contains(&GroupRemoval::ExifIfd),
+        IfdKind::Interop => {
+            groups.contains(&GroupRemoval::ExifIfd) || groups.contains(&GroupRemoval::Interop)
+        }
+        _ => false,
+    };
     scan.entries.iter().find(|entry| {
         entry.ifd != IfdKind::Gps
+            && !deleted(entry.ifd)
             && (UNMODELLED_POINTER_TAGS.contains(&entry.tag_id)
                 || NAMED_POINTER_TAGS.contains(&entry.tag_id))
     })
@@ -1353,7 +1364,7 @@ fn plan_exif_write_inner(
     // and the bytes it locates left behind -- a dangling SubIFDs pointer,
     // reported as success -- so such a block is refused (fail closed). The
     // in-place writers, which never move existing bytes, still edit it.
-    if let Some(entry) = unmodelled_pointer(scan) {
+    if let Some(entry) = unmodelled_pointer(scan, &groups) {
         return Err(ExifToolError::unsupported_format(format!(
             "Cannot rewrite this EXIF block: {} tag 0x{:04X} locates data this \
              writer does not relocate (a SubIFD or offset pointer), and \
