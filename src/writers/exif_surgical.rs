@@ -3141,6 +3141,102 @@ const MAKERNOTE_GROUPS: &[&str] = &[
     "SonyIDC",
 ];
 
+/// Groups a write request may spell in any case, beside the maker-note
+/// groups and the groups of the file's own rows.
+const WRITE_GROUPS: &[&str] = &[
+    "IFD0",
+    "IFD1",
+    "ExifIFD",
+    "GPS",
+    "InteropIFD",
+    "EXIF",
+    "MakerNotes",
+    "File",
+    "XMP",
+    "IPTC",
+    "PNG",
+    "ICC_Profile",
+    "Photoshop",
+    "JFIF",
+    "Composite",
+    "SubIFD",
+];
+
+/// `key` in its canonical spelling: the file's own row if one matches
+/// without regard to case, else the canonical group (a known write group, a
+/// maker-note group or a group of the file's rows) and the registered tag
+/// name (`tag_registry::canonical_tag_name_spelling`), `All` for a
+/// group-wide removal. A key with no group, or that nothing matches, is
+/// returned as it is.
+pub(crate) fn canonical_write_key(key: &str, baseline: &MetadataMap) -> String {
+    let Some((group, name)) = key.split_once(':') else {
+        return key.to_string();
+    };
+    if baseline.contains_key(key) {
+        return key.to_string();
+    }
+    if let Some(existing) = baseline.keys().find(|k| k.eq_ignore_ascii_case(key)) {
+        return existing.clone();
+    }
+    let group = WRITE_GROUPS
+        .iter()
+        .chain(MAKERNOTE_GROUPS.iter())
+        .map(|g| g.to_string())
+        .chain(
+            baseline
+                .keys()
+                .filter_map(|k| k.split_once(':').map(|(g, _)| g.to_string())),
+        )
+        .find(|g| g.eq_ignore_ascii_case(group))
+        .unwrap_or_else(|| group.to_string());
+    let name = if name.eq_ignore_ascii_case("all") {
+        "All"
+    } else {
+        crate::tag_db::tag_registry::canonical_tag_name_spelling(&group, name).unwrap_or(name)
+    };
+    format!("{group}:{name}")
+}
+
+/// A write request with every key in its canonical spelling
+/// ([`canonical_write_key`]): the map's keys that the file has no row for,
+/// and every named removal. A value under a differently-cased spelling of
+/// one of the file's rows replaces that row's value.
+pub(crate) fn normalize_write_request(
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> (MetadataMap, Vec<String>) {
+    let mut normalized = desired.clone();
+    let respelled: Vec<(String, String)> = desired
+        .keys()
+        .filter(|key| !baseline.contains_key(key.as_str()))
+        .map(|key| (key.clone(), canonical_write_key(key, baseline)))
+        .filter(|(key, canonical)| key != canonical)
+        .collect();
+    for (key, canonical) in respelled {
+        if let Some(value) = normalized.remove(&key) {
+            normalized.insert(canonical, value);
+        }
+    }
+    let removed: Vec<String> = removed
+        .iter()
+        .map(|key| canonical_write_key(key, baseline))
+        .collect();
+    // A named removal of one of the file's rows deletes it: `remove_tag`
+    // takes the key out of the map as spelled, so `ExifIFD:iso` left
+    // `ExifIFD:ISO` in the map, unchanged, beside its own removal. The row
+    // goes unless the map sets it to something new.
+    for key in &removed {
+        if group_removal(key).is_none()
+            && baseline.contains_key(key.as_str())
+            && normalized.get(key.as_str()) == baseline.get(key.as_str())
+        {
+            normalized.remove(key.as_str());
+        }
+    }
+    (normalized, removed)
+}
+
 /// Whether `key` of `baseline` is a row a maker-note decoder produced: its
 /// family-1 group is a maker-note group ([`MAKERNOTE_GROUPS`]) or its
 /// occurrence's family-0 group is `MakerNotes`.
@@ -3190,6 +3286,69 @@ pub(crate) fn refuse_dropped_makernote_rows(dropped: &[String]) -> Result<()> {
              written"
         ))),
     }
+}
+
+/// The maker-note rows a write changes or adds: `modify_tag(path,
+/// "Canon:MacroMode", ...)`. No writer here can set one decoded maker-note
+/// tag -- the MakerNote is carried byte-for-byte -- and the EXIF no-op
+/// checks look only at EXIF-family keys, so such a write reported success
+/// with nothing changed (JPEG, PNG and TIFF).
+pub(crate) fn changed_makernote_rows(baseline: &MetadataMap, desired: &MetadataMap) -> Vec<String> {
+    desired
+        .iter()
+        .filter(|(key, value)| {
+            is_makernote_row(baseline, key) && baseline.get(key.as_str()) != Some(*value)
+        })
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
+/// The refusal for [`changed_makernote_rows`]: exit 1, nothing written.
+pub(crate) fn refuse_changed_makernote_rows(changed: &[String]) -> Result<()> {
+    match changed.first() {
+        None => Ok(()),
+        Some(key) => Err(ExifToolError::unsupported_format(format!(
+            "Setting '{key}' is not supported: it is decoded from the MakerNote, which \
+             this writer carries byte-for-byte and cannot edit; nothing was written"
+        ))),
+    }
+}
+
+/// Post-condition for [`changed_makernote_rows`]: a changed maker-note row
+/// reads back with its new value only if the MakerNote itself changed, so
+/// an output whose MakerNote is missing or byte-identical to `original`'s
+/// fails, the key named.
+pub(crate) fn verify_makernote_rows_set(
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    original: Option<&[u8]>,
+    output: &[u8],
+    magics: &[u16],
+) -> Result<()> {
+    let changed = changed_makernote_rows(baseline, desired);
+    let Some(key) = changed.first() else {
+        return Ok(());
+    };
+    let blob = |tiff: &[u8]| {
+        scan_entries_with_magics(tiff, magics)
+            .ok()
+            .and_then(|scan| {
+                scan.entries
+                    .into_iter()
+                    .find(|entry| entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE)
+                    .map(|entry| entry.value)
+            })
+    };
+    let before = original.filter(|tiff| !tiff.is_empty()).and_then(blob);
+    let after = (!output.is_empty()).then(|| blob(output)).flatten();
+    if after.is_none() || after == before {
+        return Err(ExifToolError::unsupported_format(format!(
+            "EXIF write verification failed: '{key}' was set but the MakerNote it is \
+             decoded from is {}; nothing was written",
+            if after.is_none() { "gone" } else { "unchanged" }
+        )));
+    }
+    Ok(())
 }
 
 /// Post-condition for rows a write drops from the map that this writer

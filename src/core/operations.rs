@@ -950,6 +950,21 @@ pub(crate) fn write_metadata_with_removals(
     // `validate_caller_changes` for why that is both sufficient and necessary.
     let baseline = read_metadata(path).ok();
 
+    // One spelling for every key, once, before any gate reads one: group
+    // and tag names are case-insensitive, as they are to ExifTool
+    // (`-exif:All=`, `-ExifIFD:iso=`, `-ifd0:artist=you`). Every prefix test
+    // below -- the no-op checks, the carrier and group removals, the PNG
+    // EXIF gate, the planners, the verifiers -- then sees the canonical form;
+    // before, a lowercase group was carried as unchanged and reported done.
+    let (normalized_metadata, normalized_removed) =
+        crate::writers::exif_surgical::normalize_write_request(
+            baseline.as_ref().unwrap_or(&MetadataMap::new()),
+            metadata,
+            removed,
+        );
+    let metadata = &normalized_metadata;
+    let removed = normalized_removed.as_slice();
+
     // PHASE 1: VALIDATION
     // JPEG and the TIFF-structured formats validate inside their surgical
     // writers, which already have the original bytes to diff against.
@@ -979,13 +994,18 @@ pub(crate) fn write_metadata_with_removals(
         // cannot make (`exif_surgical::dropped_makernote_rows`); nor is such
         // a request a no-op.
         let drops_makernote_rows = !whole_clear
-            && !crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
-                .is_empty();
+            && (!crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
+                .is_empty()
+                || !crate::writers::exif_surgical::changed_makernote_rows(&original, metadata)
+                    .is_empty());
         if !whole_clear {
             crate::writers::exif_surgical::refuse_dropped_makernote_rows(
                 &crate::writers::exif_surgical::dropped_makernote_rows(
                     &original, metadata, removed,
                 ),
+            )?;
+            crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                &crate::writers::exif_surgical::changed_makernote_rows(&original, metadata),
             )?;
         }
         if !whole_clear
@@ -1021,6 +1041,13 @@ pub(crate) fn write_metadata_with_removals(
             crate::writers::exif_surgical::verify_dropped_rows_gone(
                 &original,
                 metadata,
+                &out,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+            crate::writers::exif_surgical::verify_makernote_rows_set(
+                &original,
+                metadata,
+                Some(file_bytes),
                 &out,
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
             )?;
@@ -1063,13 +1090,22 @@ pub(crate) fn write_metadata_with_removals(
                 None => (&reader, file_bytes),
             };
             let drops_makernote_rows = !whole_clear
-                && !crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
-                    .is_empty();
+                && (!crate::writers::exif_surgical::dropped_makernote_rows(
+                    &original,
+                    metadata,
+                    &[],
+                )
+                .is_empty()
+                    || !crate::writers::exif_surgical::changed_makernote_rows(&original, metadata)
+                        .is_empty());
             if !whole_clear {
                 crate::writers::exif_surgical::refuse_dropped_makernote_rows(
                     &crate::writers::exif_surgical::dropped_makernote_rows(
                         &original, metadata, removed,
                     ),
+                )?;
+                crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                    &crate::writers::exif_surgical::changed_makernote_rows(&original, metadata),
                 )?;
             }
             if !whole_clear
@@ -1126,6 +1162,13 @@ pub(crate) fn write_metadata_with_removals(
                 crate::writers::exif_surgical::verify_dropped_rows_gone(
                     &original,
                     metadata,
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                )?;
+                crate::writers::exif_surgical::verify_makernote_rows_set(
+                    &original,
+                    metadata,
+                    before.as_deref(),
                     after.first().map(Vec::as_slice).unwrap_or_default(),
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
@@ -1197,6 +1240,9 @@ pub(crate) fn write_metadata_with_removals(
                     &crate::writers::exif_surgical::dropped_makernote_rows(
                         &baseline, metadata, removed,
                     ),
+                )?;
+                crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                    &crate::writers::exif_surgical::changed_makernote_rows(&baseline, metadata),
                 )?;
             }
             write_png_metadata_with_removals(path, &reader, metadata, &baseline, removed)?
