@@ -1357,9 +1357,13 @@ fn a_family_alias_removal_of_a_carried_entry_is_refused() {
 /// magic 42, and 85 for Panasonic's RW2/RWL (`tiff_surgical::
 /// is_walkable_tiff`). The post-write check scanned with the EXIF-block
 /// scanner, which accepts 42 only, so every RW2 edit failed "Invalid TIFF
-/// magic number in EXIF data" while tip 707c7565 wrote it. Pinned ExifTool
-/// 13.59 writes `-IFD0:Artist=x` to t/images/Panasonic.rw2 and reads it
-/// back; so does oxidex.
+/// magic number in EXIF data" while tip 707c7565 wrote it. The synthetic
+/// RW2's outer IFD0 holds Artist, which pinned ExifTool 13.59 rewrites
+/// there. t/images/Panasonic.rw2's does not: ExifTool writes
+/// `-IFD0:Artist=x` into its embedded JpgFromRaw's IFD0 (`Doc1:IFD0`) only,
+/// where this writer does not write, so it is refused by name, file
+/// untouched (`tests/rw2_embedded_ifd0.rs`; until 8991992e it was written
+/// to the outer IFD0, a read-back unlike the oracle's).
 #[test]
 fn an_rw2_edit_passes_the_post_write_check() {
     let dir = tempfile::tempdir().unwrap();
@@ -1395,12 +1399,11 @@ fn an_rw2_edit_passes_the_post_write_check() {
     };
     let path = dir.path().join("Panasonic.rw2");
     std::fs::copy(&sample, &path).unwrap();
-    modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
-        .unwrap_or_else(|e| panic!("t/images/Panasonic.rw2: {e}"));
-    assert_eq!(
-        read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-        Some("x")
-    );
+    let original = std::fs::read(&path).unwrap();
+    let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+        .expect_err("t/images/Panasonic.rw2: IFD0:Artist written outside the JpgFromRaw");
+    assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    assert!(std::fs::read(&path).unwrap() == original, "file touched");
 }
 
 /// `remove_tag` of a tag the block does not hold is a no-op success, and it

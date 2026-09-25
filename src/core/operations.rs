@@ -966,6 +966,7 @@ pub(crate) fn write_metadata_transaction(
     assigned: &[String],
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
+    crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, assigned)?;
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -1072,6 +1073,16 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // An IFD0-group edit of a Panasonic RAW/RW2/RWL that pinned
+        // ExifTool 13.59 makes in the embedded JpgFromRaw's IFD0, or in an
+        // outer `PanasonicRaw::Main` entry this writer cannot edit, is
+        // refused by name, before the no-op check can take it for one
+        // (`rw2_ifd0::refuse_rw2_ifd0_edits`).
+        if !whole_clear {
+            crate::writers::rw2_ifd0::refuse_rw2_ifd0_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
         // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
         // JpgFromRaw's own EXIF is refused by name, before the no-op check
         // (which reads only the outer directories) can take a tag held only
@@ -1143,6 +1154,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
             )?;
         }
+        crate::writers::rw2_ifd0::verify_jpg_from_raw_kept(file_bytes, &out)?;
         write_atomic(path, &out)?;
         return Ok(());
     }

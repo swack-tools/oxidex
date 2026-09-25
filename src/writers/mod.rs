@@ -38,6 +38,7 @@ pub(crate) mod jpeg_trailer;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
+pub(crate) mod rw2_ifd0;
 // Source-selected final scalar stage remains internal until file parity is proved.
 pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
