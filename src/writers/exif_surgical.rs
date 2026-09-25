@@ -143,6 +143,57 @@ pub(crate) fn group_has_content(
     }
 }
 
+/// The EXIF rows a write sets: the planned rows of `desired` whose value is
+/// not `original_map`'s. After a carrier- or group-wide removal these, and
+/// only these, are written back (delete first, then set).
+fn requested_sets(original_map: &MetadataMap, desired: &MetadataMap) -> MetadataMap {
+    let mut sets = MetadataMap::new();
+    for (key, value) in desired.iter() {
+        if is_planned_key(key) && original_map.get(key.as_str()) != Some(value) {
+            sets.insert(key.clone(), value.clone());
+        }
+    }
+    sets
+}
+
+/// An empty scan in `byte_order`: the starting point of a fresh block.
+fn fresh_scan(byte_order: ByteOrder) -> ExifScan {
+    ExifScan {
+        byte_order,
+        entries: Vec::new(),
+        thumbnail: None,
+        makernote_offset: None,
+        ifd1_next: None,
+    }
+}
+
+/// The payload a carrier-wide removal (`IFD0:All` / `EXIF:All`) leaves:
+/// nothing when the write sets nothing, else a fresh block holding the
+/// sets, in the deleted block's byte order when it had a readable one.
+/// The deleted block is never parsed beyond its byte-order mark.
+fn fresh_block_for_sets(
+    deleted: &[u8],
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+) -> Result<Vec<u8>> {
+    let sets = requested_sets(original_map, desired);
+    if sets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let byte_order = match deleted.get(..2) {
+        Some(b"MM") => ByteOrder::BigEndian,
+        _ => ByteOrder::LittleEndian,
+    };
+    let plan = plan_exif_write_inner(
+        &fresh_scan(byte_order),
+        &MetadataMap::new(),
+        &sets,
+        &[],
+        false,
+    )?;
+    serialize_exif(&plan)
+}
+
 /// Whether the group-wide removals in `removed` delete a whole EXIF carrier
 /// (`IFD0:All` / `EXIF:All` on a JPEG or PNG). Such a write never parses the
 /// carrier: pinned ExifTool 13.59 drops the APP1 / eXIf wholesale, even one
@@ -1026,7 +1077,24 @@ fn plan_exif_write_inner(
         .filter_map(|key| group_removal(key))
         .collect();
     if groups.contains(&GroupRemoval::Carrier) {
-        return Ok(plan);
+        // Delete first, then set (pinned ExifTool 13.59: `-EXIF:All=
+        // -Make=x` leaves a block holding Make): the rows this write sets
+        // go into a fresh block, planned exactly as a set on a file with no
+        // EXIF is. Before, the empty plan dropped them and the write
+        // reported success. (A block created so carries no mandatory
+        // entries -- YCbCrPositioning, ExifVersion... -- yet; that belongs
+        // to the mandatory-entries work, staging/beta1/exififd-mandatory.)
+        let sets = requested_sets(original_map, desired);
+        if sets.is_empty() {
+            return Ok(plan);
+        }
+        return plan_exif_write_inner(
+            &fresh_scan(scan.byte_order),
+            &MetadataMap::new(),
+            &sets,
+            &[],
+            false,
+        );
     }
 
     // A named removal of a raw-carried entry is refused too. The PNG reader
@@ -1615,21 +1683,33 @@ fn plan_exif_write_inner(
     }
 
     // Group-wide removals: drop the named directories wholesale (the
-    // serializer omits an empty directory and its pointer).
+    // serializer omits an empty directory and its pointer) -- but for the
+    // entries this same write sets there: delete first, then set, as pinned
+    // ExifTool 13.59 does (`-ExifIFD:All= -ExifIFD:ISO=200` leaves ExifIFD
+    // holding ISO). A directory created so carries no mandatory entries yet
+    // (staging/beta1/exififd-mandatory).
+    let set_addresses: Vec<(IfdKind, u16)> = requested_sets(original_map, desired)
+        .keys()
+        .flat_map(|key| key_addresses(key))
+        .collect();
+    let keep = |ifd: IfdKind| {
+        let set_addresses = &set_addresses;
+        move |entry: &OutEntry| set_addresses.contains(&(ifd, entry.tag_id))
+    };
     for group in &groups {
         match group {
             GroupRemoval::Carrier => unreachable!("returned above"),
             GroupRemoval::ExifIfd => {
-                plan.exif_ifd.clear();
-                plan.interop.clear();
+                plan.exif_ifd.retain(keep(IfdKind::ExifIfd));
+                plan.interop.retain(keep(IfdKind::Interop));
                 plan.makernote_pin = None;
             }
-            GroupRemoval::Gps => plan.gps.clear(),
+            GroupRemoval::Gps => plan.gps.retain(keep(IfdKind::Gps)),
             GroupRemoval::Ifd1 => {
-                plan.ifd1.clear();
+                plan.ifd1.retain(keep(IfdKind::Ifd1));
                 plan.thumbnail = None;
             }
-            GroupRemoval::Interop => plan.interop.clear(),
+            GroupRemoval::Interop => plan.interop.retain(keep(IfdKind::Interop)),
             GroupRemoval::MakerNotes => {
                 if makernote_in_makernotes_group(scan, original_map) {
                     plan.exif_ifd.retain(|entry| entry.tag_id != MAKERNOTE);
@@ -2249,9 +2329,12 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<Vec<u8>> {
-    // `IFD0:All` / `EXIF:All` delete the carrier without reading it.
-    if tiff.is_some() && removes_carrier(removed) {
-        return Ok(Vec::new());
+    // `IFD0:All` / `EXIF:All` delete the carrier without reading it; what
+    // the same write sets goes into a fresh block.
+    if let Some(deleted) = tiff
+        && removes_carrier(removed)
+    {
+        return fresh_block_for_sets(deleted, original_map, desired);
     }
     let empty = MetadataMap::new();
     let (scan, original_map) = match tiff {
@@ -2636,7 +2719,7 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     removed: &[String],
 ) -> Result<Vec<u8>> {
     if removes_carrier(removed) {
-        return Ok(Vec::new());
+        return fresh_block_for_sets(tiff, original_map, desired);
     }
     let scan = scan_exif_entries(tiff)?;
     if is_no_op(&scan, original_map, desired, removed) {
@@ -2947,17 +3030,26 @@ pub(crate) fn verify_exif_write(
     // never read): nothing may be left of it but a block built from the
     // tags the same write sets, checked below against an empty original.
     let carrier_deleted = removes_carrier(removed);
+    let first_set = desired
+        .iter()
+        .find(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
+        .map(|(key, _)| key.clone());
     if carrier_deleted {
-        if output.is_empty() {
-            return Ok(());
-        }
-        if !desired
-            .iter()
-            .any(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
-        {
-            return Err(refused(
-                "the EXIF block was to be deleted but is still present".to_string(),
-            ));
+        // An empty output is the carrier gone -- right only when the write
+        // sets nothing. A set is checked (b, below) against the fresh block.
+        match (output.is_empty(), &first_set) {
+            (true, None) => return Ok(()),
+            (true, Some(key)) => {
+                return Err(refused(format!(
+                    "'{key}' was set but the EXIF block was deleted"
+                )));
+            }
+            (false, None) => {
+                return Err(refused(
+                    "the EXIF block was to be deleted but is still present".to_string(),
+                ));
+            }
+            (false, Some(_)) => {}
         }
     }
     let before = match original {

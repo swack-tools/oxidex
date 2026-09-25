@@ -2600,3 +2600,304 @@ mod tests {
         assert_eq!(sub_reader.size(), 80);
     }
 }
+
+/// One public-batch transaction that removes a whole group and sets tags in
+/// it (`write_metadata_with_removals`: the map with the sets, the group in
+/// `removed`). Pinned ExifTool 13.59 deletes first, then sets:
+/// `-EXIF:All= -Make=x` leaves a block holding Make, `-ExifIFD:All=
+/// -ExifIFD:ISO=200` an ExifIFD holding ISO, `-GPS:All= -GPS:GPSAltitude=50`
+/// a GPS IFD holding GPSAltitude. The carrier-wide removal returned an empty
+/// plan before looking at the sets, the JPEG and PNG paths dropped the whole
+/// EXIF carrier, and `verify_exif_write` accepted the empty output before
+/// checking the sets: success, and the set lost (b92d0c44). Group removals
+/// cleared the directory the set had just been planned into.
+///
+/// Known difference from the oracle, not asserted: a block or directory
+/// created so carries no mandatory entries (ExifTool adds YCbCrPositioning,
+/// ExifVersion/ComponentsConfiguration/ColorSpace, GPSVersionID...); those
+/// belong to staging/beta1/exififd-mandatory. IFD1 and InteropIFD sets are
+/// refused (a raw-carried class) where ExifTool creates the directory.
+#[cfg(test)]
+mod removal_then_set_tests {
+    use super::*;
+    use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    fn w16(v: u16, bo: ByteOrder) -> [u8; 2] {
+        match bo {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        }
+    }
+    fn w32(v: u32, bo: ByteOrder) -> [u8; 4] {
+        match bo {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        }
+    }
+
+    /// IFD0 {Make "Acme", Model "M1", Artist "me", ExifIFD, GPS} -> IFD1
+    /// {Compression 6, a 4-byte thumbnail}; ExifIFD {ExposureProgram 2,
+    /// ISO 100}; GPS {GPSVersionID 2.3.0.0, GPSAltitudeRef 0}.
+    fn block(bo: ByteOrder) -> Vec<u8> {
+        let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+            [
+                w16(tag, bo).as_slice(),
+                &w16(typ, bo),
+                &w32(count, bo),
+                &value,
+            ]
+            .concat()
+        };
+        let short = |v: u16| {
+            let mut b = [0; 4];
+            b[..2].copy_from_slice(&w16(v, bo));
+            b
+        };
+        // IFD0 at 8: 5 entries -> 8+2+60+4 = 74; "Acme\0" at 74 (6 with pad)
+        // ExifIFD at 80: 2 entries -> 80+2+24+4 = 110
+        // GPS at 110: 2 entries -> 140; IFD1 at 140: 3 entries -> 182; thumb 182
+        let mut t = match bo {
+            ByteOrder::LittleEndian => b"II".to_vec(),
+            ByteOrder::BigEndian => b"MM".to_vec(),
+        };
+        t.extend(w16(42, bo));
+        t.extend(w32(8, bo));
+        t.extend(w16(5, bo));
+        t.extend(entry(0x010F, 2, 5, w32(74, bo)));
+        t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+        t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+        t.extend(entry(0x8769, 4, 1, w32(80, bo)));
+        t.extend(entry(0x8825, 4, 1, w32(110, bo)));
+        t.extend(w32(140, bo));
+        t.extend(b"Acme\0\0");
+        assert_eq!(t.len(), 80);
+        t.extend(w16(2, bo));
+        t.extend(entry(0x8822, 3, 1, short(2)));
+        t.extend(entry(0x8827, 3, 1, short(100)));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 110);
+        t.extend(w16(2, bo));
+        t.extend(entry(0x0000, 1, 4, [2, 3, 0, 0]));
+        t.extend(entry(0x0005, 1, 1, [0, 0, 0, 0]));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 140);
+        t.extend(w16(3, bo));
+        t.extend(entry(0x0103, 3, 1, short(6)));
+        t.extend(entry(0x0201, 4, 1, w32(182, bo)));
+        t.extend(entry(0x0202, 4, 1, w32(4, bo)));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 182);
+        t.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+        t
+    }
+
+    fn jpeg(tiff: &[u8]) -> Vec<u8> {
+        const BODY: &str = "ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        out.extend(b"Exif\0\0");
+        out.extend(tiff);
+        out.extend(
+            (0..BODY.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&BODY[i..i + 2], 16).unwrap()),
+        );
+        out
+    }
+
+    fn png(tiff: &[u8]) -> Vec<u8> {
+        let crc = |data: &[u8]| {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &byte in data {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        0xEDB8_8320 ^ (crc >> 1)
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        };
+        let chunk = |kind: &[u8; 4], data: &[u8]| {
+            let body = [kind.as_slice(), data].concat();
+            [
+                (data.len() as u32).to_be_bytes().as_slice(),
+                &body,
+                &crc(&body).to_be_bytes(),
+            ]
+            .concat()
+        };
+        let ihdr = [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0];
+        let idat = [0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01];
+        [
+            b"\x89PNG\r\n\x1a\n".as_slice(),
+            &chunk(b"IHDR", &ihdr),
+            &chunk(b"eXIf", tiff),
+            &chunk(b"IDAT", &idat),
+            &chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// Runs one batch: `removed` plus the `sets` over the map read from the
+    /// file. Returns the result, the file bytes before and the map after.
+    fn batch(
+        dir: &Path,
+        name: &str,
+        original: &[u8],
+        removed: &[&str],
+        sets: &[(&str, TagValue)],
+    ) -> (Result<()>, MetadataMap) {
+        let path = dir.join(name);
+        std::fs::write(&path, original).unwrap();
+        let mut map = read_metadata(&path).unwrap();
+        for (key, value) in sets {
+            map.insert(*key, value.clone());
+        }
+        let removed: Vec<String> = removed.iter().map(|k| k.to_string()).collect();
+        let result = write_metadata_with_removals(&path, &map, &removed);
+        if result.is_err() {
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                original,
+                "{name}: refused but written"
+            );
+        }
+        (result, read_metadata(&path).unwrap())
+    }
+
+    #[test]
+    fn a_set_survives_a_carrier_wide_removal_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("b.jpg", jpeg(&tiff)), ("b.png", png(&tiff))] {
+                for group in ["IFD0:All", "EXIF:All"] {
+                    for sets in [
+                        // legacy
+                        vec![("IFD0:Make", TagValue::new_string("x"))],
+                        // generated
+                        vec![("IFD0:Artist", TagValue::new_string("you"))],
+                        // mixed
+                        vec![
+                            ("IFD0:Make", TagValue::new_string("x")),
+                            ("IFD0:Artist", TagValue::new_string("you")),
+                        ],
+                    ] {
+                        let label = format!(
+                            "{bo:?} {carrier} {group} {:?}",
+                            sets.iter().map(|s| s.0).collect::<Vec<_>>()
+                        );
+                        let (result, after) =
+                            batch(dir.path(), carrier, &original, &[group], &sets);
+                        result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                        for (key, value) in &sets {
+                            assert_eq!(after.get_string(key), value.as_string(), "{label}: {key}");
+                        }
+                        // Everything else went with the carrier.
+                        for gone in [
+                            "IFD0:Model",
+                            "ExifIFD:ISO",
+                            "ExifIFD:ExposureProgram",
+                            "GPS:GPSAltitudeRef",
+                        ] {
+                            assert!(!after.contains_key(gone), "{label}: {gone} kept");
+                        }
+                        if !sets.iter().any(|s| s.0 == "IFD0:Make") {
+                            assert!(!after.contains_key("IFD0:Make"), "{label}: Make kept");
+                        }
+                        if !sets.iter().any(|s| s.0 == "IFD0:Artist") {
+                            assert!(!after.contains_key("IFD0:Artist"), "{label}: Artist kept");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A TIFF-structured file: pinned ExifTool 13.59 never deletes IFD0
+    /// there ("Can't delete IFD0 from TIFF") and still sets Make, so
+    /// `IFD0:All` is a no-op and the set lands in place; `EXIF:All`, which
+    /// deletes ExifIFD there, is refused (a directory deletion the in-place
+    /// TIFF writer cannot make), the file untouched.
+    #[test]
+    fn a_tiff_file_keeps_ifd0_and_takes_the_set() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            let (result, after) = batch(
+                dir.path(),
+                "t.tif",
+                &tiff,
+                &["IFD0:All"],
+                &[("IFD0:Make", TagValue::new_string("xy"))],
+            );
+            result.unwrap_or_else(|e| panic!("{bo:?}: {e}"));
+            assert_eq!(after.get_string("IFD0:Make"), Some("xy"), "{bo:?}");
+            assert_eq!(after.get_string("IFD0:Model"), Some("M1"), "{bo:?}");
+            let (result, _) = batch(
+                dir.path(),
+                "t.tif",
+                &tiff,
+                &["EXIF:All"],
+                &[("IFD0:Make", TagValue::new_string("xy"))],
+            );
+            assert!(result.is_err(), "{bo:?} EXIF:All");
+        }
+    }
+
+    #[test]
+    fn a_set_survives_a_group_removal_of_its_own_directory_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("g.jpg", jpeg(&tiff)), ("g.png", png(&tiff))] {
+                let label = format!("{bo:?} {carrier}");
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["ExifIFD:All"],
+                    &[("ExifIFD:ISO", TagValue::new_integer(200))],
+                );
+                result.unwrap_or_else(|e| panic!("{label} ExifIFD: {e}"));
+                assert_eq!(after.get_integer("ExifIFD:ISO"), Some(200), "{label}");
+                assert!(!after.contains_key("ExifIFD:ExposureProgram"), "{label}");
+                assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["GPS:All"],
+                    &[("GPS:GPSAltitude", TagValue::new_rational(50, 1))],
+                );
+                result.unwrap_or_else(|e| panic!("{label} GPS: {e}"));
+                assert!(
+                    after.contains_key("GPS:GPSAltitude"),
+                    "{label}: GPSAltitude lost"
+                );
+                assert!(!after.contains_key("GPS:GPSAltitudeRef"), "{label}");
+                assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+
+                // An IFD1 set: honored or refused (file untouched), never
+                // reported done and lost.
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["IFD1:All"],
+                    &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
+                );
+                if result.is_ok() {
+                    assert!(
+                        after.contains_key("IFD1:XResolution"),
+                        "{label}: IFD1 set lost"
+                    );
+                }
+            }
+        }
+    }
+}

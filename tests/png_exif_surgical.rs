@@ -2623,3 +2623,51 @@ fn a_map_only_deletion_of_a_decoded_makernote_row_is_refused() {
         assert!(exercised >= 5, "only {exercised} dropped rows exercised");
     }
 }
+
+/// The CLI applies each `-TAG=` / `-TAG=value` as its own write, in
+/// argument order, which is pinned ExifTool 13.59's order too: `-EXIF:All=
+/// -IFD0:Make=x` deletes the block, then creates one holding Make; `-IFD0:
+/// Make=x -EXIF:All=` leaves no EXIF at all (the later deletion wins). So
+/// the CLI never reached the lossy single-transaction path (a carrier-wide
+/// removal with a set in one batch, pinned in `core::operations`'
+/// `removal_then_set_tests`); this pins that it keeps matching the oracle.
+/// Known difference: the created block has no mandatory YCbCrPositioning
+/// (staging/beta1/exififd-mandatory).
+#[test]
+fn cli_group_removal_and_set_follow_argument_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("cli.jpg", jpeg_with(&tiff)),
+            ("cli.png", png(&[(b"eXIf", tiff.clone())], &[])),
+        ] {
+            let label = format!("{order:?} {name}");
+            let path = write(dir.path(), name, &original);
+            let status = std::process::Command::new(cli)
+                .args(["-EXIF:All=", "-IFD0:Make=x"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{label}: {status:?}");
+            let after = read_metadata(&path).unwrap();
+            assert_eq!(after.get_string("IFD0:Make"), Some("x"), "{label}");
+            assert!(!after.contains_key("IFD0:Model"), "{label}: Model kept");
+            assert!(!after.contains_key("ExifIFD:ISO"), "{label}: ISO kept");
+
+            let path = write(dir.path(), name, &original);
+            let status = std::process::Command::new(cli)
+                .args(["-IFD0:Make=x", "-EXIF:All="])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{label}: {status:?}");
+            let after = read_metadata(&path).unwrap();
+            assert!(
+                !after.contains_key("IFD0:Make"),
+                "{label}: Make kept after -EXIF:All="
+            );
+        }
+    }
+}
