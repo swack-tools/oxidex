@@ -443,18 +443,23 @@ fn plan_exif(
             .iter()
             .map(|block| block.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(block)),
     );
+    // A dropped maker-note row is never a no-op: the write goes on to the
+    // post-condition (`verify_dropped_rows_gone`), which refuses it.
+    let drops_makernote_rows =
+        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty();
     if !exif_changed(metadata, baseline, removed)
-        || crate::writers::exif_surgical::exif_request_is_no_op(
-            &blocks,
-            &exif_blocks,
-            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
-            // Pinned ExifTool 13.59 keeps an empty eXIf chunk ("1 image
-            // files unchanged"); it drops only an empty JPEG APP1.
-            false,
-            baseline,
-            metadata,
-            removed,
-        )
+        || !drops_makernote_rows
+            && crate::writers::exif_surgical::exif_request_is_no_op(
+                &blocks,
+                &exif_blocks,
+                crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                // Pinned ExifTool 13.59 keeps an empty eXIf chunk ("1 image
+                // files unchanged"); it drops only an empty JPEG APP1.
+                false,
+                baseline,
+                metadata,
+                removed,
+            )
     {
         return Ok(ExifFate::Carry);
     }
