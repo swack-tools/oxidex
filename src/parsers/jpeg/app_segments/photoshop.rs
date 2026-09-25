@@ -346,123 +346,128 @@ fn parse_url_list(data: &[u8]) -> Option<TagValue> {
 ///
 /// Returns `ParseError` if the data doesn't start with the Photoshop signature.
 pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Check for Photoshop signature
-    if !data.starts_with(PHOTOSHOP_SIGNATURE) {
-        return Err(ExifToolError::parse_error("Not a Photoshop IRB segment"));
-    }
-
-    // Skip past the Photoshop signature
-    let mut current = &data[PHOTOSHOP_SIGNATURE.len()..];
-
-    // Parse all 8BIM resource blocks
-    while current.len() > 4 {
-        // Check if this looks like a 8BIM block
-        if !current.starts_with(EIGHTBIM_SIGNATURE) {
-            break;
+        // Check for Photoshop signature
+        if !data.starts_with(PHOTOSHOP_SIGNATURE) {
+            return Err(ExifToolError::parse_error("Not a Photoshop IRB segment"));
         }
 
-        let Ok((remaining, block)) = parse_image_resource_block(current) else {
-            // Failed to parse block, stop processing
-            break;
-        };
+        // Skip past the Photoshop signature
+        let mut current = &data[PHOTOSHOP_SIGNATURE.len()..];
 
-        match block.id {
-            RES_RESOLUTION_INFO => parse_resolution_info(block.data, &mut metadata),
-            RES_JPEG_QUALITY => parse_jpeg_quality(block.data, &mut metadata),
-            RES_SLICE_INFO => parse_slice_info(block.data, &mut metadata),
-            RES_VERSION_INFO => parse_version_info(block.data, &mut metadata),
-            RES_PRINT_SCALE_INFO => parse_print_scale_info(block.data, &mut metadata),
-            RES_COPYRIGHT_FLAG => {
-                if let Some(&flag) = block.data.first() {
-                    let value = match flag {
-                        0 => TagValue::String("False".to_string()),
-                        1 => TagValue::String("True".to_string()),
-                        other => unknown_code(other as i64),
-                    };
-                    metadata.insert("Photoshop:CopyrightFlag", value);
+        // Parse all 8BIM resource blocks
+        while current.len() > 4 {
+            // Check if this looks like a 8BIM block
+            if !current.starts_with(EIGHTBIM_SIGNATURE) {
+                break;
+            }
+
+            let Ok((remaining, block)) = parse_image_resource_block(current) else {
+                // Failed to parse block, stop processing
+                break;
+            };
+
+            match block.id {
+                RES_RESOLUTION_INFO => parse_resolution_info(block.data, &mut metadata),
+                RES_JPEG_QUALITY => parse_jpeg_quality(block.data, &mut metadata),
+                RES_SLICE_INFO => parse_slice_info(block.data, &mut metadata),
+                RES_VERSION_INFO => parse_version_info(block.data, &mut metadata),
+                RES_PRINT_SCALE_INFO => parse_print_scale_info(block.data, &mut metadata),
+                RES_COPYRIGHT_FLAG => {
+                    if let Some(&flag) = block.data.first() {
+                        let value = match flag {
+                            0 => TagValue::String("False".to_string()),
+                            1 => TagValue::String("True".to_string()),
+                            other => unknown_code(other as i64),
+                        };
+                        metadata.insert("Photoshop:CopyrightFlag", value);
+                    }
                 }
-            }
-            RES_URL => {
-                // Writable => 'string': only the terminating NUL is dropped,
-                // the padding spaces this resource often carries are kept.
-                let text = String::from_utf8_lossy(block.data);
-                metadata.insert(
-                    "Photoshop:URL",
-                    TagValue::String(text.trim_end_matches('\0').to_string()),
-                );
-            }
-            RES_URL_LIST => {
-                if let Some(value) = parse_url_list(block.data) {
-                    metadata.insert("Photoshop:URL_List", value);
-                }
-            }
-            RES_GLOBAL_ANGLE => {
-                if let Some(angle) = be_u32_at(block.data, 0) {
-                    metadata.insert("Photoshop:GlobalAngle", TagValue::Integer(angle as i64));
-                }
-            }
-            RES_GLOBAL_ALTITUDE => {
-                if let Some(altitude) = be_u32_at(block.data, 0) {
+                RES_URL => {
+                    // Writable => 'string': only the terminating NUL is dropped,
+                    // the padding spaces this resource often carries are kept.
+                    let text = String::from_utf8_lossy(block.data);
                     metadata.insert(
-                        "Photoshop:GlobalAltitude",
-                        TagValue::Integer(altitude as i64),
+                        "Photoshop:URL",
+                        TagValue::String(text.trim_end_matches('\0').to_string()),
                     );
                 }
-            }
-            RES_IPTC_DIGEST => {
-                // ValueConv => 'unpack("H*", $val)'
-                metadata.insert(
-                    "Photoshop:IPTCDigest",
-                    TagValue::String(
-                        block
-                            .data
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<String>(),
-                    ),
-                );
-            }
-            // PixelInfo (Photoshop.pm:513-522): ProcessBinaryData,
-            // FIRST_ENTRY 0, only field is index 4 `PixelAspectRatio`
-            // (`Format => 'double'`, no PrintConv -- the raw double prints
-            // via Perl's default number stringification).
-            RES_PIXEL_INFO => {
-                if let Some(ratio) = be_f64_at(block.data, 4) {
+                RES_URL_LIST => {
+                    if let Some(value) = parse_url_list(block.data) {
+                        metadata.insert("Photoshop:URL_List", value);
+                    }
+                }
+                RES_GLOBAL_ANGLE => {
+                    if let Some(angle) = be_u32_at(block.data, 0) {
+                        metadata.insert("Photoshop:GlobalAngle", TagValue::Integer(angle as i64));
+                    }
+                }
+                RES_GLOBAL_ALTITUDE => {
+                    if let Some(altitude) = be_u32_at(block.data, 0) {
+                        metadata.insert(
+                            "Photoshop:GlobalAltitude",
+                            TagValue::Integer(altitude as i64),
+                        );
+                    }
+                }
+                RES_IPTC_DIGEST => {
+                    // ValueConv => 'unpack("H*", $val)'
                     metadata.insert(
-                        "Photoshop:PixelAspectRatio",
-                        TagValue::String(perl_number(ratio)),
+                        "Photoshop:IPTCDigest",
+                        TagValue::String(
+                            block
+                                .data
+                                .iter()
+                                .map(|b| format!("{:02x}", b))
+                                .collect::<String>(),
+                        ),
                     );
                 }
-            }
-            // PhotoshopThumbnail (Photoshop.pm:186-191, `%thumbnailInfo`):
-            // the embedded JPEG starts 28 bytes into the resource's own
-            // data (see PHOTOSHOP_THUMBNAIL_HEADER_LEN's doc comment).
-            // ValidateImage's magic-byte check only fires when the tag is
-            // specifically requested (ExifTool.pm:6425), which a default
-            // dump never does -- irrelevant here, matching the same
-            // decision already made for Casio's/Sony's preview tags.
-            RES_PHOTOSHOP_THUMBNAIL => {
-                if let Some(len) = block.data.len().checked_sub(PHOTOSHOP_THUMBNAIL_HEADER_LEN) {
-                    metadata.insert(
-                        "Photoshop:PhotoshopThumbnail",
-                        TagValue::String(format!(
-                            "(Binary data {len} bytes, use -b option to extract)"
-                        )),
-                    );
+                // PixelInfo (Photoshop.pm:513-522): ProcessBinaryData,
+                // FIRST_ENTRY 0, only field is index 4 `PixelAspectRatio`
+                // (`Format => 'double'`, no PrintConv -- the raw double prints
+                // via Perl's default number stringification).
+                RES_PIXEL_INFO => {
+                    if let Some(ratio) = be_f64_at(block.data, 4) {
+                        metadata.insert(
+                            "Photoshop:PixelAspectRatio",
+                            TagValue::String(perl_number(ratio)),
+                        );
+                    }
                 }
+                // PhotoshopThumbnail (Photoshop.pm:186-191, `%thumbnailInfo`):
+                // the embedded JPEG starts 28 bytes into the resource's own
+                // data (see PHOTOSHOP_THUMBNAIL_HEADER_LEN's doc comment).
+                // ValidateImage's magic-byte check only fires when the tag is
+                // specifically requested (ExifTool.pm:6425), which a default
+                // dump never does -- irrelevant here, matching the same
+                // decision already made for Casio's/Sony's preview tags.
+                RES_PHOTOSHOP_THUMBNAIL => {
+                    if let Some(len) = block.data.len().checked_sub(PHOTOSHOP_THUMBNAIL_HEADER_LEN)
+                    {
+                        metadata.insert(
+                            "Photoshop:PhotoshopThumbnail",
+                            TagValue::String(format!(
+                                "(Binary data {len} bytes, use -b option to extract)"
+                            )),
+                        );
+                    }
+                }
+                // Resource 0x0404 (IPTCData) is parsed by the IPTC parser, and
+                // every other resource is either `Unknown => 1` in Photoshop.pm
+                // or not yet ported; either way ExifTool shows nothing for it.
+                _ => {}
             }
-            // Resource 0x0404 (IPTCData) is parsed by the IPTC parser, and
-            // every other resource is either `Unknown => 1` in Photoshop.pm
-            // or not yet ported; either way ExifTool shows nothing for it.
-            _ => {}
+
+            current = remaining;
         }
 
-        current = remaining;
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

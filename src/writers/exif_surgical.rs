@@ -3250,7 +3250,7 @@ pub(crate) fn normalize_write_request(
     // to a value the file does not hold, which a carried row never is: then
     // the set is the request (delete, then set). A set to the value the file
     // already holds is told apart from a carried row only by the map's own
-    // record of what was assigned (`MetadataMap::assigned_after_read`),
+    // record of what was assigned (`MetadataMap::is_assigned`),
     // which `core::operations::write_metadata_transaction` resolves before
     // this.
     let mut removed = removed;

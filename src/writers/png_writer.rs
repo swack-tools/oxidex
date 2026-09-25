@@ -213,7 +213,7 @@ fn is_exif_key(key: &str) -> bool {
 fn exif_rows(map: &MetadataMap) -> MetadataMap {
     // Filtered from a clone, not re-inserted into a fresh map: each row keeps
     // its occurrence, so a caller's assignment stays distinguishable from a
-    // value the read produced (`MetadataMap::assigned_after_read`, which
+    // value the read produced (`MetadataMap::is_assigned`, which
     // `xp_strings::is_explicit_xp_set` asks).
     let mut rows = map.clone();
     let other: Vec<String> = map

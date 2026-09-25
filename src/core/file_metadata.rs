@@ -129,169 +129,173 @@ fn insert_system_tag(metadata: &mut MetadataMap, key: &'static str, value: TagVa
 }
 
 pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::with_capacity(10);
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::with_capacity(10);
 
-    // Get file metadata from the file system
-    let file_metadata = fs::metadata(path)?; // From trait converts io::Error to ExifToolError::IoError
+        // Get file metadata from the file system
+        let file_metadata = fs::metadata(path)?; // From trait converts io::Error to ExifToolError::IoError
 
-    // File name (basename without directory)
-    if let Some(filename) = path.file_name()
-        && let Some(filename_str) = filename.to_str()
-    {
-        insert_system_tag(
-            &mut metadata,
-            "File:FileName",
-            TagValue::new_string(filename_str.to_string()),
-        );
-    }
-
-    // Directory (parent directory path)
-    if let Some(parent) = path.parent() {
-        let dir_str = if parent.as_os_str().is_empty() {
-            ".".to_string()
-        } else {
-            parent.to_string_lossy().to_string()
-        };
-        insert_system_tag(
-            &mut metadata,
-            "File:Directory",
-            TagValue::new_string(dir_str),
-        );
-    }
-
-    // File size. ExifTool's `%Extra` declares `FileSize` with a
-    // `PrintConv => \&ConvertFileSize` (ExifTool.pm:1388-1389) over the raw
-    // byte count; oxidex used to fuse that conversion in at insert time
-    // (storing only `"26 kB"`), which is exactly AGENTS.md's tagmodel/1.5
-    // finding -- `--no-print-conv` had nothing to select, because the raw
-    // byte count was already gone by the time it ran. `-n -s -FileSize` on
-    // the pinned `t/images/ExifTool.jpg` (26106 bytes) must print `26106`;
-    // `-G0:1 -s -FileSize` (no `-n`) must still print `[File:System]
-    // FileSize : 26 kB`, unchanged from before this step. Storing both
-    // forms on the same occurrence -- the formatted string where every
-    // existing reader already looks, the byte count where only
-    // `--no-print-conv` (`MetadataMap::without_print_conv`,
-    // `cli::tag_resolution`) looks -- satisfies both without touching any
-    // other reader of this tag.
-    let file_size = file_metadata.len();
-    let size_str = fmt_file_size(file_size);
-    metadata.insert_occurrence_with_raw(
-        "File:FileSize",
-        TagValue::new_string(size_str),
-        TagValue::new_integer(file_size as i64),
-        SHIM_DEFAULT_PRIORITY,
-        "System",
-        Instance::default(),
-    );
-
-    // File modification date/time
-    if let Ok(modified) = file_metadata.modified() {
-        let formatted_date = format_system_time(modified);
-        insert_system_tag(
-            &mut metadata,
-            "File:FileModifyDate",
-            TagValue::new_string(formatted_date),
-        );
-    }
-
-    // File access date/time
-    if let Ok(accessed) = file_metadata.accessed() {
-        let formatted_date = format_system_time(accessed);
-        insert_system_tag(
-            &mut metadata,
-            "File:FileAccessDate",
-            TagValue::new_string(formatted_date),
-        );
-    }
-
-    // File inode change time (Unix) or creation time (Windows)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let ctime = file_metadata.ctime();
-        let system_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ctime as u64);
-        let formatted_date = format_system_time(system_time);
-        insert_system_tag(
-            &mut metadata,
-            "File:FileInodeChangeDate",
-            TagValue::new_string(formatted_date),
-        );
-    }
-
-    #[cfg(windows)]
-    {
-        if let Ok(created) = file_metadata.created() {
-            let formatted_date = format_system_time(created);
+        // File name (basename without directory)
+        if let Some(filename) = path.file_name()
+            && let Some(filename_str) = filename.to_str()
+        {
             insert_system_tag(
                 &mut metadata,
-                "File:FileCreateDate",
+                "File:FileName",
+                TagValue::new_string(filename_str.to_string()),
+            );
+        }
+
+        // Directory (parent directory path)
+        if let Some(parent) = path.parent() {
+            let dir_str = if parent.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                parent.to_string_lossy().to_string()
+            };
+            insert_system_tag(
+                &mut metadata,
+                "File:Directory",
+                TagValue::new_string(dir_str),
+            );
+        }
+
+        // File size. ExifTool's `%Extra` declares `FileSize` with a
+        // `PrintConv => \&ConvertFileSize` (ExifTool.pm:1388-1389) over the raw
+        // byte count; oxidex used to fuse that conversion in at insert time
+        // (storing only `"26 kB"`), which is exactly AGENTS.md's tagmodel/1.5
+        // finding -- `--no-print-conv` had nothing to select, because the raw
+        // byte count was already gone by the time it ran. `-n -s -FileSize` on
+        // the pinned `t/images/ExifTool.jpg` (26106 bytes) must print `26106`;
+        // `-G0:1 -s -FileSize` (no `-n`) must still print `[File:System]
+        // FileSize : 26 kB`, unchanged from before this step. Storing both
+        // forms on the same occurrence -- the formatted string where every
+        // existing reader already looks, the byte count where only
+        // `--no-print-conv` (`MetadataMap::without_print_conv`,
+        // `cli::tag_resolution`) looks -- satisfies both without touching any
+        // other reader of this tag.
+        let file_size = file_metadata.len();
+        let size_str = fmt_file_size(file_size);
+        metadata.insert_occurrence_with_raw(
+            "File:FileSize",
+            TagValue::new_string(size_str),
+            TagValue::new_integer(file_size as i64),
+            SHIM_DEFAULT_PRIORITY,
+            "System",
+            Instance::default(),
+        );
+
+        // File modification date/time
+        if let Ok(modified) = file_metadata.modified() {
+            let formatted_date = format_system_time(modified);
+            insert_system_tag(
+                &mut metadata,
+                "File:FileModifyDate",
                 TagValue::new_string(formatted_date),
             );
         }
-    }
 
-    // File permissions (Unix format)
-    #[cfg(unix)]
-    {
-        let permissions = file_metadata.permissions();
-        let mode = permissions.mode();
-        let perm_str = format_unix_permissions(mode);
-        insert_system_tag(
-            &mut metadata,
-            "File:FilePermissions",
-            TagValue::new_string(perm_str),
-        );
-    }
-
-    #[cfg(windows)]
-    {
-        // Windows doesn't have Unix-style permissions, so we show a placeholder
-        insert_system_tag(
-            &mut metadata,
-            "File:FilePermissions",
-            TagValue::new_string("-rw-rw-rw-".to_string()),
-        );
-    }
-
-    // File type and extension based on path
-    if let Some(extension) = path.extension()
-        && let Some(ext_str) = extension.to_str()
-    {
-        let ext_lower = ext_str.to_lowercase();
-        // The header is what lets `filetype::refine` run, and three formats in
-        // the corpus need it: a multi-page DjVu, Portable FloatMap's
-        // `image/x-pfm`, and any HEIF whose `ftyp` brand contradicts its
-        // extension. Reading it here rather than trusting the extension alone
-        // is also what keeps this resolver from *out-ranking*
-        // `operations::add_identity_tags`, which sees the same bytes.
-        let header = read_header(path);
-        let (file_type, file_type_ext, mime_type) = identify_extension(&ext_lower, &header);
-
-        if crate::exiftool_tables::attribution::silenced(
-            crate::exiftool_tables::attribution::Token::Producers,
-        ) {
-            return Ok(metadata);
+        // File access date/time
+        if let Ok(accessed) = file_metadata.accessed() {
+            let formatted_date = format_system_time(accessed);
+            insert_system_tag(
+                &mut metadata,
+                "File:FileAccessDate",
+                TagValue::new_string(formatted_date),
+            );
         }
 
-        // File type extension. ExifTool reports the format's canonical
-        // extension rather than echoing the filename, so `clip.m2ts` reports
-        // `mts`.
-        metadata.insert(
-            "File:FileTypeExtension".to_string(),
-            TagValue::new_string(file_type_ext),
-        );
+        // File inode change time (Unix) or creation time (Windows)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let ctime = file_metadata.ctime();
+            let system_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ctime as u64);
+            let formatted_date = format_system_time(system_time);
+            insert_system_tag(
+                &mut metadata,
+                "File:FileInodeChangeDate",
+                TagValue::new_string(formatted_date),
+            );
+        }
 
-        // File type (human-readable)
-        metadata.insert("File:FileType".to_string(), TagValue::new_string(file_type));
+        #[cfg(windows)]
+        {
+            if let Ok(created) = file_metadata.created() {
+                let formatted_date = format_system_time(created);
+                insert_system_tag(
+                    &mut metadata,
+                    "File:FileCreateDate",
+                    TagValue::new_string(formatted_date),
+                );
+            }
+        }
 
-        // MIME type
-        metadata.insert(
-            "File:MIMEType".to_string(),
-            TagValue::new_string(mime_type.to_string()),
-        );
-    }
+        // File permissions (Unix format)
+        #[cfg(unix)]
+        {
+            let permissions = file_metadata.permissions();
+            let mode = permissions.mode();
+            let perm_str = format_unix_permissions(mode);
+            insert_system_tag(
+                &mut metadata,
+                "File:FilePermissions",
+                TagValue::new_string(perm_str),
+            );
+        }
 
-    Ok(metadata)
+        #[cfg(windows)]
+        {
+            // Windows doesn't have Unix-style permissions, so we show a placeholder
+            insert_system_tag(
+                &mut metadata,
+                "File:FilePermissions",
+                TagValue::new_string("-rw-rw-rw-".to_string()),
+            );
+        }
+
+        // File type and extension based on path
+        if let Some(extension) = path.extension()
+            && let Some(ext_str) = extension.to_str()
+        {
+            let ext_lower = ext_str.to_lowercase();
+            // The header is what lets `filetype::refine` run, and three formats in
+            // the corpus need it: a multi-page DjVu, Portable FloatMap's
+            // `image/x-pfm`, and any HEIF whose `ftyp` brand contradicts its
+            // extension. Reading it here rather than trusting the extension alone
+            // is also what keeps this resolver from *out-ranking*
+            // `operations::add_identity_tags`, which sees the same bytes.
+            let header = read_header(path);
+            let (file_type, file_type_ext, mime_type) = identify_extension(&ext_lower, &header);
+
+            if crate::exiftool_tables::attribution::silenced(
+                crate::exiftool_tables::attribution::Token::Producers,
+            ) {
+                return Ok(metadata);
+            }
+
+            // File type extension. ExifTool reports the format's canonical
+            // extension rather than echoing the filename, so `clip.m2ts` reports
+            // `mts`.
+            metadata.insert(
+                "File:FileTypeExtension".to_string(),
+                TagValue::new_string(file_type_ext),
+            );
+
+            // File type (human-readable)
+            metadata.insert("File:FileType".to_string(), TagValue::new_string(file_type));
+
+            // MIME type
+            metadata.insert(
+                "File:MIMEType".to_string(),
+                TagValue::new_string(mime_type.to_string()),
+            );
+        }
+
+        Ok(metadata)
+    })
 }
 
 // File size formatting moved to core::value_formatter module

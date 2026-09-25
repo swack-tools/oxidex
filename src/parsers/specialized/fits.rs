@@ -265,23 +265,27 @@ impl FITSParser {
 
 impl FormatParser for FITSParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid FITS signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid FITS signature"));
+            }
 
-        // Identity is not this parser's to report, even correctly prefixed.
-        // `add_identity_tags` resolves all three from the generated tables,
-        // which carry FITS in full -- the `SIMPLE  = {20}T` magic number, the
-        // `fits` extension row, and `("FITS", "image/fits")` -- and answer
-        // exactly as these literals did, verified on the corpus FITS.fits.
-        //
-        // Being hardcoded rather than looked up is what made them a second
-        // detector, and being already in the `File:` group is what put them out
-        // of `normalize_identity_tags`' reach: it drops the *ungrouped* copies,
-        // so this was the last place a parser could still outrank the tables.
-        // `merge` gives format metadata precedence over the `File:` group, so
-        // had the two ever drifted, this copy would have won silently.
-        Self::parse_header(reader)
+            // Identity is not this parser's to report, even correctly prefixed.
+            // `add_identity_tags` resolves all three from the generated tables,
+            // which carry FITS in full -- the `SIMPLE  = {20}T` magic number, the
+            // `fits` extension row, and `("FITS", "image/fits")` -- and answer
+            // exactly as these literals did, verified on the corpus FITS.fits.
+            //
+            // Being hardcoded rather than looked up is what made them a second
+            // detector, and being already in the `File:` group is what put them out
+            // of `normalize_identity_tags`' reach: it drops the *ungrouped* copies,
+            // so this was the last place a parser could still outrank the tables.
+            // `merge` gives format metadata precedence over the `File:` group, so
+            // had the two ever drifted, this copy would have won silently.
+            Self::parse_header(reader)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -807,74 +811,78 @@ fn dicom_take_dot_digits(bytes: &[u8]) -> (Option<&[u8]>, &[u8]) {
 
 /// Parses DICOM Part 10 metadata using this existing specialty parser module.
 pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let size = usize::try_from(reader.size())
-        .map_err(|_| ExifToolError::parse_error("DICOM file is too large"))?;
-    let data = reader.read(0, size)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let size = usize::try_from(reader.size())
+            .map_err(|_| ExifToolError::parse_error("DICOM file is too large"))?;
+        let data = reader.read(0, size)?;
 
-    if data.get(DICOM_MAGIC_OFFSET..DICOM_DATA_OFFSET) != Some(b"DICM") {
-        return Err(ExifToolError::parse_error("invalid DICOM signature"));
-    }
+        if data.get(DICOM_MAGIC_OFFSET..DICOM_DATA_OFFSET) != Some(b"DICM") {
+            return Err(ExifToolError::parse_error("invalid DICOM signature"));
+        }
 
-    let mut metadata = MetadataMap::new();
-    let mut offset = DICOM_DATA_OFFSET;
-    let mut data_syntax = DicomSyntax::Encoding(DicomEncoding::EXPLICIT_LE);
-    let mut file_meta = true;
+        let mut metadata = MetadataMap::new();
+        let mut offset = DICOM_DATA_OFFSET;
+        let mut data_syntax = DicomSyntax::Encoding(DicomEncoding::EXPLICIT_LE);
+        let mut file_meta = true;
 
-    // Mid-file failures never fail the file: each `break` below mirrors a
-    // `last` in ProcessDICOM, which warns "Error reading DICOM file
-    // (corrupted?)" and still reports everything already extracted.
-    while offset + 8 <= data.len() {
-        if file_meta {
-            // The file-meta group is always explicit little-endian; the data
-            // syntax takes over at the first element outside group 0x0002.
-            let little = EndianReader::little_endian(data);
-            let Some(group) = little.u16_at(offset) else {
+        // Mid-file failures never fail the file: each `break` below mirrors a
+        // `last` in ProcessDICOM, which warns "Error reading DICOM file
+        // (corrupted?)" and still reports everything already extracted.
+        while offset + 8 <= data.len() {
+            if file_meta {
+                // The file-meta group is always explicit little-endian; the data
+                // syntax takes over at the first element outside group 0x0002.
+                let little = EndianReader::little_endian(data);
+                let Some(group) = little.u16_at(offset) else {
+                    break;
+                };
+                if group != 0x0002 {
+                    file_meta = false;
+                }
+            }
+
+            let encoding = if file_meta {
+                DicomEncoding::EXPLICIT_LE
+            } else {
+                match data_syntax {
+                    DicomSyntax::Encoding(encoding) => encoding,
+                    // Deflated or unrecognized transfer syntax: stop the walk,
+                    // keep what the file-meta group gave us.
+                    DicomSyntax::Unsupported => break,
+                }
+            };
+            let Ok(element) = parse_dicom_element(data, offset, encoding) else {
+                // Truncated or malformed element: ExifTool warns "(corrupted?)"
+                // and reports everything already read.
                 break;
             };
-            if group != 0x0002 {
-                file_meta = false;
+
+            if element.group == 0x0002 && element.element == 0x0010 {
+                data_syntax = dicom_transfer_syntax(element.value);
             }
-        }
 
-        let encoding = if file_meta {
-            DicomEncoding::EXPLICIT_LE
-        } else {
-            match data_syntax {
-                DicomSyntax::Encoding(encoding) => encoding,
-                // Deflated or unrecognized transfer syntax: stop the walk,
-                // keep what the file-meta group gave us.
-                DicomSyntax::Unsupported => break,
+            if let Some(entry) = dicom_dict_entry(element.group, element.element) {
+                if let Some(value) = dicom_value(&element, encoding, entry)
+                    && !crate::exiftool_tables::attribution::silenced(
+                        crate::exiftool_tables::attribution::Token::Producers,
+                    )
+                {
+                    metadata.insert(format!("DICOM:{}", entry.name), value);
+                }
             }
-        };
-        let Ok(element) = parse_dicom_element(data, offset, encoding) else {
-            // Truncated or malformed element: ExifTool warns "(corrupted?)"
-            // and reports everything already read.
-            break;
-        };
-
-        if element.group == 0x0002 && element.element == 0x0010 {
-            data_syntax = dicom_transfer_syntax(element.value);
-        }
-
-        if let Some(entry) = dicom_dict_entry(element.group, element.element) {
-            if let Some(value) = dicom_value(&element, encoding, entry)
-                && !crate::exiftool_tables::attribution::silenced(
-                    crate::exiftool_tables::attribution::Token::Producers,
-                )
-            {
-                metadata.insert(format!("DICOM:{}", entry.name), value);
+            if element.next_offset <= offset {
+                break;
             }
+            offset = element.next_offset;
         }
-        if element.next_offset <= offset {
-            break;
-        }
-        offset = element.next_offset;
-    }
 
-    metadata.insert("File:FileType", TagValue::new_string("DICOM"));
-    metadata.insert("File:FileTypeExtension", TagValue::new_string("dcm"));
-    metadata.insert("File:MIMEType", TagValue::new_string("application/dicom"));
-    Ok(metadata)
+        metadata.insert("File:FileType", TagValue::new_string("DICOM"));
+        metadata.insert("File:FileTypeExtension", TagValue::new_string("dcm"));
+        metadata.insert("File:MIMEType", TagValue::new_string("application/dicom"));
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

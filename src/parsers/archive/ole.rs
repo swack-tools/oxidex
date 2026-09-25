@@ -513,47 +513,51 @@ impl OLEParser {
 
 impl FormatParser for OLEParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let header = Self::parse_header(reader)?;
-        let fat = Self::read_fat(reader, &header)?;
-        let entries = Self::read_directory_entries(reader, &header, &fat)?;
-        let mini_fat = Self::read_mini_fat(reader, &header, &fat)?;
-        let root_entry = entries.iter().find(|entry| entry.entry_type == STGTY_ROOT);
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let header = Self::parse_header(reader)?;
+            let fat = Self::read_fat(reader, &header)?;
+            let entries = Self::read_directory_entries(reader, &header, &fat)?;
+            let mini_fat = Self::read_mini_fat(reader, &header, &fat)?;
+            let root_entry = entries.iter().find(|entry| entry.entry_type == STGTY_ROOT);
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Basic OLE metadata
-        metadata.insert(
-            "OLE:SectorSize".to_string(),
-            TagValue::new_integer(header.sector_size as i64),
-        );
-        metadata.insert(
-            "OLE:TotalSectors".to_string(),
-            TagValue::new_integer(header.total_sectors as i64),
-        );
-        metadata.insert(
-            "OLE:DirectoryEntryCount".to_string(),
-            TagValue::new_integer(entries.len() as i64),
-        );
+            // Basic OLE metadata
+            metadata.insert(
+                "OLE:SectorSize".to_string(),
+                TagValue::new_integer(header.sector_size as i64),
+            );
+            metadata.insert(
+                "OLE:TotalSectors".to_string(),
+                TagValue::new_integer(header.total_sectors as i64),
+            );
+            metadata.insert(
+                "OLE:DirectoryEntryCount".to_string(),
+                TagValue::new_integer(entries.len() as i64),
+            );
 
-        // FlashPix property sets (SummaryInformation / DocumentSummaryInformation)
-        Self::extract_property_sets(
-            reader,
-            &entries,
-            &header,
-            &fat,
-            &mini_fat,
-            root_entry,
-            &mut metadata,
-        );
+            // FlashPix property sets (SummaryInformation / DocumentSummaryInformation)
+            Self::extract_property_sets(
+                reader,
+                &entries,
+                &header,
+                &fat,
+                &mini_fat,
+                root_entry,
+                &mut metadata,
+            );
 
-        // Check for VBA macros
-        let vba_metadata =
-            VBAAnalyzer::analyze_vba(reader, &entries, &header, &fat, &mini_fat, root_entry);
-        for (key, value) in vba_metadata {
-            metadata.insert(key, value);
-        }
+            // Check for VBA macros
+            let vba_metadata =
+                VBAAnalyzer::analyze_vba(reader, &entries, &header, &fat, &mini_fat, root_entry);
+            for (key, value) in vba_metadata {
+                metadata.insert(key, value);
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

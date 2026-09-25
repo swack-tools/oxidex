@@ -962,3 +962,114 @@ fn oracle_explicit_set_of_the_stored_text_matches() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Provenance is a property of each occurrence (review of #949, four P2
+// threads): a value is the caller's when a public mutation put it there, and
+// the file's when a reader produced it -- through clears, normalized copies,
+// the public PNG parser and in-place mutation alike. Each case below is a
+// same-text XP set (must write ExifTool's direct bytes, 41 00 8c f3 00 00 for
+// a stored pair) or an untouched XP row (must keep the stored pair).
+// ---------------------------------------------------------------------------
+
+const PAIR: &str = "41003cd88cdf0000";
+const PAIR_DIRECT: &str = "41008cf30000";
+
+fn pair_file(dir: &Path, name: &str, png: bool) -> std::path::PathBuf {
+    let raw = hex(PAIR);
+    let block = tiff(
+        Order::Ii,
+        &[
+            (0x013b, 2, 3, b"me\0".to_vec()),
+            (XP_TITLE, 1, raw.len() as u32, raw),
+        ],
+    );
+    let bytes = if png {
+        png_with(Some(&block))
+    } else {
+        jpeg_with(&block)
+    };
+    write(dir, name, &bytes)
+}
+
+/// Thread metadata_map.rs:152: `clear()` then re-inserting the read values
+/// is a caller's map -- every value in it is assigned, so the same-text
+/// XPTitle is a direct write.
+#[test]
+fn values_reinserted_after_clear_are_assignments() {
+    use oxidex::core::operations::write_metadata;
+    let dir = tempfile::tempdir().unwrap();
+    let path = pair_file(dir.path(), "clear.jpg", false);
+    let mut map = read_metadata(&path).unwrap();
+    let rows: Vec<(String, TagValue)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    map.clear();
+    for (key, value) in rows {
+        map.insert(key, value);
+    }
+    write_metadata(&path, &map).unwrap();
+    assert_eq!(
+        xp_entries(&path).get(&XP_TITLE),
+        Some(&(1, hex(PAIR_DIRECT)))
+    );
+}
+
+/// Thread metadata_map.rs:128: a normalized copy of a read map is still the
+/// file's rows -- writing it back unchanged keeps the stored pair.
+#[test]
+fn a_normalized_copy_keeps_read_provenance() {
+    use oxidex::core::operations::write_metadata;
+    use oxidex::core::tag_normalization::normalize_metadata_map;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, png) in [("norm.jpg", false), ("norm.png", true)] {
+        let path = pair_file(dir.path(), name, png);
+        let normalized = normalize_metadata_map(&read_metadata(&path).unwrap());
+        write_metadata(&path, &normalized).unwrap();
+        assert_eq!(
+            xp_entries(&path).get(&XP_TITLE),
+            Some(&(1, hex(PAIR))),
+            "{name}"
+        );
+    }
+}
+
+/// Thread xp_strings.rs:150: the public PNG parser's rows are read values.
+/// The documented parse -> edit -> `write_png_metadata_with_baseline` flow
+/// that edits another tag leaves the untouched XPTitle's stored pair.
+#[test]
+fn public_png_parser_rows_are_read_values() {
+    use oxidex::io::buffered_reader::BufferedReader;
+    use oxidex::parsers::png::parse_png_metadata;
+    use oxidex::writers::png_writer::write_png_metadata_with_baseline;
+    let dir = tempfile::tempdir().unwrap();
+    let path = pair_file(dir.path(), "parsed.png", true);
+    let reader = BufferedReader::new(&path).unwrap();
+    let baseline = parse_png_metadata(&reader).unwrap();
+    let mut map = parse_png_metadata(&reader).unwrap();
+    map.insert("IFD0:Artist", TagValue::new_string("you"));
+    write_png_metadata_with_baseline(&path, &reader, &map, &baseline).unwrap();
+    drop(reader);
+    assert_eq!(xp_entries(&path).get(&XP_TITLE), Some(&(1, hex(PAIR))));
+    assert_eq!(
+        read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+        Some("you")
+    );
+}
+
+/// Thread metadata_map.rs:76: assigning through `get_mut` is a set, even to
+/// the text the file already decodes to.
+#[test]
+fn a_get_mut_assignment_is_a_set() {
+    use oxidex::core::operations::write_metadata;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, png) in [("mut.jpg", false), ("mut.png", true)] {
+        let path = pair_file(dir.path(), name, png);
+        let mut map = read_metadata(&path).unwrap();
+        *map.get_mut("IFD0:XPTitle").unwrap() = TagValue::new_string("A🎌");
+        write_metadata(&path, &map).unwrap();
+        assert_eq!(
+            xp_entries(&path).get(&XP_TITLE),
+            Some(&(1, hex(PAIR_DIRECT))),
+            "{name}"
+        );
+    }
+}

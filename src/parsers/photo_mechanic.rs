@@ -44,25 +44,29 @@ const FOOTER_LEN: usize = 12;
 /// A metadata map keyed `PhotoMechanic:<Name>`; empty when the file carries
 /// no Photo Mechanic trailer.
 pub fn parse_photo_mechanic_trailer(file: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let Some(data) = find_trailer(file) else {
-        return metadata;
-    };
-    let Ok(records) = parse_all_iptc_records(data) else {
-        return metadata;
-    };
-
-    for record in records {
-        // Only record 2 carries soft-edit information.
-        if record.record_number != 2 {
-            continue;
-        }
-        let Some((name, value)) = soft_edit_tag(record.dataset_number, &record.data) else {
-            continue;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let Some(data) = find_trailer(file) else {
+            return metadata;
         };
-        metadata.insert(format!("PhotoMechanic:{name}"), value);
-    }
-    metadata
+        let Ok(records) = parse_all_iptc_records(data) else {
+            return metadata;
+        };
+
+        for record in records {
+            // Only record 2 carries soft-edit information.
+            if record.record_number != 2 {
+                continue;
+            }
+            let Some((name, value)) = soft_edit_tag(record.dataset_number, &record.data) else {
+                continue;
+            };
+            metadata.insert(format!("PhotoMechanic:{name}"), value);
+        }
+        metadata
+    })
 }
 
 /// Finds the IPTC record block of the outermost valid Photo Mechanic

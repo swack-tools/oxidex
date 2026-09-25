@@ -54,44 +54,49 @@ use crate::parsers::xmp::rdf_parser::{insert_xmp_entry, parse_xmp_entries};
 /// Note: This implementation does not handle compressed streams. PDFs with
 /// compressed metadata streams will not have their XMP extracted.
 pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let file_size = reader.size();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file_size = reader.size();
 
-    // XMP packets are typically in the first part of the file (after header)
-    // or in metadata streams. Search the first 1MB or entire file if smaller.
-    let search_size = std::cmp::min(1024 * 1024, file_size) as usize;
-    let search_data = reader.read(0, search_size)?;
+        // XMP packets are typically in the first part of the file (after header)
+        // or in metadata streams. Search the first 1MB or entire file if smaller.
+        let search_size = std::cmp::min(1024 * 1024, file_size) as usize;
+        let search_data = reader.read(0, search_size)?;
 
-    // Search for XMP packet markers
-    match find_xmp_packet(search_data) {
-        Some(xmp_xml) => {
-            // Preserve RDF bags and sequences as lists. Joining them here
-            // loses the structured representation expected by MetadataMap.
-            let xmp_tags = parse_xmp_entries(xmp_xml)
-                .map_err(|e| ExifToolError::parse_error(format!("XMP parsing failed: {}", e)))?;
+        // Search for XMP packet markers
+        match find_xmp_packet(search_data) {
+            Some(xmp_xml) => {
+                // Preserve RDF bags and sequences as lists. Joining them here
+                // loses the structured representation expected by MetadataMap.
+                let xmp_tags = parse_xmp_entries(xmp_xml).map_err(|e| {
+                    ExifToolError::parse_error(format!("XMP parsing failed: {}", e))
+                })?;
 
-            // Parse XMP history for forensic metadata
-            let xml_str = std::str::from_utf8(xmp_xml).unwrap_or("");
-            let history_tags = parse_xmp_history(xml_str).unwrap_or_default();
+                // Parse XMP history for forensic metadata
+                let xml_str = std::str::from_utf8(xmp_xml).unwrap_or("");
+                let history_tags = parse_xmp_history(xml_str).unwrap_or_default();
 
-            // Convert to MetadataMap
-            let total_tags = xmp_tags.len() + history_tags.len();
-            let mut metadata = MetadataMap::with_capacity(total_tags);
+                // Convert to MetadataMap
+                let total_tags = xmp_tags.len() + history_tags.len();
+                let mut metadata = MetadataMap::with_capacity(total_tags);
 
-            for entry in &xmp_tags {
-                insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+                for entry in &xmp_tags {
+                    insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+                }
+
+                for (key, value) in history_tags {
+                    metadata.insert(key, crate::core::TagValue::new_string(value));
+                }
+
+                Ok(metadata)
             }
-
-            for (key, value) in history_tags {
-                metadata.insert(key, crate::core::TagValue::new_string(value));
+            None => {
+                // No XMP packet found - return empty metadata
+                Ok(MetadataMap::new())
             }
-
-            Ok(metadata)
         }
-        None => {
-            // No XMP packet found - return empty metadata
-            Ok(MetadataMap::new())
-        }
-    }
+    })
 }
 
 /// Finds and extracts XMP packet content from PDF data

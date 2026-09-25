@@ -941,38 +941,42 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 impl FormatParser for PlistParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid plist signature"));
-        }
-        let data = reader.read(0, reader.size() as usize)?;
-        let mut metadata = MetadataMap::new();
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid plist signature"));
+            }
+            let data = reader.read(0, reader.size() as usize)?;
+            let mut metadata = MetadataMap::new();
 
-        if data.starts_with(BPLIST_MAGIC) {
-            // The two encodings of a plist have different MIME types, and
-            // only the XML one is in `%mimeType` -- `PLIST =>
-            // 'application/xml'` (ExifTool.pm), whose own comment says the
-            // binary format's 'application/x-plist' is recognized at run
-            // time by `ProcessPLIST`:
-            //
-            //     $et->SetFileType('PLIST', 'application/x-plist');
-            //
-            // Only the MIME type is set here; the file type is left to the
-            // identification layer, which already reports `PLIST` -- and
-            // `AAE` for the Apple edit sidecars that are also plists.
-            metadata.insert(
-                "File:MIMEType".to_string(),
-                TagValue::String("application/x-plist".to_string()),
-            );
-            let mut store = PlistStore::new(&mut metadata, "PLIST");
-            // A bad trailer is ExifTool's "Error reading binary PLIST file":
-            // the file is still typed and reported, just without content
-            // tags -- so the error deliberately does not fail the read.
-            let _ = parse_binary_plist(data, &mut store);
-        } else {
-            let mut store = PlistStore::new(&mut metadata, "XML");
-            parse_xml_plist(data, &mut store);
-        }
-        Ok(metadata)
+            if data.starts_with(BPLIST_MAGIC) {
+                // The two encodings of a plist have different MIME types, and
+                // only the XML one is in `%mimeType` -- `PLIST =>
+                // 'application/xml'` (ExifTool.pm), whose own comment says the
+                // binary format's 'application/x-plist' is recognized at run
+                // time by `ProcessPLIST`:
+                //
+                //     $et->SetFileType('PLIST', 'application/x-plist');
+                //
+                // Only the MIME type is set here; the file type is left to the
+                // identification layer, which already reports `PLIST` -- and
+                // `AAE` for the Apple edit sidecars that are also plists.
+                metadata.insert(
+                    "File:MIMEType".to_string(),
+                    TagValue::String("application/x-plist".to_string()),
+                );
+                let mut store = PlistStore::new(&mut metadata, "PLIST");
+                // A bad trailer is ExifTool's "Error reading binary PLIST file":
+                // the file is still typed and reported, just without content
+                // tags -- so the error deliberately does not fail the read.
+                let _ = parse_binary_plist(data, &mut store);
+            } else {
+                let mut store = PlistStore::new(&mut metadata, "XML");
+                parse_xml_plist(data, &mut store);
+            }
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

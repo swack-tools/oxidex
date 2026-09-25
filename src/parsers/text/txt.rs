@@ -339,84 +339,88 @@ impl TXTParser {
     /// * `Ok(MetadataMap)` - Extracted text metadata
     /// * `Err(ExifToolError)` - Parse error
     pub fn parse_text_content(reader: &dyn FileReader) -> Result<MetadataMap> {
-        let size = reader.size() as usize;
-        let read_size = size.min(MAX_ANALYSIS_BYTES);
-        let data = reader.read(0, read_size)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let size = reader.size() as usize;
+            let read_size = size.min(MAX_ANALYSIS_BYTES);
+            let data = reader.read(0, read_size)?;
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Detect encoding and BOM
-        let (encoding, has_bom) = Self::detect_encoding(data);
+            // Detect encoding and BOM
+            let (encoding, has_bom) = Self::detect_encoding(data);
 
-        // `Text::Main`'s GROUPS are `{ 0 => 'File', 1 => 'File', 2 =>
-        // 'Document' }` -- every tag lands in the `File` family-1 group. An
-        // ungrouped key renders as `[]` under `-G1` and matches nothing.
-        metadata.insert(
-            "File:MIMEEncoding".to_string(),
-            TagValue::String(encoding.mime_name().to_string()),
-        );
-
-        // ExifTool only answers the BOM question for encodings that can
-        // carry one (`HandleTag(ByteOrderMark => $isBOM) if defined $isBOM`).
-        // Reporting "No" for us-ascii or iso-8859-1 states something ExifTool
-        // deliberately declines to state.
-        if encoding.can_carry_bom() {
+            // `Text::Main`'s GROUPS are `{ 0 => 'File', 1 => 'File', 2 =>
+            // 'Document' }` -- every tag lands in the `File` family-1 group. An
+            // ungrouped key renders as `[]` under `-G1` and matches nothing.
             metadata.insert(
-                "File:ByteOrderMark".to_string(),
-                TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
+                "File:MIMEEncoding".to_string(),
+                TagValue::String(encoding.mime_name().to_string()),
             );
-        }
 
-        // Decode for further analysis. Only a single-byte encoding gets line
-        // and word statistics -- `Text.pm` returns before counting once
-        // `$isUTF8` is undefined, which is exactly the multi-byte cases.
-        let decoded;
-        let text = match encoding {
-            Encoding::UTF8 => {
-                let start = if has_bom { 3 } else { 0 };
-                std::str::from_utf8(&data[start..])
-                    .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?
-            }
-            Encoding::ASCII => std::str::from_utf8(data)
-                .map_err(|e| ExifToolError::parse_error(format!("Invalid ASCII: {}", e)))?,
-            // 8-bit text is transcoded from Latin-1 so that its newlines and
-            // statistics are reported like any other single-byte file's.
-            Encoding::Latin1 | Encoding::Unknown8Bit => {
-                decoded = data.iter().map(|&byte| byte as char).collect::<String>();
-                &decoded
-            }
-            Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
-                // Newlines is *not* gated on a single-byte encoding, and
-                // ExifTool finds it in the raw bytes without decoding.
-                let line_ending = Self::detect_multibyte_line_endings(data, &encoding);
+            // ExifTool only answers the BOM question for encodings that can
+            // carry one (`HandleTag(ByteOrderMark => $isBOM) if defined $isBOM`).
+            // Reporting "No" for us-ascii or iso-8859-1 states something ExifTool
+            // deliberately declines to state.
+            if encoding.can_carry_bom() {
                 metadata.insert(
-                    "File:Newlines".to_string(),
-                    TagValue::String(line_ending.display_name().to_string()),
+                    "File:ByteOrderMark".to_string(),
+                    TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
                 );
-                return Ok(metadata);
             }
-            Encoding::Unknown => return Ok(metadata),
-        };
 
-        // Detect line endings
-        let line_ending = Self::detect_line_endings(text);
-        metadata.insert(
-            "File:Newlines".to_string(),
-            TagValue::String(line_ending.display_name().to_string()),
-        );
+            // Decode for further analysis. Only a single-byte encoding gets line
+            // and word statistics -- `Text.pm` returns before counting once
+            // `$isUTF8` is undefined, which is exactly the multi-byte cases.
+            let decoded;
+            let text = match encoding {
+                Encoding::UTF8 => {
+                    let start = if has_bom { 3 } else { 0 };
+                    std::str::from_utf8(&data[start..])
+                        .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?
+                }
+                Encoding::ASCII => std::str::from_utf8(data)
+                    .map_err(|e| ExifToolError::parse_error(format!("Invalid ASCII: {}", e)))?,
+                // 8-bit text is transcoded from Latin-1 so that its newlines and
+                // statistics are reported like any other single-byte file's.
+                Encoding::Latin1 | Encoding::Unknown8Bit => {
+                    decoded = data.iter().map(|&byte| byte as char).collect::<String>();
+                    &decoded
+                }
+                Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
+                    // Newlines is *not* gated on a single-byte encoding, and
+                    // ExifTool finds it in the raw bytes without decoding.
+                    let line_ending = Self::detect_multibyte_line_endings(data, &encoding);
+                    metadata.insert(
+                        "File:Newlines".to_string(),
+                        TagValue::String(line_ending.display_name().to_string()),
+                    );
+                    return Ok(metadata);
+                }
+                Encoding::Unknown => return Ok(metadata),
+            };
 
-        // Compute statistics
-        let stats = Self::compute_stats(text);
-        metadata.insert(
-            "File:LineCount".to_string(),
-            TagValue::Integer(stats.line_count as i64),
-        );
-        metadata.insert(
-            "File:WordCount".to_string(),
-            TagValue::Integer(stats.word_count as i64),
-        );
+            // Detect line endings
+            let line_ending = Self::detect_line_endings(text);
+            metadata.insert(
+                "File:Newlines".to_string(),
+                TagValue::String(line_ending.display_name().to_string()),
+            );
 
-        Ok(metadata)
+            // Compute statistics
+            let stats = Self::compute_stats(text);
+            metadata.insert(
+                "File:LineCount".to_string(),
+                TagValue::Integer(stats.line_count as i64),
+            );
+            metadata.insert(
+                "File:WordCount".to_string(),
+                TagValue::Integer(stats.word_count as i64),
+            );
+
+            Ok(metadata)
+        })
     }
 }
 
@@ -624,22 +628,26 @@ impl FormatParser for TXTParser {
     /// * `Ok(MetadataMap)` - Successfully extracted metadata
     /// * `Err(ExifToolError)` - Parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("TXT".to_string()));
-        // No `FileSize` here. `extract_file_metadata` already records the file's
-        // length as `File:FileSize`, formatted the way ExifTool prints it
-        // ("785 bytes"); a raw byte count under a second, ungrouped key added a
-        // third spelling of one fact and disagreed with the oracle.
-        // `operations::drop_redundant_file_size` is the backstop for the other
-        // parsers that still do this.
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("TXT".to_string()));
+            // No `FileSize` here. `extract_file_metadata` already records the file's
+            // length as `File:FileSize`, formatted the way ExifTool prints it
+            // ("785 bytes"); a raw byte count under a second, ungrouped key added a
+            // third spelling of one fact and disagreed with the oracle.
+            // `operations::drop_redundant_file_size` is the backstop for the other
+            // parsers that still do this.
 
-        // Parse text content and merge with basic metadata
-        let text_metadata = Self::parse_text_content(reader)?;
-        for (key, value) in text_metadata {
-            metadata.insert(key, value);
-        }
+            // Parse text content and merge with basic metadata
+            let text_metadata = Self::parse_text_content(reader)?;
+            for (key, value) in text_metadata {
+                metadata.insert(key, value);
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Indicates whether this parser supports the given file format
@@ -669,91 +677,95 @@ pub struct CSVParser;
 
 impl FormatParser for CSVParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("CSV".to_string()));
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("CSV".to_string()));
 
-        let probe_size = (reader.size() as usize).min(MAX_ANALYSIS_BYTES);
-        let probe = reader.read(0, probe_size)?;
-        let (encoding, has_bom) = TXTParser::detect_encoding(probe);
+            let probe_size = (reader.size() as usize).min(MAX_ANALYSIS_BYTES);
+            let probe = reader.read(0, probe_size)?;
+            let (encoding, has_bom) = TXTParser::detect_encoding(probe);
 
-        metadata.insert(
-            "File:MIMEEncoding".to_string(),
-            TagValue::String(encoding.mime_name().to_string()),
-        );
-        if encoding.can_carry_bom() {
             metadata.insert(
-                "File:ByteOrderMark".to_string(),
-                TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
+                "File:MIMEEncoding".to_string(),
+                TagValue::String(encoding.mime_name().to_string()),
             );
-        }
-
-        // Newlines: same rule as TXT (first sequence wins; found in the raw
-        // bytes for the multi-byte encodings).
-        let line_ending = match encoding {
-            Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
-                let ending = TXTParser::detect_multibyte_line_endings(probe, &encoding);
+            if encoding.can_carry_bom() {
                 metadata.insert(
-                    "File:Newlines".to_string(),
-                    TagValue::String(ending.display_name().to_string()),
+                    "File:ByteOrderMark".to_string(),
+                    TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
                 );
-                // Text.pm: `return 1 if $fast or not defined $isUTF8;` --
-                // `$isUTF8` is left undefined for the multi-byte encodings,
-                // so the CSV statistics are not generated for them.
-                return Ok(metadata);
             }
-            Encoding::Unknown => return Ok(metadata),
-            _ => {
-                let text = String::from_utf8_lossy(probe);
-                TXTParser::detect_line_endings(&text)
+
+            // Newlines: same rule as TXT (first sequence wins; found in the raw
+            // bytes for the multi-byte encodings).
+            let line_ending = match encoding {
+                Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
+                    let ending = TXTParser::detect_multibyte_line_endings(probe, &encoding);
+                    metadata.insert(
+                        "File:Newlines".to_string(),
+                        TagValue::String(ending.display_name().to_string()),
+                    );
+                    // Text.pm: `return 1 if $fast or not defined $isUTF8;` --
+                    // `$isUTF8` is left undefined for the multi-byte encodings,
+                    // so the CSV statistics are not generated for them.
+                    return Ok(metadata);
+                }
+                Encoding::Unknown => return Ok(metadata),
+                _ => {
+                    let text = String::from_utf8_lossy(probe);
+                    TXTParser::detect_line_endings(&text)
+                }
+            };
+            metadata.insert(
+                "File:Newlines".to_string(),
+                TagValue::String(line_ending.display_name().to_string()),
+            );
+
+            // The statistics walk the whole file (ExifTool's ReadLine loop), but
+            // stop at the 1000-row counting cap; a memory-mapped read makes the
+            // full-length slice cheap.
+            let data = reader.read(0, reader.size() as usize)?;
+            let stats = TXTParser::compute_csv_stats(data);
+
+            // The `Delimiter` and `Quoting` PrintConv hashes, Text.pm:45-46.
+            let delimiter = match stats.delimiter {
+                None => "(none)",
+                Some(',') => "Comma",
+                Some(';') => "Semicolon",
+                Some('\t') => "Tab",
+                // Unreachable: compute_csv_stats only ever picks the three above.
+                Some(_) => "(none)",
+            };
+            let quoting = match stats.quoting {
+                None => "(none)",
+                Some('"') => "Double quotes",
+                Some('\'') => "Single quotes",
+                Some(_) => "(none)",
+            };
+            metadata.insert(
+                "File:Delimiter".to_string(),
+                TagValue::String(delimiter.to_string()),
+            );
+            metadata.insert(
+                "File:Quoting".to_string(),
+                TagValue::String(quoting.to_string()),
+            );
+            metadata.insert(
+                "File:ColumnCount".to_string(),
+                TagValue::Integer(stats.column_count),
+            );
+            // `HandleTag(RowCount => $nrows) if $nrows` -- omitted past the cap,
+            // and 0 is falsy in Perl, so a zero row count is omitted too.
+            if let Some(rows) = stats.row_count {
+                if rows > 0 {
+                    metadata.insert("File:RowCount".to_string(), TagValue::Integer(rows));
+                }
             }
-        };
-        metadata.insert(
-            "File:Newlines".to_string(),
-            TagValue::String(line_ending.display_name().to_string()),
-        );
 
-        // The statistics walk the whole file (ExifTool's ReadLine loop), but
-        // stop at the 1000-row counting cap; a memory-mapped read makes the
-        // full-length slice cheap.
-        let data = reader.read(0, reader.size() as usize)?;
-        let stats = TXTParser::compute_csv_stats(data);
-
-        // The `Delimiter` and `Quoting` PrintConv hashes, Text.pm:45-46.
-        let delimiter = match stats.delimiter {
-            None => "(none)",
-            Some(',') => "Comma",
-            Some(';') => "Semicolon",
-            Some('\t') => "Tab",
-            // Unreachable: compute_csv_stats only ever picks the three above.
-            Some(_) => "(none)",
-        };
-        let quoting = match stats.quoting {
-            None => "(none)",
-            Some('"') => "Double quotes",
-            Some('\'') => "Single quotes",
-            Some(_) => "(none)",
-        };
-        metadata.insert(
-            "File:Delimiter".to_string(),
-            TagValue::String(delimiter.to_string()),
-        );
-        metadata.insert(
-            "File:Quoting".to_string(),
-            TagValue::String(quoting.to_string()),
-        );
-        metadata.insert(
-            "File:ColumnCount".to_string(),
-            TagValue::Integer(stats.column_count),
-        );
-        // `HandleTag(RowCount => $nrows) if $nrows` -- omitted past the cap,
-        // and 0 is falsy in Perl, so a zero row count is omitted too.
-        if let Some(rows) = stats.row_count {
-            if rows > 0 {
-                metadata.insert("File:RowCount".to_string(), TagValue::Integer(rows));
-            }
-        }
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

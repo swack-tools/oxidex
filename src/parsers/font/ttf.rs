@@ -796,43 +796,47 @@ impl TTFParser {
 
 impl FormatParser for TTFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid TTF signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        metadata.insert("FileType".to_string(), TagValue::String("TTF".to_string()));
-
-        let num_tables = Self::read_num_tables(reader)?;
-        metadata.insert(
-            "NumTables".to_string(),
-            TagValue::String(num_tables.to_string()),
-        );
-
-        // Parse table directory
-        let tables = Self::parse_table_directory(reader, num_tables)?;
-
-        // Extract metadata from name table
-        if let Some(name_table) = Self::find_table(&tables, b"name") {
-            let name_metadata = Self::extract_name_metadata(reader, name_table)?;
-            for (key, value) in name_metadata {
-                metadata.insert(key, value);
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid TTF signature"));
             }
-        }
 
-        // Extract metadata from head table
-        if let Some(head_table) = Self::find_table(&tables, b"head") {
-            let head_metadata = Self::extract_head_metadata(reader, head_table)?;
-            for (key, value) in head_metadata {
-                metadata.insert(key, value);
+            let mut metadata = MetadataMap::new();
+
+            metadata.insert("FileType".to_string(), TagValue::String("TTF".to_string()));
+
+            let num_tables = Self::read_num_tables(reader)?;
+            metadata.insert(
+                "NumTables".to_string(),
+                TagValue::String(num_tables.to_string()),
+            );
+
+            // Parse table directory
+            let tables = Self::parse_table_directory(reader, num_tables)?;
+
+            // Extract metadata from name table
+            if let Some(name_table) = Self::find_table(&tables, b"name") {
+                let name_metadata = Self::extract_name_metadata(reader, name_table)?;
+                for (key, value) in name_metadata {
+                    metadata.insert(key, value);
+                }
             }
-        }
 
-        // Add TTF-specific tag aliases for Worker 21 requirements
-        add_ttf_tag_aliases(&mut metadata);
+            // Extract metadata from head table
+            if let Some(head_table) = Self::find_table(&tables, b"head") {
+                let head_metadata = Self::extract_head_metadata(reader, head_table)?;
+                for (key, value) in head_metadata {
+                    metadata.insert(key, value);
+                }
+            }
 
-        Ok(metadata)
+            // Add TTF-specific tag aliases for Worker 21 requirements
+            add_ttf_tag_aliases(&mut metadata);
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

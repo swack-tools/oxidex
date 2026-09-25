@@ -104,20 +104,24 @@ pub struct IccTag {
 /// extracts the profile stream, decompresses if necessary, and parses
 /// the ICC profile header and tags.
 pub fn extract_icc_profile(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Extract ICC profile from PDF
-    let icc_data = pdf::extract_icc_from_pdf(reader)?;
+        // Extract ICC profile from PDF
+        let icc_data = pdf::extract_icc_from_pdf(reader)?;
 
-    // Parse the ICC profile and insert it, grouped by table provenance.
-    let icc_tags = parse_icc_profile(&icc_data)?;
-    insert_icc_tags(&mut metadata, icc_tags);
+        // Parse the ICC profile and insert it, grouped by table provenance.
+        let icc_tags = parse_icc_profile(&icc_data)?;
+        insert_icc_tags(&mut metadata, icc_tags);
 
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error("No ICC profile found in PDF"));
-    }
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error("No ICC profile found in PDF"));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Parses ICC profile binary data and extracts metadata.
@@ -152,23 +156,27 @@ pub fn insert_icc_tags(metadata: &mut MetadataMap, tags: Vec<IccTag>) {
 /// This function reads an ICC profile file directly (not embedded in PDF/JPEG/etc.)
 /// and extracts all metadata with ICC_Profile: prefix.
 pub fn parse_icc_file(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Read the entire ICC profile file
-    let size = reader.size() as usize;
-    let icc_data = reader.read(0, size)?;
+        // Read the entire ICC profile file
+        let size = reader.size() as usize;
+        let icc_data = reader.read(0, size)?;
 
-    // Parse the ICC profile and insert it, grouped by table provenance.
-    let icc_tags = parse_icc_profile(icc_data)?;
-    insert_icc_tags(&mut metadata, icc_tags);
+        // Parse the ICC profile and insert it, grouped by table provenance.
+        let icc_tags = parse_icc_profile(icc_data)?;
+        insert_icc_tags(&mut metadata, icc_tags);
 
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No valid ICC profile data found",
-        ));
-    }
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "No valid ICC profile data found",
+            ));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 // ============================================================================

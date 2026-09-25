@@ -499,38 +499,42 @@ pub fn parse_sof_segment_with_options(
 /// preview payload; only the three names with a complete ValueConv are
 /// emitted here.
 pub fn parse_scalado_directory(data: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let mut offset = 0usize;
-    let mut end = data.len();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let mut offset = 0usize;
+        let mut end = data.len();
 
-    while offset + 12 <= end {
-        let tag = &data[offset..offset + 4];
-        let version = u32::from_be_bytes(data[offset + 4..offset + 8].try_into().unwrap());
-        let raw = u32::from_be_bytes(data[offset + 8..offset + 12].try_into().unwrap());
+        while offset + 12 <= end {
+            let tag = &data[offset..offset + 4];
+            let version = u32::from_be_bytes(data[offset + 4..offset + 8].try_into().unwrap());
+            let raw = u32::from_be_bytes(data[offset + 8..offset + 12].try_into().unwrap());
 
-        if tag == b"SPMO" {
-            end = if version < 5 {
-                data.len().saturating_sub(raw as usize)
-            } else {
-                (raw as usize).saturating_add(12).min(data.len())
-            };
-        } else if raw != 0 {
-            let value = i64::from(i32::from_be_bytes(raw.to_be_bytes())).abs();
-            let name = match tag {
-                b"WDTH" => Some("PreviewImageWidth"),
-                b"HGHT" => Some("PreviewImageHeight"),
-                b"QUAL" => Some("PreviewQuality"),
-                _ => None,
-            };
-            if let Some(name) = name {
-                metadata.insert(format!("APP4:{name}"), TagValue::Integer(value));
+            if tag == b"SPMO" {
+                end = if version < 5 {
+                    data.len().saturating_sub(raw as usize)
+                } else {
+                    (raw as usize).saturating_add(12).min(data.len())
+                };
+            } else if raw != 0 {
+                let value = i64::from(i32::from_be_bytes(raw.to_be_bytes())).abs();
+                let name = match tag {
+                    b"WDTH" => Some("PreviewImageWidth"),
+                    b"HGHT" => Some("PreviewImageHeight"),
+                    b"QUAL" => Some("PreviewQuality"),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    metadata.insert(format!("APP4:{name}"), TagValue::Integer(value));
+                }
             }
+
+            offset += 12;
         }
 
-        offset += 12;
-    }
-
-    metadata
+        metadata
+    })
 }
 
 /// Parse APP8 (SPIFF) segment

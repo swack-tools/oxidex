@@ -373,7 +373,8 @@ pub fn read_metadata_with_detector_and_options(
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
     // Everything recorded by the read is the file's own; what a caller
-    // inserts afterwards is an assignment (`MetadataMap::assigned_after_read`).
+    // inserts or mutates afterwards is an assignment
+    // (`MetadataMap::is_assigned`).
     read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
         metadata.mark_read_complete();
         metadata
@@ -975,9 +976,10 @@ pub(crate) fn write_metadata_with_removals(
 /// first, then the map -- whose assigned keys are the caller's explicit sets
 /// (`modify_tag`'s tag, a batch's `-TAG=value`s), whatever their value.
 ///
-/// Provenance, not equality, decides what a set is, and the map records it:
-/// a value inserted after `read_metadata` returned is an assignment
-/// (`MetadataMap::assigned_after_read`, the single notion the writers --
+/// Provenance, not equality, decides what a set is, and the map records it
+/// per occurrence: a value a public mutation (`insert`, `get_mut`) put there
+/// is an assignment, a row a reader produced is not
+/// (`MetadataMap::is_assigned`, the single notion the writers --
 /// this transaction, the XP strings' direct write -- all ask). A value that
 /// differs from the file's is a set whatever its provenance (a carried row
 /// never differs); an assigned key whose value equals the file's is a set
@@ -1505,9 +1507,9 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     let key = canonical_write_tag_name(tag_name);
     metadata.insert(key, new_value);
 
-    // Step 3: Write all metadata back to file; the tag, inserted after the
-    // read, is an explicit set whatever its value
-    // (`MetadataMap::assigned_after_read`).
+    // Step 3: Write all metadata back to file; the tag, inserted by the
+    // caller, is an explicit set whatever its value
+    // (`MetadataMap::is_assigned`).
     write_metadata_transaction(path, &metadata, &[])?;
 
     Ok(())
@@ -3112,7 +3114,7 @@ mod removal_then_set_tests {
     /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`
     /// keeps Make. 00f0c398 inferred from the equal value that the row was
     /// carried and deleted it; the map now records what was assigned (a value
-    /// inserted after the read, `MetadataMap::assigned_after_read`), and a
+    /// the caller inserted, `MetadataMap::is_assigned`), and a
     /// carried row -- the same map without the assignment -- still goes. The same holds under a
     /// carrier removal (`EXIF:All` then `IFD0:Make=Acme`). JPEG and PNG, II
     /// and MM.

@@ -102,135 +102,140 @@ pub fn parse_aac_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for AacParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let file_size = reader.size();
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let file_size = reader.size();
 
-        // Verify file is large enough
-        if file_size < 7 {
-            return Err(ExifToolError::parse_error("File too small to be AAC"));
-        }
+            // Verify file is large enough
+            if file_size < 7 {
+                return Err(ExifToolError::parse_error("File too small to be AAC"));
+            }
 
-        // ISO Base Media containers share the QuickTime atom walker and its
-        // generated ItemList decoder. The FourCC follows the four-byte size.
-        if file_size >= 8 && reader.read(4, 4)? == b"ftyp" {
-            return crate::parsers::quicktime::parse_quicktime_metadata(reader)
-                .map_err(ExifToolError::parse_error);
-        }
+            // ISO Base Media containers share the QuickTime atom walker and its
+            // generated ItemList decoder. The FourCC follows the four-byte size.
+            if file_size >= 8 && reader.read(4, 4)? == b"ftyp" {
+                return crate::parsers::quicktime::parse_quicktime_metadata(reader)
+                    .map_err(ExifToolError::parse_error);
+            }
 
-        // Otherwise, try to parse as pure ADTS AAC. The ADTS header is 7
-        // bytes: handing `parse_adts_header` the 4-byte magic made it fail
-        // its own length check on every real AAC file, so the format
-        // silently produced no tags at all.
-        let header = reader.read(0, 7)?;
-        let header_reader = EndianReader::big_endian(header);
+            // Otherwise, try to parse as pure ADTS AAC. The ADTS header is 7
+            // bytes: handing `parse_adts_header` the 4-byte magic made it fail
+            // its own length check on every real AAC file, so the format
+            // silently produced no tags at all.
+            let header = reader.read(0, 7)?;
+            let header_reader = EndianReader::big_endian(header);
 
-        // Verify ADTS sync word (0xFFF in first 12 bits)
-        let sync = header_reader.u16_at(0).unwrap_or(0);
-        if (sync >> 4) != ADTS_SYNC_WORD {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid AAC file: not MP4 format and not valid ADTS (sync word 0x{:03X})",
-                sync >> 4
-            )));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(16);
-
-        // Parse ADTS header
-        let adts_info = parse_adts_header(header)?;
-
-        // ExifTool's AAC table names these ProfileType / SampleRate /
-        // Channels (AAC.pm bits 016-017, 018-021 and 023-025).
-        metadata.insert(
-            "AAC:ProfileType".to_string(),
-            TagValue::new_string(adts_info.profile_type.to_string()),
-        );
-        metadata.insert(
-            "AAC:AudioObjectType".to_string(),
-            TagValue::new_string(adts_info.profile.to_string()),
-        );
-        metadata.insert(
-            "AAC:SampleRate".to_string(),
-            TagValue::new_integer(adts_info.sample_rate as i64),
-        );
-        metadata.insert(
-            "AAC:ChannelConfiguration".to_string(),
-            TagValue::new_integer(adts_info.channel_config as i64),
-        );
-
-        // The encoder name lives in the first frame's filler payload.
-        if let Some(encoder) = read_encoder_from_first_frame(reader, header, adts_info.frame_length)
-        {
-            metadata.insert("AAC:Encoder".to_string(), TagValue::new_string(encoder));
-        }
-        metadata.insert(
-            "AAC:FrameLength".to_string(),
-            TagValue::new_integer(adts_info.frame_length as i64),
-        );
-
-        // Channels uses ExifTool's PrintConv for the channel configuration
-        // code: 6 and 7 print as "5+1" and "7+1", and an unset code prints
-        // "?" rather than being silently rounded to stereo.
-        metadata.insert(
-            "AAC:Channels".to_string(),
-            TagValue::new_string(
-                match adts_info.channel_config {
-                    0 => "?",
-                    1 => "1",
-                    2 => "2",
-                    3 => "3",
-                    4 => "4",
-                    5 => "5",
-                    6 => "5+1",
-                    7 => "7+1",
-                    _ => "?",
-                }
-                .to_string(),
-            ),
-        );
-
-        // AAC:BitRate, AAC:ObjectType and AAC:ProfileLevel used to be
-        // emitted here. ObjectType and ProfileLevel were re-spellings of
-        // AudioObjectType with no ExifTool counterpart, and BitRate
-        // extrapolated the whole file's rate from the first frame alone --
-        // ExifTool's own AAC.pm notes that "all frames must be scanned to
-        // calculate average bitrate", so that number was a guess wearing a
-        // measurement's name.
-
-        // Count the ADTS frames that are actually present (scan up to 1MB).
-        let scan_size = 1_000_000u64.min(file_size);
-        let mut frame_count = 0u64;
-        let mut offset = 0u64;
-
-        while offset + 7 < scan_size {
-            // Verify sync word
-            let sync_bytes = reader.read(offset, 2)?;
-            let sync_reader = EndianReader::big_endian(sync_bytes);
-            let sync = sync_reader.u16_at(0).unwrap_or(0);
-
+            // Verify ADTS sync word (0xFFF in first 12 bits)
+            let sync = header_reader.u16_at(0).unwrap_or(0);
             if (sync >> 4) != ADTS_SYNC_WORD {
-                break;
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid AAC file: not MP4 format and not valid ADTS (sync word 0x{:03X})",
+                    sync >> 4
+                )));
             }
 
-            // Read frame length from header
-            let frame_header = reader.read(offset, 7)?;
-            if let Ok(frame_info) = parse_adts_header(frame_header) {
-                frame_count += 1;
-                offset += frame_info.frame_length as u64;
-            } else {
-                break;
-            }
-        }
+            let mut metadata = MetadataMap::with_capacity(16);
 
-        if frame_count > 0 {
+            // Parse ADTS header
+            let adts_info = parse_adts_header(header)?;
+
+            // ExifTool's AAC table names these ProfileType / SampleRate /
+            // Channels (AAC.pm bits 016-017, 018-021 and 023-025).
             metadata.insert(
-                "AAC:FrameCount".to_string(),
-                TagValue::new_integer(frame_count as i64),
+                "AAC:ProfileType".to_string(),
+                TagValue::new_string(adts_info.profile_type.to_string()),
             );
-        }
-        // AAC:Duration used to be derived here by extrapolating an average
-        // frame size over the file length. That is a projection, not a
-        // measurement, and ExifTool publishes no Duration for AAC at all.
+            metadata.insert(
+                "AAC:AudioObjectType".to_string(),
+                TagValue::new_string(adts_info.profile.to_string()),
+            );
+            metadata.insert(
+                "AAC:SampleRate".to_string(),
+                TagValue::new_integer(adts_info.sample_rate as i64),
+            );
+            metadata.insert(
+                "AAC:ChannelConfiguration".to_string(),
+                TagValue::new_integer(adts_info.channel_config as i64),
+            );
 
-        Ok(metadata)
+            // The encoder name lives in the first frame's filler payload.
+            if let Some(encoder) =
+                read_encoder_from_first_frame(reader, header, adts_info.frame_length)
+            {
+                metadata.insert("AAC:Encoder".to_string(), TagValue::new_string(encoder));
+            }
+            metadata.insert(
+                "AAC:FrameLength".to_string(),
+                TagValue::new_integer(adts_info.frame_length as i64),
+            );
+
+            // Channels uses ExifTool's PrintConv for the channel configuration
+            // code: 6 and 7 print as "5+1" and "7+1", and an unset code prints
+            // "?" rather than being silently rounded to stereo.
+            metadata.insert(
+                "AAC:Channels".to_string(),
+                TagValue::new_string(
+                    match adts_info.channel_config {
+                        0 => "?",
+                        1 => "1",
+                        2 => "2",
+                        3 => "3",
+                        4 => "4",
+                        5 => "5",
+                        6 => "5+1",
+                        7 => "7+1",
+                        _ => "?",
+                    }
+                    .to_string(),
+                ),
+            );
+
+            // AAC:BitRate, AAC:ObjectType and AAC:ProfileLevel used to be
+            // emitted here. ObjectType and ProfileLevel were re-spellings of
+            // AudioObjectType with no ExifTool counterpart, and BitRate
+            // extrapolated the whole file's rate from the first frame alone --
+            // ExifTool's own AAC.pm notes that "all frames must be scanned to
+            // calculate average bitrate", so that number was a guess wearing a
+            // measurement's name.
+
+            // Count the ADTS frames that are actually present (scan up to 1MB).
+            let scan_size = 1_000_000u64.min(file_size);
+            let mut frame_count = 0u64;
+            let mut offset = 0u64;
+
+            while offset + 7 < scan_size {
+                // Verify sync word
+                let sync_bytes = reader.read(offset, 2)?;
+                let sync_reader = EndianReader::big_endian(sync_bytes);
+                let sync = sync_reader.u16_at(0).unwrap_or(0);
+
+                if (sync >> 4) != ADTS_SYNC_WORD {
+                    break;
+                }
+
+                // Read frame length from header
+                let frame_header = reader.read(offset, 7)?;
+                if let Ok(frame_info) = parse_adts_header(frame_header) {
+                    frame_count += 1;
+                    offset += frame_info.frame_length as u64;
+                } else {
+                    break;
+                }
+            }
+
+            if frame_count > 0 {
+                metadata.insert(
+                    "AAC:FrameCount".to_string(),
+                    TagValue::new_integer(frame_count as i64),
+                );
+            }
+            // AAC:Duration used to be derived here by extrapolating an average
+            // frame size over the file length. That is a projection, not a
+            // measurement, and ExifTool publishes no Duration for AAC at all.
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

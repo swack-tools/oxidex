@@ -52,52 +52,57 @@ pub use rdf_parser::parse_xmp;
 ///
 /// This function reads an XMP sidecar file (.xmp) and extracts all metadata.
 pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // A sidecar is XMP whatever it is called. `%fileTypeLookup` answers for
-    // the `.xmp` extension, but an RDF-rooted sidecar named `.xml` reaches
-    // this parser by content, and the identification layer has already called
-    // it TXT or XML by then -- `filetype::identify_text` deliberately declines
-    // to claim XMP, leaving the naming to this parser.
-    //
-    // The values are the ones `SetFileType` produces for the RDF branch, where
-    // both its arguments are undefined: the file type falls back to XMP.pm's
-    // own, and the MIME type to `$mimeType{XMP}` (XMP.pm:4430).
-    metadata.insert("File:FileType", TagValue::new_string("XMP"));
-    metadata.insert("File:FileTypeExtension", TagValue::new_string("xmp"));
-    metadata.insert("File:MIMEType", TagValue::new_string("application/rdf+xml"));
+        // A sidecar is XMP whatever it is called. `%fileTypeLookup` answers for
+        // the `.xmp` extension, but an RDF-rooted sidecar named `.xml` reaches
+        // this parser by content, and the identification layer has already called
+        // it TXT or XML by then -- `filetype::identify_text` deliberately declines
+        // to claim XMP, leaving the naming to this parser.
+        //
+        // The values are the ones `SetFileType` produces for the RDF branch, where
+        // both its arguments are undefined: the file type falls back to XMP.pm's
+        // own, and the MIME type to `$mimeType{XMP}` (XMP.pm:4430).
+        metadata.insert("File:FileType", TagValue::new_string("XMP"));
+        metadata.insert("File:FileTypeExtension", TagValue::new_string("xmp"));
+        metadata.insert("File:MIMEType", TagValue::new_string("application/rdf+xml"));
 
-    // Read the entire XMP file
-    let size = reader.size() as usize;
-    let xmp_data = reader.read(0, size)?;
+        // Read the entire XMP file
+        let size = reader.size() as usize;
+        let xmp_data = reader.read(0, size)?;
 
-    // Parse the XMP data, keeping List-valued properties as lists. The second
-    // element carries FocalPlaneXResolution/FocalPlaneYResolution in their
-    // unreduced `n/d` form -- see the doc comment on
-    // `parse_xmp_typed_with_rational_forms` for why the composite layer needs
-    // it and why this carriage is tactical (Step 8 of
-    // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
-    let (xmp_tags, rational_forms) = rdf_parser::parse_xmp_entries_with_rational_forms(xmp_data)?;
+        // Parse the XMP data, keeping List-valued properties as lists. The second
+        // element carries FocalPlaneXResolution/FocalPlaneYResolution in their
+        // unreduced `n/d` form -- see the doc comment on
+        // `parse_xmp_typed_with_rational_forms` for why the composite layer needs
+        // it and why this carriage is tactical (Step 8 of
+        // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
+        let (xmp_tags, rational_forms) =
+            rdf_parser::parse_xmp_entries_with_rational_forms(xmp_data)?;
 
-    // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
-    // "Worker 30" step here also synthesized XMP:CreatorTool from the
-    // XMPToolkit, and XMP:CreationDate/XMP:ModificationDate aliases of
-    // CreateDate/ModifyDate. ExifTool 13.59 emits none of them for a sidecar
-    // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
-    // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
-    // fabricated tags and are gone.)
-    for entry in &xmp_tags {
-        rdf_parser::insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
-        // `set_value_form` only attaches to a tag already present in the map,
-        // which the insert just above guarantees.
-        if !entry.shadowed
-            && let Some((_, raw)) = rational_forms.iter().find(|(key, _)| *key == entry.key)
-        {
-            metadata.set_value_form(entry.key.clone(), raw.clone());
+        // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
+        // "Worker 30" step here also synthesized XMP:CreatorTool from the
+        // XMPToolkit, and XMP:CreationDate/XMP:ModificationDate aliases of
+        // CreateDate/ModifyDate. ExifTool 13.59 emits none of them for a sidecar
+        // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
+        // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
+        // fabricated tags and are gone.)
+        for entry in &xmp_tags {
+            rdf_parser::insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+            // `set_value_form` only attaches to a tag already present in the map,
+            // which the insert just above guarantees.
+            if !entry.shadowed
+                && let Some((_, raw)) = rational_forms.iter().find(|(key, _)| *key == entry.key)
+            {
+                metadata.set_value_form(entry.key.clone(), raw.clone());
+            }
         }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

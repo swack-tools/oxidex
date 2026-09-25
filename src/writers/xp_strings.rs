@@ -31,9 +31,10 @@
 //!   back unchanged: a surrogate pair `3c d8 8c df`, and even a lone
 //!   surrogate, survive `-TagsFromFile`.
 //!
-//! Whether a value is the caller's is recorded, never inferred from its
-//! value: an occurrence recorded after the read is an assignment
-//! (`MetadataMap::assigned_after_read`). An assigned XP string is always a
+//! Whether a value is the caller's is recorded on each occurrence, never
+//! inferred from its value: a public mutation of the map (`insert`,
+//! `get_mut`) records an assignment, a row a reader produced is read
+//! (`MetadataMap::is_assigned`). An assigned XP string is always a
 //! direct write, even when its text is exactly what the file decodes to --
 //! a stored pair, lone surrogate or BOM decodes to text that does not
 //! encode back to the same bytes, and ExifTool re-encodes the assigned text
@@ -140,13 +141,13 @@ fn pack_v(text: &str) -> Vec<u16> {
 }
 
 /// Whether `key` in `desired` is an XP string the caller assigned
-/// ([`MetadataMap::assigned_after_read`]) -- a direct write, which ExifTool
+/// ([`MetadataMap::is_assigned`]) -- a direct write, which ExifTool
 /// re-encodes from the assigned text even when that text equals what the
 /// file decodes to: a stored surrogate pair, lone surrogate or BOM reads as
 /// text that does not encode back to the same bytes. The writers rewrite
 /// such an entry instead of carrying it over by value equality.
 pub(crate) fn is_explicit_xp_set(desired: &MetadataMap, key: &str) -> bool {
-    is_xp_tag_key(key) && desired.assigned_after_read(key)
+    is_xp_tag_key(key) && desired.is_assigned(key)
 }
 
 /// Whether `desired` holds any XP string the caller assigned

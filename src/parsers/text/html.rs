@@ -1512,32 +1512,40 @@ impl HTMLParser {
     /// Extract HTML meta information from a whole-file buffer.
     #[must_use]
     pub fn parse_bytes(data: &[u8]) -> MetadataMap {
-        if !looks_like_html(data) {
-            return MetadataMap::new();
-        }
-        // ExifTool warns 'Invalid HTML data' and extracts nothing when it
-        // cannot determine the record separator.
-        let Some(separator) = record_separator(data) else {
-            return MetadataMap::new();
-        };
-        let Some(doc) = head_section(data, separator) else {
-            return MetadataMap::new();
-        };
-        let mut walker = Walker {
-            charset: None,
-            separator: separator.to_vec(),
-            out: Collected::default(),
-        };
-        walker.walk(doc);
-        walker.out.into_metadata()
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> MetadataMap {
+            if !looks_like_html(data) {
+                return MetadataMap::new();
+            }
+            // ExifTool warns 'Invalid HTML data' and extracts nothing when it
+            // cannot determine the record separator.
+            let Some(separator) = record_separator(data) else {
+                return MetadataMap::new();
+            };
+            let Some(doc) = head_section(data, separator) else {
+                return MetadataMap::new();
+            };
+            let mut walker = Walker {
+                charset: None,
+                separator: separator.to_vec(),
+                out: Collected::default(),
+            };
+            walker.walk(doc);
+            walker.out.into_metadata()
+        })
     }
 }
 
 impl FormatParser for HTMLParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let size = reader.size() as usize;
-        let data = reader.read(0, size)?;
-        Ok(Self::parse_bytes(data))
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let size = reader.size() as usize;
+            let data = reader.read(0, size)?;
+            Ok(Self::parse_bytes(data))
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

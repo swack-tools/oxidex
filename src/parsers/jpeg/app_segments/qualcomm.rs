@@ -282,50 +282,54 @@ pub fn is_qualcomm_app7(data: &[u8]) -> bool {
 /// complete entry, yields an empty map -- which is what ExifTool reports for
 /// such a segment.
 pub fn parse_qualcomm_app7(data: &[u8]) -> MetadataMap {
-    let mut out = MetadataMap::new();
-    if !is_qualcomm_app7(data) {
-        return out;
-    }
-    let end = data.len();
-    let mut pos = qualcomm_tables::DIR_START;
-
-    // ExifTool: while ($pos + 3 < $dirEnd)
-    while pos + 3 < end {
-        let val_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
-        let tag_len = data[pos + 2] as usize;
-
-        // ExifTool: last if $pos + 8 + $tagLen + $valLen > $dirEnd
-        if pos + 8 + tag_len + val_len > end {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut out = MetadataMap::new();
+        if !is_qualcomm_app7(data) {
+            return out;
         }
+        let end = data.len();
+        let mut pos = qualcomm_tables::DIR_START;
 
-        let tag = &data[pos + 3..pos + 3 + tag_len];
-        pos += 3 + tag_len;
-        let fmt_code = data[pos] as usize;
-        pos += HEADER_AFTER_TAG;
-        let raw = &data[pos..pos + val_len];
-        pos += val_len;
+        // ExifTool: while ($pos + 3 < $dirEnd)
+        while pos + 3 < end {
+            let val_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+            let tag_len = data[pos + 2] as usize;
 
-        // A tag id that is not valid UTF-8 cannot be named; ExifTool works on
-        // bytes but every id it can name is ASCII after the tr/// class filter.
-        let Ok(id) = std::str::from_utf8(tag) else {
-            continue;
-        };
-        let Some(name) = make_name(id) else {
-            continue;
-        };
+            // ExifTool: last if $pos + 8 + $tagLen + $valLen > $dirEnd
+            if pos + 8 + tag_len + val_len > end {
+                break;
+            }
 
-        let value = match qualcomm_tables::FORMATS.get(fmt_code) {
-            Some(&fmt) => read_value(raw, fmt, val_len),
-            // ExifTool keeps the raw bytes for an unknown format code.
-            None => Some(TagValue::Binary(raw.to_vec())),
-        };
-        // A value ExifTool would have left undefined is not stored at all.
-        if let Some(value) = value {
-            out.insert(format!("{GROUP}:{name}"), value);
+            let tag = &data[pos + 3..pos + 3 + tag_len];
+            pos += 3 + tag_len;
+            let fmt_code = data[pos] as usize;
+            pos += HEADER_AFTER_TAG;
+            let raw = &data[pos..pos + val_len];
+            pos += val_len;
+
+            // A tag id that is not valid UTF-8 cannot be named; ExifTool works on
+            // bytes but every id it can name is ASCII after the tr/// class filter.
+            let Ok(id) = std::str::from_utf8(tag) else {
+                continue;
+            };
+            let Some(name) = make_name(id) else {
+                continue;
+            };
+
+            let value = match qualcomm_tables::FORMATS.get(fmt_code) {
+                Some(&fmt) => read_value(raw, fmt, val_len),
+                // ExifTool keeps the raw bytes for an unknown format code.
+                None => Some(TagValue::Binary(raw.to_vec())),
+            };
+            // A value ExifTool would have left undefined is not stored at all.
+            if let Some(value) = value {
+                out.insert(format!("{GROUP}:{name}"), value);
+            }
         }
-    }
-    out
+        out
+    })
 }
 
 #[cfg(test)]

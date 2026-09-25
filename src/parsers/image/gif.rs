@@ -451,207 +451,211 @@ struct GraphicControlExtension {
 
 impl FormatParser for GIFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid GIF signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid GIF signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Basic file information
-        metadata.insert("FileType".to_string(), TagValue::String("GIF".to_string()));
+            // Basic file information
+            metadata.insert("FileType".to_string(), TagValue::String("GIF".to_string()));
 
-        let version = Self::read_version(reader)?;
-        metadata.insert(
-            "GIFVersion".to_string(),
-            TagValue::String(version.to_string()),
-        );
-        // Add GIF: prefixed version for format-specific tagging
-        metadata.insert(
-            "GIF:Version".to_string(),
-            TagValue::String(version.to_string()),
-        );
-
-        // Logical Screen Descriptor fields
-        let lsd = Self::read_logical_screen_descriptor(reader)?;
-
-        metadata.insert(
-            "ImageWidth".to_string(),
-            TagValue::String(lsd.width.to_string()),
-        );
-        metadata.insert(
-            "ImageHeight".to_string(),
-            TagValue::String(lsd.height.to_string()),
-        );
-        // Add GIF: prefixed versions for format-specific tagging
-        metadata.insert("GIF:Width".to_string(), TagValue::Integer(lsd.width as i64));
-        metadata.insert(
-            "GIF:Height".to_string(),
-            TagValue::Integer(lsd.height as i64),
-        );
-
-        // ColorResolutionDepth - ExifTool tag name for bits per primary color
-        metadata.insert(
-            "ColorResolutionDepth".to_string(),
-            TagValue::Integer(lsd.color_resolution as i64),
-        );
-
-        // HasColorMap - ExifTool tag for global color table flag
-        let has_color_map_str = if lsd.global_color_table_flag {
-            "Yes"
-        } else {
-            "No"
-        };
-        metadata.insert(
-            "HasColorMap".to_string(),
-            TagValue::String(has_color_map_str.to_string()),
-        );
-        // Add GIF: prefixed version for format-specific tagging
-        metadata.insert(
-            "GIF:GlobalColorTable".to_string(),
-            TagValue::String(has_color_map_str.to_string()),
-        );
-
-        if lsd.global_color_table_flag {
+            let version = Self::read_version(reader)?;
             metadata.insert(
-                "GlobalColorTableSize".to_string(),
-                TagValue::Integer(lsd.global_color_table_size as i64),
+                "GIFVersion".to_string(),
+                TagValue::String(version.to_string()),
             );
             // Add GIF: prefixed version for format-specific tagging
             metadata.insert(
-                "GIF:ColorTableSize".to_string(),
-                TagValue::Integer(lsd.global_color_table_size as i64),
+                "GIF:Version".to_string(),
+                TagValue::String(version.to_string()),
             );
-            // BitsPerPixel - log2 of color table size
-            let bits_per_pixel = (lsd.global_color_table_size as f64).log2() as i64;
+
+            // Logical Screen Descriptor fields
+            let lsd = Self::read_logical_screen_descriptor(reader)?;
+
             metadata.insert(
-                "BitsPerPixel".to_string(),
-                TagValue::Integer(bits_per_pixel),
+                "ImageWidth".to_string(),
+                TagValue::String(lsd.width.to_string()),
             );
-        }
-
-        // BackgroundColor - ExifTool uses this name (not BackgroundColorIndex)
-        metadata.insert(
-            "BackgroundColor".to_string(),
-            TagValue::Integer(lsd.background_color_index as i64),
-        );
-        // Add GIF: prefixed version for format-specific tagging.
-        //
-        // This MUST carry the same value as the unprefixed key. ExifTool 13.55
-        // reports this tag in the GIF group as a plain index, not as a hex
-        // colour string:
-        //   $ exiftool -G1 -BackgroundColor GIF.gif
-        //   [GIF]  Background Color  : 0
-        // Until 2026-07-26 this insert applied a `format!("#{:02x}", ..)`
-        // transform, so oxidex emitted `BackgroundColor: 0` alongside
-        // `GIF:BackgroundColor: #00`. The tag-comparison harness normalises the
-        // group prefix away and then matched whichever of the two it happened
-        // to visit first: the same source tree reported
-        // `BackgroundColor: exiftool="0" oxidex="#00"` at 22:17 and GIF 35/35
-        // with value_differences=0 at 22:37. Its duplicate_emissions detector
-        // keys on the exact tag string, so two distinct strings each emitted
-        // once scored 0 and the divergence went unreported.
-        metadata.insert(
-            "GIF:BackgroundColor".to_string(),
-            TagValue::Integer(lsd.background_color_index as i64),
-        );
-
-        // PixelAspectRatio - convert from raw value to actual ratio
-        // If raw value is 0, aspect ratio is not given, otherwise: (value + 15) / 64
-        // ExifTool rounds to nearest integer
-        if lsd.pixel_aspect_ratio == 0 {
             metadata.insert(
-                "PixelAspectRatio".to_string(),
-                TagValue::Integer(1), // Default 1:1
+                "ImageHeight".to_string(),
+                TagValue::String(lsd.height.to_string()),
             );
-        } else {
-            let ratio = ((lsd.pixel_aspect_ratio as f64 + 15.0) / 64.0).round() as i64;
-            metadata.insert("PixelAspectRatio".to_string(), TagValue::Integer(ratio));
-        }
-
-        // Scan for extensions and image blocks
-        let scan_result = Self::scan_blocks(reader)?;
-
-        metadata.insert(
-            "FrameCount".to_string(),
-            TagValue::Integer(scan_result.frame_count as i64),
-        );
-        // Add GIF: prefixed version for format-specific tagging
-        metadata.insert(
-            "GIF:FrameCount".to_string(),
-            TagValue::Integer(scan_result.frame_count as i64),
-        );
-
-        if scan_result.is_animated {
-            metadata.insert("Animation".to_string(), TagValue::String("yes".to_string()));
-        }
-
-        if let Some(comment) = scan_result.comment {
-            metadata.insert("Comment".to_string(), TagValue::String(comment));
-        }
-
-        if let Some(delay_time) = scan_result.delay_time {
+            // Add GIF: prefixed versions for format-specific tagging
+            metadata.insert("GIF:Width".to_string(), TagValue::Integer(lsd.width as i64));
             metadata.insert(
-                "FrameDelay".to_string(),
-                TagValue::String(format!("{} cs", delay_time)),
+                "GIF:Height".to_string(),
+                TagValue::Integer(lsd.height as i64),
             );
-        }
 
-        if let Some(disposal_method) = scan_result.disposal_method {
-            let disposal_str = match disposal_method {
-                0 => "Unspecified",
-                1 => "Do not dispose",
-                2 => "Restore to background",
-                3 => "Restore to previous",
-                _ => "Unknown",
+            // ColorResolutionDepth - ExifTool tag name for bits per primary color
+            metadata.insert(
+                "ColorResolutionDepth".to_string(),
+                TagValue::Integer(lsd.color_resolution as i64),
+            );
+
+            // HasColorMap - ExifTool tag for global color table flag
+            let has_color_map_str = if lsd.global_color_table_flag {
+                "Yes"
+            } else {
+                "No"
             };
             metadata.insert(
-                "DisposalMethod".to_string(),
-                TagValue::String(disposal_str.to_string()),
+                "HasColorMap".to_string(),
+                TagValue::String(has_color_map_str.to_string()),
             );
-        }
-
-        if scan_result.has_transparency {
+            // Add GIF: prefixed version for format-specific tagging
             metadata.insert(
-                "HasTransparency".to_string(),
-                TagValue::String("yes".to_string()),
+                "GIF:GlobalColorTable".to_string(),
+                TagValue::String(has_color_map_str.to_string()),
             );
-            if let Some(color) = scan_result.transparent_color {
+
+            if lsd.global_color_table_flag {
                 metadata.insert(
-                    "TransparentColorIndex".to_string(),
-                    TagValue::Integer(color as i64),
+                    "GlobalColorTableSize".to_string(),
+                    TagValue::Integer(lsd.global_color_table_size as i64),
+                );
+                // Add GIF: prefixed version for format-specific tagging
+                metadata.insert(
+                    "GIF:ColorTableSize".to_string(),
+                    TagValue::Integer(lsd.global_color_table_size as i64),
+                );
+                // BitsPerPixel - log2 of color table size
+                let bits_per_pixel = (lsd.global_color_table_size as f64).log2() as i64;
+                metadata.insert(
+                    "BitsPerPixel".to_string(),
+                    TagValue::Integer(bits_per_pixel),
                 );
             }
-        }
 
-        // Parse ICC profile if present
-        if let Some(icc_data) = scan_result.icc_profile {
-            if icc_data.len() >= 128 {
-                match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
-                    Ok(icc_tags) => {
-                        crate::parsers::icc::insert_icc_tags(&mut metadata, icc_tags);
+            // BackgroundColor - ExifTool uses this name (not BackgroundColorIndex)
+            metadata.insert(
+                "BackgroundColor".to_string(),
+                TagValue::Integer(lsd.background_color_index as i64),
+            );
+            // Add GIF: prefixed version for format-specific tagging.
+            //
+            // This MUST carry the same value as the unprefixed key. ExifTool 13.55
+            // reports this tag in the GIF group as a plain index, not as a hex
+            // colour string:
+            //   $ exiftool -G1 -BackgroundColor GIF.gif
+            //   [GIF]  Background Color  : 0
+            // Until 2026-07-26 this insert applied a `format!("#{:02x}", ..)`
+            // transform, so oxidex emitted `BackgroundColor: 0` alongside
+            // `GIF:BackgroundColor: #00`. The tag-comparison harness normalises the
+            // group prefix away and then matched whichever of the two it happened
+            // to visit first: the same source tree reported
+            // `BackgroundColor: exiftool="0" oxidex="#00"` at 22:17 and GIF 35/35
+            // with value_differences=0 at 22:37. Its duplicate_emissions detector
+            // keys on the exact tag string, so two distinct strings each emitted
+            // once scored 0 and the divergence went unreported.
+            metadata.insert(
+                "GIF:BackgroundColor".to_string(),
+                TagValue::Integer(lsd.background_color_index as i64),
+            );
+
+            // PixelAspectRatio - convert from raw value to actual ratio
+            // If raw value is 0, aspect ratio is not given, otherwise: (value + 15) / 64
+            // ExifTool rounds to nearest integer
+            if lsd.pixel_aspect_ratio == 0 {
+                metadata.insert(
+                    "PixelAspectRatio".to_string(),
+                    TagValue::Integer(1), // Default 1:1
+                );
+            } else {
+                let ratio = ((lsd.pixel_aspect_ratio as f64 + 15.0) / 64.0).round() as i64;
+                metadata.insert("PixelAspectRatio".to_string(), TagValue::Integer(ratio));
+            }
+
+            // Scan for extensions and image blocks
+            let scan_result = Self::scan_blocks(reader)?;
+
+            metadata.insert(
+                "FrameCount".to_string(),
+                TagValue::Integer(scan_result.frame_count as i64),
+            );
+            // Add GIF: prefixed version for format-specific tagging
+            metadata.insert(
+                "GIF:FrameCount".to_string(),
+                TagValue::Integer(scan_result.frame_count as i64),
+            );
+
+            if scan_result.is_animated {
+                metadata.insert("Animation".to_string(), TagValue::String("yes".to_string()));
+            }
+
+            if let Some(comment) = scan_result.comment {
+                metadata.insert("Comment".to_string(), TagValue::String(comment));
+            }
+
+            if let Some(delay_time) = scan_result.delay_time {
+                metadata.insert(
+                    "FrameDelay".to_string(),
+                    TagValue::String(format!("{} cs", delay_time)),
+                );
+            }
+
+            if let Some(disposal_method) = scan_result.disposal_method {
+                let disposal_str = match disposal_method {
+                    0 => "Unspecified",
+                    1 => "Do not dispose",
+                    2 => "Restore to background",
+                    3 => "Restore to previous",
+                    _ => "Unknown",
+                };
+                metadata.insert(
+                    "DisposalMethod".to_string(),
+                    TagValue::String(disposal_str.to_string()),
+                );
+            }
+
+            if scan_result.has_transparency {
+                metadata.insert(
+                    "HasTransparency".to_string(),
+                    TagValue::String("yes".to_string()),
+                );
+                if let Some(color) = scan_result.transparent_color {
+                    metadata.insert(
+                        "TransparentColorIndex".to_string(),
+                        TagValue::Integer(color as i64),
+                    );
+                }
+            }
+
+            // Parse ICC profile if present
+            if let Some(icc_data) = scan_result.icc_profile {
+                if icc_data.len() >= 128 {
+                    match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
+                        Ok(icc_tags) => {
+                            crate::parsers::icc::insert_icc_tags(&mut metadata, icc_tags);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse ICC profile in GIF: {}", e);
+                        }
                     }
+                }
+            }
+
+            // Parse XMP data if present
+            if let Some(xmp_bytes) = scan_result.xmp_data {
+                match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+                    &mut metadata,
+                    &xmp_bytes,
+                    false,
+                ) {
+                    Ok(_) => {}
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse ICC profile in GIF: {}", e);
+                        eprintln!("Warning: Failed to parse XMP in GIF: {}", e);
                     }
                 }
             }
-        }
 
-        // Parse XMP data if present
-        if let Some(xmp_bytes) = scan_result.xmp_data {
-            match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
-                &mut metadata,
-                &xmp_bytes,
-                false,
-            ) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse XMP in GIF: {}", e);
-                }
-            }
-        }
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

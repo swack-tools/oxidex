@@ -31,56 +31,60 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
 /// ExifTool sets it only for JPEG when reading; without it ProcessVivo returns
 /// 0 and the walk stops at a Vivo trailer.
 pub fn parse_trailer_chain(file: &[u8], jpeg_trailer_start: Option<usize>) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let mut end = file.len();
-    while end > 0 {
-        let window = &file[end.saturating_sub(IDENTIFY_WINDOW)..end];
-        let start = if is_unsized_trailer(window) {
-            None
-        } else if window.ends_with(b"cbipcbbl") {
-            photo_mechanic_start(file, end)
-        } else if window.starts_with(b"CANON OPTIONAL DATA\0") {
-            None
-        } else if let Some(start) = crate::parsers::mie::trailer_start_ending_at(file, end) {
-            Some(start)
-        } else if window.ends_with(b"\0\0QDIOBS") || window.ends_with(DIRECT_SEFT) {
-            let samsung = parse_samsung_trailer(file, end);
-            // `Samsung::Trailer` has `PRIORITY => 0`: the first one wins.
-            if !metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
-                metadata.merge_winners_keeping_group1(&samsung.metadata);
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let mut end = file.len();
+        while end > 0 {
+            let window = &file[end.saturating_sub(IDENTIFY_WINDOW)..end];
+            let start = if is_unsized_trailer(window) {
+                None
+            } else if window.ends_with(b"cbipcbbl") {
+                photo_mechanic_start(file, end)
+            } else if window.starts_with(b"CANON OPTIONAL DATA\0") {
+                None
+            } else if let Some(start) = crate::parsers::mie::trailer_start_ending_at(file, end) {
+                Some(start)
+            } else if window.ends_with(b"\0\0QDIOBS") || window.ends_with(DIRECT_SEFT) {
+                let samsung = parse_samsung_trailer(file, end);
+                // `Samsung::Trailer` has `PRIORITY => 0`: the first one wins.
+                if !metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
+                    metadata.merge_winners_keeping_group1(&samsung.metadata);
+                }
+                samsung.data_pos
+            } else if crate::parsers::vivo::has_footer_at(file, end) {
+                jpeg_trailer_start
+                    .and_then(|trailer_start| {
+                        crate::parsers::vivo::process_vivo(file, end, trailer_start)
+                    })
+                    .map(|vivo| {
+                        if let Some(json) = vivo.json
+                            && !metadata.contains_key("Trailer:JSONInfo")
+                        {
+                            metadata.insert_with_group1(
+                                "Trailer:JSONInfo",
+                                TagValue::new_string(json),
+                                "Vivo",
+                            );
+                        }
+                        vivo.start
+                    })
+            } else {
+                None
+            };
+            // `last unless $result > 0 and $dirLen`, then the JPEG-only stop once
+            // a trailer starts at or before TrailerStart.
+            let Some(start) = start.filter(|start| *start < end) else {
+                break;
+            };
+            if jpeg_trailer_start.is_some_and(|trailer_start| start <= trailer_start) {
+                break;
             }
-            samsung.data_pos
-        } else if crate::parsers::vivo::has_footer_at(file, end) {
-            jpeg_trailer_start
-                .and_then(|trailer_start| {
-                    crate::parsers::vivo::process_vivo(file, end, trailer_start)
-                })
-                .map(|vivo| {
-                    if let Some(json) = vivo.json
-                        && !metadata.contains_key("Trailer:JSONInfo")
-                    {
-                        metadata.insert_with_group1(
-                            "Trailer:JSONInfo",
-                            TagValue::new_string(json),
-                            "Vivo",
-                        );
-                    }
-                    vivo.start
-                })
-        } else {
-            None
-        };
-        // `last unless $result > 0 and $dirLen`, then the JPEG-only stop once
-        // a trailer starts at or before TrailerStart.
-        let Some(start) = start.filter(|start| *start < end) else {
-            break;
-        };
-        if jpeg_trailer_start.is_some_and(|trailer_start| start <= trailer_start) {
-            break;
+            end = start;
         }
-        end = start;
-    }
-    metadata
+        metadata
+    })
 }
 
 /// IdentifyTrailer types checked before PhotoMechanic whose length this walk

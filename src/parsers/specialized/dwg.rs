@@ -125,51 +125,55 @@ impl DWGParser {
 
 impl FormatParser for DWGParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid DWG signature"));
-        }
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("DWG".to_string()));
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid DWG signature"));
+            }
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("DWG".to_string()));
 
-        // Extract version information
-        let version = Self::read_version(reader)?;
-        metadata.insert("DWGVersion".to_string(), TagValue::String(version.clone()));
+            // Extract version information
+            let version = Self::read_version(reader)?;
+            metadata.insert("DWGVersion".to_string(), TagValue::String(version.clone()));
 
-        // Map to friendly release name
-        let release = Self::map_version_to_release(&version);
-        metadata.insert(
-            "AutoCADRelease".to_string(),
-            TagValue::String(release.to_string()),
-        );
-
-        // Check for encryption
-        if let Ok(encrypted) = Self::is_encrypted(reader)
-            && encrypted
-        {
-            metadata.insert("Encrypted".to_string(), TagValue::String("Yes".to_string()));
-        }
-
-        // Extract codepage if available
-        if let Ok(Some(codepage)) = Self::read_codepage(reader) {
+            // Map to friendly release name
+            let release = Self::map_version_to_release(&version);
             metadata.insert(
-                "CodePage".to_string(),
-                TagValue::String(codepage.to_string()),
+                "AutoCADRelease".to_string(),
+                TagValue::String(release.to_string()),
             );
-        }
 
-        // Extract preview image information
-        if let Ok(Some((offset, size))) = Self::read_preview_info(reader) {
-            metadata.insert(
-                "PreviewImageOffset".to_string(),
-                TagValue::String(offset.to_string()),
-            );
-            metadata.insert(
-                "PreviewImageSize".to_string(),
-                TagValue::String(size.to_string()),
-            );
-        }
+            // Check for encryption
+            if let Ok(encrypted) = Self::is_encrypted(reader)
+                && encrypted
+            {
+                metadata.insert("Encrypted".to_string(), TagValue::String("Yes".to_string()));
+            }
 
-        Ok(metadata)
+            // Extract codepage if available
+            if let Ok(Some(codepage)) = Self::read_codepage(reader) {
+                metadata.insert(
+                    "CodePage".to_string(),
+                    TagValue::String(codepage.to_string()),
+                );
+            }
+
+            // Extract preview image information
+            if let Ok(Some((offset, size))) = Self::read_preview_info(reader) {
+                metadata.insert(
+                    "PreviewImageOffset".to_string(),
+                    TagValue::String(offset.to_string()),
+                );
+                metadata.insert(
+                    "PreviewImageSize".to_string(),
+                    TagValue::String(size.to_string()),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

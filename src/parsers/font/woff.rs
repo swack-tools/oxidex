@@ -208,95 +208,99 @@ impl WOFFParser {
 
 impl FormatParser for WOFFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid WOFF signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Basic file info
-        metadata.insert("FileType".to_string(), TagValue::String("WOFF".to_string()));
-
-        let flavor = Self::read_flavor(reader)?;
-        metadata.insert("FontFlavor".to_string(), TagValue::String(flavor));
-
-        // Parse WOFF header
-        let (header, priv_offset, _priv_length) = Self::parse_header(reader)?;
-        metadata.insert(
-            "NumTables".to_string(),
-            TagValue::String(header.num_tables.to_string()),
-        );
-        metadata.insert(
-            "TotalSfntSize".to_string(),
-            TagValue::String(header.total_sfnt_size.to_string()),
-        );
-        metadata.insert(
-            "FontVersion".to_string(),
-            TagValue::String(format!("{}.{}", header.major_version, header.minor_version)),
-        );
-
-        // Calculate compression ratio
-        let file_size = reader.size();
-        if header.total_sfnt_size > 0 {
-            let ratio = (file_size as f64 / header.total_sfnt_size as f64) * 100.0;
-            metadata.insert(
-                "CompressionRatio".to_string(),
-                TagValue::String(format!("{:.1}%", ratio)),
-            );
-        }
-
-        // Check for metadata and private data blocks
-        metadata.insert(
-            "HasMetadata".to_string(),
-            TagValue::String(if header.meta_offset > 0 { "Yes" } else { "No" }.to_string()),
-        );
-        metadata.insert(
-            "HasPrivateData".to_string(),
-            TagValue::String(if priv_offset > 0 { "Yes" } else { "No" }.to_string()),
-        );
-
-        // Extract XML metadata if present
-        if header.meta_offset > 0 && header.meta_length > 0 {
-            let meta_offset = header.meta_offset as u64;
-            let meta_length = header.meta_length as usize;
-
-            if reader.size() >= meta_offset + meta_length as u64
-                && let Ok(compressed) = reader.read(meta_offset, meta_length)
-                && let Ok(decompressed) = Self::decompress_zlib(compressed)
-                && let Ok(xml_str) = String::from_utf8(decompressed)
-            {
-                let xml_metadata = Self::parse_xml_metadata(&xml_str);
-                for (key, value) in xml_metadata {
-                    metadata.insert(key, TagValue::String(value));
-                }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid WOFF signature"));
             }
-        }
 
-        // Try to extract font names from name table
-        if let Ok(Some(name_table)) = Self::find_table(reader, header.num_tables, b"name") {
-            let table_offset = name_table.offset as u64;
-            let table_length = name_table.comp_length as usize;
+            let mut metadata = MetadataMap::new();
 
-            if reader.size() >= table_offset + table_length as u64
-                && let Ok(compressed) = reader.read(table_offset, table_length)
-            {
-                // Try decompression if compressed
-                let name_data = if name_table.comp_length < name_table.orig_length {
-                    Self::decompress_zlib(compressed).unwrap_or_else(|_| compressed.to_vec())
-                } else {
-                    compressed.to_vec()
-                };
+            // Basic file info
+            metadata.insert("FileType".to_string(), TagValue::String("WOFF".to_string()));
 
-                let names = Self::extract_names_from_table(&name_data);
-                for (key, value) in names {
-                    if !metadata.contains_key(&key) {
+            let flavor = Self::read_flavor(reader)?;
+            metadata.insert("FontFlavor".to_string(), TagValue::String(flavor));
+
+            // Parse WOFF header
+            let (header, priv_offset, _priv_length) = Self::parse_header(reader)?;
+            metadata.insert(
+                "NumTables".to_string(),
+                TagValue::String(header.num_tables.to_string()),
+            );
+            metadata.insert(
+                "TotalSfntSize".to_string(),
+                TagValue::String(header.total_sfnt_size.to_string()),
+            );
+            metadata.insert(
+                "FontVersion".to_string(),
+                TagValue::String(format!("{}.{}", header.major_version, header.minor_version)),
+            );
+
+            // Calculate compression ratio
+            let file_size = reader.size();
+            if header.total_sfnt_size > 0 {
+                let ratio = (file_size as f64 / header.total_sfnt_size as f64) * 100.0;
+                metadata.insert(
+                    "CompressionRatio".to_string(),
+                    TagValue::String(format!("{:.1}%", ratio)),
+                );
+            }
+
+            // Check for metadata and private data blocks
+            metadata.insert(
+                "HasMetadata".to_string(),
+                TagValue::String(if header.meta_offset > 0 { "Yes" } else { "No" }.to_string()),
+            );
+            metadata.insert(
+                "HasPrivateData".to_string(),
+                TagValue::String(if priv_offset > 0 { "Yes" } else { "No" }.to_string()),
+            );
+
+            // Extract XML metadata if present
+            if header.meta_offset > 0 && header.meta_length > 0 {
+                let meta_offset = header.meta_offset as u64;
+                let meta_length = header.meta_length as usize;
+
+                if reader.size() >= meta_offset + meta_length as u64
+                    && let Ok(compressed) = reader.read(meta_offset, meta_length)
+                    && let Ok(decompressed) = Self::decompress_zlib(compressed)
+                    && let Ok(xml_str) = String::from_utf8(decompressed)
+                {
+                    let xml_metadata = Self::parse_xml_metadata(&xml_str);
+                    for (key, value) in xml_metadata {
                         metadata.insert(key, TagValue::String(value));
                     }
                 }
             }
-        }
 
-        Ok(metadata)
+            // Try to extract font names from name table
+            if let Ok(Some(name_table)) = Self::find_table(reader, header.num_tables, b"name") {
+                let table_offset = name_table.offset as u64;
+                let table_length = name_table.comp_length as usize;
+
+                if reader.size() >= table_offset + table_length as u64
+                    && let Ok(compressed) = reader.read(table_offset, table_length)
+                {
+                    // Try decompression if compressed
+                    let name_data = if name_table.comp_length < name_table.orig_length {
+                        Self::decompress_zlib(compressed).unwrap_or_else(|_| compressed.to_vec())
+                    } else {
+                        compressed.to_vec()
+                    };
+
+                    let names = Self::extract_names_from_table(&name_data);
+                    for (key, value) in names {
+                        if !metadata.contains_key(&key) {
+                            metadata.insert(key, TagValue::String(value));
+                        }
+                    }
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
