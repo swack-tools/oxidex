@@ -227,7 +227,10 @@ fn exif_rows(map: &MetadataMap) -> MetadataMap {
 /// the chunk untouched, so an unrelated edit (`-XMP-dc:Title=`, a `PNG:`
 /// text key) must leave every EXIF byte as it was.
 fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[String]) -> bool {
-    removed.iter().any(|key| is_exif_key(key))
+    // A decoded maker-note row (`Canon:MacroMode`) left out of the map is an
+    // EXIF change too, whatever its family-1 group.
+    !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
+        || removed.iter().any(|key| is_exif_key(key))
         || metadata
             .iter()
             .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
@@ -254,6 +257,8 @@ fn rewrite_exif_payload(
     baseline: &MetadataMap,
     removed: &[String],
 ) -> Result<Vec<u8>> {
+    let full_baseline = baseline;
+    let full_desired = metadata;
     let desired = exif_rows(metadata);
     let baseline = exif_rows(baseline);
     let removed: Vec<String> = removed.iter().filter(|k| is_exif_key(k)).cloned().collect();
@@ -288,6 +293,14 @@ fn rewrite_exif_payload(
         &baseline,
         &desired,
         &removed,
+        crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+    )?;
+    // A dropped row this writer cannot delete one by one (a maker-note,
+    // IFD1 or InteropIFD row) is gone, or the write is refused.
+    crate::writers::exif_surgical::verify_dropped_rows_gone(
+        full_baseline,
+        full_desired,
+        &payload,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
     Ok(payload)
@@ -430,18 +443,23 @@ fn plan_exif(
             .iter()
             .map(|block| block.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(block)),
     );
+    // A dropped maker-note row is never a no-op: the write goes on to the
+    // post-condition (`verify_dropped_rows_gone`), which refuses it.
+    let drops_makernote_rows =
+        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty();
     if !exif_changed(metadata, baseline, removed)
-        || crate::writers::exif_surgical::exif_request_is_no_op(
-            &blocks,
-            &exif_blocks,
-            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
-            // Pinned ExifTool 13.59 keeps an empty eXIf chunk ("1 image
-            // files unchanged"); it drops only an empty JPEG APP1.
-            false,
-            baseline,
-            metadata,
-            removed,
-        )
+        || !drops_makernote_rows
+            && crate::writers::exif_surgical::exif_request_is_no_op(
+                &blocks,
+                &exif_blocks,
+                crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                // Pinned ExifTool 13.59 keeps an empty eXIf chunk ("1 image
+                // files unchanged"); it drops only an empty JPEG APP1.
+                false,
+                baseline,
+                metadata,
+                removed,
+            )
     {
         return Ok(ExifFate::Carry);
     }

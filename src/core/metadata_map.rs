@@ -556,6 +556,13 @@ impl MetadataMap {
             .set_winner_display_value(&key, TagValue::new_string(value.into()));
     }
 
+    /// The family-0 group of `key`'s winning occurrence (`MakerNotes` for a
+    /// row a maker-note decoder produced, whatever its family-1 group, e.g.
+    /// `Canon:MacroMode`), if the key is present.
+    pub(crate) fn group0_of(&self, key: &str) -> Option<&str> {
+        Some(&*self.sink.winner_occurrence(key)?.group0)
+    }
+
     /// Returns the full-precision value form attached to `key`, if any.
     pub(crate) fn value_form(&self, key: &str) -> Option<&str> {
         self.sink

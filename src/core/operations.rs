@@ -975,7 +975,21 @@ pub(crate) fn write_metadata_with_removals(
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // A maker-note row left out of the map is a deletion this writer
+        // cannot make (`exif_surgical::dropped_makernote_rows`); nor is such
+        // a request a no-op.
+        let drops_makernote_rows = !whole_clear
+            && !crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
+                .is_empty();
+        if !whole_clear {
+            crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                &crate::writers::exif_surgical::dropped_makernote_rows(
+                    &original, metadata, removed,
+                ),
+            )?;
+        }
         if !whole_clear
+            && !drops_makernote_rows
             && crate::writers::exif_surgical::exif_request_is_no_op(
                 &[file_bytes],
                 &[file_bytes],
@@ -1002,6 +1016,12 @@ pub(crate) fn write_metadata_with_removals(
                 &original,
                 metadata,
                 removed,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+            crate::writers::exif_surgical::verify_dropped_rows_gone(
+                &original,
+                metadata,
+                &out,
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
             )?;
         }
@@ -1032,7 +1052,18 @@ pub(crate) fn write_metadata_with_removals(
                 Some(stripped) => (stripped, stripped.0),
                 None => (&reader, file_bytes),
             };
+            let drops_makernote_rows = !whole_clear
+                && !crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
+                    .is_empty();
+            if !whole_clear {
+                crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                    &crate::writers::exif_surgical::dropped_makernote_rows(
+                        &original, metadata, removed,
+                    ),
+                )?;
+            }
             if !whole_clear
+                && !drops_makernote_rows
                 && let Ok(payloads) = crate::writers::exif_surgical::jpeg_exif_payloads(file_bytes)
             {
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
@@ -1082,6 +1113,12 @@ pub(crate) fn write_metadata_with_removals(
                     removed,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
+                crate::writers::exif_surgical::verify_dropped_rows_gone(
+                    &original,
+                    metadata,
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                )?;
                 if let (Some(before), Some(after), Some(header)) = (
                     before.as_deref(),
                     after.first(),
@@ -1116,6 +1153,13 @@ pub(crate) fn write_metadata_with_removals(
                 Some(baseline) => baseline,
                 None => crate::parsers::png::parse_png_metadata(&reader).unwrap_or_default(),
             };
+            if !whole_clear {
+                crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                    &crate::writers::exif_surgical::dropped_makernote_rows(
+                        &baseline, metadata, removed,
+                    ),
+                )?;
+            }
             write_png_metadata_with_removals(path, &reader, metadata, &baseline, removed)?
         }
         FileFormat::PDF => {

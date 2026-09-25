@@ -1849,6 +1849,25 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
     Ok(scan)
 }
 
+/// The first value an IFD record holds inline (`value` is its last 4
+/// bytes), decoded by TIFF type as the reader's `read_unsigned_field` does:
+/// BYTE, SHORT, LONG, SLONG or IFD. Any other type keeps the former 4-byte
+/// reading. A pointer or length stored as a SHORT occupies the first two
+/// bytes of the field, so reading all four as a LONG is right only in
+/// little-endian order, and only by luck.
+pub(crate) fn inline_unsigned(
+    field_type: u16,
+    count: u32,
+    value: &[u8],
+    order: ByteOrder,
+) -> usize {
+    match (field_type, count) {
+        (1, 1..) => value[0] as usize,
+        (3, 1..) => read_u16(&value[0..2], order) as usize,
+        _ => read_u32(&value[0..4], order) as usize,
+    }
+}
+
 /// Pointers discovered while walking one IFD.
 #[derive(Default)]
 struct WalkResult {
@@ -1885,28 +1904,33 @@ fn walk_ifd(
         let tag_id = read_u16(&entry[0..2], byte_order);
         let field_type = read_u16(&entry[2..4], byte_order);
         let count = read_u32(&entry[4..8], byte_order);
+        // The out-of-line offset of a value longer than 4 bytes is always a
+        // 4-byte offset; a pointer or length held inline is decoded by its
+        // TIFF type (`inline_unsigned`): a big-endian SHORT
+        // JPEGInterchangeFormat `00 dc 00 00` is 0xdc, not 0x00dc0000.
         let value_or_offset = read_u32(&entry[8..12], byte_order) as usize;
+        let inline = inline_unsigned(field_type, count, &entry[8..12], byte_order);
 
         // Structural pointers: record and continue (never stored as entries)
         match (which, tag_id) {
             (IfdKind::Ifd0, EXIF_IFD_POINTER) => {
-                result.exif_pointer = Some(value_or_offset);
+                result.exif_pointer = Some(inline);
                 continue;
             }
             (IfdKind::Ifd0, GPS_IFD_POINTER) => {
-                result.gps_pointer = Some(value_or_offset);
+                result.gps_pointer = Some(inline);
                 continue;
             }
             (IfdKind::ExifIfd, INTEROP_POINTER) => {
-                result.interop_pointer = Some(value_or_offset);
+                result.interop_pointer = Some(inline);
                 continue;
             }
             (IfdKind::Ifd1, THUMBNAIL_OFFSET) => {
-                result.thumb_offset = Some(value_or_offset);
+                result.thumb_offset = Some(inline);
                 continue;
             }
             (IfdKind::Ifd1, THUMBNAIL_LENGTH) => {
-                result.thumb_length = Some(value_or_offset);
+                result.thumb_length = Some(inline);
                 continue;
             }
             _ => {}
@@ -2677,7 +2701,15 @@ fn ifd_chain_beyond_ifd1(tiff: &[u8], magics: &[u16]) -> Option<IfdChain> {
             let value = read_u32(&record[8..12], order) as usize;
             dir.located
                 .push(if size > 4 { locate(value, size) } else { None });
-            values.push((tag, value));
+            values.push((
+                tag,
+                inline_unsigned(
+                    read_u16(&record[2..4], order),
+                    count as u32,
+                    &record[8..12],
+                    order,
+                ),
+            ));
             dir.records.push(record);
         }
         for (offset_tag, length_tag) in [(0x0201u16, 0x0202u16), (0x0111, 0x0117)] {
@@ -2874,6 +2906,164 @@ fn key_addresses(key: &str) -> Vec<(IfdKind, u16)> {
         _ => &[],
     };
     ifds.iter().map(|ifd| (*ifd, tag_id)).collect()
+}
+
+/// The family-1 groups of pinned ExifTool 13.59's maker-note tables: every
+/// table whose `GROUPS` has family 0 `MakerNotes`, with its family 1 (or
+/// module name) and each tag's `Groups => { 1 => ... }` override --
+/// `LoadAllTables` over `%allTables`, less `GPS` (a maker-note tag's
+/// override that names the EXIF GPS group). The reader keys a decoded
+/// maker-note row by these (`Canon:MacroMode`, `Pentax:AEAperture`), and
+/// its occurrence's family-0 label is not reliably `MakerNotes` (`Canon`).
+const MAKERNOTE_GROUPS: &[&str] = &[
+    "AdobeDNG",
+    "Apple",
+    "CIFF",
+    "Canon",
+    "CanonCustom",
+    "CanonRaw",
+    "Casio",
+    "DJI",
+    "FLIR",
+    "FujiFilm",
+    "GE",
+    "Google",
+    "HP",
+    "HTC",
+    "JVC",
+    "KDC_IFD",
+    "Kodak",
+    "KodakIFD",
+    "KyoceraRaw",
+    "LeafSubIFD",
+    "Leica",
+    "MakerNotes",
+    "MakerUnknown",
+    "Microsoft",
+    "Minolta",
+    "MinoltaRaw",
+    "Motorola",
+    "Nikon",
+    "NikonCapture",
+    "NikonCustom",
+    "NikonScan",
+    "NikonSettings",
+    "Nintendo",
+    "Olympus",
+    "Panasonic",
+    "Pentax",
+    "PhaseOne",
+    "PreviewIFD",
+    "Qualcomm",
+    "Reconyx",
+    "Ricoh",
+    "SR2",
+    "SR2DataIFD",
+    "SR2SubIFD",
+    "Samsung",
+    "Sanyo",
+    "Sigma",
+    "Sony",
+    "SonyIDC",
+];
+
+/// Whether `key` of `baseline` is a row a maker-note decoder produced: its
+/// family-1 group is a maker-note group ([`MAKERNOTE_GROUPS`]) or its
+/// occurrence's family-0 group is `MakerNotes`.
+fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
+    key.split_once(':')
+        .is_some_and(|(group, _)| MAKERNOTE_GROUPS.contains(&group))
+        || baseline.group0_of(key) == Some("MakerNotes")
+}
+
+/// The maker-note rows of `baseline` a write drops from the map without
+/// deleting the MakerNote itself: `read_metadata`, `map.remove(
+/// "Canon:MacroMode")`, `write_metadata`. A row missing from a map read
+/// from the file is a deletion; no writer here can delete one decoded
+/// maker-note tag -- the MakerNote is carried byte-for-byte -- so the write
+/// used to report success with the tag still in the file. Only removing
+/// the whole MakerNote (`MakerNotes:All`, `ExifIFD:All`, `IFD0:All` /
+/// `EXIF:All`, as `removed` names them) deletes such rows.
+pub(crate) fn dropped_makernote_rows(
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Vec<String> {
+    let deletes_makernote = removed.iter().any(|key| {
+        matches!(
+            group_removal(key),
+            Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd | GroupRemoval::Carrier)
+        )
+    });
+    if deletes_makernote {
+        return Vec::new();
+    }
+    baseline
+        .keys()
+        .filter(|key| !desired.contains_key(key.as_str()) && is_makernote_row(baseline, key))
+        .cloned()
+        .collect()
+}
+
+/// The refusal for [`dropped_makernote_rows`]: exit 1, nothing written.
+pub(crate) fn refuse_dropped_makernote_rows(dropped: &[String]) -> Result<()> {
+    match dropped.first() {
+        None => Ok(()),
+        Some(key) => Err(ExifToolError::unsupported_format(format!(
+            "Deleting '{key}' is not supported: it is decoded from the MakerNote, \
+             which this writer carries byte-for-byte and cannot delete one tag of \
+             (remove the whole MakerNote with MakerNotes:All instead); nothing was \
+             written"
+        ))),
+    }
+}
+
+/// Post-condition for rows a write drops from the map that this writer
+/// cannot delete one by one -- a maker-note row, an IFD1 or InteropIFD row:
+/// each dropped row must be gone from `output`, i.e. no entry is left at
+/// its address (the MakerNote blob for a maker-note row). `verify_exif_write`
+/// looks only at the entries a key addresses, and skipped maker-note rows
+/// altogether, so a dropped decoded row with its blob kept passed.
+pub(crate) fn verify_dropped_rows_gone(
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    output: &[u8],
+    magics: &[u16],
+) -> Result<()> {
+    let dropped: Vec<&String> = baseline
+        .keys()
+        .filter(|key| !desired.contains_key(key.as_str()))
+        .filter(|key| {
+            is_makernote_row(baseline, key)
+                || key.starts_with("IFD1:")
+                || key.starts_with("InteropIFD:")
+        })
+        .collect();
+    if dropped.is_empty() || output.is_empty() {
+        return Ok(());
+    }
+    let after = scan_entries_with_magics(output, magics)?;
+    let present = |ifd: IfdKind, tag_id: u16| {
+        after
+            .entries
+            .iter()
+            .any(|entry| entry.ifd == ifd && entry.tag_id == tag_id)
+    };
+    for key in dropped {
+        let addresses = if is_makernote_row(baseline, key) {
+            vec![(IfdKind::ExifIfd, MAKERNOTE)]
+        } else {
+            key_addresses(key)
+        };
+        if let Some((ifd, tag_id)) = addresses.into_iter().find(|&(ifd, id)| present(ifd, id)) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "EXIF write verification failed: '{key}' was dropped from the map but \
+                 {} tag 0x{tag_id:04X} is still present; nothing was written",
+                ifd.prefix()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Post-condition of an EXIF write, checked on the produced payload before
@@ -4863,6 +5053,57 @@ mod tests {
             err.to_string().contains("IFD1:PanasonicTitle"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn short_thumbnail_pointers_are_decoded_by_type_and_their_loss_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let w16 = |v: u16| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            let w32 = |v: u32| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            // A SHORT inline value: the first two bytes, the rest zero.
+            let short = |v: u16| [w16(v).as_slice(), &[0, 0]].concat();
+            let entry = |tag: u16, typ: u16, value: &[u8]| {
+                [w16(tag).as_slice(), &w16(typ), &w32(1), value].concat()
+            };
+            // IFD0 {ImageWidth 7} at 8 -> IFD1 {Compression 6, thumbnail
+            // offset 68 and length 4, both SHORT} at 26; thumbnail at 68.
+            let mut t = match bo {
+                ByteOrder::LittleEndian => b"II".to_vec(),
+                ByteOrder::BigEndian => b"MM".to_vec(),
+            };
+            t.extend(w16(42));
+            t.extend(w32(8));
+            t.extend(w16(1));
+            t.extend(entry(0x0100, 4, &w32(7)));
+            t.extend(w32(26));
+            t.extend(w16(3));
+            t.extend(entry(0x0103, 3, &short(6)));
+            t.extend(entry(THUMBNAIL_OFFSET, 3, &short(68)));
+            t.extend(entry(THUMBNAIL_LENGTH, 3, &short(4)));
+            t.extend(w32(0));
+            assert_eq!(t.len(), 68);
+            t.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+            let scan = scan_exif_entries(&t).unwrap();
+            assert_eq!(
+                scan.thumbnail.as_deref(),
+                Some(&[0xFF, 0xD8, 0xFF, 0xD9][..]),
+                "{bo:?}"
+            );
+            // The verifier's thumbnail-survival check reads the pair the
+            // same way, so an output that lost IFD1 is refused.
+            let empty = MetadataMap::new();
+            let mut lost = t[..26].to_vec();
+            lost[22..26].copy_from_slice(&w32(0));
+            let err = verify_exif_write(Some(&t), &lost, &empty, &empty, &[], EXIF_BLOCK_MAGICS)
+                .unwrap_err();
+            assert!(err.to_string().contains("thumbnail"), "{bo:?}: {err}");
+        }
     }
 
     #[test]
