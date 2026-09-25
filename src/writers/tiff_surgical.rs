@@ -190,7 +190,14 @@ fn walk(bytes: &[u8], offset: usize, which: IfdKind, scan: &mut TiffScan) {
         let record = &bytes[record_offset..record_end];
         let tag_id = read_u16(&record[0..2], scan.byte_order);
         let field_type = read_u16(&record[2..4], scan.byte_order);
-        let value_or_offset = read_u32(&record[8..12], scan.byte_order) as usize;
+        // A pointer held inline is decoded by its TIFF type (a SHORT is the
+        // first two bytes), as the reader does.
+        let value_or_offset = crate::writers::exif_surgical::inline_unsigned(
+            field_type,
+            read_u32(&record[4..8], scan.byte_order),
+            &record[8..12],
+            scan.byte_order,
+        );
 
         // Structural pointers are followed, never treated as editable entries
         if which == IfdKind::Ifd0 && tag_id == EXIF_IFD_POINTER {
