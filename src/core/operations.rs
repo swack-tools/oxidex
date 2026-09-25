@@ -3140,6 +3140,87 @@ mod removal_then_set_tests {
         }
     }
 
+    /// Every entry of IFD1 in a carrier's EXIF block, `(tag, type, count,
+    /// value bytes)`, the thumbnail pointer pair left out (its offset is
+    /// layout); `None` when there is no IFD1.
+    fn ifd1_entries(file: &[u8]) -> Option<Vec<(u16, u16, u32, Vec<u8>)>> {
+        let tiff = payload_of(file)?;
+        let scan = crate::writers::exif_surgical::scan_exif_entries(&tiff).unwrap();
+        let entries: Vec<_> = scan
+            .entries
+            .iter()
+            .filter(|entry| entry.ifd == crate::writers::exif_surgical::IfdKind::Ifd1)
+            .map(|entry| {
+                (
+                    entry.tag_id,
+                    entry.field_type,
+                    entry.count,
+                    entry.value.clone(),
+                )
+            })
+            .collect();
+        (!entries.is_empty()).then_some(entries)
+    }
+
+    /// One transaction deleting IFD1 (`IFD1:All`) or the whole carrier
+    /// (`EXIF:All`) and setting a generated IFD1 tag creates IFD1 anew, so
+    /// WriteExif gives it its other %mandatory entries (WriteExif.pl
+    /// 13.59:25-50, 714-719). Pinned ExifTool 13.59, one invocation of
+    /// `-IFD1:All= -IFD1:XResolution=300` (or `-EXIF:All= ...`), JPEG and
+    /// PNG, II and MM: IFD1 = {Compression 6, XResolution 300, YResolution
+    /// 72, ResolutionUnit 2}, the thumbnail gone. The transaction seeded
+    /// those entries, and then the group-removal verification refused them
+    /// as IFD1 content left behind (8b32abd8): a write ExifTool makes,
+    /// refused.
+    #[test]
+    fn a_recreated_ifd1_keeps_its_mandatory_entries() {
+        let Some(oracle) = crate::exiftool_oracle::available()
+            .then(crate::exiftool_oracle::shared)
+            .and_then(std::result::Result::ok)
+        else {
+            eprintln!("skipping: no usable ExifTool oracle");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("r.jpg", jpeg(&tiff)), ("r.png", png(&tiff))] {
+                for group in ["IFD1:All", "EXIF:All"] {
+                    let label = format!("{bo:?} {carrier} {group}");
+                    let (result, after) = batch(
+                        dir.path(),
+                        carrier,
+                        &original,
+                        &[group],
+                        &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
+                    );
+                    result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                    assert!(after.contains_key("IFD1:XResolution"), "{label}: set lost");
+                    let ours = std::fs::read(dir.path().join(carrier)).unwrap();
+
+                    let theirs = dir.path().join(format!("oracle-{carrier}"));
+                    std::fs::write(&theirs, &original).unwrap();
+                    let status = oracle
+                        .command()
+                        .args(["-q", "-q", "-overwrite_original"])
+                        .arg(format!("-{group}="))
+                        .arg("-IFD1:XResolution=300")
+                        .arg(&theirs)
+                        .status()
+                        .unwrap();
+                    assert!(status.success(), "{label}: oracle failed");
+                    let theirs = std::fs::read(&theirs).unwrap();
+                    assert_eq!(ifd1_entries(&ours), ifd1_entries(&theirs), "{label}: IFD1");
+                    assert_eq!(
+                        ifd1_entries(&theirs).map(|e| e.len()),
+                        Some(4),
+                        "{label}: oracle IFD1"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_set_survives_a_group_removal_of_its_own_directory_in_one_batch() {
         let dir = tempfile::tempdir().unwrap();

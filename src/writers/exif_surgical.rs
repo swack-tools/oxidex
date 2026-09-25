@@ -2020,9 +2020,12 @@ fn plan_exif_write_inner(
 /// of a directory the same write set a tag into -- so created anew, and
 /// seeded (`add_mandatory_entries`) as pinned ExifTool 13.59 seeds it:
 /// `-ExifIFD:All= -ExifIFD:ISO=200` leaves ExifVersion beside ISO, and
-/// `-EXIF:All= -IFD0:Make=x` YCbCrPositioning beside Make. Only the exact
-/// entry the recipe creates counts; IFD0's JFIF-substituted resolution rows
-/// need only their recipe type, the JFIF values being the carrier's.
+/// `-EXIF:All= -IFD0:Make=x` YCbCrPositioning beside Make, and
+/// `-IFD1:All= -IFD1:XResolution=300` Compression, YResolution and
+/// ResolutionUnit beside XResolution (the generated path seeds a created
+/// IFD1). Only the exact entry the recipe creates counts; IFD0's
+/// JFIF-substituted resolution rows need only their recipe type, the JFIF
+/// values being the carrier's.
 fn recreated_mandatory(entry: &RawEntry, byte_order: ByteOrder, kept: &[(IfdKind, u16)]) -> bool {
     use crate::writers::mandatory_defaults_runtime::{TiffByteOrder, encode_creation_defaults};
     let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
@@ -2030,7 +2033,7 @@ fn recreated_mandatory(entry: &RawEntry, byte_order: ByteOrder, kept: &[(IfdKind
         IfdKind::Ifd0 => !kept.is_empty(),
         ifd => kept.iter().any(|(kind, _)| *kind == ifd),
     };
-    if !set_into || entry.ifd == IfdKind::Ifd1 {
+    if !set_into {
         return false;
     }
     let order = match byte_order {
