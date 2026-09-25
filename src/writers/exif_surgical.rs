@@ -4870,6 +4870,57 @@ mod tests {
     }
 
     #[test]
+    fn short_thumbnail_pointers_are_decoded_by_type_and_their_loss_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let w16 = |v: u16| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            let w32 = |v: u32| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            // A SHORT inline value: the first two bytes, the rest zero.
+            let short = |v: u16| [w16(v).as_slice(), &[0, 0]].concat();
+            let entry = |tag: u16, typ: u16, value: &[u8]| {
+                [w16(tag).as_slice(), &w16(typ), &w32(1), value].concat()
+            };
+            // IFD0 {ImageWidth 7} at 8 -> IFD1 {Compression 6, thumbnail
+            // offset 68 and length 4, both SHORT} at 26; thumbnail at 68.
+            let mut t = match bo {
+                ByteOrder::LittleEndian => b"II".to_vec(),
+                ByteOrder::BigEndian => b"MM".to_vec(),
+            };
+            t.extend(w16(42));
+            t.extend(w32(8));
+            t.extend(w16(1));
+            t.extend(entry(0x0100, 4, &w32(7)));
+            t.extend(w32(26));
+            t.extend(w16(3));
+            t.extend(entry(0x0103, 3, &short(6)));
+            t.extend(entry(THUMBNAIL_OFFSET, 3, &short(68)));
+            t.extend(entry(THUMBNAIL_LENGTH, 3, &short(4)));
+            t.extend(w32(0));
+            assert_eq!(t.len(), 68);
+            t.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+            let scan = scan_exif_entries(&t).unwrap();
+            assert_eq!(
+                scan.thumbnail.as_deref(),
+                Some(&[0xFF, 0xD8, 0xFF, 0xD9][..]),
+                "{bo:?}"
+            );
+            // The verifier's thumbnail-survival check reads the pair the
+            // same way, so an output that lost IFD1 is refused.
+            let empty = MetadataMap::new();
+            let mut lost = t[..26].to_vec();
+            lost[22..26].copy_from_slice(&w32(0));
+            let err = verify_exif_write(Some(&t), &lost, &empty, &empty, &[], EXIF_BLOCK_MAGICS)
+                .unwrap_err();
+            assert!(err.to_string().contains("thumbnail"), "{bo:?}: {err}");
+        }
+    }
+
+    #[test]
     fn a_chain_past_ifd1_is_refused_by_the_planner_and_the_verifier() {
         for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
             let w16 = |v: u16| match bo {
