@@ -411,6 +411,120 @@ pub(crate) fn resolve_tiff_group_removals(
     Ok(kept)
 }
 
+/// Whether pinned ExifTool 13.59 makes a single-tag set in family-1 `group`
+/// in a Panasonic JpgFromRaw's own EXIF: every EXIF group but IFD0 (whose
+/// tags the outer PanasonicRaw IFD0 may hold itself), the family spelling
+/// `EXIF:`, and the maker-note groups.
+fn embedded_edit_group(group: &str) -> bool {
+    matches!(
+        group,
+        "ExifIFD" | "GPS" | "IFD1" | "InteropIFD" | "EXIF" | "MakerNotes"
+    ) || MAKERNOTE_GROUPS.contains(&group)
+}
+
+/// Refuses a single-tag edit of a TIFF-structured file (`file_bytes`, read
+/// into `baseline`) that pinned ExifTool 13.59 makes in the embedded
+/// PanasonicRaw 0x002e JpgFromRaw ([`PANASONIC_JPG_FROM_RAW`], "processed as
+/// an embedded document because it contains full EXIF"; PanasonicRaw.pm
+/// `WriteJpgFromRaw`, the only such embedded-document writer in 13.59).
+/// This writer edits the outer TIFF directories in place and never that
+/// JPEG, whose length a write changes (its 0x002e offset/length and any
+/// strip data after it would move).
+///
+/// - A named removal whose tag the embedded EXIF holds (in any IFD,
+///   IFD0 included): ExifTool deletes it there (`-ExifIFD:ISO=` on
+///   t/images Panasonic.rw2 drops the embedded ExifIFD ISO); without this
+///   check the outer directories lack the tag and the request was reported
+///   done with the file byte-identical.
+/// - A set in an [`embedded_edit_group`] while the embedded JPEG carries
+///   EXIF: ExifTool writes it there, creating the directory if need be
+///   (`-ExifIFD:ISO=200`, `-ExifIFD:LensModel=x`, `-GPS:GPSLatitudeRef=N`;
+///   evidence `rw2-embedded-oracle.txt`), where this writer would have
+///   edited only the outer directories or refused on another ground.
+///
+/// Both are refused by name, file untouched. It runs before the no-op
+/// check, which reads only the outer directories and so would take a tag
+/// present only in the embedded EXIF for an absent one.
+pub(crate) fn refuse_embedded_jpeg_edits(
+    file_bytes: &[u8],
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<()> {
+    fn group(key: &str) -> &str {
+        key.split_once(':').map_or("", |(group, _)| group)
+    }
+    let removals: Vec<&String> = removed
+        .iter()
+        .filter(|key| group_removal(key).is_none() && key.contains(':'))
+        .collect();
+    let sets: Vec<&String> = desired
+        .iter()
+        .filter(|(key, value)| {
+            embedded_edit_group(group(key)) && baseline.get(key.as_str()) != Some(*value)
+        })
+        .map(|(key, _)| key)
+        .collect();
+    if removals.is_empty() && sets.is_empty() {
+        return Ok(());
+    }
+    let Ok(scan) = scan_entries_with_magics(
+        file_bytes,
+        crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+    ) else {
+        return Ok(());
+    };
+    let Some(jpeg) = scan
+        .entries
+        .iter()
+        .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == PANASONIC_JPG_FROM_RAW)
+        .map(|entry| entry.value.as_slice())
+    else {
+        return Ok(());
+    };
+    let Some(tiff) = jpeg_exif_payload(jpeg).ok().flatten() else {
+        return Ok(());
+    };
+    let file_type = baseline.get_string("File:FileType").unwrap_or("TIFF");
+    if let Some(key) = sets.first() {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Writing '{key}' to a {file_type} file is not supported: pinned ExifTool \
+             13.59 writes it into the EXIF of the embedded JpgFromRaw (PanasonicRaw \
+             0x002e), which this writer does not edit"
+        )));
+    }
+    // An embedded EXIF that does not scan is refused rather than taken for
+    // one without the tag.
+    let emb = scan_exif_entries(&tiff).ok();
+    let holds_makernote = |emb: &ExifScan| {
+        emb.entries
+            .iter()
+            .any(|entry| entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE)
+    };
+    for key in removals {
+        let in_embedded = emb.as_ref().is_none_or(|emb| {
+            let addressed = key_addresses(key).iter().any(|(ifd, tag_id)| {
+                emb.entries
+                    .iter()
+                    .any(|entry| entry.ifd == *ifd && entry.tag_id == *tag_id)
+            });
+            addressed
+                || (MAKERNOTE_GROUPS.contains(&group(key))
+                    && baseline.contains_key(key.as_str())
+                    && holds_makernote(emb))
+        });
+        if in_embedded {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Removing '{key}' from a {file_type} file is not supported: the tag lives \
+                 in the EXIF of the embedded JpgFromRaw (PanasonicRaw 0x002e), where \
+                 pinned ExifTool 13.59 deletes it, and this writer does not edit that \
+                 JPEG"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Reconstructs every metadata-map key the reader could plausibly have
 /// produced for one raw-carried entry in an always-carried IFD class
 /// (InteropIFD, IFD1, MakerNote — see the Design Rule table). These classes

@@ -2945,6 +2945,93 @@ fn a_thumbnail_strip_pointer_is_never_left_dangling() {
     }
 }
 
+/// A single-tag edit pinned ExifTool 13.59 makes in t/images
+/// Panasonic.rw2's embedded JpgFromRaw (PanasonicRaw 0x002e, "processed as
+/// an embedded document") is refused by name, file untouched -- library and
+/// CLI (exit 1). `-ExifIFD:ISO=` removes ISO from the JpgFromRaw's ExifIFD
+/// (the outer directories hold only IFD0:ISO); at tip 8825f101 and
+/// 00f0c398 oxidex reported "1 image files updated" and left the file
+/// byte-identical. `-IFD0:XResolution=` is the same shape in the embedded
+/// IFD0. The sets (`-ExifIFD:ISO=200`, `-ExifIFD:LensModel=x`,
+/// `-GPS:GPSLatitudeRef=N`) are written there by ExifTool too, creating the
+/// directory where needed; 00f0c398 edited the outer ExifIFD instead or
+/// refused on another ground. Evidence `rw2-embedded-oracle.txt`. An outer
+/// IFD0 set (`IFD0:Artist`, pinned by `an_rw2_edit_passes_the_post_write_check`)
+/// is not affected.
+#[test]
+fn a_panasonic_jpgfromraw_edit_is_refused_by_name() {
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&sample).unwrap();
+    fn refused<E: std::fmt::Display>(
+        label: &str,
+        result: Result<(), E>,
+        path: &Path,
+        original: &[u8],
+    ) {
+        let Err(err) = result else {
+            panic!("{label}: reported done");
+        };
+        assert!(err.to_string().contains("JpgFromRaw"), "{label}: {err}");
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            original,
+            "{label}: file touched"
+        );
+    }
+    for key in ["ExifIFD:ISO", "ExifIFD:iso", "IFD0:XResolution"] {
+        let path = write(dir.path(), "lib.rw2", &original);
+        refused(
+            &format!("remove {key}"),
+            remove_tag(&path, key),
+            &path,
+            &original,
+        );
+    }
+    for (key, value) in [
+        ("ExifIFD:ISO", TagValue::new_integer(200)),
+        ("ExifIFD:LensModel", TagValue::new_string("x")),
+        ("GPS:GPSLatitudeRef", TagValue::new_string("N")),
+    ] {
+        let path = write(dir.path(), "lib.rw2", &original);
+        refused(
+            &format!("set {key}"),
+            modify_tag(&path, key, value),
+            &path,
+            &original,
+        );
+    }
+
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for arg in [
+        "-ExifIFD:ISO=",
+        "-ExifIFD:ISO=200",
+        "-ExifIFD:LensModel=x",
+        "-GPS:GPSLatitudeRef=N",
+    ] {
+        let path = write(dir.path(), "cli.rw2", &original);
+        let out = std::process::Command::new(cli)
+            .arg(arg)
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(1), "{arg}: {text}");
+        assert!(text.contains("JpgFromRaw"), "{arg}: {text}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "{arg}: file touched"
+        );
+    }
+}
+
 /// `ExifIFD:All` and `MakerNotes:All` on t/images Panasonic.rw2,
 /// whose JpgFromRaw carries ExifIFD and a MakerNote: pinned ExifTool 13.59
 /// leaves the file unchanged for `ExifIFD:All` and `MakerNotes:All`, exit

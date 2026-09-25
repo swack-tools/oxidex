@@ -1072,6 +1072,15 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
+        // JpgFromRaw's own EXIF is refused by name, before the no-op check
+        // (which reads only the outer directories) can take a tag held only
+        // there for an absent one (`exif_surgical::refuse_embedded_jpeg_edits`).
+        if !whole_clear {
+            crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
         // A maker-note row left out of the map is a deletion this writer
         // cannot make (`exif_surgical::dropped_makernote_rows`); nor is such
         // a request a no-op.
