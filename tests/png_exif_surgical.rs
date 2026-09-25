@@ -204,7 +204,14 @@ fn dump(tiff: &[u8]) -> BTreeMap<String, Field> {
                 let off = order.read_u32(&tiff[p + 8..]) as usize;
                 tiff[off..off + size].to_vec()
             };
-            let target = order.read_u32(&tiff[p + 8..]) as usize;
+            // A pointer or length held inline is decoded by its type: a
+            // SHORT is the field's first two bytes (big-endian `00 dc 00 00`
+            // is 0xdc).
+            let target = if field_type == 3 {
+                order.read_u16(&tiff[p + 8..]) as usize
+            } else {
+                order.read_u32(&tiff[p + 8..]) as usize
+            };
             match (name, tag) {
                 ("IFD0", 0x8769) => todo.push(("ExifIFD", target)),
                 ("IFD0", 0x8825) => todo.push(("GPS", target)),
@@ -663,12 +670,13 @@ fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
         .arg(path)
         .output()
         .unwrap();
-    // Each warning, less the `Validate` summary line ("2 Warnings"), which
-    // differs whenever the counts do.
+    // Each warning, less the `Validate` summary line ("2 Warnings", or "OK"
+    // for none), which differs whenever the counts do.
     let summary = |line: &str| {
-        line.split_once(' ').is_some_and(|(n, rest)| {
-            n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with("Warning")
-        })
+        line == "OK"
+            || line.split_once(' ').is_some_and(|(n, rest)| {
+                n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with("Warning")
+            })
     };
     Some(
         String::from_utf8_lossy(&out.stdout)
@@ -2417,5 +2425,201 @@ fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
             }
             assert_validate_parity(&original, name, &[&args], &path, &format!("{name} {key}"));
         }
+    }
+}
+
+/// `tiff` with IFD1's JPEGInterchangeFormat -- and, with `both`, its
+/// JPEGInterchangeFormatLength -- stored as a SHORT, as Leica cameras
+/// write them (LeicaM8.jpg: the offset a SHORT, the length a LONG). The
+/// value sits in the field's first two bytes, the other two zero.
+fn with_short_thumb_pointers(tiff: &[u8], both: bool) -> Vec<u8> {
+    let order = if &tiff[..2] == b"II" {
+        Order::Ii
+    } else {
+        Order::Mm
+    };
+    let mut out = tiff.to_vec();
+    let ifd0 = order.read_u32(&tiff[4..8]) as usize;
+    let n0 = order.read_u16(&tiff[ifd0..]) as usize;
+    let ifd1 = order.read_u32(&tiff[ifd0 + 2 + 12 * n0..]) as usize;
+    let n1 = order.read_u16(&tiff[ifd1..]) as usize;
+    for i in 0..n1 {
+        let p = ifd1 + 2 + 12 * i;
+        let tag = order.read_u16(&tiff[p..]);
+        if tag == 0x0201 || (both && tag == 0x0202) {
+            let value = order.read_u32(&tiff[p + 8..]);
+            let value = u16::try_from(value).expect("fixture pointer fits a SHORT");
+            out[p + 2..p + 4].copy_from_slice(&order.u16(3));
+            out[p + 8..p + 10].copy_from_slice(&order.u16(value));
+            out[p + 10..p + 12].copy_from_slice(&[0, 0]);
+        }
+    }
+    out
+}
+
+/// IFD1 thumbnail pointers stored as SHORT. The shared scanner read every
+/// inline field as a LONG, so a big-endian SHORT JPEGInterchangeFormat
+/// `00 dc 00 00` became 0x00dc0000: the range check failed, both pointer
+/// entries were already excluded as structural, and a write that re-laid
+/// the block out dropped the thumbnail and reported success (e42c3db8 and
+/// tip). The scanner now decodes every inline pointer and length by type,
+/// as the reader's `read_unsigned_field` does, and so does the verifier's
+/// thumbnail-survival check, which uses it. Pinned ExifTool 13.59 keeps
+/// the thumbnail. II and MM, JPEG and PNG, one or both pointers SHORT, and
+/// the real Leica M8 sample (II, the offset a SHORT).
+#[test]
+fn short_thumbnail_pointers_survive_a_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let thumb = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x03, 0x01, 0xFF, 0xD9];
+    for order in [Order::Ii, Order::Mm] {
+        let r = [order.u32(72), order.u32(1)].concat();
+        let base = Tiff {
+            ifd0: vec![
+                (0x010F, 2, 6, b"LEICA\0".to_vec()),
+                (0x0110, 2, 8, b"M8-TEST\0".to_vec()),
+            ],
+            exif: Some(vec![(0x8827, 3, 1, order.u16(160).to_vec())]),
+            interop: None,
+            gps: None,
+            ifd1: Some((
+                vec![
+                    (0x0103, 3, 1, order.u16(6).to_vec()),
+                    (0x011A, 5, 1, r.clone()),
+                ],
+                thumb.clone(),
+            )),
+        }
+        .build(order);
+        for both in [false, true] {
+            let tiff = with_short_thumb_pointers(&base, both);
+            assert_eq!(
+                dump(&tiff).get("IFD1:thumbnail").map(|f| f.2.clone()),
+                Some(thumb.clone()),
+                "{order:?} fixture"
+            );
+            for (name, original) in [
+                ("short.jpg", jpeg_with(&tiff)),
+                ("short.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ] {
+                let label = format!("{order:?} both={both} {name}");
+                // A legacy deletion: the block is re-laid out.
+                let path = write(dir.path(), name, &original);
+                remove_tag(&path, "IFD0:Model").unwrap_or_else(|e| panic!("{label}: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let (after, _) = tiff_and_rest(name, &out);
+                let dumped = dump(&after);
+                assert!(!dumped.contains_key("IFD0:0x0110"), "{label}: Model kept");
+                assert_eq!(
+                    dumped.get("IFD1:thumbnail").map(|f| f.2.clone()),
+                    Some(thumb.clone()),
+                    "{label}: thumbnail lost"
+                );
+                assert_validate_parity(&original, name, &["-IFD0:Model="], &path, &label);
+            }
+        }
+    }
+    let Some(sample) = fixtures::pinned_combined_fixture_path("Leica/LeicaM8.jpg") else {
+        return;
+    };
+    let original = std::fs::read(&sample).unwrap();
+    let (before, _) = tiff_and_rest("m8.jpg", &original);
+    let thumb = dump(&before).get("IFD1:thumbnail").map(|f| f.2.clone());
+    assert!(thumb.is_some(), "LeicaM8.jpg has an IFD1 thumbnail");
+    for (name, original) in [
+        ("m8.jpg", original.clone()),
+        ("m8.png", png(&[(b"eXIf", before.clone())], &[])),
+    ] {
+        let path = write(dir.path(), name, &original);
+        remove_tag(&path, "IFD0:Model").unwrap_or_else(|e| panic!("LeicaM8 {name}: {e}"));
+        let out = std::fs::read(&path).unwrap();
+        let (after, _) = tiff_and_rest(name, &out);
+        assert_eq!(
+            dump(&after).get("IFD1:thumbnail").map(|f| f.2.clone()),
+            thumb,
+            "LeicaM8 {name}: thumbnail lost"
+        );
+        assert_validate_parity(
+            &original,
+            name,
+            &["-IFD0:Model="],
+            &path,
+            &format!("LeicaM8 {name}"),
+        );
+    }
+}
+
+/// A decoded maker-note row -- `Canon:MacroMode`, any family-1 group whose
+/// family-0 group is MakerNotes -- left out of a map read from the file is
+/// a deletion (the API semantics approved for #951), and this writer cannot
+/// delete one maker-note tag: the MakerNote is carried byte-for-byte. Only
+/// `remove_tag` (an explicit name) was refused; `read_metadata`, drop the
+/// row, `write_metadata` reported success with the tag still in the file.
+/// It is refused now, the file untouched and the key named, for a JPEG, a
+/// PNG eXIf and a TIFF-structured file, II (Canon) and MM (Pentax). A
+/// dropped IFD1 or InteropIFD row is either deleted for real (the
+/// generated path deletes `IFD1:XResolution` as the oracle does) or
+/// refused -- never kept with success: `exif_surgical::
+/// verify_dropped_rows_gone` checks every such row, maker-note rows too,
+/// after the write.
+#[test]
+fn a_map_only_deletion_of_a_decoded_makernote_row_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut exercised = 0;
+    for (sample, keys) in [
+        (
+            "Canon.jpg",
+            &["Canon:MacroMode", "InteropIFD:InteropIndex"][..],
+        ),
+        (
+            "Pentax.jpg",
+            &[
+                "Pentax:AEAperture",
+                "IFD1:XResolution",
+                "InteropIFD:InteropIndex",
+            ][..],
+        ),
+    ] {
+        let Some(path) = fixtures::pinned_t_images_fixture_path(sample) else {
+            continue;
+        };
+        let jpeg = std::fs::read(&path).unwrap();
+        let (tiff, _) = tiff_and_rest("x.jpg", &jpeg);
+        for (name, original) in [
+            ("mn.jpg", jpeg.clone()),
+            ("mn.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("mn.tif", tiff.clone()),
+        ] {
+            for key in keys {
+                let label = format!("{sample} {name} {key}");
+                let path = write(dir.path(), name, &original);
+                let mut map = read_metadata(&path).unwrap();
+                if map.remove(key).is_none() {
+                    // A reader that surfaces no such row (the bare TIFF's
+                    // maker note, a PNG's IFD1) has nothing to drop.
+                    assert!(!name.ends_with(".jpg"), "{label}: row not surfaced");
+                    continue;
+                }
+                exercised += 1;
+                match write_metadata(&path, &map) {
+                    // A maker-note row: never deletable on its own.
+                    Ok(()) if !key.starts_with("IFD1:") && !key.starts_with("InteropIFD:") => {
+                        panic!("{label}: the dropped row was reported deleted")
+                    }
+                    // An IFD1 row the generated path deletes (as pinned
+                    // ExifTool 13.59 does): really gone, not silently kept.
+                    Ok(()) => assert!(
+                        !read_metadata(&path).unwrap().contains_key(key),
+                        "{label}: reported deleted but still read back"
+                    ),
+                    Err(err) => {
+                        assert!(err.to_string().contains(key), "{label}: {err}");
+                        assert_eq!(std::fs::read(&path).unwrap(), original, "{label}");
+                    }
+                }
+            }
+        }
+    }
+    if fixtures::pinned_t_images_fixture_path("Canon.jpg").is_some() {
+        assert!(exercised >= 5, "only {exercised} dropped rows exercised");
     }
 }
