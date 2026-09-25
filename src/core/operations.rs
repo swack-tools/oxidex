@@ -942,6 +942,88 @@ pub(crate) fn write_metadata_with_removals(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_metadata_transaction(path, metadata, removed, &[])
+}
+
+/// One write transaction: `removed` (named tags and `<group>:All`) applied
+/// first, then the map -- and `assigned`, the keys the caller explicitly set
+/// (`modify_tag`'s tag, a batch's `-TAG=value`s), whatever their value.
+///
+/// Provenance, not equality, decides what a set is. A value that differs
+/// from the file's is a set whatever the list says (a carried row never
+/// differs); an assigned key whose value equals the file's is a set too,
+/// which the map alone cannot show. When such a same-value set falls under
+/// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
+/// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
+/// ExifTool's order -- the removals, then the sets -- as two passes on a
+/// private copy of the file that replaces it only when both succeed; pinned
+/// ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme` keeps Make. Otherwise it
+/// is one pass.
+pub(crate) fn write_metadata_transaction(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    assigned: &[String],
+) -> Result<()> {
+    let baseline = read_metadata(path).unwrap_or_default();
+    let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
+    let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
+    // Same-value sets a removal covers: the only ones the map cannot tell
+    // from carried rows, and the only ones that need the two passes.
+    let resets: Vec<(String, TagValue)> = assigned
+        .iter()
+        .filter_map(|key| {
+            let value = metadata.get(key)?.clone();
+            let key = canonical(key);
+            (baseline.get(key.as_str()) == Some(&value)
+                && removals.iter().any(|removal| {
+                    crate::writers::exif_surgical::removal_covers(removal, &key, &baseline)
+                }))
+            .then_some((key, value))
+        })
+        .collect();
+    if resets.is_empty() {
+        return write_single_pass(path, metadata, removed);
+    }
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // Same directory (the final rename stays on one filesystem), same
+    // extension (a format some readers tell by it reads the same).
+    let suffix = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    let staged = tempfile::Builder::new()
+        .prefix(".oxidex-transaction-")
+        .suffix(&suffix)
+        .tempfile_in(dir)
+        .map_err(ExifToolError::from)?;
+    std::fs::copy(path, staged.path()).map_err(ExifToolError::from)?;
+    // Pass 1: the removals, with the same-value sets they cover left out.
+    let mut first = metadata.clone();
+    for (key, _) in &resets {
+        first.remove(key);
+        if let Some(spelled) = assigned.iter().find(|k| canonical(k) == *key) {
+            first.remove(spelled);
+        }
+    }
+    write_single_pass(staged.path(), &first, removed)?;
+    // Pass 2: the sets, over what the removals left.
+    let mut second = read_metadata(staged.path())?;
+    for (key, value) in &resets {
+        second.insert(key.clone(), value.clone());
+    }
+    write_single_pass(staged.path(), &second, &[])?;
+    staged
+        .persist(path)
+        .map_err(|error| ExifToolError::from(error.error))?;
+    Ok(())
+}
+
+/// One pass of [`write_metadata_transaction`].
+fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) -> Result<()> {
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
@@ -990,6 +1072,15 @@ pub(crate) fn write_metadata_with_removals(
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
+        // JpgFromRaw's own EXIF is refused by name, before the no-op check
+        // (which reads only the outer directories) can take a tag held only
+        // there for an absent one (`exif_surgical::refuse_embedded_jpeg_edits`).
+        if !whole_clear {
+            crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
         // A maker-note row left out of the map is a deletion this writer
         // cannot make (`exif_surgical::dropped_makernote_rows`); nor is such
         // a request a no-op.
@@ -1419,10 +1510,12 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Modify the single tag
-    metadata.insert(canonical_write_tag_name(tag_name), new_value);
+    let key = canonical_write_tag_name(tag_name);
+    metadata.insert(key, new_value);
 
-    // Step 3: Write all metadata back to file
-    write_metadata(path, &metadata)?;
+    // Step 3: Write all metadata back to file; the tag is an explicit set,
+    // whatever its value.
+    write_metadata_transaction(path, &metadata, &[], &[key.to_string()])?;
 
     Ok(())
 }
@@ -3016,6 +3109,57 @@ mod removal_then_set_tests {
                         let expected: &[u8] = if keeps_ii { b"II" } else { b"MM" };
                         assert_eq!(&written[..2], expected, "{case}: byte order");
                     }
+                }
+            }
+        }
+    }
+
+    /// A same-value set after a removal of the same tag, in one batch
+    /// (`removed = ["IFD0:Make"]`, then `IFD0:Make=Acme` with Make already
+    /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`
+    /// keeps Make. 00f0c398 inferred from the equal value that the row was
+    /// carried and deleted it; the transaction now records what was assigned
+    /// (`write_metadata_transaction`'s `assigned`), and a carried row -- the
+    /// same map without the assignment -- still goes. The same holds under a
+    /// carrier removal (`EXIF:All` then `IFD0:Make=Acme`). JPEG and PNG, II
+    /// and MM.
+    #[test]
+    fn a_same_value_set_after_a_removal_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("s.jpg", jpeg(&tiff)), ("s.png", png(&tiff))] {
+                for removal in ["IFD0:Make", "EXIF:All", "IFD0:All"] {
+                    let label = format!("{bo:?} {carrier} {removal}");
+                    let path = dir.path().join(carrier);
+                    std::fs::write(&path, &original).unwrap();
+                    let map = read_metadata(&path).unwrap();
+                    assert_eq!(map.get_string("IFD0:Make"), Some("Acme"), "{label}");
+                    write_metadata_transaction(
+                        &path,
+                        &map,
+                        &[removal.to_string()],
+                        &["IFD0:Make".to_string()],
+                    )
+                    .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    let after = read_metadata(&path).unwrap();
+                    assert_eq!(
+                        after.get_string("IFD0:Make"),
+                        Some("Acme"),
+                        "{label}: Make lost"
+                    );
+                    if removal != "IFD0:Make" {
+                        assert!(!after.contains_key("IFD0:Model"), "{label}: Model kept");
+                    }
+
+                    // Carried, not assigned: the removal wins.
+                    std::fs::write(&path, &original).unwrap();
+                    write_metadata_transaction(&path, &map, &[removal.to_string()], &[])
+                        .unwrap_or_else(|e| panic!("{label} carried: {e}"));
+                    assert!(
+                        !read_metadata(&path).unwrap().contains_key("IFD0:Make"),
+                        "{label}: carried Make kept"
+                    );
                 }
             }
         }
