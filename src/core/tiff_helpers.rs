@@ -1935,7 +1935,16 @@ pub fn parse_gps_subifd(
             let tag_value = if matches!(tag_id, 0x001B | 0x001C)
                 && let TagValue::Binary(bytes) = &tag_value
             {
-                let decoded = crate::core::formatters::decode_gps_processing_method(bytes);
+                // No-BOM UNICODE text starts in this block's byte order, as
+                // ExifTool's `Decode($str,'UTF16','Unknown')` does.
+                let order = match byte_order {
+                    ByteOrder::LittleEndian => {
+                        crate::exiftool_tables::session::ByteOrder::LittleEndian
+                    }
+                    ByteOrder::BigEndian => crate::exiftool_tables::session::ByteOrder::BigEndian,
+                };
+                let decoded =
+                    crate::core::formatters::gps_processing_method::decode_gps_text(bytes, order);
                 if decoded.is_empty() {
                     tag_value
                 } else {

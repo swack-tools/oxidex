@@ -48,21 +48,11 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 /// The TIFF `undef` field type every one of these tags is written as.
 const UNDEF: u16 = 7;
 
-/// Whether a map key names one of the three `EncodeExifText` tags, under a
-/// spelling the EXIF writers accept: the tag's own directory, the `EXIF`
-/// family, or no group.
+/// Whether a map key names one of the three `EncodeExifText` tags: the
+/// tag-metadata classification
+/// ([`crate::tag_db::tag_registry::is_encode_exif_text_tag`]).
 pub(crate) fn is_exif_text_key(key: &str) -> bool {
-    let (group, name) = match key.split_once(':') {
-        Some((group, name)) => (Some(group), name),
-        None => (None, key),
-    };
-    match name {
-        "UserComment" => matches!(group, None | Some("ExifIFD" | "EXIF")),
-        "GPSProcessingMethod" | "GPSAreaInformation" => {
-            matches!(group, None | Some("GPS" | "EXIF"))
-        }
-        _ => false,
-    }
+    crate::tag_db::tag_registry::is_encode_exif_text_tag(key)
 }
 
 /// `EncodeExifText($val)` for `text`, packing UTF-16 in `order`.

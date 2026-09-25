@@ -7090,6 +7090,32 @@ pub(crate) fn declared_ieee_field_type(name: &str) -> Option<u16> {
         .and_then(field_type_of)
 }
 
+/// Whether a tag key names one of the EXIF text tags whose value is text
+/// that ExifTool stores through `EncodeExifText` (`RawConvInv`): ExifIFD
+/// `0x9286` UserComment (Exif.pm 13.59:2497-2506) and GPS `0x001b`
+/// GPSProcessingMethod / `0x001c` GPSAreaInformation (GPS.pm 13.59:294-307).
+/// Their value is the caller's text whatever `TagValue` shape the registry
+/// records for the stored bytes; the EXIF serializer encodes it with the
+/// block's byte order. Matched spellings: the tag's own directory, the
+/// `EXIF` family, or no group -- never XMP, IFD0/IFD1 or another table's
+/// same-named tag.
+///
+/// Tag metadata, so it lives here and not in a writer: domain validation and
+/// the EXIF write adapter both ask it.
+pub fn is_encode_exif_text_tag(key: &str) -> bool {
+    let (group, name) = match key.split_once(':') {
+        Some((group, name)) => (Some(group), name),
+        None => (None, key),
+    };
+    match name {
+        "UserComment" => matches!(group, None | Some("ExifIFD" | "EXIF")),
+        "GPSProcessingMethod" | "GPSAreaInformation" => {
+            matches!(group, None | Some("GPS" | "EXIF"))
+        }
+        _ => false,
+    }
+}
+
 /// Reports whether `descriptor`'s value type came from reliable metadata.
 ///
 /// Reliability is derived from *provenance* via pointer identity: only the

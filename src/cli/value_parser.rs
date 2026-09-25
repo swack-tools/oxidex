@@ -253,7 +253,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // their RawConvInv, which needs the byte order of the EXIF block being
     // written (UTF-16 for non-ASCII text). The value stays the caller's text
     // here; the EXIF serializers encode it (`writers::exif_text`).
-    if crate::writers::exif_text::is_exif_text_key(tag_name) {
+    if crate::tag_db::tag_registry::is_encode_exif_text_tag(tag_name) {
         return Ok(TagValue::String(raw.to_string()));
     }
 

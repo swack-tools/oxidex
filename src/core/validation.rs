@@ -10,7 +10,7 @@
 use crate::core::tag_value::TagValue;
 use crate::core::{TagDescriptor, ValueType};
 use crate::error::ExifToolError;
-use crate::tag_db::tag_registry::descriptor_has_reliable_value_type;
+use crate::tag_db::tag_registry::{descriptor_has_reliable_value_type, is_encode_exif_text_tag};
 
 fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
     let name = descriptor.name();
@@ -111,11 +111,11 @@ pub fn validate_tag_value_with_name(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
-    // UserComment, GPSProcessingMethod and GPSAreaInformation take text: the
-    // EXIF serializers apply `EncodeExifText` to it (`writers::exif_text`),
-    // whatever `TagValue` shape the registry records for the stored bytes.
-    if matches!(value, TagValue::String(_)) && crate::writers::exif_text::is_exif_text_key(tag_name)
-    {
+    // UserComment, GPSProcessingMethod and GPSAreaInformation take text:
+    // ExifTool stores it through `EncodeExifText`, whatever `TagValue` shape
+    // the registry records for the stored bytes (tag metadata,
+    // `tag_db::tag_registry::is_encode_exif_text_tag`).
+    if matches!(value, TagValue::String(_)) && is_encode_exif_text_tag(tag_name) {
         return Ok(());
     }
     if !descriptor_has_reliable_value_type(descriptor) {
