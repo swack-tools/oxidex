@@ -2962,6 +2962,34 @@ fn a_thumbnail_strip_pointer_is_never_left_dangling() {
     }
 }
 
+/// An ungrouped CLI write (`-Artist=z`: `modify_tag` passes the bare name
+/// on) is never judged a no-op by the EXIF no-op check, which reads only
+/// grouped keys: from c3bedc21 to 1003d053 it was, and the write was
+/// reported done with the file unchanged (tip 8825f101 wrote it). Pinned
+/// ExifTool 13.59 writes IFD0:Artist. (Resolving every ungrouped name as
+/// ExifTool does is #945's `write_request::resolve_write_key`.)
+#[test]
+fn an_ungrouped_write_is_not_taken_for_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let label = format!("{order:?}");
+        let path = write(dir.path(), "bare.jpg", &jpeg_with(&tiff));
+        let out = std::process::Command::new(cli)
+            .arg("-Artist=z")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{label}: {out:?}");
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("z"),
+            "{label}: reported done, Artist not written"
+        );
+    }
+}
+
 /// A single-tag edit pinned ExifTool 13.59 makes in t/images
 /// Panasonic.rw2's embedded JpgFromRaw (PanasonicRaw 0x002e, "processed as
 /// an embedded document") is refused by name, file untouched -- library and

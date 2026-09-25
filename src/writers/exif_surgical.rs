@@ -467,12 +467,17 @@ pub(crate) fn refuse_embedded_jpeg_edits(
     }
     let removals: Vec<&String> = removed
         .iter()
-        .filter(|key| group_removal(key).is_none() && key.contains(':'))
+        .filter(|key| group_removal(key).is_none())
         .collect();
+    // An ungrouped name is written where ExifTool would put it: an EXIF tag
+    // (`-Artist=z`) into the embedded EXIF too.
+    let exif_tag =
+        |key: &str| !key.contains(':') && get_tag_descriptor(&format!("EXIF:{key}")).is_some();
     let sets: Vec<&String> = desired
         .iter()
         .filter(|(key, value)| {
-            embedded_edit_group(group(key)) && baseline.get(key.as_str()) != Some(*value)
+            (embedded_edit_group(group(key)) || exif_tag(key))
+                && baseline.get(key.as_str()) != Some(*value)
         })
         .map(|(key, _)| key)
         .collect();
@@ -514,7 +519,13 @@ pub(crate) fn refuse_embedded_jpeg_edits(
     };
     for key in removals {
         let in_embedded = emb.as_ref().is_none_or(|emb| {
-            let addressed = key_addresses(key).iter().any(|(ifd, tag_id)| {
+            // An ungrouped name addresses every EXIF directory.
+            let spelled = if key.contains(':') {
+                key.to_string()
+            } else {
+                format!("EXIF:{key}")
+            };
+            let addressed = key_addresses(&spelled).iter().any(|(ifd, tag_id)| {
                 emb.entries
                     .iter()
                     .any(|entry| entry.ifd == *ifd && entry.tag_id == *tag_id)
@@ -2718,6 +2729,18 @@ pub(crate) fn exif_request_is_no_op(
     desired: &MetadataMap,
     removed: &[String],
 ) -> bool {
+    // An ungrouped key (`-Artist=z`, `-Make=`: `modify_tag` / `remove_tag`
+    // pass the bare name on) is resolved to its directory by the planner,
+    // not here: a request holding one is never judged a no-op, or every
+    // ungrouped write was reported done with the file unchanged (this
+    // branch from c3bedc21 on; tip 8825f101 writes them).
+    if desired
+        .iter()
+        .any(|(key, value)| !key.contains(':') && baseline.get(key.as_str()) != Some(value))
+        || removed.iter().any(|key| !key.contains(':'))
+    {
+        return false;
+    }
     if !rows_unchanged(baseline, desired) {
         return false;
     }
