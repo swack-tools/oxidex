@@ -2849,11 +2849,57 @@ fn strip_tiff(order: Order) -> Vec<u8> {
     t
 }
 
+/// The same strip pointer carried in IFD1 {Compression, 0x5028, 0x502c},
+/// IFD0 {Make, Model, Artist}: IFD1 entries are carried verbatim by a
+/// re-layout, so this is the shape that dangled silently (00f0c398 and tip
+/// 8825f101: success, strip gone, offset unchanged).
+fn ifd1_strip_tiff(order: Order) -> Vec<u8> {
+    let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(typ),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    let short = |v: u16| {
+        let mut b = [0u8; 4];
+        b[..2].copy_from_slice(&order.u16(v));
+        b
+    };
+    // IFD0 at 8: 3 entries -> 50; "Acme\0" at 50 (+pad); IFD1 at 56: 3
+    // entries -> 98; strip at 98.
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(8));
+    t.extend(order.u16(3));
+    t.extend(entry(0x010F, 2, 5, order.u32(50)));
+    t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(order.u32(56));
+    t.extend(b"Acme\0\0");
+    assert_eq!(t.len(), 56);
+    t.extend(order.u16(3));
+    t.extend(entry(0x0103, 3, 1, short(6)));
+    t.extend(entry(0x5028, 4, 1, order.u32(98)));
+    t.extend(entry(0x502C, 4, 1, order.u32(8)));
+    t.extend(order.u32(0));
+    assert_eq!(t.len(), 98);
+    t.extend(b"STRIPDAT");
+    t
+}
+
 /// IFD0 0x5028 ThumbnailStripOffsets (with 0x502c ThumbnailStripByteCounts)
 /// locates a strip inside the block. It was missing from the pointer
 /// refusal list, so a write that re-laid the block out (a legacy deletion)
 /// re-emitted the old offset without the strip and reported success
-/// (00f0c398). Such a block is now never re-laid out -- the write is
+/// (00f0c398 and tip 8825f101 with the pair in IFD1; with it in IFD0,
+/// 00f0c398 refused only by accident, unable to re-add the surfaced row).
+/// Such a block is now never re-laid out -- the write is
 /// refused, file untouched -- and an in-place edit keeps the strip where
 /// its pointer says. The post-write check follows every offset/length pair
 /// the scanner knows, so it refuses the dangling pointer on its own
@@ -2865,26 +2911,36 @@ fn strip_tiff(order: Order) -> Vec<u8> {
 fn a_thumbnail_strip_pointer_is_never_left_dangling() {
     let dir = tempfile::tempdir().unwrap();
     for order in [Order::Ii, Order::Mm] {
-        let tiff = strip_tiff(order);
-        for (name, original) in [
-            ("strip.jpg", jpeg_with(&tiff)),
-            ("strip.png", png(&[(b"eXIf", tiff.clone())], &[])),
+        // IFD1-carried (dangled silently before) and IFD0 (refused before,
+        // by accident: the planner could not re-add the surfaced row).
+        for (ifd, tiff) in [
+            ("IFD1", ifd1_strip_tiff(order)),
+            ("IFD0", strip_tiff(order)),
         ] {
-            let label = format!("{order:?} {name}");
-            let path = write(dir.path(), name, &original);
-            let err = remove_tag(&path, "IFD0:Model").expect_err(&format!("{label}: re-laid"));
-            assert!(err.to_string().contains("0x5028"), "{label}: {err}");
-            assert_eq!(std::fs::read(&path).unwrap(), original, "{label}");
+            for (name, original) in [
+                ("strip.jpg", jpeg_with(&tiff)),
+                ("strip.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ] {
+                let label = format!("{order:?} {ifd} {name}");
+                let path = write(dir.path(), name, &original);
+                let err = remove_tag(&path, "IFD0:Model").expect_err(&format!("{label}: re-laid"));
+                assert!(err.to_string().contains("0x5028"), "{label}: {err}");
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{label}");
 
-            // In place: the strip stays where the pointer says.
-            modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
-                .unwrap_or_else(|e| panic!("{label} Artist: {e}"));
-            let out = std::fs::read(&path).unwrap();
-            let (after, _) = tiff_and_rest(name, &out);
-            let d = dump(&after);
-            let offset = d.get("IFD0:0x5028").expect("pointer kept").2.clone();
-            let offset = order.read_u32(&offset) as usize;
-            assert_eq!(&after[offset..offset + 8], b"STRIPDAT", "{label}: strip");
+                // In place: the strip stays where the pointer says.
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                    .unwrap_or_else(|e| panic!("{label} Artist: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let (after, _) = tiff_and_rest(name, &out);
+                let d = dump(&after);
+                let offset = d
+                    .get(&format!("{ifd}:0x5028"))
+                    .expect("pointer kept")
+                    .2
+                    .clone();
+                let offset = order.read_u32(&offset) as usize;
+                assert_eq!(&after[offset..offset + 8], b"STRIPDAT", "{label}: strip");
+            }
         }
     }
 }
@@ -2893,8 +2949,9 @@ fn a_thumbnail_strip_pointer_is_never_left_dangling() {
 /// whose JpgFromRaw carries ExifIFD and a MakerNote: pinned ExifTool 13.59
 /// leaves the file unchanged for `ExifIFD:All` and `MakerNotes:All`, exit
 /// 0, with "Can't delete ExifIFD/MakerNotes from RW2" (its raw-file rule
-/// applies inside the embedded JPEG too: the embedded ExifIFD keeps all 90
-/// rows; evidence `rw2-oracle.txt`). So does this writer. Pinned here so a
+/// applies inside the embedded JPEG too: the `-G1 -s -ExifIFD:All
+/// -MakerNotes:All` read-back is 78 rows before and after; evidence
+/// `rw2-oracle.txt`). So does this writer. Pinned here so a
 /// change to the embedded-directory check cannot make them refusals or
 /// deletions the oracle does not make.
 #[test]
