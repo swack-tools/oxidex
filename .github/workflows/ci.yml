@@ -324,6 +324,13 @@ jobs:
           # order, so a runner image shipping its own exiftool cannot
           # quietly win the lookup.
           echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
+          # The capability half of "verified": a .docx must read as DOCX.
+          FT=$(/tmp/exiftool-src/exiftool -s3 -FileType /tmp/exiftool-src/t/images/OOXML.docx)
+          [ "$FT" = "DOCX" ] || { echo "::error::OOXML.docx reads as '$FT', expected DOCX"; exit 1; }
+          # This job has the pinned oracle, so an oracle-graded test that
+          # finds it unverified must fail here, never skip
+          # (exiftool_oracle::REQUIRE_ENV).
+          echo "OXIDEX_REQUIRE_EXIFTOOL_ORACLE=1" >> "$GITHUB_ENV"
       # Only on a miss, and only once the step above has proved the tree is
       # the right release -- default `success()` semantics are load-bearing
       # here, so a failed verify never persists a bad tree. Reuses the
