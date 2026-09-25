@@ -578,15 +578,16 @@ fn plan_exif(
             .strip_prefix(b"Exif\0\0".as_slice())
             .unwrap_or(&chunk.data)
     });
-    // A whole-carrier removal alone (`IFD0:All` / `EXIF:All`) drops even a
-    // malformed chunk, as the oracle does (one with no byte-order mark before
-    // it looks further, PNG.pm 13.59:1376-1380); any other write that reaches
-    // here needs the chunk's TIFF structure (see `MalformedExif`).
-    let sets = metadata
-        .iter()
-        .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value));
+    // A carrier the transaction deletes (`IFD0:All` / `EXIF:All`) is never
+    // parsed: the removal drops even a malformed chunk, as the oracle does
+    // (PNG.pm 13.59:1365, 1376-1380), and any set in the same transaction
+    // goes into the fresh block `rewrite_exif_payload` builds. Every other
+    // write that reaches here edits the chunk, which needs its TIFF
+    // structure (see `MalformedExif`). A chunk too short for a TIFF header
+    // lost its `IFD0:All` above, so a set beside that removal is refused
+    // here: the oracle writes nothing then.
     if let Some(block) = original
-        && (sets || !crate::writers::exif_surgical::removes_carrier(removed))
+        && !crate::writers::exif_surgical::removes_carrier(removed)
         && let Some(fault) = MalformedExif::of(block)
     {
         return Err(fault.refusal(block.len()));
