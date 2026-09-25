@@ -282,8 +282,14 @@ pub(crate) fn write_public_exif_transaction(
         );
     }
     transform_exif(reader, |original, head| {
-        rewrite_generated_exif_payload(original, &|| source_raw_properties(head), baseline, plan)
-            .map(|bytes| (bytes, ()))
+        rewrite_generated_exif_payload(
+            original,
+            &|| source_raw_properties(head),
+            baseline,
+            plan,
+            crate::writers::exif_surgical::FreshOrder::SetPreferred,
+        )
+        .map(|bytes| (bytes, ()))
     })
     .map(|(bytes, ())| bytes)
 }
@@ -304,6 +310,7 @@ pub(crate) fn rewrite_generated_exif_payload(
     raw_properties: &dyn Fn() -> Result<std::collections::BTreeMap<String, i64>>,
     baseline: &MetadataMap,
     plan: crate::writers::generated_public_write::PublicWritePlan,
+    fresh: crate::writers::exif_surgical::FreshOrder,
 ) -> Result<Vec<u8>> {
     use crate::writers::mandatory_defaults_runtime as mandatory;
     use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
@@ -323,14 +330,26 @@ pub(crate) fn rewrite_generated_exif_payload(
     // still decided by the original IFD0 (`$numEntries`, WriteExif.pl
     // 13.59:714-719), which existed. Oracle, `-ExifIFD:ISO= -IFD0:Artist=you`
     // on a block holding only ISO: byte order kept, IFD0 = {Artist}.
+    //
+    // A carrier this transaction deletes (`IFD0:All` / `EXIF:All`) is never
+    // read -- it may be unreadable, and pinned ExifTool 13.59 discards it
+    // unparsed. The write then always stages (the fresh block of the legacy
+    // sets, or an empty IFD0 in the fresh byte order), and nothing below
+    // reads the deleted block. The fresh block's IFD0 is created, so it is
+    // seeded as a block the carrier never had is (`$numEntries` 0; pinned
+    // ExifTool 13.59's `-EXIF:All= -IFD0:Artist=x` block carries
+    // YCbCrPositioning); the legacy half seeds the sub-directories it
+    // creates.
+    let deletes_carrier = crate::writers::exif_surgical::removes_carrier(&plan.legacy_removed);
     let creation_count = match original {
+        Some(_) if deletes_carrier => Some(0),
         Some(tiff) => Some(tiff_surgical::ifd0_state(tiff)?.0),
         None => None,
     };
     let mut plan = plan;
     let staged;
-    let restaged =
-        matches!(original, Some(_) if plan.has_legacy_changes && legacy_deletes(baseline, &plan));
+    let restaged = matches!(original, Some(_) if deletes_carrier
+        || plan.has_legacy_changes && legacy_deletes(baseline, &plan));
     let original = match original {
         Some(tiff) if restaged => {
             let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
@@ -338,10 +357,16 @@ pub(crate) fn rewrite_generated_exif_payload(
                 baseline,
                 &plan.legacy_metadata,
                 &plan.legacy_removed,
+                fresh,
             )?;
             staged = if kept.is_empty() {
-                let order = match crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
-                {
+                // A deleted carrier's order is only its byte-order mark
+                // (`FreshOrder`); a kept one's is its scan.
+                let order = match if deletes_carrier {
+                    crate::writers::exif_surgical::fresh_byte_order(tiff, fresh)?
+                } else {
+                    crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
+                } {
                     crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
                         mandatory::TiffByteOrder::Little
                     }
@@ -363,7 +388,14 @@ pub(crate) fn rewrite_generated_exif_payload(
     let tiff = match original {
         Some(tiff) => tiff,
         None => {
-            let order = source_fresh_byte_order()?;
+            let order = match crate::writers::exif_surgical::fresh_byte_order(&[], fresh)? {
+                crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                    mandatory::TiffByteOrder::Little
+                }
+                crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                    mandatory::TiffByteOrder::Big
+                }
+            };
             empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
                 .map_err(ExifToolError::unsupported_format)?;
             &empty

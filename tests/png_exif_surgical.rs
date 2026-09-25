@@ -2624,6 +2624,506 @@ fn a_map_only_deletion_of_a_decoded_makernote_row_is_refused() {
     }
 }
 
+/// The CLI applies each `-TAG=` / `-TAG=value` as its own write, in
+/// argument order, which is pinned ExifTool 13.59's order too: `-EXIF:All=
+/// -IFD0:Make=x` deletes the block, then creates one holding Make; `-IFD0:
+/// Make=x -EXIF:All=` leaves no EXIF at all (the later deletion wins). So
+/// the CLI never reached the lossy single-transaction path (a carrier-wide
+/// removal with a set in one batch, pinned in `core::operations`'
+/// `removal_then_set_tests`); this pins that it keeps matching the oracle,
+/// the created block's mandatory YCbCrPositioning included (`-validate`
+/// parity and an entry-for-entry comparison with the oracle's own run).
+#[test]
+fn cli_group_removal_and_set_follow_argument_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("cli.jpg", jpeg_with(&tiff)),
+            ("cli.png", png(&[(b"eXIf", tiff.clone())], &[])),
+        ] {
+            let label = format!("{order:?} {name}");
+            let path = write(dir.path(), name, &original);
+            let status = std::process::Command::new(cli)
+                .args(["-EXIF:All=", "-IFD0:Make=x"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{label}: {status:?}");
+            let after = read_metadata(&path).unwrap();
+            assert_eq!(after.get_string("IFD0:Make"), Some("x"), "{label}");
+            assert!(!after.contains_key("IFD0:Model"), "{label}: Model kept");
+            assert!(!after.contains_key("ExifIFD:ISO"), "{label}: ISO kept");
+            let args = ["-EXIF:All=", "-IFD0:Make=x"];
+            assert_validate_parity(&original, name, &args, &path, &label);
+            if let Some(oracle) = exiftool_oracle::available()
+                .then(exiftool_oracle::shared)
+                .and_then(Result::ok)
+            {
+                let theirs = write(dir.path(), &format!("oracle-{name}"), &original);
+                assert!(
+                    oracle
+                        .command()
+                        .args(["-q", "-q", "-overwrite_original"])
+                        .args(args)
+                        .arg(&theirs)
+                        .status()
+                        .unwrap()
+                        .success(),
+                    "{label}: oracle failed"
+                );
+                assert_eq!(
+                    exif_block_at(&path).as_deref().map(dump),
+                    exif_block_at(&theirs).as_deref().map(dump),
+                    "{label}: entries"
+                );
+            }
+
+            let path = write(dir.path(), name, &original);
+            let status = std::process::Command::new(cli)
+                .args(["-IFD0:Make=x", "-EXIF:All="])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{label}: {status:?}");
+            let after = read_metadata(&path).unwrap();
+            assert!(
+                !after.contains_key("IFD0:Make"),
+                "{label}: Make kept after -EXIF:All="
+            );
+        }
+    }
+}
+
+/// A decoded maker-note row that a write changes or adds --
+/// `modify_tag(path, "Canon:MacroMode", ...)`, or the same through a map --
+/// cannot be applied: the MakerNote is carried byte-for-byte. The EXIF no-op
+/// checks looked only at EXIF-family keys, so the call reported success with
+/// nothing changed (e4f512d4, JPEG, PNG and TIFF). It is refused now, the key
+/// named, the file untouched, from the library and the CLI. Pinned ExifTool
+/// 13.59 does write it (`-Canon:MacroMode=Normal` on Canon.jpg: Unknown (0)
+/// -> Normal): a fail-closed divergence, listed in the PR.
+#[test]
+fn a_changed_decoded_makernote_row_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for (sample, key, value, cli_arg) in [
+        (
+            "Canon.jpg",
+            "Canon:MacroMode",
+            TagValue::new_integer(1),
+            "-Canon:MacroMode=1",
+        ),
+        (
+            "Pentax.jpg",
+            "Pentax:AEAperture",
+            TagValue::new_string("8.0"),
+            "-Pentax:AEAperture=8",
+        ),
+    ] {
+        let Some(path) = fixtures::pinned_t_images_fixture_path(sample) else {
+            continue;
+        };
+        let jpeg = std::fs::read(&path).unwrap();
+        let (tiff, _) = tiff_and_rest("x.jpg", &jpeg);
+        for (name, original) in [
+            ("mn.jpg", jpeg.clone()),
+            ("mn.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("mn.tif", tiff.clone()),
+        ] {
+            let label = format!("{sample} {name} {key}");
+            let path = write(dir.path(), name, &original);
+            if !read_metadata(&path).unwrap().contains_key(key) {
+                // The bare TIFF's maker note is not decoded by the reader.
+                assert!(!name.ends_with(".jpg"), "{label}: row not surfaced");
+                continue;
+            }
+            let err =
+                modify_tag(&path, key, value.clone()).expect_err(&format!("{label}: reported set"));
+            assert!(err.to_string().contains(key), "{label}: {err}");
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                original,
+                "{label} modify_tag"
+            );
+
+            let mut map = read_metadata(&path).unwrap();
+            map.insert(key, value.clone());
+            assert!(write_metadata(&path, &map).is_err(), "{label} map");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} map");
+
+            let out = std::process::Command::new(cli)
+                .arg(cli_arg)
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(!out.status.success(), "{label} CLI: {out:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} CLI");
+        }
+    }
+}
+
+/// Group and tag names are case-insensitive, as they are to ExifTool: the
+/// write transaction canonicalizes every key once, at its entry, so
+/// `exif:All`, `Exif:all`, `ifd0:ALL`, `ExifIFD:iso`, `gps:all`,
+/// `makernotes:all`, `exififd:ISO=200` and `ifd0:artist=you` do exactly what
+/// their canonical spellings do. `is_exif_key` and the other gates are
+/// case-sensitive prefix tests, so `remove_tag(path, "exif:All")` on a PNG
+/// was carried as unchanged and reported success with the eXIf chunk kept;
+/// a lowercase set changed nothing (e4f512d4). Library and CLI; JPEG, PNG
+/// and a TIFF file, II and MM: the same exit status and the same bytes as
+/// the canonical spelling.
+#[test]
+fn group_and_tag_names_are_case_insensitive() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    let pairs: [(&str, &str, Option<&str>); 10] = [
+        ("exif:All", "EXIF:All", None),
+        ("Exif:all", "EXIF:All", None),
+        ("ifd0:ALL", "IFD0:All", None),
+        ("ExifIFD:iso", "ExifIFD:ISO", None),
+        ("gps:all", "GPS:All", None),
+        ("makernotes:all", "MakerNotes:All", None),
+        ("exififd:all", "ExifIFD:All", None),
+        ("interopifd:ALL", "InteropIFD:All", None),
+        ("exififd:ISO", "ExifIFD:ISO", Some("200")),
+        ("ifd0:artist", "IFD0:Artist", Some("you")),
+    ];
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("case.jpg", jpeg_with(&tiff)),
+            ("case.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("case.tif", tiff.clone()),
+        ] {
+            for (spelled, canonical, value) in pairs {
+                let label = format!("{order:?} {name} {spelled}");
+                let run = |key: &str| {
+                    let path = write(dir.path(), name, &original);
+                    let ok = match value {
+                        None => remove_tag(&path, key).is_ok(),
+                        Some(v) => {
+                            let value = if v == "200" {
+                                TagValue::new_integer(200)
+                            } else {
+                                TagValue::new_string(v)
+                            };
+                            modify_tag(&path, key, value).is_ok()
+                        }
+                    };
+                    (ok, std::fs::read(&path).unwrap())
+                };
+                let (ok, bytes) = run(spelled);
+                let (canonical_ok, canonical_bytes) = run(canonical);
+                assert_eq!(ok, canonical_ok, "{label}: library status");
+                assert_eq!(bytes, canonical_bytes, "{label}: library bytes");
+                if canonical_ok && canonical != "MakerNotes:All" && !name.ends_with(".tif") {
+                    // Not silently nothing: the canonical write changes this
+                    // JPEG/PNG fixture (it has every group but a maker note;
+                    // on a TIFF file `IFD0:All` is the oracle's no-op).
+                    assert_ne!(bytes, original, "{label}: nothing changed");
+                }
+
+                let cli_run = |key: &str| {
+                    let path = write(dir.path(), name, &original);
+                    let arg = format!("-{key}={}", value.unwrap_or(""));
+                    let out = std::process::Command::new(cli)
+                        .arg(&arg)
+                        .arg(&path)
+                        .output()
+                        .unwrap();
+                    (out.status.success(), std::fs::read(&path).unwrap())
+                };
+                assert_eq!(cli_run(spelled), cli_run(canonical), "{label}: CLI");
+            }
+        }
+    }
+}
+
+/// IFD0 {Make "Acme", Model "M1", Artist "me", ThumbnailStripOffsets ->
+/// an 8-byte strip inside the block, ThumbnailStripByteCounts 8}.
+fn strip_tiff(order: Order) -> Vec<u8> {
+    let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(typ),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    // IFD0 at 8: 5 entries -> 8+2+60+4 = 74; "Acme\0" at 74 (+pad), strip at 80.
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(8));
+    t.extend(order.u16(5));
+    t.extend(entry(0x010F, 2, 5, order.u32(74)));
+    t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(entry(0x5028, 4, 1, order.u32(80)));
+    t.extend(entry(0x502C, 4, 1, order.u32(8)));
+    t.extend(order.u32(0));
+    t.extend(b"Acme\0\0");
+    assert_eq!(t.len(), 80);
+    t.extend(b"STRIPDAT");
+    t
+}
+
+/// The same strip pointer carried in IFD1 {Compression, 0x5028, 0x502c},
+/// IFD0 {Make, Model, Artist}: IFD1 entries are carried verbatim by a
+/// re-layout, so this is the shape that dangled silently (00f0c398 and tip
+/// 8825f101: success, strip gone, offset unchanged).
+fn ifd1_strip_tiff(order: Order) -> Vec<u8> {
+    let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(typ),
+            &order.u32(count),
+            &value,
+        ]
+        .concat()
+    };
+    let short = |v: u16| {
+        let mut b = [0u8; 4];
+        b[..2].copy_from_slice(&order.u16(v));
+        b
+    };
+    // IFD0 at 8: 3 entries -> 50; "Acme\0" at 50 (+pad); IFD1 at 56: 3
+    // entries -> 98; strip at 98.
+    let mut t = match order {
+        Order::Ii => b"II".to_vec(),
+        Order::Mm => b"MM".to_vec(),
+    };
+    t.extend(order.u16(42));
+    t.extend(order.u32(8));
+    t.extend(order.u16(3));
+    t.extend(entry(0x010F, 2, 5, order.u32(50)));
+    t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+    t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+    t.extend(order.u32(56));
+    t.extend(b"Acme\0\0");
+    assert_eq!(t.len(), 56);
+    t.extend(order.u16(3));
+    t.extend(entry(0x0103, 3, 1, short(6)));
+    t.extend(entry(0x5028, 4, 1, order.u32(98)));
+    t.extend(entry(0x502C, 4, 1, order.u32(8)));
+    t.extend(order.u32(0));
+    assert_eq!(t.len(), 98);
+    t.extend(b"STRIPDAT");
+    t
+}
+
+/// IFD0 0x5028 ThumbnailStripOffsets (with 0x502c ThumbnailStripByteCounts)
+/// locates a strip inside the block. It was missing from the pointer
+/// refusal list, so a write that re-laid the block out (a legacy deletion)
+/// re-emitted the old offset without the strip and reported success
+/// (00f0c398 and tip 8825f101 with the pair in IFD1; with it in IFD0,
+/// 00f0c398 refused only by accident, unable to re-add the surfaced row).
+/// Such a block is now never re-laid out -- the write is
+/// refused, file untouched -- and an in-place edit keeps the strip where
+/// its pointer says. The post-write check follows every offset/length pair
+/// the scanner knows, so it refuses the dangling pointer on its own
+/// (review-head evidence: strip-refusal-reverted). Pinned ExifTool 13.59
+/// declares 0x5028 a plain tag; its own re-layout does not move the strip
+/// either (evidence `strip-oracle.txt`), so this refusal is on the
+/// fail-closed side. JPEG and PNG, II and MM.
+#[test]
+fn a_thumbnail_strip_pointer_is_never_left_dangling() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        // IFD1-carried (dangled silently before) and IFD0 (refused before,
+        // by accident: the planner could not re-add the surfaced row).
+        for (ifd, tiff) in [
+            ("IFD1", ifd1_strip_tiff(order)),
+            ("IFD0", strip_tiff(order)),
+        ] {
+            for (name, original) in [
+                ("strip.jpg", jpeg_with(&tiff)),
+                ("strip.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ] {
+                let label = format!("{order:?} {ifd} {name}");
+                let path = write(dir.path(), name, &original);
+                let err = remove_tag(&path, "IFD0:Model").expect_err(&format!("{label}: re-laid"));
+                assert!(err.to_string().contains("0x5028"), "{label}: {err}");
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{label}");
+
+                // In place: the strip stays where the pointer says.
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                    .unwrap_or_else(|e| panic!("{label} Artist: {e}"));
+                let out = std::fs::read(&path).unwrap();
+                let (after, _) = tiff_and_rest(name, &out);
+                let d = dump(&after);
+                let offset = d
+                    .get(&format!("{ifd}:0x5028"))
+                    .expect("pointer kept")
+                    .2
+                    .clone();
+                let offset = order.read_u32(&offset) as usize;
+                assert_eq!(&after[offset..offset + 8], b"STRIPDAT", "{label}: strip");
+
+                // `IFD1:All` deletes the pair with its directory: nothing is
+                // left to dangle, so it is no refusal (sweep2 at 247a9f90
+                // caught the check refusing it; pinned ExifTool 13.59 and
+                // tip 8825f101 delete IFD1).
+                if ifd == "IFD1" {
+                    let path = write(dir.path(), name, &original);
+                    remove_tag(&path, "IFD1:All")
+                        .unwrap_or_else(|e| panic!("{label} IFD1:All: {e}"));
+                    let (after, _) = tiff_and_rest(name, &std::fs::read(&path).unwrap());
+                    let d = dump(&after);
+                    assert!(
+                        !d.keys().any(|k| k.starts_with("IFD1:")),
+                        "{label}: IFD1 kept"
+                    );
+                    assert!(d.contains_key("IFD0:0x010f"), "{label}: IFD0 lost");
+                }
+            }
+        }
+    }
+}
+
+/// An ungrouped CLI write (`-Artist=z`: `modify_tag` passes the bare name
+/// on) is never judged a no-op by the EXIF no-op check, which reads only
+/// grouped keys: from c3bedc21 to 1003d053 it was, and the write was
+/// reported done with the file unchanged (tip 8825f101 wrote it). Pinned
+/// ExifTool 13.59 writes IFD0:Artist. (Resolving every ungrouped name as
+/// ExifTool does is #945's `write_request::resolve_write_key`.)
+#[test]
+fn an_ungrouped_write_is_not_taken_for_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        let label = format!("{order:?}");
+        let path = write(dir.path(), "bare.jpg", &jpeg_with(&tiff));
+        let out = std::process::Command::new(cli)
+            .arg("-Artist=z")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{label}: {out:?}");
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("z"),
+            "{label}: reported done, Artist not written"
+        );
+    }
+}
+
+/// A single-tag edit pinned ExifTool 13.59 makes in t/images
+/// Panasonic.rw2's embedded JpgFromRaw (PanasonicRaw 0x002e, "processed as
+/// an embedded document") is refused by name, file untouched -- library and
+/// CLI (exit 1). `-ExifIFD:ISO=` removes ISO from the JpgFromRaw's ExifIFD
+/// (the outer directories hold only IFD0:ISO); at tip 8825f101 and
+/// 00f0c398 oxidex reported "1 image files updated" and left the file
+/// byte-identical. `-IFD0:XResolution=` is the same shape in the embedded
+/// IFD0. The sets (`-ExifIFD:ISO=200`, `-ExifIFD:LensModel=x`,
+/// `-GPS:GPSLatitudeRef=N`) are written there by ExifTool too, creating the
+/// directory where needed; 00f0c398 edited the outer ExifIFD instead or
+/// refused on another ground. Evidence `rw2-embedded-oracle.txt`. An outer
+/// IFD0 set (`IFD0:Artist`, pinned by `an_rw2_edit_passes_the_post_write_check`)
+/// is not affected.
+#[test]
+fn a_panasonic_jpgfromraw_edit_is_refused_by_name() {
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&sample).unwrap();
+    fn refused<E: std::fmt::Display>(
+        label: &str,
+        result: Result<(), E>,
+        path: &Path,
+        original: &[u8],
+    ) {
+        let Err(err) = result else {
+            panic!("{label}: reported done");
+        };
+        assert!(err.to_string().contains("JpgFromRaw"), "{label}: {err}");
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            original,
+            "{label}: file touched"
+        );
+    }
+    for key in ["ExifIFD:ISO", "ExifIFD:iso", "IFD0:XResolution"] {
+        let path = write(dir.path(), "lib.rw2", &original);
+        refused(
+            &format!("remove {key}"),
+            remove_tag(&path, key),
+            &path,
+            &original,
+        );
+    }
+    for (key, value) in [
+        ("ExifIFD:ISO", TagValue::new_integer(200)),
+        ("ExifIFD:LensModel", TagValue::new_string("x")),
+        ("GPS:GPSLatitudeRef", TagValue::new_string("N")),
+    ] {
+        let path = write(dir.path(), "lib.rw2", &original);
+        refused(
+            &format!("set {key}"),
+            modify_tag(&path, key, value),
+            &path,
+            &original,
+        );
+    }
+
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for arg in [
+        "-ExifIFD:ISO=",
+        "-ExifIFD:ISO=200",
+        "-ExifIFD:LensModel=x",
+        "-GPS:GPSLatitudeRef=N",
+    ] {
+        let path = write(dir.path(), "cli.rw2", &original);
+        let out = std::process::Command::new(cli)
+            .arg(arg)
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(1), "{arg}: {text}");
+        assert!(text.contains("JpgFromRaw"), "{arg}: {text}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "{arg}: file touched"
+        );
+    }
+}
+
+/// `ExifIFD:All` and `MakerNotes:All` on t/images Panasonic.rw2,
+/// whose JpgFromRaw carries ExifIFD and a MakerNote: pinned ExifTool 13.59
+/// leaves the file unchanged for `ExifIFD:All` and `MakerNotes:All`, exit
+/// 0, with "Can't delete ExifIFD/MakerNotes from RW2" (its raw-file rule
+/// applies inside the embedded JPEG too: the `-G1 -s -ExifIFD:All
+/// -MakerNotes:All` read-back is 78 rows before and after; evidence
+/// `rw2-oracle.txt`). So does this writer. Pinned here so a
+/// change to the embedded-directory check cannot make them refusals or
+/// deletions the oracle does not make.
+#[test]
+fn rw2_embedded_exififd_and_makernotes_removals_follow_the_oracle() {
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&sample).unwrap();
+    for group in ["ExifIFD:All", "MakerNotes:All"] {
+        let path = write(dir.path(), "p.rw2", &original);
+        remove_tag(&path, group).unwrap_or_else(|e| panic!("{group}: {e}"));
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{group}");
+    }
+}
+
 /// The EXIF block (TIFF bytes) of `path`, `None` when it has none.
 fn exif_block_at(path: &Path) -> Option<Vec<u8>> {
     let name = path.file_name().unwrap().to_str().unwrap();

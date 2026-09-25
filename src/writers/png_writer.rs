@@ -230,6 +230,7 @@ fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[Strin
     // A decoded maker-note row (`Canon:MacroMode`) left out of the map is an
     // EXIF change too, whatever its family-1 group.
     !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
+        || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty()
         || removed.iter().any(|key| is_exif_key(key))
         || metadata
             .iter()
@@ -264,6 +265,19 @@ fn rewrite_exif_payload(
     let removed: Vec<String> = removed.iter().filter(|k| is_exif_key(k)).cloned().collect();
     let plan =
         crate::writers::generated_public_write::plan_public_write(&baseline, &desired, &removed)?;
+    // A carrier-wide removal's sets go into a fresh block (`FreshOrder`):
+    // `EXIF:All` deletes the eXIf chunk and a new one is big-endian;
+    // `IFD0:All` deletes IFD0 inside it and keeps a readable header's order.
+    let fresh = if removed.iter().any(|key| {
+        crate::writers::exif_surgical::removes_carrier(std::slice::from_ref(key))
+            && key
+                .split_once(':')
+                .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
+    }) {
+        crate::writers::exif_surgical::FreshOrder::SetPreferred
+    } else {
+        crate::writers::exif_surgical::FreshOrder::KeepReadableMark
+    };
     let payload = if plan.whole_exif_clear {
         Vec::new()
     } else if plan.generated.is_empty() {
@@ -272,6 +286,7 @@ fn rewrite_exif_payload(
             &baseline,
             &plan.legacy_metadata,
             &plan.legacy_removed,
+            fresh,
         )?
     } else {
         // A PNG has no JFIF segment, so `WriteExif` seeds no resolution
@@ -284,6 +299,7 @@ fn rewrite_exif_payload(
             &|| Ok(std::collections::BTreeMap::new()),
             &baseline,
             plan,
+            fresh,
         )?
     };
     // Every removal gone, every set present, before anything is written.
@@ -300,6 +316,13 @@ fn rewrite_exif_payload(
     crate::writers::exif_surgical::verify_dropped_rows_gone(
         full_baseline,
         full_desired,
+        &payload,
+        crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+    )?;
+    crate::writers::exif_surgical::verify_makernote_rows_set(
+        full_baseline,
+        full_desired,
+        original,
         &payload,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
@@ -446,7 +469,9 @@ fn plan_exif(
     // A dropped maker-note row is never a no-op: the write goes on to the
     // post-condition (`verify_dropped_rows_gone`), which refuses it.
     let drops_makernote_rows =
-        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty();
+        !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
+            || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata)
+                .is_empty();
     if !exif_changed(metadata, baseline, removed)
         || !drops_makernote_rows
             && crate::writers::exif_surgical::exif_request_is_no_op(
