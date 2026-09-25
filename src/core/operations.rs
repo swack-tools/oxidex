@@ -1459,6 +1459,18 @@ fn resolve_write_key_for(
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
         png_prefers_text, resolve_exif_family_key, resolve_write_key,
     };
+    // Group and tag names are case-insensitive, as they are to ExifTool
+    // (`-exififd:ISO=200`, `-ExifIFD:iso=`): a grouped name is resolved in
+    // #943's canonical spelling (`exif_surgical::canonical_write_key`, the
+    // spelling its transaction entry uses too), or the address checks below
+    // refused `exififd` and a deletion of `ExifIFD:iso` looked absent.
+    let respelled;
+    let tag_name = if tag_name.contains(':') {
+        respelled = crate::writers::exif_surgical::canonical_write_key(tag_name, baseline);
+        respelled.as_str()
+    } else {
+        tag_name
+    };
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     let surgical = is_surgical_tiff_target(format, &reader);
@@ -1551,6 +1563,14 @@ fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -> Result<bo
         )
     };
     Ok(if is_surgical_tiff_target(format, &reader) {
+        // The block scan below reads only the outer directories; a tag held
+        // only in a Panasonic RW2's embedded JpgFromRaw EXIF is not absent
+        // (ExifTool deletes it there), and #943 refuses that edit by name
+        // (`exif_surgical::refuse_embedded_jpeg_edits`) before any no-op
+        // decision -- so must this shortcut.
+        crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
+            file_bytes, metadata, metadata, &removed,
+        )?;
         no_op(
             &[file_bytes],
             crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,

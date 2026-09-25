@@ -593,3 +593,72 @@ fn png_ifd1_numerator(path: &Path, tag: u16) -> Option<u32> {
     }
     None
 }
+
+/// Group and tag names are case-insensitive, as they are to ExifTool: the
+/// resolver reads a grouped name in its canonical spelling. Pinned 13.59 on
+/// synthetic_001.jpg, in sequence:
+/// - `-exififd:ISO=200`: `1 image files updated`, ISO 200;
+/// - `-ExifIFD:iso=`: `1 image files updated`, ISO gone;
+/// - `-ifd0:artist=you`: `1 image files updated`, Artist you;
+/// - `-exififd:iso=` (now absent): `0 image files updated` / `1 image files
+///   unchanged`.
+///
+/// At 98288f02 oxidex refused the first (`cannot write the exififd group`)
+/// and reported the second unchanged with ISO still present.
+#[test]
+fn mixed_case_names_resolve_like_exiftool() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("c.jpg");
+    std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &file).unwrap();
+    let run = |arg: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .arg(arg)
+            .arg(&file)
+            .output()
+            .unwrap()
+    };
+    let read = |key: &str| {
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-s3", &format!("-{key}")])
+            .arg(&file)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    for (arg, stdout, key, value) in [
+        (
+            "-exififd:ISO=200",
+            "    1 image files updated\n",
+            "ExifIFD:ISO",
+            "200",
+        ),
+        (
+            "-ExifIFD:iso=",
+            "    1 image files updated\n",
+            "ExifIFD:ISO",
+            "",
+        ),
+        (
+            "-ifd0:artist=you",
+            "    1 image files updated\n",
+            "IFD0:Artist",
+            "you",
+        ),
+        (
+            "-exififd:iso=",
+            "    0 image files updated\n    1 image files unchanged\n",
+            "ExifIFD:ISO",
+            "",
+        ),
+    ] {
+        let o = run(arg);
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "{arg}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&o.stdout), stdout, "{arg}");
+        assert_eq!(read(key), value, "{arg}: {key}");
+    }
+}
