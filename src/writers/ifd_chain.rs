@@ -76,10 +76,13 @@ pub(crate) const OFFSET_PAIRS: [(u16, u16); 2] = [(0x0111, 0x0117), (0x0201, 0x0
 
 /// Tags that locate a directory or data this module does not model when met
 /// in a chain directory: the `%Exif::Main` pointers `exif_surgical` does not
-/// relocate, plus the ExifIFD/GPS/Interop sub-directory pointers (which the
-/// chain's directories never own here).
+/// relocate (its table-derived `UNMODELLED_POINTER_TAGS` and
+/// `NAMED_POINTER_TAGS`, less the [`OFFSET_PAIRS`] modelled here), plus the
+/// ExifIFD/GPS/Interop sub-directory pointers (which the chain's directories
+/// never own here).
 fn is_unmodelled_pointer(tag: u16) -> bool {
-    crate::writers::exif_surgical::UNMODELLED_POINTER_TAGS.contains(&tag)
+    use crate::writers::exif_surgical::{NAMED_POINTER_TAGS, UNMODELLED_POINTER_TAGS};
+    (UNMODELLED_POINTER_TAGS.contains(&tag) || NAMED_POINTER_TAGS.contains(&tag))
         && !OFFSET_PAIRS.iter().any(|(offset, _)| *offset == tag)
         || matches!(tag, 0x8769 | 0x8825 | 0xA005)
 }
@@ -244,9 +247,10 @@ fn scan_dir(
         raw.iter()
             .find(|(t, _, _, _)| *t == tag)
             .filter(|(_, typ, count, _)| *count == 1 && matches!(typ, 3 | 4))
-            .map(|(_, typ, _, field)| match typ {
-                3 => usize::from(read_u16(&field[..2], order)),
-                _ => read_u32(field, order) as usize,
+            // SHORT in the field's first two bytes, LONG in all four
+            // (`exif_surgical::inline_unsigned`, as the reader decodes it).
+            .map(|(_, typ, count, field)| {
+                crate::writers::exif_surgical::inline_unsigned(*typ, *count, field, order)
             })
     };
     let mut why = None;
