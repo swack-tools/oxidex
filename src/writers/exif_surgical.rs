@@ -2148,7 +2148,10 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
 /// [`serialize_exif`] for a plan derived from the block `original`.
 ///
 /// When that block has a MakerNote (pinned at its original offset, as
-/// always), everything the edit leaves alone also stays where it was, so
+/// always), everything the edit leaves alone also stays where it was (a
+/// table, value or thumbnail at an odd offset excepted: it is laid out on
+/// an even one, as TIFF requires and ExifTool's rewrite does -- `-validate`
+/// warns "Odd offset" otherwise), so
 /// maker-note data outside the note's byte count survives
 /// ([`super::makernote_guard`]): every byte no standard structure owns is
 /// copied to its original offset, a table whose row count is unchanged is
@@ -2253,6 +2256,7 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
                 && present[i]
                 && original_rows == rows[i]
                 && at >= 8
+                && at % 2 == 0
                 && at + table_size(rows[i]) <= tiff.len()
                 && alloc.reserve(at, table_size(rows[i]))
             {
@@ -2267,6 +2271,7 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
                 if let Some((at, len)) = layout.value(kinds[i], e.tag_id)
                     && len == e.value.len()
                     && at >= 8
+                    && at % 2 == 0
                     && tiff[at..at + len] == value_in_byte_order(e, bo)[..]
                     && alloc.reserve(at, len)
                 {
@@ -2277,6 +2282,7 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
         if let (Some((at, len)), Some(thumb)) = (layout.thumbnail, plan.thumbnail.as_ref())
             && len == thumb.len()
             && at >= 8
+            && at % 2 == 0
             && tiff[at..at + len] == thumb[..]
             && alloc.reserve(at, len)
         {
@@ -2286,6 +2292,40 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
             let start = start.max(8);
             if end > start && alloc.reserve(start, end - start) {
                 holes.push((start, end));
+            }
+        }
+        // Bytes the note's own IFD addresses outside it that a structure
+        // this edit moves or deletes owns (a value running on past the note
+        // into IFD1's table, one borrowing the thumbnail's bytes): kept where
+        // they are too, as ExifTool keeps them by copying them into its
+        // rebuilt note (WriteExif.pl 13.59:858-960). Only the addressed
+        // bytes; the structure itself still goes.
+        if let (Some(pin), Some(len)) = (pinned, makernote_len) {
+            for (start, end) in super::makernote_guard::note_references(tiff, pin, len, bo) {
+                let mut at = start.max(8);
+                while at < end {
+                    let blocked = alloc
+                        .reserved
+                        .iter()
+                        .find(|(rs, rl)| at >= *rs && at < rs + rl)
+                        .map(|(rs, rl)| rs + rl);
+                    if let Some(skip) = blocked {
+                        at = skip;
+                        continue;
+                    }
+                    let stop = alloc
+                        .reserved
+                        .iter()
+                        .map(|(rs, _)| *rs)
+                        .filter(|rs| *rs > at)
+                        .min()
+                        .unwrap_or(end)
+                        .min(end);
+                    if alloc.reserve(at, stop - at) {
+                        holes.push((at, stop));
+                    }
+                    at = stop;
+                }
             }
         }
     }

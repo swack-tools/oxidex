@@ -868,3 +868,89 @@ fn a_preview_at_the_end_of_the_block_survives_every_shrinking_group_removal() {
         }
     }
 }
+
+/// A maker note no decoder reads, in its own byte order (little-endian
+/// inside a big-endian block, as Panasonic and `SONY PI` notes are), whose
+/// one value starts inside the note and runs on through IFD1's table --
+/// the corpus's SonyDSC-S1900 CameraParameters (12,000 bytes, 42 past the
+/// note) and PanasonicDMC-FT20 BabyAge have this shape. `-IFD1:All=`
+/// deletes the table; the bytes the note addresses must stay (pinned
+/// ExifTool 13.59 copies them into its rebuilt note, WriteExif.pl
+/// 858-960), and nothing but a byte check can see them. Red at 07698fb5:
+/// the write succeeded and zeroed them.
+#[test]
+fn bytes_a_note_addresses_in_a_deleted_table_are_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let order = Order::Mm;
+    let le16 = |v: u16| v.to_le_bytes();
+    let le32 = |v: u32| v.to_le_bytes();
+    // header | IFD0 {Make, ExifIFD} @8 | "Acme\0" | ExifIFD {MakerNote} |
+    // note | IFD1 {Compression, thumbnail pair} | thumbnail
+    let make = ascii("Acme");
+    let ifd0_at = 8usize;
+    let make_at = ifd0_at + 2 + 12 * 2 + 4;
+    let exif_at = make_at + make.len() + make.len() % 2;
+    let note_at = exif_at + 2 + 12 + 4;
+    let note_ifd = 6usize;
+    let note_len = note_ifd + 2 + 12 + 4 + 10; // 10 value bytes inside
+    let value_at = note_at + note_ifd + 2 + 12 + 4;
+    let ifd1_at = note_at + note_len;
+    let value_len = (ifd1_at + 20) - value_at; // runs 20 bytes into IFD1's table
+    let thumb: &[u8] = &[0xFF, 0xD8, 0xFF, 0xD9];
+    let thumb_at = ifd1_at + 2 + 12 * 3 + 4;
+    let mut t = order.mark().to_vec();
+    t.extend(order.u16(42));
+    t.extend(order.u32(ifd0_at as u32));
+    t.extend(order.u16(2));
+    t.extend([order.u16(0x010F), order.u16(2)].concat());
+    t.extend(order.u32(make.len() as u32));
+    t.extend(order.u32(make_at as u32));
+    t.extend([order.u16(0x8769), order.u16(4)].concat());
+    t.extend(order.u32(1));
+    t.extend(order.u32(exif_at as u32));
+    t.extend(order.u32(ifd1_at as u32));
+    t.extend(&make);
+    t.resize(exif_at, 0);
+    t.extend(order.u16(1));
+    t.extend([order.u16(0x927C), order.u16(7)].concat());
+    t.extend(order.u32(note_len as u32));
+    t.extend(order.u32(note_at as u32));
+    t.extend(order.u32(0));
+    assert_eq!(t.len(), note_at);
+    t.extend(b"ACME\0\0");
+    t.extend(le16(1));
+    t.extend([le16(0x0001), le16(7)].concat());
+    t.extend(le32(value_len as u32));
+    t.extend(le32(value_at as u32)); // TIFF-relative
+    t.extend(le32(0));
+    t.extend(b"0123456789");
+    assert_eq!(t.len(), ifd1_at);
+    t.extend(order.u16(3));
+    t.extend([order.u16(0x0103), order.u16(3)].concat());
+    t.extend(order.u32(1));
+    t.extend([order.u16(6).as_slice(), &[0x5A, 0xA5]].concat());
+    t.extend([order.u16(0x0201), order.u16(4)].concat());
+    t.extend(order.u32(1));
+    t.extend(order.u32(thumb_at as u32));
+    t.extend([order.u16(0x0202), order.u16(4)].concat());
+    t.extend(order.u32(1));
+    t.extend(order.u32(thumb.len() as u32));
+    t.extend(order.u32(0));
+    t.extend(thumb);
+    let addressed = t[value_at..value_at + value_len].to_vec();
+    for (carrier, file) in [("jpg", jpeg_with(&t)), ("png", png_with(&t))] {
+        let path = write(dir.path(), &format!("borrow-ifd1.{carrier}"), &file);
+        remove_tag(&path, "IFD1:All")
+            .unwrap_or_else(|e| panic!("{carrier}: the addressed bytes can be kept: {e}"));
+        let out = tiff_of(&std::fs::read(&path).unwrap());
+        assert_eq!(
+            out.get(value_at..value_at + value_len),
+            Some(addressed.as_slice()),
+            "{carrier}: bytes the note addresses were overwritten"
+        );
+        assert_eq!(
+            &out[note_at..note_at + note_len],
+            &t[note_at..note_at + note_len]
+        );
+    }
+}

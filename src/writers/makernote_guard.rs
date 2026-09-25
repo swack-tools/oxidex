@@ -332,6 +332,134 @@ struct Links {
     thumb_len: Option<usize>,
 }
 
+/// The byte ranges of the block `tiff` that the MakerNote at
+/// `tiff[note_at..note_at + note_len]` addresses outside itself through its
+/// own IFD: every value longer than four bytes, at the offset its entry
+/// holds, clipped to the block, less the part inside the note.
+///
+/// A vendor-neutral reading of an IFD-style note, after ExifTool's
+/// `MakerNotes.pm` (13.59) `LocateIFD` (1494) and `GetMakerNoteOffset` /
+/// `FixBase` (1149, 1282), without their per-model tables:
+///
+/// * the IFD is looked for at the header lengths the IFD-style notes use
+///   (0 Canon/Minolta, 6 `QVC\0`/`AOC\0`, 8 `OLYMP\0`/`LEICA\0`/`SANYO`,
+///   10, 12 `Panasonic`/`SONY`/`OLYMPUS\0II`, 14, 16, 18) in the block's
+///   byte order and then the other one, and, for a note
+///   carrying its own TIFF header (`Nikon\0\x02`), at that header's first
+///   IFD, in that header's byte order and with its base;
+/// * a candidate is a plausible directory: 1..=512 entries, the table inside
+///   the note, every entry of a TIFF type 1..=13;
+/// * its offsets are read from the TIFF header, from the note's start, or
+///   from the note's own TIFF header, whichever puts the most values inside
+///   the note, where a note keeps its value data (ExifTool's expectation too).
+///
+/// A note that is no such directory yields nothing. The ranges tell the
+/// serializer which bytes outside the note to keep where they are when the
+/// structure owning them moves or goes (a Panasonic note whose values run on
+/// into IFD1's table, a Sony `SONY PI` CameraParameters running 42 bytes past
+/// the note), and let [`verify_makernote_preserved`] check them byte for byte
+/// where no decoder reads them.
+pub(crate) fn note_references(
+    tiff: &[u8],
+    note_at: usize,
+    note_len: usize,
+    bo: ByteOrder,
+) -> Vec<(usize, usize)> {
+    let note_end = note_at.saturating_add(note_len).min(tiff.len());
+    if note_at >= note_end {
+        return Vec::new();
+    }
+    // (IFD offset in the block, byte order, the note's own base if any)
+    let mut candidates: Vec<(usize, ByteOrder, Option<usize>)> = Vec::new();
+    for k in 0..=12usize {
+        let at = note_at + k;
+        let inner = match tiff.get(at..at + 4) {
+            Some(b"II*\0") => ByteOrder::LittleEndian,
+            Some(b"MM\0*") => ByteOrder::BigEndian,
+            _ => continue,
+        };
+        if let Some(first) = u32_at(tiff, at + 4, inner) {
+            candidates.push((at + first as usize, inner, Some(at)));
+        }
+        break;
+    }
+    // The block's byte order first; then the other one, for the notes that
+    // keep their own regardless of the block's (a Panasonic or `SONY PI` note
+    // is little-endian inside a big-endian block).
+    let other = match bo {
+        ByteOrder::LittleEndian => ByteOrder::BigEndian,
+        ByteOrder::BigEndian => ByteOrder::LittleEndian,
+    };
+    for order in [bo, other] {
+        for start in [0usize, 6, 8, 10, 12, 14, 16, 18] {
+            candidates.push((note_at + start, order, None));
+        }
+    }
+    let valid = |ifd: usize, order: ByteOrder| -> Option<Vec<(u16, usize, usize)>> {
+        let rows = u16_at(tiff, ifd, order)? as usize;
+        if rows == 0 || rows > 512 || ifd + 2 + 12 * rows > note_end {
+            return None;
+        }
+        let mut values = Vec::new();
+        for i in 0..rows {
+            let entry = ifd + 2 + 12 * i;
+            let kind = u16_at(tiff, entry + 2, order)?;
+            let count = u32_at(tiff, entry + 4, order)?;
+            if !(1..=13).contains(&kind) {
+                return None;
+            }
+            let size = type_size(kind).checked_mul(count as usize)?;
+            if size > 4 {
+                values.push((kind, u32_at(tiff, entry + 8, order)? as usize, size));
+            }
+        }
+        Some(values)
+    };
+    let Some((values, order_base)) = candidates
+        .iter()
+        .find_map(|(ifd, order, base)| valid(*ifd, *order).map(|v| (v, *base)))
+    else {
+        return Vec::new();
+    };
+    let bases: Vec<usize> = match order_base {
+        Some(own) => vec![own],
+        None => vec![0, note_at],
+    };
+    let inside = |base: usize| {
+        values
+            .iter()
+            .filter(|(_, off, size)| {
+                base.checked_add(*off)
+                    .is_some_and(|s| s >= note_at && s.saturating_add(*size) <= note_end)
+            })
+            .count()
+    };
+    // the first base wins a tie: TIFF-relative, as most notes are
+    let base = bases
+        .iter()
+        .copied()
+        .fold(None::<(usize, usize)>, |best, b| match best {
+            Some((_, n)) if n >= inside(b) => best,
+            _ => Some((b, inside(b))),
+        })
+        .map_or(0, |(b, _)| b);
+    let mut out = Vec::new();
+    for (_, off, size) in values {
+        let Some(start) = base.checked_add(off) else {
+            continue;
+        };
+        let end = start.saturating_add(size).min(tiff.len());
+        for (s, e) in [(start, end.min(note_at)), (start.max(note_end), end)] {
+            if s < e {
+                out.push((s, e));
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// An EXIF block inside the file that carries it: `file[tiff_at..][..tiff_len]`
 /// is the block (a JPEG APP1 after `Exif\0\0`, a PNG `eXIf` chunk, or the
 /// whole of a TIFF file).
@@ -442,6 +570,17 @@ pub(crate) fn verify_makernote_preserved(original: Carrier<'_>, output: Carrier<
             "the MakerNote would move from TIFF offset {note_at} or change, which \
              invalidates the absolute offsets inside it"
         )));
+    }
+
+    // The bytes the note's own IFD addresses outside it, where no decoder
+    // may read them (`note_references`): unchanged, at the same offsets.
+    for (start, end) in note_references(before_tiff, note_at, note.value.len(), before.byte_order) {
+        if after_tiff.get(start..end) != before_tiff.get(start..end) {
+            return Err(refused(format!(
+                "the MakerNote addresses bytes {start}..{end} outside itself, which \
+                 this edit would move or overwrite"
+            )));
+        }
     }
 
     let make = ifd0_ascii(&before, 0x010F).unwrap_or_default();
@@ -560,6 +699,32 @@ mod tests {
         assert_eq!(layout.holes(), vec![(64, 70)]);
         assert_eq!(layout.value(IfdKind::ExifIfd, 0x927C), Some((56, 8)));
         assert_eq!(layout.table(IfdKind::ExifIfd), Some((38, 1)));
+    }
+
+    /// `note_references` finds the note's IFD in either byte order and
+    /// after a vendor header, and returns only what lies outside the note.
+    #[test]
+    fn note_references_reads_the_notes_own_ifd() {
+        // MM block, LE note "SONY PI\0" + 4 bytes, IFD at +12: one undef
+        // value at TIFF 40 of 30 bytes, the note spanning 20..60 -- so the
+        // value (40..70) runs 10 bytes past the note's end.
+        let mut t = vec![0u8; 80];
+        t[..2].copy_from_slice(b"MM");
+        let note_at = 20;
+        t[note_at..note_at + 8].copy_from_slice(b"SONY PI\0");
+        let ifd = note_at + 12;
+        t[ifd..ifd + 2].copy_from_slice(&1u16.to_le_bytes());
+        t[ifd + 2..ifd + 4].copy_from_slice(&0x2050u16.to_le_bytes());
+        t[ifd + 4..ifd + 6].copy_from_slice(&7u16.to_le_bytes());
+        t[ifd + 6..ifd + 10].copy_from_slice(&30u32.to_le_bytes());
+        t[ifd + 10..ifd + 14].copy_from_slice(&40u32.to_le_bytes());
+        assert_eq!(
+            note_references(&t, note_at, 40, ByteOrder::BigEndian),
+            vec![(60, 70)]
+        );
+        // not a directory at all: nothing
+        let junk = vec![0xEEu8; 80];
+        assert!(note_references(&junk, 20, 40, ByteOrder::BigEndian).is_empty());
     }
 
     #[test]
