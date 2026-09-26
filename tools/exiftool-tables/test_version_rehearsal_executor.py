@@ -680,6 +680,7 @@ class ExecutorTests(unittest.TestCase):
         with patch.object(executor.os, "killpg") as killpg, \
              patch.object(executor, "_group_member_pids", return_value=[member, stranger]), \
              patch.object(executor, "_process_identity", side_effect=lambda pid: identities[pid]), \
+             patch.object(executor, "_pid_live", return_value=True), \
              patch.object(executor, "_signal_pid") as signal_pid:
             executor._signal_owned_group(child, signal.SIGKILL)
         self.assertNotIn(signal.SIGKILL, [call.args[1] for call in killpg.call_args_list])
@@ -777,6 +778,28 @@ class ExecutorTests(unittest.TestCase):
                     os.kill(command_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin kernel process identity")
+    def test_darwin_zombie_descendant_identity_reports_exit_not_uncertainty(self):
+        """A killed descendant awaiting its reaper is gone, not an unverifiable identity.
+
+        proc_pidinfo has no BSD info for a zombie, and signal zero to one
+        reparented to launchd is refused with EPERM; timeout cleanup then
+        reported a spurious cleanup_error. The kernel's p_stat says SZOMB.
+        """
+        child = subprocess.Popen(["sleep", "30"])
+        try:
+            os.kill(child.pid, signal.SIGKILL)
+            deadline = time.monotonic() + 10
+            while (executor._darwin_kinfo([*executor._DARWIN_KERN_PROC, executor._DARWIN_KERN_PROC_PID, child.pid])
+                   != [(child.pid, executor._DARWIN_SZOMB)]):
+                if time.monotonic() >= deadline:
+                    self.fail("child never became a zombie")
+                time.sleep(0.01)
+            with self.assertRaises(ProcessLookupError):
+                executor._process_identity(child.pid)
+        finally:
+            child.wait(timeout=10)
 
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.

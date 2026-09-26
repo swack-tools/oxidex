@@ -1099,10 +1099,17 @@ def _darwin_start_time(pid: int) -> tuple[int, int]:
     size = ctypes.sizeof(info)
     received = proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
     if received != size or info.pbi_pid != pid:
+        # proc_pidinfo has no BSD info for a zombie, and signal zero to one
+        # reparented to launchd is refused with EPERM. A zombie has exited
+        # (and holds no descriptors); its PID cannot be reused until reaped.
+        if _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PID, pid]) == [(pid, _DARWIN_SZOMB)]:
+            raise ProcessLookupError(pid)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             raise
+        except PermissionError:
+            pass
         raise OSError(f"cannot obtain precise Darwin process identity for pid {pid}")
     seconds, microseconds = int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
     if seconds <= 0 or not 0 <= microseconds < 1_000_000:
@@ -1173,9 +1180,9 @@ def _group_live(pgid: int, *, proc_root: Path = Path("/proc")) -> bool:
     except PermissionError:
         # macOS refuses signal-zero to a group whose remaining members are
         # zombies awaiting reaping; only the kernel member view may say so.
-        if _zombie_only_group(pgid):
-            return False
-        raise
+        # Anything else, including a membership that changed between the two
+        # kernel views while launchd reaped, still counts as live.
+        return not _zombie_only_group(pgid)
     if sys.platform.startswith("linux"):
         states = _procfs_group_states(pgid, proc_root)
         if not states:
@@ -1227,17 +1234,69 @@ def _signal_owned_descendants(child: subprocess.Popen[str], signal_value: signal
             _signal_pid(pid, signal_value)
 
 
+def _group_member_pids(pgid: int, *, proc_root: Path = Path("/proc")) -> list[int] | None:
+    """Current members of a process group, or None when they cannot be listed."""
+    if sys.platform.startswith("linux"):
+        try:
+            entries = list(proc_root.iterdir())
+        except OSError:
+            return None
+        members = []
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            row = _procfs_stat(entry / "stat")
+            if row is None:
+                try:
+                    entry.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return None
+                return None
+            if row[1] == pgid:
+                members.append(int(entry.name))
+        return members
+    if sys.platform == "darwin":
+        members = _darwin_group_members(pgid)
+        return None if members is None else [pid for pid, _state in members]
+    return None
+
+
 def _signal_owned_group(child: subprocess.Popen[str], signal_value: signal.Signals) -> None:
+    """Signal the child's process group without ever hitting a reused PGID.
+
+    While the leader is unreaped its PID, and so the PGID, cannot be reused,
+    and ``killpg`` is safe. Once it is reaped the number may name an unrelated
+    group, so only members whose recorded identity still matches are
+    signalled; anything unverifiable is left for the caller's liveness check
+    to report as incomplete.
+    """
     if signal_value == signal.SIGTERM and _group_live(child.pid):
         _mark_catchable_termination_unverifiable(child)
+    if child.returncode is not None:
+        owned = dict(getattr(child, "_oxidex_owned_descendants", {}))
+        for pid in _group_member_pids(child.pid) or []:
+            identity = owned.get(pid)
+            if identity is None:
+                continue
+            try:
+                if not _pid_live(pid):
+                    continue  # a zombie awaiting its reaper needs no signal
+                if _process_identity(pid) == identity:
+                    _signal_pid(pid, signal_value)
+            except OSError:
+                pass  # gone or unverifiable: the caller's liveness check decides
+        return
     try:
         os.killpg(child.pid, signal_value)
     except ProcessLookupError:
         pass
     except PermissionError:
-        # A zombie-only group cannot be signalled on macOS and needs no signal.
-        if not _zombie_only_group(child.pid):
-            raise
+        # macOS refuses to signal a group whose members are zombies (they need
+        # no signal). Whatever the reason, the caller's liveness check decides
+        # whether the group is gone; an unsignalled live member fails closed.
+        pass
 
 
 def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
@@ -1249,6 +1308,24 @@ def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
     return survivors
 
 
+def _readable(descriptor: int, timeout: float) -> bool:
+    """Whether a descriptor is readable (or at EOF) within ``timeout`` seconds.
+
+    ``select.select`` refuses descriptors at or above ``FD_SETSIZE`` with a
+    ValueError; ``poll`` has no such ceiling, and any failure is an OSError
+    that callers already treat as unverifiable.
+    """
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    try:
+        events = poller.poll(max(0, int(timeout * 1000)))
+    except (OSError, ValueError) as exc:
+        raise OSError(f"cannot poll descriptor {descriptor}: {exc}") from exc
+    if any(mask & select.POLLNVAL for _fd, mask in events):
+        raise OSError(f"descriptor {descriptor} is not open")
+    return bool(events)
+
+
 def _ownership_probe_live(child: subprocess.Popen[str]) -> bool:
     """Report whether any spawned process still inherits the ownership writer."""
     descriptor = getattr(child, "_oxidex_ownership_read_fd", None)
@@ -1257,8 +1334,7 @@ def _ownership_probe_live(child: subprocess.Popen[str]) -> bool:
             return False
         raise OSError("owned process lifetime verification is unavailable")
     try:
-        readable, _, _ = select.select([descriptor], [], [], 0)
-        if not readable:
+        if not _readable(descriptor, 0):
             return True
         payload = os.read(descriptor, 1)
     except OSError as exc:
@@ -1350,7 +1426,7 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     except BaseException as exc:
         enumeration_error = exc
     try:
-        os.killpg(child.pid, signal.SIGKILL)
+        _signal_owned_group(child, signal.SIGKILL)
     except OSError:
         pass
     try:
@@ -1466,7 +1542,12 @@ status_fd = int(sys.argv[1])
 argv = sys.argv[2:]
 
 def report(**fields):
-    os.write(status_fd, (json.dumps(fields, sort_keys=True) + "\n").encode())
+    # A lost reader must never stop the sweep: reporting is best effort, and
+    # the executor treats a missing report as unverified.
+    try:
+        os.write(status_fd, (json.dumps(fields, sort_keys=True) + "\n").encode())
+    except OSError:
+        pass
 
 class Sweep(Exception):
     pass
@@ -1477,9 +1558,30 @@ def request_sweep(_signum, _frame):
 def children():
     me = os.getpid()
     found = set()
-    for task in os.listdir(f"/proc/{me}/task"):
-        with open(f"/proc/{me}/task/{task}/children", encoding="ascii") as listing:
-            found.update(int(value) for value in listing.read().split())
+    try:
+        for task in os.listdir(f"/proc/{me}/task"):
+            with open(f"/proc/{me}/task/{task}/children", encoding="ascii") as listing:
+                found.update(int(value) for value in listing.read().split())
+        return found
+    except OSError:
+        pass
+    # Kernels without CONFIG_PROC_CHILDREN: scan every /proc/<pid>/stat for
+    # our PID as parent. An entry that vanishes mid-scan exited; any other
+    # unreadable entry makes the answer unverifiable.
+    found = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", encoding="utf-8") as stat:
+                raw = stat.read()
+        except FileNotFoundError:
+            continue
+        fields = raw[raw.rfind(")") + 2:].split()
+        if len(fields) < 2:
+            raise OSError(f"unparseable /proc/{name}/stat")
+        if int(fields[1]) == me:
+            found.add(int(name))
     return found
 
 def state(pid):
@@ -1585,8 +1687,7 @@ def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        readable, _, _ = select.select([descriptor], [], [], remaining)
-        if not readable:
+        if not _readable(descriptor, remaining):
             break
         chunk = os.read(descriptor, 65536)
         if not chunk:
@@ -1605,13 +1706,28 @@ def _close_lineage_status(child: subprocess.Popen[Any]) -> None:
 
 
 def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
-    """Replicate Popen's exec-failure semantics for a supervised command."""
-    reports = _lineage_reports(child, timeout=30, phase="exec")
-    exec_report = next((row for row in reports if row.get("phase") == "exec"), None)
-    if exec_report is not None and exec_report.get("ok") is True:
-        return
+    """Replicate Popen's exec-failure semantics for a supervised command.
+
+    If the exec report cannot be read, the command may already be running
+    while its handle is unpublished: the supervisor is told to sweep its
+    lineage (SIGUSR1; before its handler exists that simply kills it before
+    it forks) and the still-unreaped group is killed as a fallback.
+    """
     try:
-        child.wait(timeout=_TERMINATION_GRACE_SECONDS)
+        reports = _lineage_reports(child, timeout=30, phase="exec")
+        failure: BaseException | None = None
+    except BaseException as exc:
+        reports, failure = [], exc
+    exec_report = next((row for row in reports if row.get("phase") == "exec"), None)
+    if failure is None and exec_report is not None and exec_report.get("ok") is True:
+        return
+    if failure is not None or exec_report is None:
+        try:
+            os.kill(child.pid, signal.SIGUSR1)
+        except ProcessLookupError:
+            pass
+    try:
+        child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(child.pid, signal.SIGKILL)
@@ -1622,6 +1738,8 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
     for stream in (child.stdin, child.stdout, child.stderr):
         if stream is not None:
             stream.close()
+    if failure is not None:
+        raise OSError(f"owned command start could not be confirmed: {failure}") from failure
     if exec_report is not None and type(exec_report.get("errno")) is int:
         number = exec_report["errno"]
         raise OSError(number, exec_report.get("error") or os.strerror(number))
@@ -2029,6 +2147,10 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
+        if incomplete_cleanup:
+            # A surviving child owns the journal's active identity: start
+            # nothing else and never overwrite it.
+            raise incomplete_cleanup[0]
         kwargs.pop("capture_output", None)
         def started(pid: int, pgid: int) -> None:
             journal["active"]["child"] = {"pid": pid, "pgid": pgid}
