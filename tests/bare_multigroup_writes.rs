@@ -508,7 +508,10 @@ fn jpeg_segments(data: &[u8]) -> Vec<(usize, u8, std::ops::Range<usize>, usize)>
 /// The first EXIF APP1's TIFF (offset of its first byte in `data`, and
 /// whether it is little-endian), and its ExifIFD entries as
 /// (entry offset in the TIFF, tag, type, count, value/offset field).
-fn exif_ifd_entries(data: &[u8]) -> (usize, bool, Vec<(usize, u16, u16, u32, [u8; 4])>) {
+/// One ExifIFD entry: (offset in the TIFF, tag, type, count, value field).
+type IfdEntry = (usize, u16, u16, u32, [u8; 4]);
+
+fn exif_ifd_entries(data: &[u8]) -> (usize, bool, Vec<IfdEntry>) {
     let (_, _, payload, _) = jpeg_segments(data)
         .into_iter()
         .find(|(_, marker, payload, _)| {
