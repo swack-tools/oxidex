@@ -1632,13 +1632,11 @@ mod tests {
                 "0:1:0 0:0:0".to_string()
             ))
         );
+        // An absolute assignment is an ordinary set, never a shift (#957
+        // round 7): it is ordered with the other requests.
         assert_eq!(
             CliArgs::parse_date_shift("-EXIF:DateTime=2025:01:15 10:30:00"),
-            Some((
-                "EXIF:DateTime".to_string(),
-                "=".to_string(),
-                "2025:01:15 10:30:00".to_string()
-            ))
+            None
         );
     }
 
