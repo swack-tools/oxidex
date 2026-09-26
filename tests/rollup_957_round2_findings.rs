@@ -5,13 +5,15 @@
 //! `oracle_*` tests through `exiftool_oracle::graded()`.
 
 use oxidex::Metadata;
+use oxidex::core::exiftool_compat::format_for_exiftool;
 use oxidex::core::operations::{copy_metadata_report, read_metadata, write_metadata};
-use oxidex::core::{TagValue, WriteOutcome};
+use oxidex::core::{MetadataMap, ReadOptions, TagValue, WriteOutcome};
 use oxidex::exiftool_oracle;
 use oxidex::ffi::{
     EXIFTOOL_OK, exiftool_create, exiftool_destroy, exiftool_read_file, exiftool_remove_tag,
     exiftool_set_tag_string, exiftool_write_file,
 };
+use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +36,10 @@ fn copy_into(dir: &TempDir, fixture: &str, name: &str) -> PathBuf {
     let path = dir.path().join(name);
     fs::copy(fixture, &path).expect("copy fixture");
     path
+}
+
+fn sha(path: &Path) -> Vec<u8> {
+    Sha256::digest(fs::read(path).expect("read file")).to_vec()
 }
 
 fn s(path: &Path) -> &str {
@@ -279,4 +285,52 @@ fn oracle_redirected_copies_to_one_destination_keep_the_last() {
         oracle_value(oracle, &ours, "IFD0:Artist"),
         oracle_value(oracle, &theirs, "IFD0:Artist")
     );
+}
+
+// --- PRRT_kwDOQNbr5M6mPnGR + the class: projections keep the read source --
+
+/// Every public key-preserving projection of a read map is still that read:
+/// a row its caller removes is deleted, and the unedited projection writes
+/// nothing. `without_print_conv` (the thread), `format_for_exiftool` and
+/// `ReadOptions::strip_extended_only` all dropped the read source, so the
+/// removal was skipped silently; `clone` and `normalize_metadata_map` keep
+/// it (the latter since 4494e008) and are pinned alongside.
+#[test]
+fn every_key_preserving_projection_keeps_the_read_source() {
+    type Projection = fn(&MetadataMap) -> MetadataMap;
+    let projections: [(&str, Projection); 5] = [
+        ("clone", |m| m.clone()),
+        ("without_print_conv", |m| m.without_print_conv()),
+        ("format_for_exiftool", format_for_exiftool),
+        ("normalize_metadata_map", |m| {
+            oxidex::core::tag_normalization::normalize_metadata_map(m)
+        }),
+        ("strip_extended_only", |m| {
+            ReadOptions::default_full_listing().strip_extended_only(m)
+        }),
+    ];
+    let dir = TempDir::new().unwrap();
+    for (name, project) in projections {
+        let file = copy_into(&dir, JPEG, "removed.jpg");
+        let mut map = project(&read_metadata(&file).unwrap());
+        assert!(map.remove("IFD0:Artist").is_some(), "{name}");
+        write_metadata(&file, &map).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            get(&file, "IFD0:Artist"),
+            None,
+            "{name}: the removal was skipped"
+        );
+        assert_eq!(
+            get(&file, "IFD0:Make").as_deref(),
+            Some("Synthetic Camera Co"),
+            "{name}"
+        );
+
+        let file = copy_into(&dir, JPEG, "unedited.jpg");
+        let before = sha(&file);
+        let map = project(&read_metadata(&file).unwrap());
+        let outcome = write_metadata(&file, &map).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(outcome, WriteOutcome::Unchanged, "{name}");
+        assert_eq!(sha(&file), before, "{name}: an unedited projection wrote");
+    }
 }

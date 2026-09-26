@@ -876,6 +876,9 @@ impl MetadataMap {
             out.insert(key.clone(), value);
             out.set_last_assigned(self.is_assigned(key));
         }
+        // The same rows in their ValueConv form: still the read, so a row its
+        // caller removes is a deletion (#957, PRRT_kwDOQNbr5M6mPnGR).
+        out.inherit_read_source(self);
         out
     }
 

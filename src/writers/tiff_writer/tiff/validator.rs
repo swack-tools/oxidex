@@ -97,8 +97,10 @@ pub fn filter_tiff_writable_tags(metadata: &MetadataMap) -> MetadataMap {
             filtered.insert(tag_name.clone(), tag_value.clone());
         }
     }
-    // A filtered copy is the same rows: each keeps its provenance.
+    // A filtered copy is the same rows: each keeps its provenance, and the
+    // map keeps the read's for the rows it kept.
     filtered.copy_provenance_from(metadata);
+    filtered.inherit_read_source(metadata);
 
     filtered
 }
