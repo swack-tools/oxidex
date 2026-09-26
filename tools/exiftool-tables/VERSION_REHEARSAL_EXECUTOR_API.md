@@ -213,7 +213,13 @@ every owned command runs under a small child-subreaper supervisor
 session that closed every inherited descriptor, are reparented to it, and it
 kills and reaps its children until `waitpid` reports `ECHILD` before
 reporting the command's status. A command that left live descendants is
-refused with record state `escaped_descendants`. macOS has no subreaper: there
+refused with record state `escaped_descendants`. If the supervisor exits
+without proving its lineage empty (for example it was killed after the
+command left its session and closed every descriptor), the child stays
+unproven and nothing holds the lock's description, so the owner also writes
+`<lock>.unproven-lineage.json` beside the lock: every later lock owner and
+standalone `recover` refuses until an operator has verified the listed
+processes are gone and removed the marker. macOS has no subreaper: there
 a descendant that detaches and closes every inherited descriptor (and so no
 longer holds the lock) is not tracked.
 An interruption whose cleanup is incomplete leaves the active stage `running`; `recover`

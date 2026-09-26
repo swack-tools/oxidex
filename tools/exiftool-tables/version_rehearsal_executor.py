@@ -904,9 +904,48 @@ def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[d
         survivors = unproven_children()
     if survivors:
         _RETAINED_LOCKS.append(stream)
+        _mark_unproven_lineage(stream, survivors)
         return survivors
     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     return []
+
+
+_UNPROVEN_LINEAGE_SUFFIX = ".unproven-lineage.json"
+
+
+def _unproven_lineage_marker(lock_path: Path) -> Path:
+    return lock_path.with_name(lock_path.name + _UNPROVEN_LINEAGE_SUFFIX)
+
+
+def _mark_unproven_lineage(stream: Any, survivors: list[dict[str, Any]]) -> None:
+    """Make retention for an unverifiable lineage outlive this process.
+
+    Parking the stream keeps the lock only while this process lives. When
+    the sole evidence of a possibly live command is its supervisor's missing
+    verdict, no surviving process holds the lock's description, so a durable
+    marker beside the lock refuses every later owner (and standalone
+    recovery) until an operator has verified the processes are gone.
+    """
+    lineage = [item for item in survivors if "lineage" in str(item.get("state", ""))]
+    if not lineage:
+        return
+    try:
+        marker = _unproven_lineage_marker(Path(stream.name).absolute())
+        _atomic(marker, {"kind": "oxidex_unproven_owned_lineage", "owner_pid": os.getpid(),
+                         "recorded_at": time.time(), "survivors": lineage})
+    except (OSError, TypeError, ValueError) as exc:
+        # Never let a marker failure turn retention into a release: report it
+        # as one more unproven survivor instead.
+        survivors.append({"pid": None, "pgid": None,
+                          "state": f"unproven lineage marker could not be written: {exc}"})
+
+
+def _refuse_unproven_lineage(path: Path) -> None:
+    marker = _unproven_lineage_marker(path)
+    if marker.exists() or marker.is_symlink():
+        raise Refused(f"host lock {path} carries an unproven owned-lineage marker ({marker}): a prior "
+                      "run could not prove its command's descendants gone. Verify the processes it "
+                      "lists have exited, then remove the marker before running or recovering")
 
 
 def release_retained_locks() -> list[dict[str, Any]]:
@@ -2284,6 +2323,7 @@ class _HeldHostLock:
             if (path.is_symlink() or not __import__("stat").S_ISREG(current.st_mode)
                     or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
                 raise Refused("host lock changed during acquisition")
+            _refuse_unproven_lineage(path)
         except BaseException:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             raise

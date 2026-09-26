@@ -1107,7 +1107,7 @@ class AdapterTests(unittest.TestCase):
         helper.write_text(
             "import os, subprocess, sys\nfrom pathlib import Path\n"
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_stage_adapter as a\n"
-            f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
+            f"Path({str(leader)!r}).write_text(str(os.getpgrp()))\n"
             f"code = {child_code!r}\n"
             "a._run([sys.executable, '-c', code], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n")
         supervisor = self.root / "executor-supervisor.py"
@@ -1146,7 +1146,7 @@ class AdapterTests(unittest.TestCase):
         child_code = f"from pathlib import Path; import os,time; Path({str(pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
         helper.write_text(
             "import os, subprocess, sys, time\nfrom pathlib import Path\n"
-            f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
+            f"Path({str(leader)!r}).write_text(str(os.getpgrp()))\n"
             "time.sleep(1.2)\n"
             f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)\n"
             f"Path({str(pid)!r}).write_text(str(child.pid))\n"
