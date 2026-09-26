@@ -669,6 +669,115 @@ class ExecutorTests(unittest.TestCase):
                     pass
 
     @_without_lineage_supervisor
+    def test_reaped_leader_group_is_never_signalled_by_numeric_pgid(self):
+        """After the leader is reaped its PGID may be reused; signal only verified members."""
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        member, stranger = 7001, 7002
+        setattr(child, "_oxidex_owned_descendants", {member: "identity-owned"})
+        identities = {member: "identity-owned", stranger: "identity-stranger"}
+        with patch.object(executor.os, "killpg") as killpg, \
+             patch.object(executor, "_group_member_pids", return_value=[member, stranger]), \
+             patch.object(executor, "_process_identity", side_effect=lambda pid: identities[pid]), \
+             patch.object(executor, "_signal_pid") as signal_pid:
+            executor._signal_owned_group(child, signal.SIGKILL)
+        self.assertNotIn(signal.SIGKILL, [call.args[1] for call in killpg.call_args_list])
+        signal_pid.assert_called_once_with(member, signal.SIGKILL)
+
+    def test_probe_and_status_reads_survive_descriptors_above_fd_setsize(self):
+        """select() refuses descriptors >= FD_SETSIZE with ValueError; the readers must not."""
+        read_fd, write_fd = os.pipe()
+        high_read = high_write = -1
+        try:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if hard != resource.RLIM_INFINITY and hard < 1200:
+                self.skipTest("descriptor limit too low to place a pipe above FD_SETSIZE")
+            if soft < 1200:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (1200, hard))
+                self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, (soft, hard))
+            high_read, high_write = os.dup2(read_fd, 1100), os.dup2(write_fd, 1101)
+            os.close(read_fd)
+            os.close(write_fd)
+            read_fd = write_fd = -1
+            probe = subprocess.Popen([sys.executable, "-c", "pass"])
+            probe.wait(timeout=30)
+            setattr(probe, "_oxidex_ownership_read_fd", high_read)
+            self.assertTrue(executor._ownership_probe_live(probe))
+            os.write(high_write, b'{"phase": "exec", "ok": true}\n')
+            setattr(probe, "_oxidex_lineage_status_fd", high_read)
+            setattr(probe, "_oxidex_ownership_read_fd", -1)
+            rows = executor._lineage_reports(probe, timeout=5, phase="exec")
+            self.assertEqual(rows, [{"phase": "exec", "ok": True}])
+            high_read = -1  # the reader closes it on EOF or leaves it attached
+        finally:
+            for descriptor in (read_fd, write_fd, high_write):
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if high_read >= 0:
+                try:
+                    os.close(high_read)
+                except OSError:
+                    pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_lineage_supervisor_falls_back_when_children_files_are_absent(self):
+        """Kernels without /proc/<pid>/task/<tid>/children must still sweep and verify."""
+        crippled = executor._LINUX_LINEAGE_SUPERVISOR.replace(
+            'f"/proc/{me}/task/{task}/children"', 'f"/proc/{me}/task/{task}/children-absent"')
+        self.assertNotEqual(crippled, executor._LINUX_LINEAGE_SUPERVISOR)
+        with patch.object(executor, "_LINUX_LINEAGE_SUPERVISOR", crippled):
+            exited = executor._run_record([sys.executable, "-c", "raise SystemExit(7)"],
+                                          cwd=self.root, env=dict(os.environ), run=subprocess.run)
+        self.assertEqual((exited["state"], exited["exit"]), ("exit_failed", 7), exited)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_unconfirmed_supervised_start_does_not_strand_the_command(self):
+        """A failed exec-report read must not leave an unpublished command running."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        command_pid = None
+        original = executor._lineage_reports
+
+        def fail_after_command_started(child, *, timeout, phase):
+            nonlocal command_pid, write_fd
+            if phase == "exec":
+                os.close(write_fd)
+                write_fd = -1
+                command_pid = int(_read_reported_line(read_fd))
+                raise ValueError("filedescriptor out of range in select()")
+            return original(child, timeout=timeout, phase=phase)
+
+        try:
+            with patch.object(executor, "_lineage_reports", side_effect=fail_after_command_started):
+                record = executor._run_record(
+                    [sys.executable, "-c",
+                     "import os, sys, time; os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode()); "
+                     "time.sleep(60)", str(write_fd)],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run)
+            self.assertEqual(record["state"], "spawn_failed", record)
+            self.assertIsNotNone(command_pid)
+            deadline = time.monotonic() + 10
+            while executor._pid_live(command_pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(executor._pid_live(command_pid), "the unpublished command was stranded")
+            self.assertEqual(executor.unproven_children(), [])
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if command_pid is not None:
+                try:
+                    os.kill(command_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
 
@@ -1908,6 +2017,52 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(persisted["phase"], "running")
             self.assertEqual(persisted["releases"][release]["stages"]["native"], "running")
             self.assertIsInstance(persisted["active"]["child"]["pid"], int)
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                executor._close_ownership_probe(child)
+
+    def test_native_probe_stops_spawning_after_incomplete_cleanup(self):
+        """Later oracle commands must not run or overwrite the surviving child's identity."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        rows: list[dict] = []
+
+        def track_creation(argv, *args, **kwargs):
+            child = original_popen(argv, *args, **kwargs)
+            if any("time.sleep(60)" in str(part) for part in argv):
+                created.append(child)
+            return child
+
+        def two_command_probe(*_args, run, **_kwargs):
+            for _ in range(2):
+                rows.append(executor.native_oracle._run(
+                    [sys.executable, "-c", "import time; time.sleep(60)"], run))
+            return {"state": "refused", "cases": [], "commands": rows}
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=two_command_probe), \
+                 patch.object(executor.native_oracle, "TIMEOUT", 0.05), \
+                 patch.object(executor.subprocess, "Popen", side_effect=track_creation), \
+                 patch.object(executor, "_bounded_timeout_cleanup", side_effect=OSError("bounded failed")), \
+                 patch.object(executor, "_emergency_reap_group", side_effect=OSError("emergency failed")), \
+                 patch.object(executor, "_group_live", return_value=True):
+                with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                    executor._run_native(self.run_dir, journal, release, docs, config,
+                                         self.cache, self.sources, subprocess.run)
+            self.assertEqual(len(created), 1, "a second oracle command ran after incomplete cleanup")
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["active"]["child"]["pid"], created[0].pid)
         finally:
             for child in created:
                 try:
