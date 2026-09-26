@@ -274,6 +274,7 @@ fn is_exif_key(key: &str) -> bool {
     EXIF_KEY_PREFIXES
         .iter()
         .any(|prefix| key.starts_with(prefix))
+        || crate::writers::exif_surgical::chain_key_dir(key).is_some()
 }
 
 /// The EXIF-family rows of a map.
@@ -404,6 +405,15 @@ fn rewrite_exif_payload(
         &payload,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
+    // A chain past IFD1 that locates data outside the chunk is kept by no
+    // write: pinned ExifTool 13.59 refuses it ("Error reading StripOffsets
+    // data in IFD2"), and nothing past an `eXIf` chunk belongs to it. A
+    // carrier the write deletes is not read.
+    if let Some(original) = original
+        && !crate::writers::exif_surgical::removes_carrier(&removed)
+    {
+        crate::writers::ifd_chain::refuse_unmovable_outside(original, &payload, false)?;
+    }
     // And every maker-note value still reads back, including data the note
     // locates outside itself (`makernote_guard`). Checked within the block:
     // an `eXIf` chunk is self-contained, nothing past it belongs to it.

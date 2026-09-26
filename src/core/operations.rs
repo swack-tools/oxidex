@@ -1353,17 +1353,14 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                     after.first().map(Vec::as_slice).unwrap_or_default(),
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
+                // The chain past IFD1 on the whole files: its IFD2 preview
+                // after the image re-pointed as ExifTool re-points it, and
+                // no other data outside the block kept (`verify_jpeg_chain`).
                 // A deleted carrier is not read (its chain went with it).
-                if let (false, Some(before), Some(after), Some(header)) = (
-                    crate::writers::exif_surgical::removes_carrier(removed),
-                    before.as_deref(),
-                    after.first(),
-                    crate::writers::exif_surgical::jpeg_exif_header_offset(file_bytes),
-                ) {
-                    crate::writers::exif_surgical::verify_chain_data_after_block(
-                        before,
-                        after,
-                        &file_bytes[header..],
+                if !crate::writers::exif_surgical::removes_carrier(removed) {
+                    crate::writers::exif_surgical::verify_jpeg_chain(
+                        file_bytes,
+                        &serialized_bytes,
                     )?;
                 }
                 // Every maker-note value still reads back, the data it
@@ -1679,10 +1676,13 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
     // spells differently (the reader keys `XMP-dc:Title` as `XMP:Title`) is
     // never judged absent from the map alone.
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    // The directory chain past IFD1 (`IFD2:`, ... -- #954's
+    // `exif_surgical::chain_key_dir`) is scanned entry by entry too: a
+    // removal naming nothing it holds is a no-op beside a real edit.
     let exif_group = matches!(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
-    );
+    ) || crate::writers::exif_surgical::chain_key_dir(key).is_some();
     if !exif_group && group != "PDF" && group != "PNG" {
         return Ok(false);
     }

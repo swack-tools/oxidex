@@ -2439,9 +2439,12 @@ fn leica_trailer_jpeg(order: Order) -> Vec<u8> {
     [jpeg, LEICA_PREVIEW.to_vec()].concat()
 }
 
-/// IFD2's table (count, records, next pointer) and the strip it locates,
-/// block-relative, or `None` when IFD1 does not link on.
-fn ifd2_of(tiff: &[u8], file_from_header: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+/// IFD2's records -- the strip offset's value field blanked, since a
+/// re-laid-out block or a re-pointed preview moves it -- and the strip it
+/// locates, block-relative (from the TIFF header on in the carrier), or
+/// `None` when IFD1 does not link on.
+#[allow(clippy::type_complexity)]
+fn ifd2_of(tiff: &[u8], file_from_header: &[u8]) -> Option<(Vec<[u8; 12]>, Option<Vec<u8>>)> {
     let order = if &tiff[..2] == b"II" {
         Order::Ii
     } else {
@@ -2459,7 +2462,16 @@ fn ifd2_of(tiff: &[u8], file_from_header: &[u8]) -> Option<(Vec<u8>, Option<Vec<
         return None;
     }
     let n = u16_at(ifd2) as usize;
-    let table = tiff[ifd2..ifd2 + 2 + 12 * n + 4].to_vec();
+    let records = (0..n)
+        .map(|i| {
+            let at = ifd2 + 2 + 12 * i;
+            let mut record: [u8; 12] = tiff[at..at + 12].try_into().unwrap();
+            if u16_at(at) == 0x0111 {
+                record[8..].fill(0);
+            }
+            record
+        })
+        .collect();
     let field = |tag: u16| {
         (0..n)
             .map(|i| ifd2 + 2 + 12 * i)
@@ -2470,7 +2482,7 @@ fn ifd2_of(tiff: &[u8], file_from_header: &[u8]) -> Option<(Vec<u8>, Option<Vec<
         (Some(start), Some(len)) => file_from_header.get(start..start + len).map(<[u8]>::to_vec),
         _ => None,
     };
-    Some((table, strip))
+    Some((records, strip))
 }
 
 /// A carrier's TIFF block and its bytes from the TIFF header on.
@@ -2486,21 +2498,22 @@ fn tiff_and_rest(name: &str, file: &[u8]) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// An EXIF block whose IFD1 links on to IFD2 (a Leica JPEG's PreviewImage
-/// IFD). The reconstructing writer followed IFD0's next pointer only as far
-/// as IFD1 and wrote IFD1 with a zero next pointer, so every write that
-/// re-laid the block out -- a legacy-only deletion or set, the staged half
-/// of a mixed write -- dropped IFD2 and its preview and reported success
-/// (tip e4edc55c too; pinned ExifTool 13.59 keeps the chain on all of
-/// them). Such a block is now never re-laid out: those writes are refused,
-/// file untouched. The in-place generated path keeps the chain
-/// byte-identical, and succeeds, unless the chain locates a preview after
-/// the JPEG's image and the APP1 changes length: ExifTool re-points that
-/// offset (Writer.pl `PREVIEW_INFO`), this writer does not (tip left it
-/// pointing 42 bytes early), so that write is refused. `IFD1:All` deletes
-/// IFD1 and the chain, as the oracle does; a removal naming nothing is a
-/// no-op. JPEG and PNG, both byte orders.
+/// IFD), through the library write path. The reconstructing writer followed
+/// IFD0's next pointer only as far as IFD1 and wrote IFD1 with a zero next
+/// pointer, so every write that re-laid the block out -- a legacy-only
+/// deletion or set, the staged half of a mixed write -- dropped IFD2 and its
+/// preview and reported success (tip e4edc55c too); #943 then refused those
+/// writes, and any in-place write that moved a trailer preview. Pinned
+/// ExifTool 13.59 keeps the chain on all of them, relocating what it locates
+/// inside the block and re-pointing a preview after the image
+/// (`writers::ifd_chain`), and so does this writer now: every write
+/// succeeds with IFD2's records and preview bytes intact, and `-validate`
+/// draws nothing the oracle's own edit does not. `IFD1:All` deletes IFD1 and
+/// the chain, as the oracle does; a removal naming nothing is a no-op. JPEG
+/// and PNG, both byte orders. (`tests/ifd2_chain_relocation.rs` grades the
+/// CLI against the oracle's read-back.)
 #[test]
-fn a_chain_past_ifd1_is_kept_or_the_write_refused() {
+fn a_chain_past_ifd1_is_kept_through_every_write() {
     let dir = tempfile::tempdir().unwrap();
     for order in [Order::Ii, Order::Mm] {
         let tiff = leica_tiff(order, None);
@@ -2518,48 +2531,57 @@ fn a_chain_past_ifd1_is_kept_or_the_write_refused() {
                 Some(LEICA_PREVIEW),
                 "{label}: fixture preview"
             );
-            let untouched = |path: &Path, what: &str| {
-                assert_eq!(std::fs::read(path).unwrap(), original, "{label} {what}");
+            let kept = |path: &Path, what: &str, args: Option<&[&str]>| {
+                let out = std::fs::read(path).unwrap();
+                assert_ne!(out, original, "{label} {what}: nothing written");
+                let (after, rest) = tiff_and_rest(name, &out);
+                assert_eq!(
+                    ifd2_of(&after, &rest),
+                    Some(chain.clone()),
+                    "{label} {what}: chain"
+                );
+                if let Some(args) = args {
+                    assert_validate_parity(&original, name, args, path, &format!("{label} {what}"));
+                }
             };
 
-            // Re-laying writes: refused, untouched.
+            // Re-laying writes: the chain carried.
             let path = write(dir.path(), name, &original);
-            assert!(
-                remove_tag(&path, "IFD0:Model").is_err(),
-                "{label} -IFD0:Model="
-            );
-            untouched(&path, "-IFD0:Model=");
-            assert!(
-                modify_tag(&path, "ExifIFD:ISO", TagValue::new_string("200")).is_err(),
-                "{label} -ExifIFD:ISO=200"
-            );
-            untouched(&path, "-ExifIFD:ISO=200");
+            remove_tag(&path, "IFD0:Model").unwrap_or_else(|e| panic!("{label} -IFD0:Model=: {e}"));
+            kept(&path, "-IFD0:Model=", Some(&["-IFD0:Model="]));
+            let path = write(dir.path(), name, &original);
+            modify_tag(&path, "ExifIFD:ISO", TagValue::Integer(200))
+                .unwrap_or_else(|e| panic!("{label} -ExifIFD:ISO=200: {e}"));
+            // No -validate parity here: this fixture has no ExifIFD, and creating
+            // one through the legacy path omits the ExifVersion,
+            // ComponentsConfiguration and ColorSpace ExifTool adds -- as at
+            // tip 8825f101 and #943 e42c3db8 on a block with no chain.
+            // `tests/ifd2_chain_relocation.rs` checks a legacy set with parity.
+            kept(&path, "-ExifIFD:ISO=200", None);
+            let path = write(dir.path(), name, &original);
             let mut map = read_metadata(&path).unwrap();
             assert!(map.remove("IFD0:Model").is_some(), "{label}");
             map.insert("IFD0:Artist", TagValue::new_string("you"));
-            assert!(write_metadata(&path, &map).is_err(), "{label} mixed");
-            untouched(&path, "mixed");
+            write_metadata(&path, &map).unwrap_or_else(|e| panic!("{label} mixed: {e}"));
+            kept(&path, "mixed", Some(&["-IFD0:Model=", "-IFD0:Artist=you"]));
 
             // A no-op.
+            let path = write(dir.path(), name, &original);
             remove_tag(&path, "EXIF:BogusTag").unwrap_or_else(|e| panic!("{label}: {e}"));
-            untouched(&path, "-EXIF:BogusTag=");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} no-op");
 
-            // In place: chain byte-identical, or refused for a trailer preview.
-            let result = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"));
-            if name == "trailer.jpg" {
-                assert!(result.is_err(), "{label} -IFD0:Artist=x");
-                untouched(&path, "-IFD0:Artist=x");
-            } else {
-                result.unwrap_or_else(|e| panic!("{label} -IFD0:Artist=x: {e}"));
-                let out = std::fs::read(&path).unwrap();
-                let (after, rest) = tiff_and_rest(name, &out);
-                assert_eq!(ifd2_of(&after, &rest), Some(chain.clone()), "{label} chain");
+            // In place, the APP1 changing length (a trailer preview moves).
+            for artist in ["x", "a much longer artist than the one before"] {
+                let path = write(dir.path(), name, &original);
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string(artist))
+                    .unwrap_or_else(|e| panic!("{label} -IFD0:Artist={artist}: {e}"));
                 assert_eq!(
                     read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-                    Some("x"),
+                    Some(artist),
                     "{label}"
                 );
-                assert_validate_parity(&original, name, &["-IFD0:Artist=x"], &path, &label);
+                let arg = format!("-IFD0:Artist={artist}");
+                kept(&path, &arg, Some(&[arg.as_str()]));
             }
 
             // IFD1:All deletes IFD1 and everything after it.

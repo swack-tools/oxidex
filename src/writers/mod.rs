@@ -54,6 +54,9 @@ pub(crate) mod xp_strings;
 // EncodeExifText (UserComment, GPSProcessingMethod, GPSAreaInformation),
 // shared by every EXIF serializer.
 pub(crate) mod exif_text;
+// The directory chain past IFD1 (IFD2 on): carried, and a JPEG's IFD2
+// preview re-pointed, through a re-laid-out EXIF block.
+pub mod ifd_chain;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {
