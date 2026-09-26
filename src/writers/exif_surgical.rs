@@ -3285,7 +3285,7 @@ pub(crate) fn removal_covers(removal: &str, key: &str, baseline: &MetadataMap) -
 /// Whether `key` of `baseline` is a row a maker-note decoder produced: its
 /// family-1 group is a maker-note group ([`MAKERNOTE_GROUPS`]) or its
 /// occurrence's family-0 group is `MakerNotes`.
-fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
+pub(crate) fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
     key.split_once(':')
         .is_some_and(|(group, _)| MAKERNOTE_GROUPS.contains(&group))
         || baseline.group0_of(key) == Some("MakerNotes")

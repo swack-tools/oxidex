@@ -966,6 +966,11 @@ pub(crate) fn write_metadata_transaction(
     assigned: &[String],
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
+    // Pinned ExifTool 13.59 writes every EXIF APP1 of a JPEG; oxidex writes
+    // one, so an EXIF-family set or deletion there is refused by name.
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes(
+        path, &baseline, metadata, removed, assigned,
+    )?;
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell

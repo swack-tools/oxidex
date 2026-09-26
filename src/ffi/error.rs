@@ -28,6 +28,9 @@ pub const EXIFTOOL_ERR_INVALID_TAG_VALUE: c_int = 4;
 pub const EXIFTOOL_ERR_UNSUPPORTED_FORMAT: c_int = 5;
 /// NULL pointer provided
 pub const EXIFTOOL_ERR_NULL_POINTER: c_int = 6;
+/// A write named tags that would not be written, so nothing was written (the
+/// file is byte-identical). The last error message names each one.
+pub const EXIFTOOL_ERR_TAG_NOT_WRITTEN: c_int = 7;
 /// Internal error (panic caught)
 pub const EXIFTOOL_ERR_INTERNAL: c_int = 99;
 
@@ -72,6 +75,7 @@ pub fn error_to_code(err: &ExifToolError) -> c_int {
             EXIFTOOL_ERR_UNSUPPORTED_FORMAT,
             format!("Unsupported format: {}", message),
         ),
+        ExifToolError::TagsNotWritten { .. } => (EXIFTOOL_ERR_TAG_NOT_WRITTEN, err.to_string()),
     };
     set_last_error(msg);
     code
