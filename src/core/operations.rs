@@ -1884,7 +1884,18 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
     } else {
         match format {
             FileFormat::PDF => group == "PDF",
-            FileFormat::PNG if group == "PNG" => true,
+            // A PNG text tag the map lacks names nothing; a chunk-backed tag
+            // (`png_writer::chunk_tag_chunk`: tIME, gAMA, sRGB) names its
+            // chunk, which the map need not surface (the reader reports no
+            // `SRGBRendering`), so its deletion is a no-op only where the
+            // file holds no such chunk (13.59: `-PNG:SRGBRendering=` drops
+            // the sRGB chunk, `1 image files updated`).
+            FileFormat::PNG if group == "PNG" => {
+                match crate::writers::png_writer::chunk_tag_chunk(key) {
+                    Some(kind) => !crate::writers::png_writer::png_has_chunk(&reader, kind)?,
+                    None => true,
+                }
+            }
             _ if !exif_group => false,
             FileFormat::JPEG => {
                 let payloads = jpeg_exif_payloads(file_bytes)?;
