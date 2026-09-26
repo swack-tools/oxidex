@@ -2201,8 +2201,17 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CopyReport {
-    /// Tags actually written to the destination.
+    /// Tags actually written to the destination: the sets the write
+    /// transaction applied and proved, each resolved destination once (two
+    /// filters redirected to one tag are one copy).
     pub copied: usize,
+    /// Tags the source supplied for the copy -- with a filter, the entries
+    /// the source carries -- before they are resolved against the
+    /// destination: ExifTool's tags "set from" the source. When it is zero a
+    /// filtered copy found nothing (13.59: `Warning: No writable tags set
+    /// from SRC`); a copy the destination makes a no-op (an EXIF tag into a
+    /// PDF) still found its tag, and 13.59 does not warn there.
+    pub requested: usize,
     /// For a copy-all: groups of source tags this destination's writer cannot
     /// write, which were therefore not copied (never silently).
     pub uncopied_groups: Vec<String>,
@@ -2325,15 +2334,23 @@ pub fn copy_metadata_report(
             dest_spec, value,
         ));
     }
-    let mut report = CopyReport {
-        copied: pending.len(),
-        ..CopyReport::default()
-    };
     if pending.is_empty() {
-        return Ok(report); // nothing to copy: the destination is not touched
+        // nothing to copy: the destination is not touched
+        return Ok(CopyReport::default());
     }
-    report.outcome = crate::core::write_transaction::apply_tag_changes(dest, &pending)?;
-    Ok(report)
+    // `copied` is what the transaction wrote and proved: requests for one
+    // destination (`Make>Artist` and `Model>Artist`) collapse to the last,
+    // and a request decided a no-op up front is not a copy. Counting the
+    // filters reported two copies for one Artist (#957,
+    // PRRT_kwDOQNbr5M6mO8E6).
+    let (outcome, copied) =
+        crate::core::write_transaction::apply_tag_changes_counted(dest, &pending)?;
+    Ok(CopyReport {
+        copied,
+        requested: pending.len(),
+        outcome,
+        ..CopyReport::default()
+    })
 }
 
 /// The copy-all half of [`copy_metadata_report`]: best-effort, like
@@ -2416,6 +2433,7 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
         }
     }
     report.copied = copied.len();
+    report.requested = report.copied + report.uncopied_tags.len();
     for tag in &report.uncopied_tags {
         let group = tag.tag.split_once(':').map_or("", |(group, _)| group);
         if !report.uncopied_groups.iter().any(|known| known == group) {

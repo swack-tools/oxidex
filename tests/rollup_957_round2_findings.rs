@@ -5,7 +5,7 @@
 //! `oracle_*` tests through `exiftool_oracle::graded()`.
 
 use oxidex::Metadata;
-use oxidex::core::operations::{read_metadata, write_metadata};
+use oxidex::core::operations::{copy_metadata_report, read_metadata, write_metadata};
 use oxidex::core::{TagValue, WriteOutcome};
 use oxidex::exiftool_oracle;
 use oxidex::ffi::{
@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
+/// `[IFD0]` Make/Model/Artist/..., `[ExifIFD]` ExifVersion/DateTimeOriginal.
+const JPEG: &str = "tests/fixtures/jpeg/simple/synthetic_001.jpg";
 /// `[IFD0] Make: TestCamera`, `Model: TM` and no ExifIFD, plus XMP.
 const JPEG_NO_EXIF_IFD: &str = "tests/fixtures/jpeg/sample_with_exif_xmp.jpg";
 
@@ -220,4 +222,61 @@ fn oracle_two_writes_from_one_map_match_two_commands() {
             "{key}"
         );
     }
+}
+
+// --- PRRT_kwDOQNbr5M6mO8E6: a copy counts what it wrote ------------------
+
+/// `IFD0:Make>IFD0:Artist` and `IFD0:Model>IFD0:Artist` are one destination:
+/// the transaction keeps the last (13.59 leaves Artist `TM`), and the report
+/// counted two copies.
+#[test]
+fn a_copy_counts_each_written_destination_once() {
+    let dir = TempDir::new().unwrap();
+    let dst = copy_into(&dir, JPEG, "dst.jpg");
+    let filters = [
+        "IFD0:Make>IFD0:Artist".to_string(),
+        "IFD0:Model>IFD0:Artist".to_string(),
+    ];
+    let report = copy_metadata_report(Path::new(JPEG_NO_EXIF_IFD), &dst, Some(&filters)).unwrap();
+    assert_eq!(report.copied, 1, "{report:?}");
+    assert_eq!(get(&dst, "IFD0:Artist").as_deref(), Some("TM"));
+
+    // Two destinations are two copies.
+    let dst = copy_into(&dir, JPEG, "two.jpg");
+    let filters = [
+        "IFD0:Make>IFD0:Artist".to_string(),
+        "IFD0:Model>IFD0:Copyright".to_string(),
+    ];
+    let report = copy_metadata_report(Path::new(JPEG_NO_EXIF_IFD), &dst, Some(&filters)).unwrap();
+    assert_eq!(report.copied, 2, "{report:?}");
+}
+
+#[test]
+fn oracle_redirected_copies_to_one_destination_keep_the_last() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let theirs = copy_into(&dir, JPEG, "theirs.jpg");
+    oracle_write(
+        oracle,
+        &[
+            "-TagsFromFile",
+            JPEG_NO_EXIF_IFD,
+            "-IFD0:Make>IFD0:Artist",
+            "-IFD0:Model>IFD0:Artist",
+        ],
+        &theirs,
+    );
+    let ours = copy_into(&dir, JPEG, "ours.jpg");
+    let filters = [
+        "IFD0:Make>IFD0:Artist".to_string(),
+        "IFD0:Model>IFD0:Artist".to_string(),
+    ];
+    copy_metadata_report(Path::new(JPEG_NO_EXIF_IFD), &ours, Some(&filters)).unwrap();
+    assert_eq!(
+        oracle_value(oracle, &ours, "IFD0:Artist"),
+        oracle_value(oracle, &theirs, "IFD0:Artist")
+    );
 }

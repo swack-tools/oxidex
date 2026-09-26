@@ -208,7 +208,7 @@ fn report_copy(
     filters: &[String],
     copy: &oxidex::core::operations::CopyReport,
 ) {
-    if !filters.is_empty() && copy.copied == 0 {
+    if !filters.is_empty() && copy.requested == 0 {
         PathLine::new("Warning: No writable tags set from ")
             .path(src)
             .eprint();
