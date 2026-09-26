@@ -2757,6 +2757,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsNotNone(child_pid)
         self.assertFalse(executor._pid_live(child_pid))
 
+    @_without_lineage_supervisor
     def test_interrupt_surviving_group_triggers_emergency_and_blocks_recovery(self):
         """A reaped leader must not hide its still-live owned process group."""
         self.initialize(self.config())
