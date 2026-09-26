@@ -398,12 +398,29 @@ once you are confident nothing will use it again:
 
 Keep it while its binary is still evidence someone may re-check, or while a
 live agent or an open PR still builds there. Delete only directories you
-created, by exact path, never by glob across other agents' directories. The
-same rule applies to scratch clones and bundles on remote hosts. A worktree
-itself is removable only when it has no uncommitted or untracked files and no
-commits missing from `origin` (`git status --porcelain` is empty and
-`git rev-list HEAD --not --remotes=origin` prints nothing). Use
-`git worktree remove`, never `rm -rf`.
+created, by exact path, never by glob across other agents' directories.
+
+A scratch clone or bundle is not build output: it can hold the only copy of
+a commit graph. Delete one only after proving that every ref it carries is
+reachable from `origin`. For a clone, run
+`git rev-list --all --not --remotes=origin` in the clone. For a bundle, list
+its heads with `git bundle list-heads` and check each one with
+`git merge-base --is-ancestor <sha> origin/<branch>`, or check that
+`git branch -r --contains <sha>` names a remote branch. Anything unreachable
+must be pushed or archived first.
+
+A worktree is removable only when all of these hold:
+- it has no uncommitted or untracked files (`git status --porcelain` is empty);
+- it has no commits missing from `origin`
+  (`git rev-list HEAD --not --remotes=origin` prints nothing);
+- its ignored files hold nothing worth keeping. `git worktree remove` deletes
+  ignored files without asking, and `git status` does not show them, so list
+  them with `git status --porcelain --ignored`. `HANDOFF.md` is ignored, and it
+  is the resume record, so copy it and any ignored evidence to
+  `~/oxidex-ops/evidence/<run>/` before removing the worktree, unless the
+  maintainer has said it is disposable.
+
+Use `git worktree remove`, never `rm -rf`.
 
 **The stash is shared by every worktree.** `refs/stash` belongs to the
 repository, not to a worktree. A bare `git stash pop` or `git stash apply`
@@ -412,9 +429,14 @@ agent's work-in-progress from a different branch. It has already happened
 here once. Git kept the other stash only because the pop conflicted. Prefer a
 WIP commit on your own branch, or a patch file in your evidence directory,
 over the stash. If you must stash, give it a message naming your branch
-(`git stash push -m "<branch>: <why>"`). Then find it with `git stash list`
-and apply it by its exact `stash@{N}`, after checking that entry's message.
-Never run a bare `pop`, `apply` or `drop`, and never `git stash clear`.
+(`git stash push -m "<branch>: <why>"`), and record its object ID at once
+(`git rev-parse stash@{0}` right after the push). To apply it later, use that
+recorded ID: `git stash apply <sha>`. `stash@{N}` is a reflog position, and
+another agent's push renumbers it between your `git stash list` and your
+`apply`. If you didn't record the ID, find the entry with `git stash list`,
+resolve it with `git rev-parse stash@{N}`, re-read its message with
+`git log -1 --format=%s <sha>`, and only then apply that ID. Never run a bare
+`pop`, `apply` or `drop`, never apply by position, and never `git stash clear`.
 
 ## How work lands
 
