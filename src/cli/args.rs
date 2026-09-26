@@ -1087,13 +1087,17 @@ impl CliArgs {
             ) {
                 return None;
             }
-            // So is any date set named by its IFD0 or ExifIFD group: the shift
+            // So is any date set named by its IFD0 or ExifIFD group, and
+            // `EXIF:ModifyDate` (written to IFD0, as 13.59 does): the shift
             // path patches the entry the name resolves to wherever it is, so
             // `-ExifIFD:ModifyDate=<date>` was refused ("not supported for
             // JPEG") and `-IFD0:ModifyDate=<date>` left the ExifIFD copy that
             // pinned ExifTool 13.59 deletes (`writers::exif_cross_delete`).
-            if tag.split_once(':').is_some_and(|(group, _)| {
-                group.eq_ignore_ascii_case("IFD0") || group.eq_ignore_ascii_case("ExifIFD")
+            if tag.split_once(':').is_some_and(|(group, name)| {
+                group.eq_ignore_ascii_case("IFD0")
+                    || group.eq_ignore_ascii_case("ExifIFD")
+                    || (group.eq_ignore_ascii_case("EXIF")
+                        && name.eq_ignore_ascii_case("ModifyDate"))
             }) {
                 return None;
             }
@@ -1626,6 +1630,7 @@ mod tests {
             "-IFD0:ModifyDate=2020:01:02 03:04:05",
             "-ExifIFD:ModifyDate=2020:01:02 03:04:05",
             "-exififd:modifydate=2020:01:02 03:04:05",
+            "-EXIF:ModifyDate=2020:01:02 03:04:05",
         ] {
             assert_eq!(CliArgs::parse_date_shift(arg), None, "{arg}");
         }

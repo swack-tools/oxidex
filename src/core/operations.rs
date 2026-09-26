@@ -983,7 +983,7 @@ fn write_metadata_transaction_among(
     let baseline = read_metadata(path).unwrap_or_default();
     let crossed = crate::writers::exif_cross_delete::with_cross_deletions(
         path, &baseline, metadata, removed, assigned, siblings,
-    );
+    )?;
     let (metadata, removed) = match &crossed {
         Some((map, removed)) => (map, removed.as_slice()),
         None => (metadata, removed),
@@ -1512,10 +1512,16 @@ pub fn modify_tag_among(
 ) -> Result<()> {
     // Step 1: Read existing metadata (preserves all other tags)
     let mut metadata = read_metadata(path)?;
-
-    // Step 2: Modify the single tag
-    let key = canonical_write_tag_name(tag_name);
-    metadata.insert(key, new_value);
+    // Step 2: Modify the tag. An ungrouped or `EXIF:` date is written to
+    // its EXIF directory (`AllDates` to all three), or refused when ExifTool
+    // also writes it outside EXIF (`exif_cross_delete::date_set_keys`).
+    let keys = match crate::writers::exif_cross_delete::date_set_keys(&metadata, tag_name)? {
+        Some(keys) => keys,
+        None => vec![canonical_write_tag_name(tag_name)],
+    };
+    for key in &keys {
+        metadata.insert(*key, new_value.clone());
+    }
 
     // Step 3: Write all metadata back to file; the tag is an explicit set,
     // whatever its value.
@@ -1523,9 +1529,28 @@ pub fn modify_tag_among(
         .iter()
         .map(|tag| canonical_write_tag_name(tag).to_string())
         .collect();
-    write_metadata_transaction_among(path, &metadata, &[], &[key.to_string()], &siblings)?;
+    let assigned: Vec<String> = keys.iter().map(|key| key.to_string()).collect();
+    write_metadata_transaction_among(path, &metadata, &[], &assigned, &siblings)?;
 
     Ok(())
+}
+
+/// Sets every EXIF key of `keys` to the date `raw` (typed per key as the CLI
+/// types a `-TAG=VALUE`) in one transaction: the route of an absolute
+/// `-ModifyDate=`, `-EXIF:ModifyDate=` or `-AllDates=` in a JPEG, TIFF or PNG
+/// (`exif_cross_delete::date_set_keys`), so each key moves its other
+/// IFD0/ExifIFD copy as pinned ExifTool 13.59 does.
+pub(crate) fn set_exif_dates(path: &Path, keys: &[&str], raw: &str) -> Result<()> {
+    let mut metadata = read_metadata(path)?;
+    let mut assigned = Vec::new();
+    for key in keys {
+        metadata.insert(
+            *key,
+            crate::cli::value_parser::parse_cli_tag_value(key, raw)?,
+        );
+        assigned.push(key.to_string());
+    }
+    write_metadata_transaction_among(path, &metadata, &[], &assigned, &[])
 }
 
 /// Removes a metadata tag from a file.

@@ -570,6 +570,19 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
         process::exit(1);
     }
 
+    // Every date request is also a `-TAG=VALUE` modification; any other one
+    // on the line was dropped here without a word (`-ModifyDate=x
+    // -ExifIFD:ModifyDate=y` wrote only the first). Refuse the command
+    // instead of performing part of it.
+    if args.tag_modifications().len() > date_shifts.len() {
+        eprintln!(
+            "Error: Cannot combine a date shift or an ungrouped date set with other tag writes \
+             in one command; nothing was written. Run them as separate commands, or name the \
+             date's group (-IFD0:ModifyDate=...)"
+        );
+        process::exit(1);
+    }
+
     // Verify file exists
     if !file.exists() {
         PathLine::new("Error: File not found: ").path(file).eprint();

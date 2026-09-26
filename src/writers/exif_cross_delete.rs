@@ -48,15 +48,19 @@
 //! Artist, so `-IFD0:Artist=x` on a file whose ExifIFD holds Artist is
 //! refused).
 //!
-//! Not covered: a date shift (ExifTool shifts the other copy too, :1259;
-//! oxidex refuses a grouped shift), an absolute `-ModifyDate=`/
-//! `-EXIF:ModifyDate=`, which the CLI still sends down its date-shift path,
-//! and an ungrouped name the write path has not resolved to IFD0/ExifIFD.
+//! An ungrouped name is followed where it is written: to its EXIF directory
+//! for the dates of [`date_set_keys`] (`-ModifyDate=`, `-AllDates=`, ...,
+//! which refuses the ones ExifTool also writes outside EXIF), and to the
+//! directory the generated writer resolves it to otherwise (`-Artist=` is
+//! IFD0's). Not covered: a date shift (ExifTool shifts the other copy too,
+//! :1259; oxidex refuses a grouped shift).
 
 use crate::core::metadata_map::MetadataMap;
+use crate::error::{ExifToolError, Result};
 use crate::writers::exif_surgical::{IfdKind, canonical_write_key, descriptor_tag_id};
 use crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
 use crate::writers::generated_setnewvalue_address_rules::SET_NEW_VALUE_LOOKUP;
+use crate::writers::generated_write_address::Resolution;
 use std::path::Path;
 
 const IFD0: &str = "IFD0";
@@ -98,7 +102,9 @@ fn exif_main_write_group(name: &str) -> Option<&'static str> {
 /// its group for `IFD0:`/`ExifIFD:`, `Exif::Main`'s write group for the
 /// family-0 alias `EXIF:`.
 fn written_directory(key: &str) -> Option<(&'static str, &str)> {
-    let (group, name) = key.split_once(':')?;
+    let Some((group, name)) = key.split_once(':') else {
+        return generated_directory(key).map(|directory| (directory, key));
+    };
     let directory = match group {
         IFD0 => IFD0,
         EXIF_IFD => EXIF_IFD,
@@ -106,6 +112,27 @@ fn written_directory(key: &str) -> Option<(&'static str, &str)> {
         _ => return None,
     };
     cross_directory(directory).map(|_| (directory, name))
+}
+
+/// How the generated public writer resolves `key` (`generated_public_write::
+/// resolve_public`, the resolver every public write goes through).
+fn generated_resolution(key: &str) -> Resolution<'static> {
+    crate::writers::generated_public_write::resolve_public(
+        key,
+        &crate::writers::generated_write_address::generated_rules(),
+        crate::writers::generated_setnewvalue_public_migration_rules::PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+    )
+}
+
+/// IFD0 or ExifIFD when the generated writer writes the ungrouped name
+/// `name` there (ungrouped `Artist` is IFD0's), else `None`.
+fn generated_directory(name: &str) -> Option<&'static str> {
+    match generated_resolution(name) {
+        Resolution::Resolved(row) => [IFD0, EXIF_IFD]
+            .into_iter()
+            .find(|directory| row.selected_group == *directory),
+        _ => None,
+    }
 }
 
 /// Whether `tag_id` is one of `directory`'s mandatory entries, which
@@ -155,6 +182,10 @@ pub(crate) fn cross_deletions(
         return deletions;
     }
     let canonical = |key: &str| canonical_write_key(key, baseline);
+    // An ungrouped name in a PNG is written to PNG's own chunks first
+    // (13.59: `-Artist=x` on t/images PNG.png writes `[PNG] Artist`), never
+    // a move between IFD0 and ExifIFD.
+    let ungrouped_is_exif = file_type != Some("PNG");
     let sets: Vec<String> = assigned
         .iter()
         .map(|key| canonical(key))
@@ -164,6 +195,7 @@ pub(crate) fn cross_deletions(
                 .filter(|(key, value)| baseline.get(key) != Some(value))
                 .map(|(key, _)| canonical(key)),
         )
+        .filter(|key| ungrouped_is_exif || key.contains(':'))
         .collect();
     let siblings: Vec<String> = siblings.iter().map(|key| canonical(key)).collect();
     let written: Vec<(&str, String)> = sets
@@ -270,6 +302,13 @@ fn png_exif_payload(bytes: &[u8]) -> Option<&[u8]> {
 /// The request with [`CrossDeletions`] applied: `desired` without the rows,
 /// `removed` naming the rowless copies. `None` when there is nothing to
 /// delete.
+///
+/// # Errors
+///
+/// A copy to delete that no writer here can delete: one the generated
+/// public writer owns but does not address in that directory (the
+/// `ExifIFD:` copy of an IFD0 tag such as Artist or XResolution). The write
+/// is refused, naming the copy, rather than made with the copy kept.
 pub(crate) fn with_cross_deletions(
     path: &Path,
     baseline: &MetadataMap,
@@ -277,7 +316,7 @@ pub(crate) fn with_cross_deletions(
     removed: &[String],
     assigned: &[String],
     siblings: &[String],
-) -> Option<(MetadataMap, Vec<String>)> {
+) -> Result<Option<(MetadataMap, Vec<String>)>> {
     let mut entries: Option<Vec<(IfdKind, u16)>> = None;
     let mut held = |ifd: IfdKind, tag_id: u16| {
         entries
@@ -292,7 +331,20 @@ pub(crate) fn with_cross_deletions(
     };
     let deletions = cross_deletions(baseline, desired, assigned, siblings, &mut held);
     if deletions == CrossDeletions::default() {
-        return None;
+        return Ok(None);
+    }
+    if let Some(key) = deletions
+        .rows
+        .iter()
+        .chain(deletions.rowless.iter())
+        .find(|key| matches!(generated_resolution(key), Resolution::Unsupported(_)))
+    {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot write this tag while the file holds '{key}': pinned ExifTool 13.59 \
+             deletes that copy when the tag is set in the other of IFD0/ExifIFD \
+             (WriteExif.pl %crossDelete), and this writer cannot delete '{key}'; \
+             nothing was written"
+        )));
     }
     let mut map = desired.clone();
     for row in &deletions.rows {
@@ -300,7 +352,119 @@ pub(crate) fn with_cross_deletions(
     }
     let mut removed = removed.to_vec();
     removed.extend(deletions.rowless);
-    Some((map, removed))
+    Ok(Some((map, removed)))
+}
+
+/// Groups a date row may sit in without pinned ExifTool 13.59 writing it on
+/// an ungrouped set: the EXIF directories, and the groups the reader derives.
+const EXIF_OR_DERIVED_GROUPS: &[&str] = &[
+    "IFD0",
+    "ExifIFD",
+    "IFD1",
+    "InteropIFD",
+    "GPS",
+    "EXIF",
+    "File",
+    "System",
+    "Composite",
+    "ExifTool",
+];
+
+/// The EXIF keys an absolute date set `tag` (ungrouped or `EXIF:`) writes in
+/// the file whose rows are `baseline`, as pinned ExifTool 13.59 writes it:
+/// `ModifyDate` to IFD0, `CreateDate` and `DateTimeOriginal` to ExifIFD, and
+/// the ungrouped `AllDates` shortcut to all three -- each moving its other
+/// IFD0/ExifIFD copy ([`with_cross_deletions`]). `None` when `tag` is none
+/// of these, or the file is not a JPEG, TIFF or PNG (the caller keeps its
+/// own route).
+///
+/// # Errors
+///
+/// An ungrouped set ExifTool also writes outside EXIF, which this route does
+/// not: in a PNG, `ModifyDate`, `CreateDate` and `AllDates` go to PNG's own
+/// `tIME`/text chunks (13.59 writes `[PNG] ModifyDate`); in a JPEG or TIFF, a
+/// file with an MIE trailer or a non-EXIF row of the same name (XMP, CIFF,
+/// ...) gets that copy updated too (13.59 on t/images ExifTool.jpg:
+/// `-DateTimeOriginal=` also writes `[CIFF]` and `[MIE-Doc]`). Refused,
+/// naming the copy; `-EXIF:<name>=` writes EXIF alone.
+pub(crate) fn date_set_keys(
+    baseline: &MetadataMap,
+    tag: &str,
+) -> Result<Option<Vec<&'static str>>> {
+    let (grouped, name) = match tag.split_once(':') {
+        None => (false, tag),
+        Some((group, name)) if group.eq_ignore_ascii_case("EXIF") => (true, name),
+        Some(_) => return Ok(None),
+    };
+    let lower = name.to_ascii_lowercase();
+    let keys: &[&'static str] = match lower.as_str() {
+        "alldates" if !grouped => &[
+            "ExifIFD:DateTimeOriginal",
+            "ExifIFD:CreateDate",
+            "IFD0:ModifyDate",
+        ],
+        "modifydate" => &["IFD0:ModifyDate"],
+        "createdate" => &["ExifIFD:CreateDate"],
+        "datetimeoriginal" => &["ExifIFD:DateTimeOriginal"],
+        _ => return Ok(None),
+    };
+    let file_type = baseline
+        .get("File:FileType")
+        .and_then(|value| value.as_string());
+    let refuse = |copy: &str| {
+        let instead = if lower == "alldates" {
+            "-EXIF:DateTimeOriginal=, -EXIF:CreateDate= and -EXIF:ModifyDate=".to_string()
+        } else {
+            format!("-EXIF:{name}=")
+        };
+        Err(ExifToolError::unsupported_format(format!(
+            "Cannot write '{tag}' ungrouped here: pinned ExifTool 13.59 also writes {copy}, \
+             which this writer does not; name the EXIF group ({instead}) to write EXIF \
+             alone. Nothing was written"
+        )))
+    };
+    match file_type {
+        Some("JPEG" | "TIFF") => {}
+        // 13.59 on t/images PDF.pdf: `-AllDates=` writes PDF:CreateDate,
+        // PDF:ModifyDate and their XMP copies; the date path wrote nothing
+        // and reported success.
+        Some("PDF") if lower == "alldates" => {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot write '{tag}' in a PDF: pinned ExifTool 13.59 writes PDF:CreateDate, \
+                 PDF:ModifyDate and their XMP copies, which this route does not. Nothing was \
+                 written"
+            )));
+        }
+        Some("PNG") if grouped || lower == "datetimeoriginal" => {}
+        Some("PNG") => {
+            let chunk = if lower == "alldates" {
+                "PNG:CreateDate and PNG:ModifyDate".to_string()
+            } else {
+                format!("PNG:{name}")
+            };
+            return refuse(&chunk);
+        }
+        _ => return Ok(None),
+    }
+    if !grouped {
+        let names: Vec<&str> = keys
+            .iter()
+            .filter_map(|key| key.split_once(':').map(|(_, name)| name))
+            .collect();
+        for key in baseline.keys() {
+            let Some((group, row_name)) = key.split_once(':') else {
+                continue;
+            };
+            let same_name = names.iter().any(|n| n.eq_ignore_ascii_case(row_name));
+            if group.starts_with("MIE") {
+                return refuse("its MIE trailer's copy");
+            }
+            if same_name && !EXIF_OR_DERIVED_GROUPS.contains(&group) {
+                return refuse(&format!("'{key}'"));
+            }
+        }
+    }
+    Ok(Some(keys.to_vec()))
 }
 
 #[cfg(test)]
@@ -459,6 +623,76 @@ mod tests {
         let desired = with(&base, "IFD0:CreateDate", "2020:01:02 03:04:05");
         let deletions = cross_deletions(&base, &desired, &[], &[], &mut |_, _| true);
         assert_eq!(deletions, CrossDeletions::default());
+    }
+
+    fn typed(file_type: &str, rows: &[(&str, &str)]) -> MetadataMap {
+        let mut all = vec![("File:FileType", file_type)];
+        all.extend_from_slice(rows);
+        map(&all)
+    }
+
+    #[test]
+    fn date_sets_are_written_to_their_exif_directories() {
+        let jpeg = typed("JPEG", &[("IFD0:ModifyDate", "2003:12:04 06:46:52")]);
+        let keys = |base: &MetadataMap, tag: &str| date_set_keys(base, tag).unwrap();
+        assert_eq!(keys(&jpeg, "ModifyDate"), Some(vec!["IFD0:ModifyDate"]));
+        assert_eq!(
+            keys(&jpeg, "EXIF:ModifyDate"),
+            Some(vec!["IFD0:ModifyDate"])
+        );
+        assert_eq!(keys(&jpeg, "CreateDate"), Some(vec!["ExifIFD:CreateDate"]));
+        assert_eq!(
+            keys(&jpeg, "AllDates"),
+            Some(vec![
+                "ExifIFD:DateTimeOriginal",
+                "ExifIFD:CreateDate",
+                "IFD0:ModifyDate"
+            ])
+        );
+        // Not a date this route owns, a group it does not, or another type.
+        assert_eq!(keys(&jpeg, "Artist"), None);
+        assert_eq!(keys(&jpeg, "XMP:ModifyDate"), None);
+        assert_eq!(keys(&jpeg, "EXIF:AllDates"), None);
+        assert_eq!(keys(&typed("MP4", &[]), "ModifyDate"), None);
+        // PNG: EXIF only when named so, or for DateTimeOriginal.
+        let png = typed("PNG", &[]);
+        assert_eq!(keys(&png, "EXIF:ModifyDate"), Some(vec!["IFD0:ModifyDate"]));
+        assert_eq!(
+            keys(&png, "DateTimeOriginal"),
+            Some(vec!["ExifIFD:DateTimeOriginal"])
+        );
+    }
+
+    #[test]
+    fn a_date_exiftool_also_writes_outside_exif_is_refused_by_name() {
+        let refused = |base: &MetadataMap, tag: &str, named: &str| {
+            let err = date_set_keys(base, tag).unwrap_err().to_string();
+            assert!(err.contains(named), "{tag}: {err}");
+        };
+        let png = typed("PNG", &[]);
+        refused(&png, "ModifyDate", "PNG:ModifyDate");
+        refused(&png, "AllDates", "PNG:CreateDate");
+        let ciff = typed("JPEG", &[("CIFF:DateTimeOriginal", "1998:05:01 21:33:18")]);
+        refused(&ciff, "DateTimeOriginal", "CIFF:DateTimeOriginal");
+        refused(&ciff, "AllDates", "CIFF:DateTimeOriginal");
+        assert!(date_set_keys(&ciff, "EXIF:DateTimeOriginal").is_ok());
+        let mie = typed("JPEG", &[("MIE-Doc:Title", "x")]);
+        refused(&mie, "ModifyDate", "MIE");
+        refused(&typed("PDF", &[]), "AllDates", "PDF:CreateDate");
+    }
+
+    #[test]
+    fn an_ungrouped_generated_name_writes_its_resolved_directory() {
+        assert_eq!(generated_directory("Artist"), Some(IFD0));
+        assert_eq!(generated_directory("NotATag"), None);
+        let base = jpeg(&[("ExifIFD:Artist", "Exif Artist")]);
+        let desired = with(&base, "Artist", "New");
+        assert_eq!(rows(&base, &desired, &[], &[]), ["ExifIFD:Artist"]);
+        // ... but not in a PNG, where ExifTool writes PNG:Artist.
+        let mut png = base.clone();
+        png.insert("File:FileType", TagValue::new_string("PNG"));
+        let desired = with(&png, "Artist", "New");
+        assert!(rows(&png, &desired, &[], &[]).is_empty());
     }
 
     #[test]

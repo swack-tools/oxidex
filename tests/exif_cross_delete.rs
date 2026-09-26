@@ -329,10 +329,99 @@ fn a_tag_moves_between_directories_png_exif() {
     ]);
 }
 
-/// A move this writer cannot make is refused, the file left byte-identical:
-/// IFD0 Artist is written by the generated writer, which does not admit the
-/// `ExifIFD:` qualifier the deletion of the ExifIFD copy needs. Before, the
-/// set succeeded and the ExifIFD copy stayed.
+/// Ungrouped and `EXIF:` date forms (the CLI's date-shift route before):
+/// `-ModifyDate=`, `-EXIF:ModifyDate=` and `-AllDates=` write each date to
+/// its EXIF directory and move the other copy; `-EXIF:ModifyDate=` in a PNG
+/// with no EXIF creates the `eXIf` chunk, as ExifTool does.
+#[test]
+fn date_forms_move_the_other_copy() {
+    let modify = format!("-ModifyDate={DATE}");
+    let exif_modify = format!("-EXIF:ModifyDate={DATE}");
+    let exif_create = format!("-EXIF:CreateDate={DATE}");
+    let all = format!("-AllDates={DATE}");
+    const PNG: Source = Source {
+        image: "PNG.png",
+        setup: &[],
+    };
+    assert_matches_oracle(&[
+        (CANON_BOTH, &[modify.as_str()]),
+        (CANON_BOTH, &[exif_modify.as_str()]),
+        (CANON_BOTH, &[all.as_str()]),
+        (CANON_BOTH, &[exif_modify.as_str(), exif_create.as_str()]),
+        (CANON, &[all.as_str()]),
+        (TIFF_BOTH, &[modify.as_str()]),
+        (TIFF_BOTH, &[exif_modify.as_str()]),
+        (TIFF_BOTH, &[all.as_str()]),
+        (PNG_EXIF, &[exif_modify.as_str()]),
+        (PNG, &[exif_modify.as_str()]),
+    ]);
+}
+
+/// What this writer cannot match is refused by name, the file left
+/// byte-identical. An ungrouped date ExifTool also writes outside EXIF: in
+/// a PNG its own chunks (13.59 writes `[PNG] ModifyDate`), in t/images
+/// ExifTool.jpg the CIFF and MIE copies. A date route mixed with other
+/// writes in one command, which the CLI used to cut short.
+#[test]
+fn date_forms_it_cannot_match_are_refused_by_name() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no graded ExifTool oracle");
+        return;
+    };
+    let modify = format!("-ModifyDate={DATE}");
+    let original = format!("-DateTimeOriginal={DATE}");
+    let all = format!("-AllDates={DATE}");
+    let exif_modify = "-ExifIFD:ModifyDate=2021:01:01 00:00:00";
+    let cases: [(Source, &[&str], &str); 5] = [
+        (PNG_EXIF, &[modify.as_str()], "PNG:ModifyDate"),
+        (PNG_EXIF, &[all.as_str()], "PNG:CreateDate"),
+        (
+            Source {
+                image: "ExifTool.jpg",
+                setup: &[],
+            },
+            &[original.as_str()],
+            "CIFF:DateTimeOriginal",
+        ),
+        (
+            Source {
+                image: "ExifTool.jpg",
+                setup: &[],
+            },
+            &[modify.as_str()],
+            "MIE",
+        ),
+        (
+            CANON_BOTH,
+            &[modify.as_str(), exif_modify],
+            "Cannot combine",
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for (index, (source, args, named)) in cases.into_iter().enumerate() {
+        let Some(path) = materialize(oracle, source, dir.path(), &index.to_string()) else {
+            eprintln!("skipping: pinned fixture {} is absent", source.image);
+            return;
+        };
+        let before = std::fs::read(&path).unwrap();
+        let output = oxidex()
+            .arg("-overwrite_original")
+            .args(args)
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?}: not refused");
+        assert!(stderr.contains(named), "{args:?}: {stderr}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{args:?}");
+    }
+}
+
+/// A move this writer cannot make is refused by name, the file left
+/// byte-identical: IFD0 Artist, set grouped or ungrouped, is written by the
+/// generated writer, which does not admit the `ExifIFD:` qualifier the
+/// deletion of the ExifIFD copy needs. Before, the set succeeded and the
+/// ExifIFD copy stayed.
 #[test]
 fn a_move_the_writer_cannot_make_is_refused() {
     let Some(oracle) = exiftool_oracle::graded() else {
@@ -340,18 +429,37 @@ fn a_move_the_writer_cannot_make_is_refused() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    for (index, source) in [CANON_BOTH_ARTIST, TIFF_BOTH].into_iter().enumerate() {
-        let Some(path) = materialize(oracle, source, dir.path(), &index.to_string()) else {
-            eprintln!("skipping: pinned fixture {} is absent", source.image);
-            return;
-        };
-        let before = std::fs::read(&path).unwrap();
-        let output = oxidex()
-            .args(["-overwrite_original", "-IFD0:Artist=New"])
-            .arg(&path)
-            .output()
-            .unwrap();
-        assert!(!output.status.success(), "{}: not refused", source.image);
-        assert_eq!(std::fs::read(&path).unwrap(), before, "{}", source.image);
+    let mut index = 0;
+    for source in [CANON_BOTH_ARTIST, TIFF_BOTH] {
+        for arg in ["-IFD0:Artist=New", "-Artist=New"] {
+            index += 1;
+            let Some(path) = materialize(oracle, source, dir.path(), &index.to_string()) else {
+                eprintln!("skipping: pinned fixture {} is absent", source.image);
+                return;
+            };
+            let before = std::fs::read(&path).unwrap();
+            let output = oxidex()
+                .args(["-overwrite_original", arg])
+                .arg(&path)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success(),
+                "{} {arg}: not refused",
+                source.image
+            );
+            assert!(
+                stderr.contains("ExifIFD:Artist"),
+                "{} {arg}: {stderr}",
+                source.image
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "{} {arg}",
+                source.image
+            );
+        }
     }
 }

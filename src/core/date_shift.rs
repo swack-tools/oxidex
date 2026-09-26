@@ -428,6 +428,16 @@ pub fn shift_metadata_dates(
     offset_or_value: &str,
     op: ShiftOperation,
 ) -> Result<()> {
+    // An absolute set of an EXIF date in a JPEG, TIFF or PNG is an ordinary
+    // write: ExifTool writes it to the tag's directory and deletes the copy
+    // in the other of IFD0/ExifIFD (`writers::exif_cross_delete`), where
+    // this path only patched the copies the file already held.
+    if op == ShiftOperation::Set
+        && let Some(keys) =
+            crate::writers::exif_cross_delete::date_set_keys(&read_metadata(path)?, tag_pattern)?
+    {
+        return crate::core::operations::set_exif_dates(path, &keys, offset_or_value);
+    }
     let spec = build_shift_spec(offset_or_value, op)?;
 
     let format = {
