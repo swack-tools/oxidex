@@ -397,8 +397,9 @@ fn key_matches_pattern(key: &str, pattern: &str) -> bool {
 ///
 /// # Divergences from ExifTool
 ///
-/// * A shift that matches no tags is an error (nonzero CLI exit), where
-///   exiftool reports "0 image files updated" and exits 0.
+/// * A shift that matches no tags leaves the file unchanged and returns
+///   `Ok(())`, as exiftool's `0 image files updated` / `1 image files
+///   unchanged` (exit 0) does.
 /// * During a multi-tag shift (AllDates), tags whose current value cannot be
 ///   parsed or shifted are skipped with a warning, matching ExifTool.
 ///
@@ -451,13 +452,10 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
             tag_pattern
         )));
     };
-    let modified = crate::writers::exif_inplace::shift_jpeg_exif_dates(path, &targets, spec)?;
-    if modified == 0 {
-        return Err(ExifToolError::parse_error(format!(
-            "No date/time tags matching '{}' found in EXIF data",
-            tag_pattern
-        )));
-    }
+    // A shift that finds nothing to shift leaves the file as it is: pinned
+    // 13.59's `-DateTimeOriginal+=1` on a file without one is `0 image
+    // files updated` / `1 image files unchanged`, exit 0.
+    crate::writers::exif_inplace::shift_jpeg_exif_dates(path, &targets, spec)?;
     Ok(())
 }
 
@@ -482,7 +480,13 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
         if !matches {
             continue;
         }
-        let Some(dt) = metadata.get(&key).and_then(|v| v.as_datetime()).copied() else {
+        // A date the reader keeps as text (a PNG `tIME` row) shifts too, as
+        // in 13.59 -- when the text is a plain `YYYY:MM:DD HH:MM:SS` date.
+        let held = metadata.get(&key).and_then(|value| match value {
+            TagValue::String(text) if text.len() == 19 => parse_absolute_datetime(text).ok(),
+            other => other.as_datetime().copied(),
+        });
+        let Some(dt) = held else {
             if !all_dates {
                 return Err(ExifToolError::parse_error(format!(
                     "Tag '{}' is not a DateTime tag",
@@ -497,10 +501,8 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
     }
 
     if modified == 0 {
-        return Err(ExifToolError::parse_error(format!(
-            "Tag '{}' not found in metadata",
-            tag_pattern
-        )));
+        // Nothing to shift: the file is left as it is (13.59: `unchanged`).
+        return Ok(());
     }
     write_metadata(path, &metadata)?;
     Ok(())

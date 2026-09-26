@@ -130,22 +130,38 @@ fn run_case(
     form: Form,
     expect: Expect,
 ) -> Result<(), String> {
-    let dir = tempfile::tempdir().unwrap();
     let original = std::fs::read(source).unwrap();
-    let et_path = dir.path().join("et.jpg");
-    let ox_path = dir.path().join("ox.jpg");
-    std::fs::write(&et_path, &original).unwrap();
-    std::fs::write(&ox_path, &original).unwrap();
-    let arg = arg(name, printed, raw, form);
+    let args = [arg(name, printed, raw, form)];
+    run_args(oracle, &original, "jpg", file, name, &args, expect)
+}
+
+/// Writes `args` (one command line) with both tools onto fresh copies of
+/// `original` (extension `ext`) and grades every group's `name` rows, read
+/// back by the oracle, against `expect`.
+fn run_args(
+    oracle: &Oracle,
+    original: &[u8],
+    ext: &str,
+    file: &str,
+    name: &str,
+    args: &[String],
+    expect: Expect,
+) -> Result<(), String> {
+    let dir = tempfile::tempdir().unwrap();
+    let et_path = dir.path().join(format!("et.{ext}"));
+    let ox_path = dir.path().join(format!("ox.{ext}"));
+    std::fs::write(&et_path, original).unwrap();
+    std::fs::write(&ox_path, original).unwrap();
 
     let et = oracle
         .command()
-        .args(["-m", "-overwrite_original", &arg])
+        .args(["-m", "-overwrite_original"])
+        .args(args)
         .arg(&et_path)
         .output()
         .expect("run oracle write");
     let ox = Command::new(env!("CARGO_BIN_EXE_oxidex"))
-        .arg(&arg)
+        .args(args)
         .arg(&ox_path)
         .output()
         .expect("run oxidex");
@@ -154,7 +170,7 @@ fn run_case(
     let ox_stderr = String::from_utf8_lossy(&ox.stderr).into_owned();
     let et_rows = oracle_rows(oracle, &et_path, name);
     let ox_rows = oracle_rows(oracle, &ox_path, name);
-    let case = format!("{file} {arg}");
+    let case = format!("{file} {}", args.join(" "));
     match expect {
         Expect::Match => {
             if !ox.status.success() {
@@ -271,4 +287,194 @@ fn a_makernote_deletion_oxidex_cannot_rule_out_is_refused() {
         "the oracle edits [Nikon] WhiteBalance"
     );
     assert_eq!(std::fs::read(&ox_path).unwrap(), original);
+}
+
+/// One review-round case: file label, bytes, extension, graded name, the
+/// command line, and its pinned outcome.
+type Case<'a> = (&'a str, &'a [u8], &'a str, &'a str, Vec<String>, Expect);
+
+/// `original` with the first EXIF APP1 of `donor` inserted after its own
+/// first EXIF APP1: two EXIF blocks, as no corpus file has.
+fn with_second_app1(original: &[u8], donor: &[u8]) -> Vec<u8> {
+    fn first_app1(data: &[u8]) -> (usize, usize) {
+        let mut at = 2;
+        loop {
+            let len = usize::from(u16::from_be_bytes([data[at + 2], data[at + 3]]));
+            if data[at + 1] == 0xE1 && data[at + 4..].starts_with(b"Exif\0\0") {
+                return (at, at + 2 + len);
+            }
+            at += 2 + len;
+        }
+    }
+    let (_, end) = first_app1(original);
+    let (donor_start, donor_end) = first_app1(donor);
+    [
+        &original[..end],
+        &donor[donor_start..donor_end],
+        &original[end..],
+    ]
+    .concat()
+}
+
+/// The shapes PR #960's review found, each graded against the pinned
+/// oracle (evidence `multigroup-write/review/`):
+///
+/// - an IFD0 `DNGPrivateData` with no Adobe `MakN` record holds no maker
+///   note: `-Contrast#=2` is EXIF alone (DNG.dng with the record renamed);
+/// - a 0x927C that is a JPEG is `ProcessUnknownOrPreview`'s PreviewImage,
+///   no maker note (SamsungDigimax370.jpg);
+/// - a request that deletes the maker note leaves no copy to edit, in
+///   either order (`-MakerNotes:All= -WhiteBalance#=1` on Canon.jpg);
+/// - a value-typed note (NikonLS-50.jpg's `LSI1`) holds no tags, but two
+///   EXIF APP1s -- one with Nikon.jpg's note -- are both written by ExifTool
+///   and refused here;
+/// - `-MakerNotes:FocusMode=` on Nikon.jpg deletes a row oxidex's reader
+///   does not surface: refused, not reported unchanged.
+#[test]
+fn review_round_shapes_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let read = |path: std::path::PathBuf| std::fs::read(path).unwrap();
+    let canon = read(fixtures::required_t_images_fixture_path("Canon.jpg"));
+    let nikon = read(fixtures::required_t_images_fixture_path("Nikon.jpg"));
+    let Some(dng) = fixtures::pinned_combined_fixture_path("DNG.dng").map(read) else {
+        return;
+    };
+    let Some(digimax) =
+        fixtures::pinned_combined_fixture_path("Samsung/SamsungDigimax370.jpg").map(read)
+    else {
+        return;
+    };
+    let Some(lsi) = fixtures::pinned_combined_fixture_path("Nikon/NikonLS-50.jpg").map(read) else {
+        return;
+    };
+    let makn = b"Adobe\0MakN";
+    let at = dng
+        .windows(makn.len())
+        .position(|window| window == makn)
+        .expect("DNG.dng carries an Adobe MakN record");
+    let mut foreign = dng.clone();
+    foreign[at + 6..at + 10].copy_from_slice(b"XxxN");
+    let two_app1 = with_second_app1(&nikon, &lsi);
+    let s = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let cases: Vec<Case<'_>> = vec![
+        (
+            "DNG.dng (MakN renamed)",
+            &foreign,
+            "dng",
+            "Contrast",
+            s(&["-Contrast#=2"]),
+            Expect::Match,
+        ),
+        (
+            "DNG.dng",
+            &dng,
+            "dng",
+            "MeteringMode",
+            s(&["-MeteringMode#=2"]),
+            Expect::Refused,
+        ),
+        (
+            "SamsungDigimax370.jpg",
+            &digimax,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "SamsungDigimax370.jpg",
+            &digimax,
+            "jpg",
+            "Contrast",
+            s(&["-Contrast#=2"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1", "-MakerNotes:All="]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-ExifIFD:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "NikonLS-50.jpg",
+            &lsi,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg+NikonLS-50 APP1",
+            &two_app1,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg+NikonLS-50 APP1",
+            &two_app1,
+            "jpg",
+            "Sharpness",
+            s(&["-Sharpness#=2"]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "FocusMode",
+            s(&["-MakerNotes:FocusMode="]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "Quality",
+            s(&["-MakerNotes:Quality="]),
+            Expect::Refused,
+        ),
+    ];
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(file, bytes, ext, name, args, expect)| {
+            run_args(oracle, bytes, ext, file, name, args, *expect).err()
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases departed from the pinned outcome:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }

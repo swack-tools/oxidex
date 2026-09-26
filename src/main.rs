@@ -109,10 +109,12 @@ fn main() {
         if files.len() == 1 && !files[0].is_dir() {
             handle_single_write(&files[0], &plan, &args);
         } else if plan.sets_only() {
+            // The plan's own sets, not the raw arguments re-parsed: every
+            // write path applies one classification of the command line.
             if files.len() == 1 {
-                handle_batch_processing(&files[0], &args);
+                handle_batch_processing(&files[0], &args, &plan.sets);
             } else {
-                handle_multi_file_processing(&files, &args);
+                handle_multi_file_processing(&files, &args, &plan.sets);
             }
         } else if files.iter().any(|path| path.is_dir()) {
             eprintln!("Error: -all=, date shifts and -TagsFromFile take files, not directories");
@@ -125,14 +127,14 @@ fn main() {
 
     if file.is_dir() {
         // Batch processing mode (directory)
-        handle_batch_processing(&file, &args);
+        handle_batch_processing(&file, &args, &[]);
     } else if files.len() > 1 {
         // args.file() only ever returns the *last* positional argument, so a
         // plain-read invocation with more than one path -- `oxidex -j a.jpg
         // b.jpg` -- used to see "b.jpg" alone. Route explicit multi-file
         // invocations through the same batch machinery a directory uses,
         // which already emits one tagged result per file.
-        handle_multi_file_processing(&files, &args);
+        handle_multi_file_processing(&files, &args, &[]);
     } else {
         // Read mode: display metadata
         handle_read_operation(&file, &args);
@@ -143,11 +145,15 @@ fn main() {
 ///
 /// Unlike `handle_batch_processing`, this does not walk a directory or
 /// filter by extension -- the files were named explicitly on the command
-/// line, so every one of them is processed as given.
-fn handle_multi_file_processing(files: &[std::path::PathBuf], args: &CliArgs) {
-    let modifications = args.plain_tag_modifications();
+/// line, so every one of them is processed as given. `modifications` are the
+/// write plan's sets (`WritePlan::sets`); empty for a read.
+fn handle_multi_file_processing(
+    files: &[std::path::PathBuf],
+    args: &CliArgs,
+    modifications: &[(String, std::ffi::OsString)],
+) {
     let result = if !modifications.is_empty() {
-        batch_processor::batch_write(files.to_vec(), &modifications, args)
+        batch_processor::batch_write(files.to_vec(), modifications, args)
     } else {
         batch_processor::batch_read(files.to_vec(), args)
     };
@@ -208,7 +214,7 @@ fn report_copy(
     filters: &[String],
     copy: &oxidex::core::operations::CopyReport,
 ) {
-    if !filters.is_empty() && copy.copied == 0 {
+    if !filters.is_empty() && copy.requested == 0 {
         PathLine::new("Warning: No writable tags set from ")
             .path(src)
             .eprint();
@@ -524,10 +530,14 @@ fn print_resolved_metadata(
 }
 
 /// Handles batch processing (multiple files or directories)
-fn handle_batch_processing(path: &std::path::Path, args: &CliArgs) {
-    match batch_processor::batch_process(path, args) {
+fn handle_batch_processing(
+    path: &std::path::Path,
+    args: &CliArgs,
+    modifications: &[(String, std::ffi::OsString)],
+) {
+    match batch_processor::batch_process_requests(path, args, modifications) {
         Ok(stats) => {
-            let is_read_mode = args.plain_tag_modifications().is_empty();
+            let is_read_mode = modifications.is_empty();
             // ExifTool prints its read summary after text output at every
             // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
             if !(is_read_mode && (args.json || args.csv)) {

@@ -26,7 +26,7 @@ use crate::core::read_report::{
 };
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
-use crate::core::tag_occurrence::ValueChannel;
+use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
 use crate::core::tiff_helpers::parse_ifd_chain_with_options;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::core::write_transaction::WriteOutcome;
@@ -986,35 +986,153 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// [`ExifToolError::TagsNotWritten`] naming every key that would not be
 /// written, and the file is byte-identical to before the call.
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<WriteOutcome> {
-    write_metadata_and_delete_groups(path, metadata, &[])
+    write_metadata_in_call_order(path, metadata, &[])
 }
 
-/// [`write_metadata`] plus `-GROUP:All=` group deletions (`"EXIF:All"`,
-/// `"GPS:All"`), all in the one transaction. The C ABI's
-/// `exiftool_write_file` uses it for the groups `exiftool_remove_tag`
-/// recorded: a group deletion names no row of the map, so the map alone
-/// cannot carry it.
-pub(crate) fn write_metadata_and_delete_groups(
+/// [`write_metadata`] for a map edited by a sequence of calls, plus the
+/// `-GROUP:All=` group deletions (`"EXIF:All"`, `"GPS:All"`) among them, all
+/// in the one transaction and in call order. The C ABI's
+/// `exiftool_write_file` uses it: `mutations` is its handle's log -- the key
+/// each set or removal named, and each recorded group deletion, which names
+/// no row of the map and so cannot be carried by the map alone.
+///
+/// ExifTool applies a command's assignments in order, and a group deletion
+/// removes the values set before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but not those set after it (13.59:
+/// `-EXIF:All= -IFD0:Artist=x` keeps Artist, `-IFD0:Artist=x -EXIF:All=`
+/// does not). Appending every group deletion after the map's changes made
+/// the deletion win whatever the call order, so a tag set after
+/// `exiftool_remove_tag(h, "EXIF:All")` was deleted by it. Each change of
+/// the map now takes the place of the last call that named its key (a
+/// change no call named -- a read map edited in place -- goes first), and
+/// the write transaction keeps that order (`write_transaction::plan_changes`).
+pub(crate) fn write_metadata_in_call_order(
     path: &Path,
     metadata: &MetadataMap,
-    groups: &[String],
+    mutations: &[String],
 ) -> Result<WriteOutcome> {
+    write_metadata_counted(path, metadata, mutations).map(|(outcome, _)| outcome)
+}
+
+/// [`write_metadata_in_call_order`], also returning how many sets the
+/// transaction applied and proved -- each resolved destination once (a PDF
+/// date's two spellings are one field), no-ops decided up front excluded
+/// (`write_transaction::apply_tag_changes_counted`). What a copy reports as
+/// [`CopyReport::copied`].
+pub(crate) fn write_metadata_counted(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+) -> Result<(WriteOutcome, usize)> {
+    use crate::core::write_transaction::{TagChange, changes_between};
+    use crate::writers::write_request::group_deletion;
     let baseline = read_metadata(path)?;
-    let mut changes = crate::core::write_transaction::changes_between(
-        &baseline,
-        metadata,
-        metadata.read_from(path),
-    );
-    changes.extend(
-        groups
+    let read = metadata.read_from(path);
+    let mut changes = changes_between(&baseline, metadata, read);
+    if read {
+        removals_in_call_order(metadata, mutations, &mut changes);
+    }
+    // Positions are 1-based in the log; 0 is "before every call".
+    let named = |call: &str, key: &str| {
+        call.eq_ignore_ascii_case(key)
+            || field_spellings(key)
+                .iter()
+                .any(|spelling| call.eq_ignore_ascii_case(spelling))
+    };
+    let mut ordered: Vec<(usize, TagChange)> = changes
+        .into_iter()
+        .map(|change| {
+            let at = mutations
+                .iter()
+                .rposition(|call| named(call, change.tag()))
+                .map_or(0, |index| index + 1);
+            (at, change)
+        })
+        .collect();
+    ordered.extend(
+        mutations
             .iter()
-            .map(|group| crate::core::write_transaction::TagChange::delete(group.clone())),
+            .enumerate()
+            .filter(|(index, call)| {
+                group_deletion(call).is_some()
+                    // Back-to-back repeats of one deletion are one deletion.
+                    && (*index == 0 || mutations[index - 1] != **call)
+            })
+            .map(|(index, call)| (index + 1, TagChange::delete(call.clone()))),
     );
+    // Stable: changes at one position keep the map's own order.
+    ordered.sort_by_key(|(at, _)| *at);
+    let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     if changes.is_empty() {
         // the file already holds this map: nothing to write
-        return Ok(WriteOutcome::Unchanged);
+        return Ok((WriteOutcome::Unchanged, 0));
     }
-    crate::core::write_transaction::apply_tag_changes(path, &changes)
+    crate::core::write_transaction::apply_tag_changes_counted(path, &changes)
+}
+
+/// The removal calls of a read map's log (`mutations`) that the map's rows
+/// alone cannot express, made explicit in `changes`:
+///
+/// * A removal whose key the map never held under that spelling -- the
+///   read keys a tag otherwise (`XMP:Title` for a removed `XMP-dc:Title`),
+///   or the file lacks it -- is ExifTool's `-TAG=`, a deletion by name,
+///   which the transaction resolves, proves a no-op, or refuses by name.
+///   It used to change nothing and report success (the `-XMP-dc:Title=`
+///   the C ABI was asked for stayed in the file).
+/// * A PDF Info date the reader surfaces under two spellings is one field,
+///   and the last call naming either spelling decides it (#957,
+///   PRRT_kwDOQNbr5M6mRRXx): `set(PDF:CreateDate)` then
+///   `remove(PDF:CreationDate)` deletes the date, as 13.59's
+///   `-PDF:CreateDate=<new> -PDF:CreateDate=` does -- the map alone, which
+///   holds the assigned `CreateDate`, says to set it. A map written without
+///   a log (`write_metadata`) has no order to go by, and a set of the field
+///   under one spelling replaces a removal of the other.
+fn removals_in_call_order(
+    metadata: &MetadataMap,
+    mutations: &[String],
+    changes: &mut Vec<crate::core::write_transaction::TagChange>,
+) {
+    use crate::core::write_transaction::TagChange;
+    for (index, call) in mutations.iter().enumerate() {
+        let later = &mutations[index + 1..];
+        if crate::writers::write_request::group_deletion(call).is_some()
+            || later.iter().any(|next| next.eq_ignore_ascii_case(call))
+            // The last call on the key left it in the map: a set.
+            || metadata.contains_key(call)
+            // Rows describing the file are never deleted by name.
+            || call.split_once(':').is_some_and(|(group, _)| {
+                ["File", "System", "Composite", "ExifTool"]
+                    .iter()
+                    .any(|descriptive| descriptive.eq_ignore_ascii_case(group))
+            })
+        {
+            continue;
+        }
+        let spellings = field_spellings(call);
+        // A later call on the field's other spelling decides it instead.
+        if spellings.iter().any(|spelling| {
+            !spelling.eq_ignore_ascii_case(call)
+                && later.iter().any(|next| next.eq_ignore_ascii_case(spelling))
+        }) {
+            continue;
+        }
+        let field = spellings.first().copied().unwrap_or(call.as_str());
+        // The removal came after any set of the field under another spelling.
+        changes.retain(|change| {
+            change.value().is_none()
+                || !spellings
+                    .iter()
+                    .any(|spelling| spelling.eq_ignore_ascii_case(change.tag()))
+        });
+        let deleted = changes.iter().any(|change| {
+            change.value().is_none()
+                && (change.tag().eq_ignore_ascii_case(field)
+                    || change.tag().eq_ignore_ascii_case(call))
+        });
+        if !deleted {
+            changes.push(TagChange::delete(field));
+        }
+    }
 }
 
 /// [`write_metadata`], plus the keys the caller asked by name to delete. The
@@ -1585,6 +1703,24 @@ pub(crate) fn resolve_write_key_for(
     baseline: &MetadataMap,
     removal: bool,
 ) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request(path, tag_name, baseline, removal, false)
+}
+
+/// [`resolve_write_key_for`] for one request of a transaction whose other
+/// requests delete the EXIF maker note (`makernote_deleted`: a planned
+/// `-MakerNotes:All=`, `-ExifIFD:All=` or `-EXIF:All=` deletion,
+/// `core::write_transaction::plan_changes`). Pinned 13.59 then edits no
+/// maker-note copy of a bare name, whichever order the arguments came in
+/// (`-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` on t/images/Canon.jpg both leave `[ExifIFD]
+/// WhiteBalance` 1 and no maker note).
+pub(crate) fn resolve_write_key_in_request(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+    makernote_deleted: bool,
+) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
         png_prefers_text, resolve_exif_family_key, resolve_write_key,
@@ -1655,7 +1791,10 @@ pub(crate) fn resolve_write_key_for(
     };
     // Whether the file's EXIF carries a maker note, scanned only when a name
     // with a maker-note candidate asks (`write_request::makernote_may_hold`).
-    let makernote_block = || file_carries_makernote(&reader, format, surgical);
+    let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
+        deleted: makernote_deleted,
+        ..file_makernote_census(&reader, format, surgical)
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1737,19 +1876,24 @@ pub(crate) fn resolve_write_key_for(
     Ok((key, addressed))
 }
 
-/// Whether the file's EXIF carries a maker note ExifTool reads
-/// (`exif_surgical::blocks_carry_makernote`): the JPEG's APP1 EXIF blocks, a
+/// The file's EXIF blocks and the ones carrying a maker note that may hold
+/// tags (`exif_surgical::makernote_census`): the JPEG's APP1 EXIF blocks, a
 /// PNG's `eXIf`, or a TIFF-structured file itself. Unprovable -- a file
-/// that cannot be read or split into blocks -- counts as carrying one.
-fn file_carries_makernote(reader: &MMapReader, format: FileFormat, surgical: bool) -> bool {
+/// that cannot be read or split into blocks -- is
+/// [`MakerNoteCensus::UNKNOWN`](crate::writers::exif_surgical::MakerNoteCensus::UNKNOWN).
+fn file_makernote_census(
+    reader: &MMapReader,
+    format: FileFormat,
+    surgical: bool,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
     use crate::writers::exif_surgical::{
-        EXIF_BLOCK_MAGICS, blocks_carry_makernote, jpeg_exif_payloads,
+        EXIF_BLOCK_MAGICS, MakerNoteCensus, jpeg_exif_payloads, makernote_census,
     };
     let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
-        return true;
+        return MakerNoteCensus::UNKNOWN;
     };
     let payloads = if surgical {
-        return blocks_carry_makernote(
+        return makernote_census(
             &[file_bytes],
             crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
         );
@@ -1760,14 +1904,14 @@ fn file_carries_makernote(reader: &MMapReader, format: FileFormat, surgical: boo
                 Ok(payloads) => Some(payloads.unwrap_or_default()),
                 Err(_) => None,
             },
-            _ => return false,
+            _ => return MakerNoteCensus::default(),
         }
     };
     let Some(payloads) = payloads else {
-        return true;
+        return MakerNoteCensus::UNKNOWN;
     };
     let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-    blocks_carry_makernote(&blocks, EXIF_BLOCK_MAGICS)
+    makernote_census(&blocks, EXIF_BLOCK_MAGICS)
 }
 
 /// Whether deleting `key` from the file at `path` changes nothing: the map
@@ -1818,7 +1962,7 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
         if !name.eq_ignore_ascii_case("all")
             && !name.starts_with("MakerNote")
             && crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
-                file_carries_makernote(&reader, format, surgical)
+                file_makernote_census(&reader, format, surgical)
             })
             .is_some()
         {
@@ -2039,19 +2183,32 @@ fn group_is_empty(group: &str, metadata: &MetadataMap) -> bool {
 /// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
 /// otherwise.
 pub(crate) fn field_spellings(key: &str) -> &[&str] {
-    match key {
-        "PDF:CreateDate" | "PDF:CreationDate" => &["PDF:CreateDate", "PDF:CreationDate"],
-        "PDF:ModifyDate" | "PDF:ModDate" => &["PDF:ModifyDate", "PDF:ModDate"],
-        _ => &[],
-    }
+    // Group and tag names compare without regard to case, as request
+    // resolution compares them (`pdf:creationdate` is `PDF:CreationDate`).
+    const FIELDS: &[&[&str]] = &[
+        &["PDF:CreateDate", "PDF:CreationDate"],
+        &["PDF:ModifyDate", "PDF:ModDate"],
+    ];
+    FIELDS
+        .iter()
+        .find(|spellings| {
+            spellings
+                .iter()
+                .any(|spelling| spelling.eq_ignore_ascii_case(key))
+        })
+        .copied()
+        .unwrap_or(&[])
 }
 
 /// Whether `metadata` holds `key` under any of its [`field_spellings`].
 pub(crate) fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
-    metadata.contains_key(key)
-        || field_spellings(key)
-            .iter()
-            .any(|alias| metadata.contains_key(alias))
+    let holds = |spelling: &str| {
+        metadata.contains_key(spelling)
+            || metadata
+                .keys()
+                .any(|row| row.eq_ignore_ascii_case(spelling))
+    };
+    holds(key) || field_spellings(key).iter().any(|alias| holds(alias))
 }
 
 /// Removes `key` and every other spelling of the same field. Removing only
@@ -2194,7 +2351,19 @@ pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
     // per-tag deletions -- which `write_metadata` would now make of it. Run
     // on a private copy so the outcome is decided by the bytes.
     crate::core::write_transaction::transact(path, |scratch| {
-        write_metadata_with_removals(scratch, &MetadataMap::new(), &[])
+        // JPEG and PNG: ExifTool's delete lists, segment by segment and
+        // chunk by chunk (`jpeg_writer::strip_all_metadata`,
+        // `png_writer::strip_all_metadata`); the carrier writers' EXIF-only
+        // clear left XMP, JFIF, ICC, pHYs and tIME behind.
+        let bytes = std::fs::read(scratch)?;
+        let stripped = match crate::writers::jpeg_writer::strip_all_metadata(&bytes)? {
+            Some(stripped) => Some(stripped),
+            None => crate::writers::png_writer::strip_all_metadata(&bytes)?,
+        };
+        match stripped {
+            Some(stripped) => std::fs::write(scratch, stripped).map_err(ExifToolError::from),
+            None => write_metadata_with_removals(scratch, &MetadataMap::new(), &[]),
+        }
     })
 }
 
@@ -2274,8 +2443,19 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CopyReport {
-    /// Tags actually written to the destination.
+    /// Tags actually written to the destination: the sets the write
+    /// transaction applied and proved, each resolved destination once (two
+    /// filters redirected to one tag, or a PDF date's two spellings copied
+    /// from a PDF, are one copy), on the filtered and the copy-all path
+    /// alike.
     pub copied: usize,
+    /// Tags the source supplied for the copy -- with a filter, the entries
+    /// the source carries -- before they are resolved against the
+    /// destination: ExifTool's tags "set from" the source. When it is zero a
+    /// filtered copy found nothing (13.59: `Warning: No writable tags set
+    /// from SRC`); a copy the destination makes a no-op (an EXIF tag into a
+    /// PDF) still found its tag, and 13.59 does not warn there.
+    pub requested: usize,
     /// For a copy-all: groups of source tags this destination's writer cannot
     /// write, which were therefore not copied (never silently).
     pub uncopied_groups: Vec<String>,
@@ -2293,82 +2473,52 @@ const READ_ONLY_GROUPS: &[&str] = &["File", "System", "Composite", "ExifTool"];
 
 /// [`copy_metadata`], reporting how many tags were written.
 ///
-/// With a filter, each entry is one ExifTool `-TagsFromFile` argument:
-/// `TAG` or `GROUP:TAG`, optionally redirected (`SRC>DST` or `DST<SRC`).
-/// The source value is found by name (and group, when given: a family-1
-/// group, or `EXIF`/`XMP` for any of their directories) and written with
-/// [`modify_tag`] to the destination spelling -- the same resolution and
-/// refusal gate as `-TAG=VALUE`, so a bare `XPTitle` lands in IFD0 and a tag
-/// the destination's writer cannot write is refused, never dropped. A filter
-/// entry the source does not carry is skipped, as ExifTool skips it (13.59:
-/// `-TagsFromFile src -XPSubject -XPTitle` copies XPTitle and says nothing
-/// about XPSubject). Wildcards, `all` inside a group, and `--TAG`
-/// exclusions are refused rather than approximated.
+/// With a filter, each entry is one ExifTool `-TagsFromFile` argument, as
+/// pinned 13.59 reads it:
+/// * `all` (or `*`, `all:all`): every source tag, as a copy without a
+///   filter; beside other selectors too (`-all -Make` is a copy-all);
+/// * `GROUP:all`, and a tag or group name with wildcards (`*Model`,
+///   `IFD0:*`): every source tag of that group or matching that name;
+/// * `-TAG`, `-GROUP:TAG`, `-GROUP:all` (ExifTool's `--TAG`: the CLI strips
+///   one `-`): excluded from the selection; exclusions alone select every
+///   tag first, as 13.59 does;
+/// * `TAG` or `GROUP:TAG`, optionally redirected (`SRC>DST` or `DST<SRC`):
+///   that one tag.
 ///
-/// Without a filter every source tag the destination's writer can address
-/// is copied, and the groups it cannot write are returned in
-/// [`CopyReport::uncopied_groups`] for the caller to report.
+/// A group is a family-0 or family-1 group (`IFD0`, `XMP-dc`), or `EXIF` /
+/// `XMP` for any of their directories. A selection (`all`, `GROUP:all`, a
+/// wildcard) is best-effort, as ExifTool's `SetNewValuesFromFile`: a tag the
+/// destination's writer cannot write is skipped and reported in
+/// [`CopyReport::uncopied_tags`] / [`CopyReport::uncopied_groups`]. A named
+/// tag goes through the same resolution and refusal gate as `-TAG=VALUE`
+/// (a bare `XPTitle` lands in IFD0), and one the destination cannot write
+/// refuses the whole copy; one the source does not carry is skipped, as
+/// ExifTool skips it (13.59: `-TagsFromFile src -XPSubject -XPTitle` copies
+/// XPTitle and says nothing about XPSubject). What 13.59 accepts and
+/// oxidex does not is refused by name, never approximated: a redirected
+/// selection (`all>XMP:all`), a redirected exclusion.
+///
+/// Every selected and named tag is written by one write transaction, only
+/// if every named tag is written.
 pub fn copy_metadata_report(
     src: &Path,
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
-    let filters = tags.filter(|filters| {
-        !filters
-            .iter()
-            .all(|f| f.eq_ignore_ascii_case("all") || f == "*")
-    });
-    let Some(filters) = filters else {
-        return copy_all(&source_metadata, dest);
-    };
-
-    // Resolve every filter against the source first; the destination is then
-    // written once, by one write transaction, and only if every request is
-    // written -- a later filter's refusal must not leave earlier ones
-    // committed.
-    let mut pending: Vec<crate::core::write_transaction::TagChange> = Vec::new();
-    for filter in filters {
-        let (source_spec, dest_spec) = if let Some((from, to)) = filter.split_once('>') {
-            (from.trim(), to.trim())
-        } else if let Some((to, from)) = filter.split_once('<') {
-            (from.trim(), to.trim())
-        } else {
-            (filter.as_str(), filter.as_str())
-        };
-        let (source_group, source_name) = match source_spec.rsplit_once(':') {
-            Some((group, name)) => (Some(group), name),
-            None => (None, source_spec),
-        };
-        let plain = |text: &str| {
-            !text.is_empty() && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        };
-        if !plain(source_name)
-            || source_name.eq_ignore_ascii_case("all")
-            || source_group.is_some_and(|group| !plain(group))
-            || dest_spec.is_empty()
-        {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot copy '{filter}': oxidex copies plain TAG, GROUP:TAG and \
-                 SRC>DST names only (no wildcards, group-wide 'all' or exclusions)"
-            )));
-        }
-        let group_matches = |key_group: &str| match source_group {
-            None => true,
-            Some(group) if group.eq_ignore_ascii_case("EXIF") => matches!(
-                key_group,
-                "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF"
-            ),
-            Some(group) if group.eq_ignore_ascii_case("XMP") => {
-                key_group == "XMP" || key_group.starts_with("XMP-")
-            }
-            Some(group) => key_group.eq_ignore_ascii_case(group),
-        };
+    let selectors = CopySelectors::parse(tags.unwrap_or(&[]))?;
+    // Resolve every named tag against the source first; the destination is
+    // then written once, by one write transaction.
+    let mut named: Vec<(String, TagValue)> = Vec::new();
+    for (filter, source_group, source_name, dest_spec) in &selectors.named {
         let candidates: Vec<(&String, TagValue)> = source_metadata
             .winner_occurrences()
-            .filter(|(key, _)| {
+            .filter(|(key, occurrence)| {
                 key.split_once(':').is_some_and(|(group, name)| {
-                    name.eq_ignore_ascii_case(source_name) && group_matches(group)
+                    name.eq_ignore_ascii_case(source_name)
+                        && source_group
+                            .as_deref()
+                            .is_none_or(|wanted| copy_group_matches(wanted, group, occurrence))
                 })
             })
             .map(|(key, occurrence)| (key, occurrence.project(ValueChannel::Stored).into_owned()))
@@ -2394,43 +2544,248 @@ pub fn copy_metadata_report(
         if crate::writers::xp_strings::is_xp_tag_key(source_key) {
             crate::writers::xp_strings::refuse_unknown_provenance(source_key, &value)?;
         }
-        pending.push(crate::core::write_transaction::TagChange::set(
-            dest_spec, value,
-        ));
+        named.push((dest_spec.clone(), value));
     }
-    let mut report = CopyReport {
-        copied: pending.len(),
-        ..CopyReport::default()
-    };
-    if pending.is_empty() {
-        return Ok(report); // nothing to copy: the destination is not touched
-    }
-    report.outcome = crate::core::write_transaction::apply_tag_changes(dest, &pending)?;
-    Ok(report)
+    copy_selection(&source_metadata, dest, &selectors, named)
 }
 
-/// The copy-all half of [`copy_metadata_report`]: best-effort, like
-/// ExifTool's `SetNewValuesFromFile` with no tag list ("All writable tags
-/// are set if none are specified", ExifTool.pod). Every source tag the
-/// destination's writer addresses is merged into the destination's own map
-/// and written by [`write_metadata`] (sets only: the map is not a read of the
-/// source); a tag it cannot write is skipped and reported in
-/// [`CopyReport::uncopied_groups`] / [`CopyReport::uncopied_tags`]. A tag of
-/// a writable group the write itself refuses by name is dropped from the
-/// request and reported the same way (as is a value the destination's
-/// validation rejects), and the rest is written again.
-fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
+/// One `-TagsFromFile` argument's selection: an optional group and a tag
+/// name, either of which may carry ExifTool's wildcards (`*`, `?`).
+#[derive(Debug, Clone)]
+struct CopyPattern {
+    group: Option<String>,
+    name: String,
+}
+
+impl CopyPattern {
+    fn matches(&self, key: &str, occurrence: &TagOccurrence) -> bool {
+        let (group, name) = key.split_once(':').unwrap_or(("", key));
+        (self.name.eq_ignore_ascii_case("all") || glob_matches(&self.name, name))
+            && self
+                .group
+                .as_deref()
+                .is_none_or(|wanted| copy_group_matches(wanted, group, occurrence))
+    }
+}
+
+/// A copy's filter, classified as pinned ExifTool 13.59's `-TagsFromFile`
+/// classifies its arguments ([`copy_metadata_report`]).
+#[derive(Debug, Default)]
+struct CopySelectors {
+    /// Every source tag (`all`, no filter, or exclusions alone).
+    all: bool,
+    /// `GROUP:all` and wildcard selections.
+    selections: Vec<CopyPattern>,
+    /// `--TAG` exclusions from the selection.
+    exclusions: Vec<CopyPattern>,
+    /// (filter as given, source group, source name, destination) for each
+    /// named tag.
+    named: Vec<(String, Option<String>, String, String)>,
+}
+
+impl CopySelectors {
+    fn parse(filters: &[String]) -> Result<Self> {
+        let refuse = |filter: &str, why: &str| {
+            ExifToolError::unsupported_format(format!("Cannot copy '{filter}': {why}"))
+        };
+        let group_ok = |group: &str| {
+            !group.is_empty()
+                && group
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'*' | b'?'))
+        };
+        let name_ok = |name: &str| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'*' | b'?'))
+        };
+        let wild = |text: &str| text.contains(['*', '?']);
+        let mut selectors = CopySelectors::default();
+        for filter in filters {
+            let (exclusion, body) = match filter.strip_prefix('-') {
+                Some(rest) => (true, rest),
+                None => (false, filter.as_str()),
+            };
+            let (source_spec, dest_spec) = if let Some((from, to)) = body.split_once('>') {
+                (from.trim(), Some(to.trim()))
+            } else if let Some((to, from)) = body.split_once('<') {
+                (from.trim(), Some(to.trim()))
+            } else {
+                (body.trim(), None)
+            };
+            let (group, name) = match source_spec.rsplit_once(':') {
+                Some((group, name)) => (Some(group), name),
+                None => (None, source_spec),
+            };
+            let group = group.filter(|group| !group.eq_ignore_ascii_case("all") && *group != "*");
+            if !name_ok(name) || group.is_some_and(|group| !group_ok(group)) {
+                return Err(refuse(
+                    filter,
+                    "not a TAG, GROUP:TAG, GROUP:all, -TAG exclusion or SRC>DST copy \
+                     selector",
+                ));
+            }
+            let selection = name.eq_ignore_ascii_case("all")
+                || name == "*"
+                || wild(name)
+                || group.is_some_and(wild);
+            let pattern = CopyPattern {
+                group: group.map(str::to_string),
+                name: name.to_string(),
+            };
+            match (exclusion, dest_spec) {
+                (true, Some(_)) => {
+                    return Err(refuse(filter, "an exclusion cannot be redirected"));
+                }
+                (true, None) => selectors.exclusions.push(pattern),
+                (false, Some(_)) if selection => {
+                    return Err(refuse(
+                        filter,
+                        "oxidex does not redirect a group, wildcard or all selection; \
+                         redirect named tags",
+                    ));
+                }
+                (false, Some(dest)) => {
+                    if dest.is_empty() {
+                        return Err(refuse(filter, "no destination tag"));
+                    }
+                    selectors.named.push((
+                        filter.clone(),
+                        pattern.group,
+                        pattern.name,
+                        dest.to_string(),
+                    ));
+                }
+                (false, None) if selection && group.is_none() && !wild(name) => {
+                    selectors.all = true;
+                }
+                (false, None) if selection => selectors.selections.push(pattern),
+                (false, None) => selectors.named.push((
+                    filter.clone(),
+                    pattern.group,
+                    pattern.name,
+                    source_spec.to_string(),
+                )),
+            }
+        }
+        // No filter, or exclusions alone: every tag (13.59, Writer.pl
+        // `SetNewValuesFromFile`: "implicitly assume '*' if first entry is an
+        // exclusion").
+        if selectors.selections.is_empty() && selectors.named.is_empty() {
+            selectors.all = true;
+        }
+        Ok(selectors)
+    }
+
+    /// Whether the selection (not the named tags) takes the source row. A
+    /// `Protected` EXIF tag is never selected (13.59, Writer.pl
+    /// `SetNewValuesFromFile`: only a tag named without wildcards is copied
+    /// with `Protected => 1`): `-all` does not copy `YCbCrPositioning`.
+    fn selects(&self, key: &str, occurrence: &TagOccurrence) -> bool {
+        !is_protected_exif_row(key)
+            && (self.all
+                || self
+                    .selections
+                    .iter()
+                    .any(|pattern| pattern.matches(key, occurrence)))
+            && !self
+                .exclusions
+                .iter()
+                .any(|pattern| pattern.matches(key, occurrence))
+    }
+}
+
+/// Whether `key` is an EXIF-directory row whose `Exif::Main` tag ExifTool
+/// declares `Protected` (a selection does not copy it).
+fn is_protected_exif_row(key: &str) -> bool {
+    let Some((group, name)) = key.split_once(':') else {
+        return false;
+    };
+    if !["IFD0", "IFD1", "ExifIFD", "InteropIFD", "SubIFD"]
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(group))
+    {
+        return false;
+    }
+    let Some(table) = crate::exiftool_tables::find_ifd_table("Exif", "Main") else {
+        return false;
+    };
+    let mut named = table
+        .tags
+        .iter()
+        .filter(|tag| tag.name.eq_ignore_ascii_case(name))
+        .peekable();
+    named.peek().is_some() && named.all(|tag| tag.flags.protected)
+}
+
+/// ExifTool's wildcard match of a tag or group name (`*` any run, `?` one
+/// character), without regard to case.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let (pattern, text): (Vec<char>, Vec<char>) = (
+        pattern.to_ascii_lowercase().chars().collect(),
+        text.to_ascii_lowercase().chars().collect(),
+    );
+    fn at(pattern: &[char], text: &[char]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some(('*', rest)) => (0..=text.len()).any(|skip| at(rest, &text[skip..])),
+            Some(('?', rest)) => !text.is_empty() && at(rest, &text[1..]),
+            Some((c, rest)) => text.first() == Some(c) && at(rest, &text[1..]),
+        }
+    }
+    at(&pattern, &text)
+}
+
+/// Whether a copy selector's group names a source row's: its family-0 key
+/// group or its family-1 group (`XMP-dc` for an `XMP:Title` row), or `EXIF`
+/// / `XMP` for any of their directories -- without regard to case, with
+/// wildcards.
+fn copy_group_matches(wanted: &str, key_group: &str, occurrence: &TagOccurrence) -> bool {
+    if wanted.eq_ignore_ascii_case("EXIF") {
+        return ["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "EXIF"]
+            .iter()
+            .any(|group| group.eq_ignore_ascii_case(key_group));
+    }
+    if wanted.eq_ignore_ascii_case("XMP") {
+        return key_group.eq_ignore_ascii_case("XMP")
+            || key_group
+                .get(..4)
+                .is_some_and(|p| p.eq_ignore_ascii_case("XMP-"));
+    }
+    glob_matches(wanted, key_group) || glob_matches(wanted, &occurrence.group1)
+}
+
+/// Writes the selected source rows (best-effort) and the named tags
+/// (all-or-nothing) to `dest` in one write transaction.
+///
+/// A selected row the destination's writer cannot write is skipped and
+/// reported (`uncopied_tags` / `uncopied_groups`), as ExifTool's
+/// `SetNewValuesFromFile` with no tag list ("All writable tags are set if
+/// none are specified", ExifTool.pod) skips it; a named tag refused refuses
+/// the copy. The rows go into the destination's own map and are written by
+/// the map write (sets only: the map is not a read of the source).
+/// `copied` is what the transaction wrote and proved, each resolved
+/// destination once: a PDF source's `CreateDate` and `CreationDate` rows
+/// are one Info field, written once (#957, PRRT_kwDOQNbr5M6mR8c8).
+/// `requested` is the raw count of source rows and named tags considered.
+fn copy_selection(
+    source_metadata: &MetadataMap,
+    dest: &Path,
+    selectors: &CopySelectors,
+    named: Vec<(String, TagValue)>,
+) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
     let surgical = is_surgical_tiff_target(format, &reader);
     drop(reader);
     let dest_baseline = read_metadata(dest)?;
     let mut report = CopyReport::default();
-    let mut copied: Vec<(String, TagValue)> = Vec::new();
+    let mut selected: Vec<(String, TagValue)> = Vec::new();
     for (tag_name, occurrence) in source_metadata.winner_occurrences() {
         let group = tag_name.split_once(':').map_or("", |(group, _)| group);
-        if READ_ONLY_GROUPS.contains(&group) {
-            continue; // derived rows: never copied
+        if READ_ONLY_GROUPS.contains(&group) || !selectors.selects(tag_name, occurrence) {
+            continue; // derived rows are never copied
         }
         if let Err(err) = crate::writers::write_request::ensure_writer_addresses(
             tag_name, tag_name, format, surgical,
@@ -2449,38 +2804,41 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
         if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
             crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
         }
-        copied.push((tag_name.clone(), value));
+        selected.push((tag_name.clone(), value));
     }
+    report.requested = selected.len() + report.uncopied_tags.len() + named.len();
     // Nothing the destination can hold: do not write at all. Serializing the
     // unchanged map still appended a PDF revision (and may re-lay-out a PNG),
     // which was then reported as an update.
-    while !copied.is_empty() {
+    while !selected.is_empty() || !named.is_empty() {
         let mut dest_metadata = dest_baseline.clone();
-        for (key, value) in &copied {
+        // Named tags after the selection: for one destination, the named
+        // request is the later, and the one that stands.
+        for (key, value) in selected.iter().chain(&named) {
             dest_metadata.insert(key.clone(), value.clone());
         }
-        match write_metadata(dest, &dest_metadata) {
-            Ok(outcome) => {
+        let skippable = |tag: &str| {
+            selected.iter().any(|(key, _)| key == tag) && !named.iter().any(|(key, _)| key == tag)
+        };
+        match write_metadata_counted(dest, &dest_metadata, &[]) {
+            Ok((outcome, proven)) => {
                 report.outcome = outcome;
+                report.copied = proven;
                 break;
             }
             Err(ExifToolError::TagsNotWritten { tags })
-                if tags
-                    .iter()
-                    .all(|refused| copied.iter().any(|(key, _)| *key == refused.tag)) =>
+                if tags.iter().all(|refused| skippable(&refused.tag)) =>
             {
                 // Skip what cannot be written, keep the rest: each round
                 // removes at least one tag, so this ends.
-                copied.retain(|(key, _)| !tags.iter().any(|refused| refused.tag == *key));
+                selected.retain(|(key, _)| !tags.iter().any(|refused| refused.tag == *key));
                 report.uncopied_tags.extend(tags);
             }
             // A copied value the destination's validation rejects (a source
             // stored form the registry types differently) is skipped the same
             // way.
-            Err(ExifToolError::InvalidTagValue { tag_name, reason })
-                if copied.iter().any(|(key, _)| *key == tag_name) =>
-            {
-                copied.retain(|(key, _)| *key != tag_name);
+            Err(ExifToolError::InvalidTagValue { tag_name, reason }) if skippable(&tag_name) => {
+                selected.retain(|(key, _)| *key != tag_name);
                 report
                     .uncopied_tags
                     .push(crate::error::TagNotWritten::new(tag_name, reason));
@@ -2488,7 +2846,6 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
             Err(other) => return Err(other),
         }
     }
-    report.copied = copied.len();
     for tag in &report.uncopied_tags {
         let group = tag.tag.split_once(':').map_or("", |(group, _)| group);
         if !report.uncopied_groups.iter().any(|known| known == group) {

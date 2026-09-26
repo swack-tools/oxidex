@@ -954,6 +954,72 @@ fn reconstruct_jpeg(
 ///
 /// - `Ok(())`: Segment written successfully
 /// - `Err(ExifToolError)`: If segment is too large (>65533 bytes)
+/// ExifTool's `-all=` on a JPEG (`clear_all_metadata`): every metadata
+/// segment goes -- APP0 through APP13 and APP15 (JFIF, EXIF, XMP, ICC,
+/// FPXR, MPF, Photoshop/IPTC, ...) and COM -- except an `Adobe` APP14,
+/// which ExifTool protects (Writer.pl `$protectedGroups`); and so does
+/// everything after EOI (the `Trailer` group: AFCP, PhotoMechanic, MPF
+/// images). Every other segment, the scans and EOI are kept byte for byte.
+/// Pinned 13.59 on t/images/ExifTool.jpg leaves `APP14:Adobe` alone, on
+/// AFCP.jpg and PhotoMechanic.jpg no trailer. `None` for bytes that are not
+/// a JPEG.
+///
+/// The EXIF-only clear this replaces left the XMP, JFIF, ICC and comment
+/// segments and reported the file updated (`-all=` then read back XMP).
+pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return Ok(None);
+    }
+    let truncated = || ExifToolError::parse_error("Truncated JPEG segment before the image data");
+    let mut output = bytes[..2].to_vec();
+    let mut at = 2;
+    loop {
+        // Fill bytes (0xFF padding) may precede a marker.
+        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
+            at += 1;
+        }
+        let (Some(&0xFF), Some(&marker)) = (bytes.get(at), bytes.get(at + 1)) else {
+            return Err(truncated());
+        };
+        // Standalone markers carry no length.
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            output.extend_from_slice(&bytes[at..at + 2]);
+            at += 2;
+            continue;
+        }
+        if marker == 0xD9 {
+            // EOI before any scan: keep it, drop what follows.
+            output.extend_from_slice(&bytes[at..at + 2]);
+            return Ok(Some(output));
+        }
+        if marker == 0xDA {
+            // The scans run to the first EOI (entropy-coded data never holds
+            // an unescaped 0xFF 0xD9); what follows it is the trailer.
+            let end = bytes[at..]
+                .windows(2)
+                .position(|pair| pair == [0xFF, 0xD9])
+                .map_or(bytes.len(), |offset| at + offset + 2);
+            output.extend_from_slice(&bytes[at..end]);
+            return Ok(Some(output));
+        }
+        let length = bytes
+            .get(at + 2..at + 4)
+            .map(|pair| usize::from(u16::from_be_bytes([pair[0], pair[1]])))
+            .ok_or_else(truncated)?;
+        let end = at + 2 + length;
+        let payload = bytes.get(at + 4..end).ok_or_else(truncated)?;
+        let metadata = match marker {
+            0xE0..=0xED | 0xEF | 0xFE => true,
+            0xEE => !payload.starts_with(b"Adobe"),
+            _ => false,
+        };
+        if !metadata {
+            output.extend_from_slice(&bytes[at..end]);
+        }
+        at = end;
+    }
+}
+
 fn write_segment(output: &mut Vec<u8>, marker: u16, data: &[u8]) -> Result<()> {
     // Write marker (2 bytes, big-endian)
     output.extend_from_slice(&marker.to_be_bytes());

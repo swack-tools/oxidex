@@ -895,3 +895,138 @@ fn calibration_illuminant_labels_match_case_insensitively() {
         );
     }
 }
+
+/// PR #959 review (Codex, round 2, P1): the `Sharpness` (0xa40a) arm is
+/// `ConvertParameter`-based, the same family as `Contrast`/`Saturation`, but
+/// was missed by the earlier raw-mode audit -- it ran unconditionally, so
+/// `-ExifIFD:Sharpness#=1` and `--no-print-conv -ExifIFD:Sharpness=1` turned
+/// the caller's raw code `1` into `2` (`ConvertParameter` treats any positive
+/// number as "High"). Confirmed against the oracle: a plain, non-raw
+/// `-ExifIFD:Sharpness=1` (a `ConvertParameter` *parameter*, not a raw code)
+/// really does store `2`, so raw mode's job is specifically to skip that
+/// conversion and store the caller's `1` unchanged.
+#[test]
+fn sharpness_raw_mode_bypasses_convert_parameter() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    let tag = "ExifIFD:Sharpness";
+
+    // `#`
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}#=1");
+
+        let ox_path = copy_into(&dir, &base, "sharp_hash.jpg");
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            oxidex_read_n(&ox_path, tag),
+            "1",
+            "oxidex {arg} must store the raw code, not run it through ConvertParameter"
+        );
+
+        let et_path = copy_into(&dir, &base, "sharp_hash_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), "1");
+    }
+
+    // `--no-print-conv` / `-n`, applied globally instead of per-tag.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}=1");
+
+        let ox_path = copy_into(&dir, &base, "sharp_np.jpg");
+        let out = oxidex(&["--no-print-conv", &arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex --no-print-conv {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(oxidex_read_n(&ox_path, tag), "1");
+
+        let et_path = copy_into(&dir, &base, "sharp_np_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", "-n", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), "1");
+    }
+
+    // Sanity: without raw mode, the plain digit "1" is a `ConvertParameter`
+    // PARAMETER, not a raw code, and the oracle really does store `2` for it
+    // -- proving the two forms are genuinely different, not coincidentally
+    // equal.
+    let dir = tempfile::tempdir().unwrap();
+    let ox_path = copy_into(&dir, &base, "sharp_label.jpg");
+    let out = oxidex(&[&format!("-{tag}=1"), ox_path.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert_eq!(oxidex_read_n(&ox_path, tag), "2");
+}
+
+/// PR #959 review (Codex, round 2, P2): the leaf-only dispatch that inverts a
+/// label against the transcribed `Exif::Main` table matched by tag NAME
+/// alone, so it also caught a MakerNotes tag sharing that name --
+/// `Sony:ExposureMode` (Sony.pm 0x0119) shares its leaf with Exif.pm's own
+/// `ExposureMode` (0xa402) but is a different tag with a different meaning.
+/// `Canon.jpg` has no Sony MakerNote group, so there is no tag to create
+/// either way; what this proves is that oxidex's parser-level fix does not
+/// change that outcome -- both tools leave the file byte-identical, matching
+/// the more precise unit-level proof in
+/// `value_parser::tests::sony_exposure_mode_is_not_inverted_through_exif_main`
+/// (which calls the parser directly and confirms it refuses "Auto" rather
+/// than silently resolving it against `Exif::Main`).
+#[test]
+fn sony_exposure_mode_write_matches_oracle() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let ox_path = copy_into(&dir, &base, "sony_ox.jpg");
+    let ox_before = std::fs::read(&ox_path).unwrap();
+    oxidex(&["-Sony:ExposureMode=Auto", ox_path.to_str().unwrap()]);
+    assert_eq!(
+        std::fs::read(&ox_path).unwrap(),
+        ox_before,
+        "oxidex must leave a Sony-less file untouched for -Sony:ExposureMode=Auto"
+    );
+
+    let et_path = copy_into(&dir, &base, "sony_et.jpg");
+    let et_before = std::fs::read(&et_path).unwrap();
+    oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-Sony:ExposureMode=Auto",
+            et_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run oracle");
+    assert_eq!(
+        std::fs::read(&et_path).unwrap(),
+        et_before,
+        "the oracle also leaves it untouched"
+    );
+}

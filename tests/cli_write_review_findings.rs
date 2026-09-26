@@ -165,14 +165,13 @@ fn combined_clear_shift_and_set_apply_every_request() {
 }
 
 /// Combinations oxidex cannot apply faithfully are refused before any
-/// file is touched, never half-applied.
+/// file is touched, never half-applied. (A copy with a set is applied, in
+/// argument order, since #957 round 7: `a_copy_and_sets_apply_in_argument_order`.)
 #[test]
 fn unsupported_mode_combinations_are_refused() {
     let dir = TempDir::new().unwrap();
-    let src = xp_source(&dir);
     for args in [
         vec!["-all=", "-DateTimeOriginal+=1:0:0"],
-        vec!["-TagsFromFile", s(&src), "-XPTitle", "-Artist=x"],
         vec![
             "-DateTimeOriginal+=1:0:0",
             "-DateTimeOriginal=2020:01:01 00:00:00",

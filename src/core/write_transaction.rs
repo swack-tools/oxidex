@@ -43,8 +43,8 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, metadata_holds, plan_group_deletion, read_metadata,
-    removal_is_no_op, remove_field, resolve_write_key_for, write_metadata_transaction,
+    exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata, removal_is_no_op,
+    remove_field, resolve_write_key_in_request, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -184,23 +184,47 @@ fn group_and_name(key: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Whether `name` is one of `names`, compared as request resolution
+/// compares group and tag names: without regard to case (ExifTool's
+/// `-file:filename=` names `File:FileName`).
+fn one_of(names: &[&str], name: &str) -> bool {
+    names.iter().any(|known| known.eq_ignore_ascii_case(name))
+}
+
+/// `map`'s row for `key` under any spelling of its case, with the key it is
+/// stored under: the exact key first, then a differently cased one
+/// (`ifd0:artist` for `IFD0:Artist`).
+fn row_of<'m>(map: &'m MetadataMap, key: &str) -> Option<(String, &'m TagValue)> {
+    if let Some(value) = map.get(key) {
+        return Some((key.to_string(), value));
+    }
+    map.iter()
+        .find(|(row, _)| row.eq_ignore_ascii_case(key))
+        .map(|(row, value)| (row.clone(), value))
+}
+
 fn is_descriptive(key: &str) -> bool {
-    matches!(group_and_name(key).0, Some(group) if DESCRIPTIVE_GROUPS.contains(&group))
+    matches!(group_and_name(key).0, Some(group) if one_of(DESCRIPTIVE_GROUPS, group))
 }
 
 fn is_file_system_fact(key: &str) -> bool {
     match group_and_name(key) {
-        (Some("ExifTool"), _) => true,
-        (Some("File" | "System"), name) => FILE_SYSTEM_FACTS.contains(&name),
+        (Some(group), _) if group.eq_ignore_ascii_case("ExifTool") => true,
+        (Some(group), name) if one_of(&["File", "System"], group) => {
+            one_of(FILE_SYSTEM_FACTS, name)
+        }
         _ => false,
     }
 }
 
 /// The requests a whole-map write makes of the file whose current map is
-/// `baseline`: every row of `desired` that is new or differs is a set. When
-/// `deletions` -- `desired` is a complete read of this same file
-/// (`MetadataMap::read_from`) -- every row of `baseline` that `desired` lacks
-/// is a row its caller removed, and a deletion. Otherwise (a map built from
+/// `baseline`. When `deletions` -- `desired` is a read of this same file
+/// (`MetadataMap::read_from`) -- the rows its caller assigned are the sets,
+/// and every row the read saw (`MetadataMap::read_saw`) that `baseline`
+/// still holds and `desired` lacks is a row its caller removed, and a
+/// deletion; a row the file gained since the read (an earlier write from
+/// this map) is neither. Otherwise every row of `desired` that is new or
+/// differs is a set, and (a map built from
 /// scratch, or read from another file) nothing is deleted: ExifTool's
 /// SetNewValue model, where a tag nobody named is never touched (ExifTool.pod,
 /// SetNewValue / WriteInfo; maintainer decision on #951, 2026-09-24).
@@ -213,8 +237,12 @@ fn is_file_system_fact(key: &str) -> bool {
 /// refused.
 ///
 /// A PDF Info field the reader surfaces under two spellings
-/// (`PDF:CreateDate` / `PDF:CreationDate`) is one field: dropping one
-/// spelling while the other stays is not a deletion of it.
+/// (`PDF:CreateDate` / `PDF:CreationDate`) is one field: removing either
+/// spelling deletes the field -- under ExifTool's name for it, the first of
+/// [`field_spellings`] (13.59 knows no tag `PDF:CreationDate`) -- unless the
+/// other spelling is itself a set of the field (assigned, or changed), which
+/// then replaces it. The untouched alias the reader left in the map is not a
+/// reason to keep the date: that silently skipped the deletion.
 pub(crate) fn changes_between(
     baseline: &MetadataMap,
     desired: &MetadataMap,
@@ -228,23 +256,26 @@ pub(crate) fn changes_between(
         // Provenance first (`MetadataMap::is_assigned`): a value the
         // caller assigned is a set whatever it equals -- an explicit
         // same-text XP set can need different bytes. In a read of this file,
-        // a row the caller did not assign is the file's own: a set only if
-        // the file holds that row with another value (an in-place
-        // `get_mut`), never because a read with options (a requested
-        // `File:JPEGQualityEstimate`) produced a row the default read lacks.
-        // Any other map is judged by value.
+        // a row the caller did not assign is the read's own and never a set
+        // (every public mutation, `get_mut` included, assigns): not because
+        // a read with options (a requested `File:JPEGQualityEstimate`)
+        // produced a row the default read lacks, not because a projection
+        // (`without_print_conv`) shows it in another form, and not because an
+        // earlier write from the same map changed it in the file since (a
+        // stale row must not revert the file). Any other map is judged by
+        // value.
         // A descriptive row (`File:`, `Composite:`, ...) is not stored in the
         // file, so it has no bytes an explicit same-value set could change:
         // an assigned one is a request (and refused) only when it is new or
         // differs. A map cleared and refilled with the file's own rows
         // (#949's `values_reinserted_after_clear_are_assignments`) sets
         // nothing there.
-        let assigned =
-            desired.is_assigned(key) && !(is_descriptive(key) && baseline.get(key) == Some(value));
+        let held = row_of(baseline, key).map(|(_, held)| held);
+        let assigned = desired.is_assigned(key) && !(is_descriptive(key) && held == Some(value));
         let is_set = if deletions {
-            assigned || baseline.get(key).is_some_and(|held| held != value)
+            assigned
         } else {
-            assigned || baseline.get(key) != Some(value)
+            assigned || held != Some(value)
         };
         if is_set {
             changes.push(TagChange::set(key.clone(), value.clone()));
@@ -254,10 +285,33 @@ pub(crate) fn changes_between(
         return changes;
     }
     for (key, _) in baseline.iter() {
-        if desired.contains_key(key) || is_descriptive(key) || metadata_holds(desired, key) {
+        // Only a row the read saw can be one its caller removed: a row the
+        // file gained since (a write from this same map seeding an
+        // ExifIFD's mandatory entries) is not a deletion -- when unsure,
+        // nothing is deleted.
+        if row_of(desired, key).is_some() || is_descriptive(key) || !desired.read_saw(key) {
             continue;
         }
-        changes.push(TagChange::delete(key.clone()));
+        let spellings = field_spellings(key);
+        // Any row spelling the alias, in any case, that sets it (a read
+        // map can hold the file's `PDF:CreateDate` beside the caller's
+        // `pdf:createdate`).
+        let set_under_alias = spellings.iter().any(|alias| {
+            !alias.eq_ignore_ascii_case(key)
+                && desired.iter().any(|(row, value)| {
+                    row.eq_ignore_ascii_case(alias)
+                        && (desired.is_assigned(row)
+                            || row_of(baseline, alias).map(|(_, held)| held) != Some(value))
+                })
+        });
+        if set_under_alias {
+            continue;
+        }
+        let field = spellings.first().copied().unwrap_or(key.as_str());
+        let deletion = TagChange::delete(field);
+        if !changes.contains(&deletion) {
+            changes.push(deletion);
+        }
     }
     changes
 }
@@ -289,7 +343,7 @@ struct Plan<'a> {
 /// Whether two resolved keys address the same field (a PDF Info field has
 /// two spellings).
 fn same_field(a: &str, b: &str) -> bool {
-    a == b || field_spellings(a).contains(&b)
+    a.eq_ignore_ascii_case(b) || one_of(field_spellings(a), b)
 }
 
 /// A field request before its writer-address check.
@@ -317,8 +371,29 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     // `rw2_ifd0`, which answer `false` for any other file).
     let file_bytes = fs::read(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
+    // Refusals of one request, by its position: a later group deletion can
+    // still cancel the request (see below), and its refusal with it.
+    let mut request_refusals: Vec<(usize, &'a str, TagNotWritten)> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
+    // Whether the request deletes the EXIF maker note: a bare name is then
+    // judged with no maker-note copy to also update, whichever order the
+    // deletion came in (pinned 13.59, `resolve_write_key_in_request`). Only
+    // a deletion `plan_group_deletion` plans for real counts -- one it
+    // proves a no-op (a note ExifTool files under EXIF) leaves the note.
+    let makernote_deleted = changes.iter().any(|change| {
+        change.value().is_none()
+            && group_deletion(change.tag()).is_some()
+            && crate::writers::exif_surgical::removal_deletes_makernote(change.tag())
+            && matches!(
+                plan_group_deletion(
+                    path,
+                    change.tag(),
+                    group_deletion(change.tag()).unwrap_or("")
+                ),
+                Ok(Some(_))
+            )
+    });
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -333,10 +408,30 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 ));
                 continue;
             }
+            // ExifTool's group deletion removes every value set in the group
+            // before it (Writer.pl `SetNewValue` -> `RemoveNewValuesForGroup`),
+            // whatever the file holds: the earlier requests it covers are
+            // cancelled here, with their refusals, before the deletion itself
+            // is planned. 13.59: `-XMP:Title=x -XMP:All=` on a file without
+            // XMP is `unchanged` (#957, PRRT_kwDOQNbr5M6mQbb-); `-IFD1:Make=x
+            // -EXIF:All=` on a JPEG with EXIF clears the EXIF and never asks
+            // for the IFD1 set oxidex cannot make (PRRT_kwDOQNbr5M6mRRX8);
+            // `-XMP-dc:Title=x -XMP:All=` where oxidex cannot delete the XMP
+            // is refused for `XMP:All` alone.
+            pending.retain(|earlier| {
+                !group_covers(group, earlier.request.requested)
+                    && !group_covers(group, &earlier.request.key)
+            });
+            request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
             match plan_group_deletion(path, change.tag(), group) {
                 Ok(Some(key)) => groups.push((at, key)),
-                Ok(None) => {} // provably nothing to delete
-                Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
+                // Provably nothing of the group in the file.
+                Ok(None) => {}
+                // Kept at its place among the requests' refusals; no later
+                // deletion cancels a deletion's own refusal.
+                Err(ExifToolError::TagsNotWritten { tags }) => {
+                    request_refusals.extend(tags.into_iter().map(|tag| (at, "", tag)));
+                }
                 Err(other) => return Err(other),
             }
             continue;
@@ -358,12 +453,18 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             Ok(true) => continue,
             Ok(false) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
-                refused.extend(tags);
+                request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
                 continue;
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for(path, change.tag(), &baseline, change.value().is_none()) {
+        match resolve_write_key_in_request(
+            path,
+            change.tag(),
+            &baseline,
+            change.value().is_none(),
+            makernote_deleted,
+        ) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
@@ -373,10 +474,15 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 addressed,
                 at,
             }),
-            Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
+            }
             Err(other) => return Err(other),
         }
     }
+    // In request order (a stable sort keeps one request's refusals in order).
+    request_refusals.sort_by_key(|(at, _, _)| *at);
+    refused.extend(request_refusals.into_iter().map(|(_, _, tag)| tag));
 
     // The last request for a field replaces every earlier one.
     let replaced: Vec<bool> = (0..pending.len())
@@ -438,6 +544,53 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     })
 }
 
+/// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
+/// (the requested spelling, or the address it resolved to) -- Writer.pl's
+/// `RemoveNewValuesForGroup` with its `%removeGroups`: a tag of that group;
+/// for `EXIF` and `IFD0` (which also removes `EXIF` and `MakerNotes`
+/// values), every EXIF directory and maker-note group; for `ExifIFD` (also
+/// `MakerNotes`, `InteropIFD`), those; for the XMP (XML) family, any `XMP-*`
+/// (`XML-*`) group, and an `XMP:Name` request the namespace of whose tag is
+/// the deleted one (`XMP:Title` is `XMP-dc:Title`, which 13.59's
+/// `-XMP-dc:All=` cancels). An ungrouped name, or a namespace the registry
+/// does not tell, is not covered: its request stays, and is written or
+/// refused by name.
+fn group_covers(group: &str, tag: &str) -> bool {
+    let Some((tag_group, _)) = tag.rsplit_once(':') else {
+        return false;
+    };
+    if tag_group.eq_ignore_ascii_case(group) {
+        return true;
+    }
+    let (group_lower, tag_lower) = (group.to_ascii_lowercase(), tag_group.to_ascii_lowercase());
+    let exif_directory = EXIF_DIRECTORIES
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(tag_group))
+        || tag_lower == "exif";
+    let makernote =
+        tag_lower == "makernotes" || crate::writers::exif_surgical::is_makernote_group(tag_group);
+    match group_lower.as_str() {
+        "exif" | "ifd0" if exif_directory || makernote => return true,
+        "exififd" if tag_lower == "interopifd" || makernote => return true,
+        "makernotes" if makernote => return true,
+        _ => {}
+    }
+    match group_lower.split_once('-') {
+        None if group_lower == "xmp" || group_lower == "xml" => {
+            tag_lower.starts_with(&format!("{group_lower}-"))
+        }
+        Some((family, _)) if (family == "xmp" || family == "xml") && tag_lower == family => {
+            crate::tag_db::tag_registry::get_tag_descriptor(tag).is_some_and(|descriptor| {
+                matches!(descriptor.id(), oxidex_tags::TagId::Named(id)
+                if id.split_once(':').is_some_and(|(namespace, _)| {
+                    namespace.eq_ignore_ascii_case(group)
+                }))
+            })
+        }
+        _ => false,
+    }
+}
+
 /// Runs a [`Plan`] on the private copy at `path`; returns the number of sets
 /// applied and proven.
 ///
@@ -491,21 +644,28 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
         write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
         index = end;
     }
-    // The read-back proves every field request no later group removal can
-    // have overridden; one a later `<group>:All` covers was proven by the
-    // writer's verifier in its own pass, and the group removal decides its
-    // final state (as in ExifTool).
-    let last_group = plan
-        .steps
-        .iter()
-        .rposition(|step| matches!(step, Step::Group(_)));
+    // The read-back proves every field request no later group removal
+    // covers -- which, since planning cancels the requests a later deletion
+    // covers, is every one. Proving only the requests after the last group
+    // removal left an unrelated earlier set unproven and uncounted: 13.59's
+    // `-IFD0:Artist=<its value> -GPS:All=` on a JPEG without GPS is
+    // `1 image files updated` by the same-value-set rule, and oxidex said
+    // `unchanged` (#957, PRRT_kwDOQNbr5M6mRRYE).
     let proven: Vec<&Resolved<'_>> = plan
         .steps
         .iter()
         .enumerate()
-        .filter(|(at, _)| last_group.is_none_or(|group| *at > group))
-        .filter_map(|(_, step)| match step {
-            Step::Field(request) => Some(request),
+        .filter_map(|(at, step)| match step {
+            Step::Field(request) => {
+                let covered = plan.steps[at + 1..].iter().any(|later| {
+                    matches!(later, Step::Group(key)
+                    if group_deletion(key).is_some_and(|group| {
+                        group_covers(group, request.requested)
+                            || group_covers(group, &request.key)
+                    }))
+                });
+                (!covered).then_some(request)
+            }
             Step::Group(_) => None,
         })
         .collect();
@@ -550,7 +710,7 @@ fn rows_at<'a>(stored: &'a MetadataMap, key: &str) -> Vec<&'a TagValue> {
             .iter()
             .filter(|(row, _)| {
                 matches!(group_and_name(row), (Some(g), n)
-                    if EXIF_DIRECTORIES.contains(&g) && n.eq_ignore_ascii_case(name))
+                    if one_of(EXIF_DIRECTORIES, g) && n.eq_ignore_ascii_case(name))
             })
             .map(|(_, value)| value)
             .collect(),
@@ -869,6 +1029,7 @@ mod tests {
         // A row an optioned read adds that the default read lacks.
         desired.insert("File:JPEGQualityEstimate", s("92"));
         desired.mark_read_complete();
+        desired.set_read_source(Path::new("a.jpg"));
         desired.insert("IFD0:Model", s("R5"));
         desired.insert("IFD0:Artist", s("me")); // explicit same-value set
         desired.insert("XPTitle", s("v"));
@@ -889,7 +1050,42 @@ mod tests {
         // The file's own map, read and untouched, requests nothing.
         let mut read = baseline.clone();
         read.mark_read_complete();
+        read.set_read_source(Path::new("a.jpg"));
         assert!(changes_between(&baseline, &read, true).is_empty());
+    }
+
+    /// Codex thread PRRT_kwDOQNbr5M6mO8E4 (#957): a read map written again
+    /// after a write is compared with a file that has changed since its
+    /// read. A row the file gained (an ExifIFD's seeded entries) is not one
+    /// the caller removed, and a row the read saw that the file now holds
+    /// with another value is not one the caller set: neither is a request.
+    /// What the caller did remove, and did assign, still are.
+    #[test]
+    fn a_stale_read_map_requests_only_what_its_caller_changed() {
+        let read_rows = map(&[("IFD0:Make", s("Acme")), ("IFD0:Model", s("R5"))]);
+        let mut desired = read_rows.clone();
+        desired.mark_read_complete();
+        desired.set_read_source(Path::new("a.jpg"));
+        desired.insert("ExifIFD:LensModel", s("L1"));
+        desired.insert("IFD0:Artist", s("x"));
+        desired.remove("IFD0:Model");
+        // The file after a first write from `desired`, plus a side effect on
+        // Make that the map never saw.
+        let file = map(&[
+            ("IFD0:Make", s("Acme (rewritten)")),
+            ("IFD0:Model", s("R5")),
+            ("ExifIFD:LensModel", s("L1")),
+            ("ExifIFD:ExifVersion", s("0232")),
+            ("ExifIFD:ColorSpace", s("Uncalibrated")),
+        ]);
+        assert_eq!(
+            changes_between(&file, &desired, true),
+            vec![
+                TagChange::set("ExifIFD:LensModel", s("L1")),
+                TagChange::set("IFD0:Artist", s("x")),
+                TagChange::delete("IFD0:Model"),
+            ]
+        );
     }
 
     /// A map built from scratch: every row is the caller's, a set whatever
@@ -911,15 +1107,50 @@ mod tests {
         );
     }
 
+    /// Codex thread PRRT_kwDOQNbr5M6mOo0z (#957): removing either spelling
+    /// of a PDF Info date from a read map deletes the field, under ExifTool's
+    /// tag name (13.59 has no `PDF:CreationDate` tag); the alias the reader
+    /// left behind no longer suppresses it. A set under the other spelling
+    /// replaces the field instead.
     #[test]
     fn a_pdf_info_field_is_one_field_under_two_spellings() {
-        let baseline = map(&[
-            ("PDF:CreateDate", s("2024:01:01 00:00:00")),
-            ("PDF:CreationDate", s("2024:01:01 00:00:00")),
-        ]);
-        let mut desired = map(&[("PDF:CreateDate", s("2024:01:01 00:00:00"))]);
-        desired.mark_read_complete();
-        assert!(changes_between(&baseline, &desired, true).is_empty());
+        let date = || s("2024:01:01 00:00:00");
+        let baseline = map(&[("PDF:CreateDate", date()), ("PDF:CreationDate", date())]);
+        // Each read saw both spellings; `rows` is what is left of it.
+        let read = |rows: &[(&str, TagValue)]| {
+            let mut read = baseline_read(&baseline);
+            for key in ["PDF:CreateDate", "PDF:CreationDate"] {
+                if !rows.iter().any(|(kept, _)| *kept == key) {
+                    read.remove(key);
+                }
+            }
+            read
+        };
+        let deleted = vec![TagChange::delete("PDF:CreateDate")];
+        for kept in ["PDF:CreateDate", "PDF:CreationDate"] {
+            assert_eq!(
+                changes_between(&baseline, &read(&[(kept, date())]), true),
+                deleted,
+                "only {kept} left"
+            );
+        }
+        assert_eq!(changes_between(&baseline, &read(&[]), true), deleted);
+        // Unchanged, both spellings: nothing.
+        assert!(changes_between(&baseline, &baseline_read(&baseline), true).is_empty());
+        // The field set under its other spelling: that set, no deletion.
+        let mut desired = read(&[("PDF:CreationDate", date())]);
+        desired.insert("PDF:CreationDate", s("2020:01:01 00:00:00"));
+        assert_eq!(
+            changes_between(&baseline, &desired, true),
+            vec![TagChange::set("PDF:CreationDate", s("2020:01:01 00:00:00"))]
+        );
+    }
+
+    fn baseline_read(baseline: &MetadataMap) -> MetadataMap {
+        let mut read = baseline.clone();
+        read.mark_read_complete();
+        read.set_read_source(Path::new("a.pdf"));
+        read
     }
 
     #[test]

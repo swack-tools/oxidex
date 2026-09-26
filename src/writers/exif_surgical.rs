@@ -427,11 +427,14 @@ pub(crate) fn resolve_tiff_group_removals(
             } else {
                 ""
             };
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing '{key}' from a {file_type} file is not supported: pinned \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing '{key}' from a {file_type} file is not supported: pinned \
                  ExifTool 13.59 deletes that directory{place}, and this writer edits \
                  entries in place and cannot delete a directory"
-            )));
+                ),
+            ));
         }
         // Pinned ExifTool 13.59 leaves the file unchanged: a no-op here too.
     }
@@ -519,11 +522,14 @@ pub(crate) fn refuse_embedded_jpeg_edits(
     };
     let file_type = baseline.get_string("File:FileType").unwrap_or("TIFF");
     if let Some(key) = sets.first() {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Writing '{key}' to a {file_type} file is not supported: pinned ExifTool \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Writing '{key}' to a {file_type} file is not supported: pinned ExifTool \
              13.59 writes it into the EXIF of the embedded JpgFromRaw (PanasonicRaw \
              0x002e), which this writer does not edit"
-        )));
+            ),
+        ));
     }
     // An embedded EXIF that does not scan is refused rather than taken for
     // one without the tag.
@@ -552,12 +558,15 @@ pub(crate) fn refuse_embedded_jpeg_edits(
                     && holds_makernote(emb))
         });
         if in_embedded {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing '{key}' from a {file_type} file is not supported: the tag lives \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing '{key}' from a {file_type} file is not supported: the tag lives \
                  in the EXIF of the embedded JpgFromRaw (PanasonicRaw 0x002e), where \
                  pinned ExifTool 13.59 deletes it, and this writer does not edit that \
                  JPEG"
-            )));
+                ),
+            ));
         }
     }
     Ok(())
@@ -888,12 +897,15 @@ fn removal_names_carried_entry(key: &str, scan: &ExifScan, original_map: &Metada
 
 /// The refusal for an added or changed [`is_carried_only_key`] key.
 pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
-    ExifToolError::unsupported_format(format!(
-        "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
+    ExifToolError::tag_not_written(
+        key.to_string(),
+        format!(
+            "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
          class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain past IFD1) that this \
          writer always raw-carries and cannot add to or edit",
-        key
-    ))
+            key
+        ),
+    )
 }
 
 /// The IFD a group-qualified write key names, for the three IFDs this
@@ -1464,12 +1476,15 @@ fn plan_exif_write_inner(
     if let Some(key) = removed.iter().find(|key| {
         group_removal(key).is_none() && removal_names_carried_entry(key, scan, original_map)
     }) {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Removing tag '{}' is not yet supported: it belongs to an \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Removing tag '{}' is not yet supported: it belongs to an \
              unsurfaced IFD class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain \
              past IFD1) that this writer always raw-carries",
-            key
-        )));
+                key
+            ),
+        ));
     }
 
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all.
@@ -1541,10 +1556,13 @@ fn plan_exif_write_inner(
             .keys()
             .find(|key| chain_key_dir(key).is_some() && !desired.contains_key(key.as_str()))
         {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing tag '{key}' is not yet supported: it belongs to the directory \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing tag '{key}' is not yet supported: it belongs to the directory \
                  chain past IFD1 (IFD2 on), which this writer always raw-carries"
-            )));
+                ),
+            ));
         }
         plan.chain = Some(chain.clone());
     }
@@ -1770,12 +1788,15 @@ fn plan_exif_write_inner(
                     && original_map.contains_key(reader_key)
                     && !desired.contains_key(reader_key)
                 {
-                    return Err(ExifToolError::unsupported_format(format!(
-                        "Removing tag '{}' is not yet supported: it belongs to an \
+                    return Err(ExifToolError::tag_not_written(
+                        reader_key.to_string(),
+                        format!(
+                            "Removing tag '{}' is not yet supported: it belongs to an \
                          unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                          writer always raw-carries",
-                        reader_key
-                    )));
+                            reader_key
+                        ),
+                    ));
                 }
             }
             if entry.ifd == IfdKind::Interop
@@ -1896,12 +1917,15 @@ fn plan_exif_write_inner(
             if original_map.get(&key).or_else(|| original_map.get(native)) == Some(value) {
                 continue;
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported: it belongs to an \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Editing tag '{}' is not yet supported: it belongs to an \
                  unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                  writer always raw-carries",
-                key
-            )));
+                    key
+                ),
+            ));
         }
         // Keys whose physical entry lives in an always-carried IFD class
         // (InteropIFD, IFD1, MakerNote — Design Rule: "unsurfaced classes")
@@ -1920,12 +1944,15 @@ fn plan_exif_write_inner(
             if value == original_value {
                 continue;
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported: it belongs to an \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Editing tag '{}' is not yet supported: it belongs to an \
                  unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                  writer always raw-carries",
-                key
-            )));
+                    key
+                ),
+            ));
         }
         let value = desired.get(&key).unwrap();
         // A borrowed engine name with its reader value is the carried entry
@@ -1934,16 +1961,19 @@ fn plan_exif_write_inner(
             continue;
         }
         if requires_subifd_write(&key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
+                    key
+                ),
+            ));
         }
         let Some(descriptor) = get_tag_descriptor(&key) else {
-            return Err(ExifToolError::parse_error(format!(
-                "Cannot add tag '{}': not a known EXIF tag",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                "not a known EXIF tag, so it cannot be added",
+            ));
         };
         validate_changed(&key, value)?;
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
@@ -2368,24 +2398,77 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
 /// The TIFF magic an EXIF block (JPEG APP1, PNG eXIf) carries.
 pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 
-/// Whether any of the TIFF structures `blocks` carries a maker note ExifTool
-/// would read: an ExifIFD MakerNote (0x927C) entry, or IFD0's
-/// `DNGPrivateData` (0xc634, whose Adobe `MakN` record is a DNG converter's
-/// copy of the original maker note). A block the scan cannot walk counts as carrying one --
-/// absence is what a caller relies on, so it must be proven.
-pub(crate) fn blocks_carry_makernote(blocks: &[&[u8]], magics: &[u16]) -> bool {
-    blocks
+/// What the EXIF blocks of a file carry, for the bare-name resolver
+/// (`write_request::makernote_may_hold`, `ensure_not_also_updated`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MakerNoteCensus {
+    /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
+    pub blocks: usize,
+    /// Blocks whose maker note may hold tags ExifTool edits: an ExifIFD
+    /// MakerNote (0x927C) that is not read as one value (not
+    /// `tiff_helpers::makernote_value_holds_no_tags`: a SilverFast `LSI1`
+    /// note, a text note, a Samsung `STMN` binary, a JPEG preview), or an
+    /// IFD0 `DNGPrivateData` carrying an Adobe `MakN` record. A block the
+    /// scan cannot walk counts, as does any block when the count cannot be
+    /// made at all -- absence is what callers rely on, so it is proven.
+    pub tag_bearing: usize,
+    /// The request deletes every EXIF maker note before the bare write is
+    /// judged (`-MakerNotes:All=`, `-ExifIFD:All=`, `-EXIF:All=` planned as
+    /// a real deletion): pinned 13.59 then has no maker-note copy to edit,
+    /// in either argument order.
+    pub deleted: bool,
+}
+
+impl MakerNoteCensus {
+    /// A census that proves nothing: every block may hold anything.
+    pub(crate) const UNKNOWN: Self = Self {
+        blocks: usize::MAX,
+        tag_bearing: usize::MAX,
+        deleted: false,
+    };
+}
+
+/// Counts the EXIF blocks `blocks` and the ones carrying a tag-bearing
+/// maker note ([`MakerNoteCensus`]).
+pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCensus {
+    let tag_bearing = blocks
         .iter()
-        .any(|block| match scan_entries_with_magics(block, magics) {
+        .filter(|block| match scan_entries_with_magics(block, magics) {
             Ok(scan) => {
-                scan.makernote_offset.is_some()
-                    || scan.entries.iter().any(|entry| {
-                        (entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE)
-                            || (entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA)
-                    })
+                let ifd0_text = |tag_id: u16| {
+                    scan.entries
+                        .iter()
+                        .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
+                        .map(|entry| {
+                            String::from_utf8_lossy(&entry.value)
+                                .trim_end_matches(['\0', ' '])
+                                .to_string()
+                        })
+                        .unwrap_or_default()
+                };
+                let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
+                scan.entries.iter().any(|entry| {
+                    (entry.ifd == IfdKind::ExifIfd
+                        && entry.tag_id == MAKERNOTE
+                        && !crate::core::tiff_helpers::makernote_value_holds_no_tags(
+                            &entry.value,
+                            &make,
+                            &model,
+                        ))
+                        || (entry.ifd == IfdKind::Ifd0
+                            && entry.tag_id == DNG_PRIVATE_DATA
+                            && entry.value.starts_with(b"Adobe\0")
+                            && entry.value.windows(4).any(|w| w == b"MakN"))
+                })
             }
             Err(_) => true,
         })
+        .count();
+    MakerNoteCensus {
+        blocks: blocks.len(),
+        tag_bearing,
+        deleted: false,
+    }
 }
 
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a
@@ -3928,6 +4011,13 @@ fn key_addresses(key: &str) -> Vec<(IfdKind, u16)> {
 /// override that names the EXIF GPS group). The reader keys a decoded
 /// maker-note row by these (`Canon:MacroMode`, `Pentax:AEAperture`), and
 /// its occurrence's family-0 label is not reliably `MakerNotes` (`Canon`).
+/// Whether `group` is a maker-note group ([`MAKERNOTE_GROUPS`]).
+pub(crate) fn is_makernote_group(group: &str) -> bool {
+    MAKERNOTE_GROUPS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+}
+
 const MAKERNOTE_GROUPS: &[&str] = &[
     "AdobeDNG",
     "Apple",
@@ -4144,6 +4234,15 @@ pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::
         .collect()
 }
 
+/// Whether the group-wide removal `key` deletes the EXIF maker note with its
+/// group: `MakerNotes:All`, `ExifIFD:All`, `IFD0:All` / `EXIF:All`.
+pub(crate) fn removal_deletes_makernote(key: &str) -> bool {
+    matches!(
+        group_removal(key),
+        Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd | GroupRemoval::Carrier)
+    )
+}
+
 /// The maker-note rows of `baseline` a write drops from the map without
 /// deleting the MakerNote itself: `read_metadata`, `map.remove(
 /// "Canon:MacroMode")`, `write_metadata`. A row missing from a map read
@@ -4157,12 +4256,7 @@ pub(crate) fn dropped_makernote_rows(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Vec<String> {
-    let deletes_makernote = removed.iter().any(|key| {
-        matches!(
-            group_removal(key),
-            Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd | GroupRemoval::Carrier)
-        )
-    });
+    let deletes_makernote = removed.iter().any(|key| removal_deletes_makernote(key));
     if deletes_makernote {
         return Vec::new();
     }
@@ -4177,12 +4271,15 @@ pub(crate) fn dropped_makernote_rows(
 pub(crate) fn refuse_dropped_makernote_rows(dropped: &[String]) -> Result<()> {
     match dropped.first() {
         None => Ok(()),
-        Some(key) => Err(ExifToolError::unsupported_format(format!(
-            "Deleting '{key}' is not supported: it is decoded from the MakerNote, \
+        Some(key) => Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Deleting '{key}' is not supported: it is decoded from the MakerNote, \
              which this writer carries byte-for-byte and cannot delete one tag of \
              (remove the whole MakerNote with MakerNotes:All instead); nothing was \
              written"
-        ))),
+            ),
+        )),
     }
 }
 
@@ -4205,10 +4302,13 @@ pub(crate) fn changed_makernote_rows(baseline: &MetadataMap, desired: &MetadataM
 pub(crate) fn refuse_changed_makernote_rows(changed: &[String]) -> Result<()> {
     match changed.first() {
         None => Ok(()),
-        Some(key) => Err(ExifToolError::unsupported_format(format!(
-            "Setting '{key}' is not supported: it is decoded from the MakerNote, which \
+        Some(key) => Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Setting '{key}' is not supported: it is decoded from the MakerNote, which \
              this writer carries byte-for-byte and cannot edit; nothing was written"
-        ))),
+            ),
+        )),
     }
 }
 
