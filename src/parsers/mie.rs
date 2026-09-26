@@ -51,6 +51,152 @@ pub(crate) fn trailer_start_ending_at(file: &[u8], end: usize) -> Option<usize> 
         })
 }
 
+/// What a MIE trailer holds of EXIF, as [`trailer_exif`] finds it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MieExif<'a> {
+    /// The whole trailer was walked and holds no `EXIF` element.
+    Absent,
+    /// The trailer's `EXIF` elements (TIFF structures), every one of them.
+    Held(Vec<&'a [u8]>),
+    /// The trailer may hold one the walk cannot see: a compressed group
+    /// (whose elements are unseen), a compressed `EXIF` element, or an
+    /// element the walk cannot read. Absence is what a caller relies on.
+    Unknown,
+}
+
+/// The file's MIE trailer's EXIF (`None` without a trailer).
+///
+/// Pinned ExifTool 13.59 writes every EXIF-family set into MIE-Meta's
+/// `EXIF` element as well, creating it (`-IFD0:Artist=x` on
+/// t/images/ExifTool.jpg, `-v2`: `Creating EXIF` under `MIE1-Meta1`), and
+/// applies a deletion to it where it holds the tag (`-IFD0:Artist=` on that
+/// output shrinks the trailer back from 188 to 90 bytes) -- but a deletion
+/// leaves a trailer with no `EXIF` element, or one without the tag, as it
+/// was (ExifTool.jpg's own 90 bytes; `-IFD0:Software=` on the 188).
+///
+/// Every MIE trailer the file carries is walked, not just the last: 13.59
+/// reads a chain of them as one (Writer.jpg + a MIE holding EXIF + one
+/// without: `MIE trailer (278 bytes)`, `[MIE-Doc]` and `[MIE2-Doc]`) and
+/// `-IFD0:Artist=` deletes the inner copy (278 -> 266 bytes).
+pub(crate) fn trailer_exif(file: &[u8]) -> Option<MieExif<'_>> {
+    let trailers = all_trailers(file);
+    if trailers.is_empty() {
+        return None;
+    }
+    let mut held = Vec::new();
+    for trailer in trailers {
+        match trailer_exif_elements(file, trailer.start, trailer.end) {
+            MieExif::Absent => {}
+            MieExif::Held(blocks) => held.extend(blocks),
+            MieExif::Unknown => return Some(MieExif::Unknown),
+        }
+    }
+    Some(if held.is_empty() {
+        MieExif::Absent
+    } else {
+        MieExif::Held(held)
+    })
+}
+
+/// Every valid MIE trailer of `file` (validated at both ends as
+/// [`find_trailer`] validates one, for each `zmie` footer anywhere in the
+/// file), in file order.
+fn all_trailers(file: &[u8]) -> Vec<MieTrailer> {
+    let mut trailers: Vec<MieTrailer> = [(SHORT_TRAILER_MARKER, 4), (LONG_TRAILER_MARKER, 8)]
+        .into_iter()
+        .flat_map(|(marker, length_width)| {
+            memchr::memmem::find_iter(file, marker).filter_map(move |at| {
+                let end = at.checked_add(marker.len() + length_width + 2)?;
+                (end <= file.len())
+                    .then(|| trailer_start(file, end, length_width))
+                    .flatten()
+                    .map(|start| MieTrailer { start, end })
+            })
+        })
+        .collect();
+    trailers.sort_by_key(|trailer| (trailer.start, trailer.end));
+    trailers
+}
+
+/// Walks the MIE elements in `file[start..end]` (MIE.pm:1483-1580's element
+/// grammar, as [`subfile_identifier`] reads it), entering every group, for
+/// its `EXIF` elements.
+fn trailer_exif_elements(file: &[u8], start: usize, end: usize) -> MieExif<'_> {
+    let mut held = Vec::new();
+    // Sized groups (non-zero data length) hold their elements in their
+    // data; they are walked as their own ranges, in their own byte order
+    // (a group's `format & 0x08` governs its contents, not its own header;
+    // the trailer's `0MIE` header reads its length in its own order, as
+    // `subfile_identifier` reads a `.mie` file's).
+    let top = file.get(start + 1).is_some_and(|format| format & 0x08 != 0);
+    let mut ranges: Vec<(usize, usize, usize, bool)> = vec![(start, end, 1, top)];
+    let mut budget = MAX_TOP_LEVEL_ELEMENTS * 10;
+    while let Some((mut cursor, end, depth, order)) = ranges.pop() {
+        if depth > 64 {
+            return MieExif::Unknown;
+        }
+        // The byte order in effect at each open streamed depth.
+        let mut orders: Vec<bool> = vec![order];
+        while cursor < end {
+            budget = match budget.checked_sub(1) {
+                Some(left) => left,
+                None => return MieExif::Unknown,
+            };
+            let Some(header) = file.get(cursor..cursor + 4) else {
+                return MieExif::Unknown;
+            };
+            if header[0] != b'~' {
+                return MieExif::Unknown;
+            }
+            let (format, tag_len, len_code) = (header[1], usize::from(header[2]), header[3]);
+            let tag_start = cursor + 4;
+            let Some(tag) = file.get(tag_start..tag_start + tag_len) else {
+                return MieExif::Unknown;
+            };
+            let little_endian = orders.last().copied().unwrap_or(false);
+            let Some((data_len, width)) =
+                mie_data_length(file, tag_start + tag_len, len_code, little_endian)
+            else {
+                return MieExif::Unknown;
+            };
+            let data_start = tag_start + tag_len + width;
+            let Some(data_end) = data_start.checked_add(data_len).filter(|e| *e <= end) else {
+                return MieExif::Unknown;
+            };
+            cursor = data_end;
+            if tag == b"EXIF" {
+                if format & 0x04 != 0 || format & 0xf0 == 0x10 {
+                    return MieExif::Unknown;
+                }
+                held.push(&file[data_start..data_end]);
+                continue;
+            }
+            if tag_len == 0 {
+                // A group terminator closes the innermost streamed group.
+                if orders.len() > 1 {
+                    orders.pop();
+                }
+                continue;
+            }
+            if format & 0xf0 == 0x10 {
+                if format & 0x04 != 0 {
+                    return MieExif::Unknown;
+                }
+                if data_len == 0 {
+                    orders.push(format & 0x08 != 0);
+                } else {
+                    ranges.push((data_start, data_end, depth + 1, format & 0x08 != 0));
+                }
+            }
+        }
+    }
+    if held.is_empty() {
+        MieExif::Absent
+    } else {
+        MieExif::Held(held)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MieTrailer {
     start: usize,
@@ -1150,6 +1296,57 @@ mod tests {
         }
         file.extend_from_slice(&[byte_order, length_width as u8]);
         file
+    }
+
+    /// A JPEG-like prefix, then a big-endian MIE trailer whose streamed
+    /// `0MIE` group holds `body`, closed by the `zmie` footer.
+    fn trailer_holding(body: &[u8]) -> Vec<u8> {
+        let mut file = b"image data".to_vec();
+        let start = file.len();
+        file.extend_from_slice(b"~\x10\x04\xfe0MIE\0\0\0\0");
+        file.extend_from_slice(body);
+        file.extend_from_slice(b"~\0\x04\0zmie~\0\0\x06");
+        let length = (file.len() + 4 + 2 - start) as u32;
+        file.extend_from_slice(&length.to_be_bytes());
+        file.extend_from_slice(&[0x10, 4]);
+        file
+    }
+
+    /// `trailer_exif` finds every `EXIF` element the trailer holds, proves
+    /// absence only from a trailer it walked whole, and answers `None`
+    /// without a trailer.
+    #[test]
+    fn trailer_exif_proves_absence_only_from_a_whole_walk() {
+        let doc = b"~\x10\x04\0Meta~\x10\x08\0Document~\x28\x09\x01Copyrightx~\0\0\0~\0\0\0";
+        assert_eq!(trailer_exif(&trailer_holding(doc)), Some(MieExif::Absent));
+        let streamed = b"~\x10\x04\0Meta~\0\x04\x04EXIFMM\0*~\0\0\0";
+        let tiff: &[u8] = b"MM\0*";
+        let file = trailer_holding(streamed);
+        assert_eq!(trailer_exif(&file), Some(MieExif::Held(vec![tiff])));
+        let sized = b"~\x10\x04\x0cMeta~\0\x04\x04EXIFMM\0*";
+        let file = trailer_holding(sized);
+        assert_eq!(trailer_exif(&file), Some(MieExif::Held(vec![tiff])));
+        for opaque in [
+            &b"~\x14\x04\x03Metaxyz"[..],
+            b"~\x10\x04\0Meta~\x04\x04\x04EXIFxyzw~\0\0\0",
+            b"~\x10\x04\0Meta!",
+        ] {
+            let file = trailer_holding(opaque);
+            assert_eq!(trailer_exif(&file), Some(MieExif::Unknown), "{opaque:?}");
+        }
+        assert_eq!(trailer_exif(b"image data with no trailer"), None);
+        // An inner trailer holding EXIF before an outer one without it.
+        let inner = trailer_holding(streamed);
+        let two = [&inner[..], &trailer_holding(doc)[b"image data".len()..]].concat();
+        assert_eq!(trailer_exif(&two), Some(MieExif::Held(vec![tiff])));
+        if let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") {
+            let file = std::fs::read(&path).expect("pinned ExifTool.jpg");
+            assert_eq!(
+                trailer_exif(&file),
+                Some(MieExif::Absent),
+                "no EXIF in its MIE"
+            );
+        }
     }
 
     #[test]

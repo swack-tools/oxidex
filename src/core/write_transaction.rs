@@ -43,8 +43,8 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata, removal_is_no_op,
-    remove_field, resolve_write_key_in_request, write_metadata_transaction,
+    ensure_no_mie_copy_for, exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata,
+    removal_is_no_op, remove_field, resolve_write_key_in_request, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -494,6 +494,26 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
 
     let mut fields: Vec<(usize, Resolved<'a>)> = Vec::new();
     for candidate in last {
+        // A request pinned 13.59 also applies to a MIE trailer's EXIF copy,
+        // which oxidex does not write, is refused -- asked only now, of the
+        // request that survived the same-field reduction (a set a later
+        // deletion overrides is never written), and before the no-op
+        // decision below, which sees the main EXIF alone (a deletion MIE's
+        // copy holds is no no-op). `operations::ensure_no_mie_copy_for`.
+        match ensure_no_mie_copy_for(
+            path,
+            candidate.request.requested,
+            &candidate.request.key,
+            &baseline,
+            candidate.request.value.is_none(),
+        ) {
+            Ok(()) => {}
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                refused.extend(tags);
+                continue;
+            }
+            Err(other) => return Err(other),
+        }
         // #945 / #943: a deletion that names nothing -- no row under any
         // spelling, and no entry of any EXIF block (`exif_surgical::
         // exif_request_is_no_op`) -- is a no-op, decided before the writer's

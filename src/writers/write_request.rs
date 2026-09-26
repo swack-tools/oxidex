@@ -682,28 +682,118 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
         .map(|(key, _)| key)
 }
 
-/// Refuses an ungrouped request resolved to the EXIF-family `key` in a file
-/// that carries MIE: pinned 13.59
-/// writes an EXIF tag into MIE-Meta's own EXIF directory as well, creating
-/// it (`-IFD0:CalibrationIlluminant1#=20` on t/images/ExifTool.jpg, `-v2`:
-/// `Creating EXIF` under `MIE1-Meta1`, and two `[IFD0]
-/// CalibrationIlluminant1` rows after), and oxidex writes no MIE.
-pub(crate) fn ensure_no_mie_copy(tag: &str, key: &str, baseline: &MetadataMap) -> Result<()> {
+/// Refuses a request -- grouped or not -- resolved to the EXIF-family `key`
+/// in a file that carries MIE, wherever pinned 13.59 also edits MIE-Meta's
+/// own EXIF copy, which oxidex does not write.
+///
+/// - A set is written into MIE's EXIF as well, which ExifTool creates when
+///   the trailer has none (`-IFD0:Artist=x` and `-IFD0:CalibrationIlluminant1#=20`
+///   on t/images/ExifTool.jpg, `-v2`: `Creating EXIF` under `MIE1-Meta1`,
+///   and two `[IFD0]` rows after): always refused.
+/// - A deletion (a tag, or `<group>:All`) is applied to MIE's EXIF where
+///   that holds the tag (`-IFD0:Artist=` on the output above shrinks the
+///   trailer from 188 to 90 bytes) and leaves a trailer without it as it was
+///   (ExifTool.jpg's own, which has no EXIF; `-IFD0:Software=` on the 188):
+///   refused unless every MIE trailer is proven not to hold the tag
+///   (`parsers::mie::trailer_exif`, then the no-op scan every EXIF deletion
+///   is decided by, `exif_surgical::exif_request_is_no_op`). An EXIF block
+///   that scan cannot read proves nothing: 13.59 reads one whose TIFF magic
+///   is not 42 anyway and deletes from it.
+/// - A maker-note tag (`-MakerNotes:OwnerName=`, set or deletion) is edited
+///   in MIE's EXIF where that carries a maker note (Writer.jpg with a MIE
+///   holding Canon.jpg's EXIF: `[Canon] OwnerName` emptied, 2490 -> 2496
+///   bytes, although the main EXIF has no maker note); ExifTool creates no
+///   maker note, so a MIE without one is left alone.
+///
+/// `file` is the file's bytes where ExifTool reads a MIE trailer (after a
+/// JPEG or a TIFF-structured file, not after a PNG's IEND), else `None`;
+/// the reader's MIE rows count as MIE too, whose EXIF is unseen without it.
+pub(crate) fn ensure_no_mie_copy(
+    tag: &str,
+    key: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+    file: Option<&[u8]>,
+) -> Result<()> {
+    use super::exif_surgical::{
+        EXIF_BLOCK_MAGICS, exif_request_is_no_op, group_removal, makernote_census,
+        scan_entries_with_magics,
+    };
+    use crate::parsers::mie::{MieExif, trailer_exif};
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    let group_all = removal && group_removal(key).is_some();
+    let makernote = !group_all && group.eq_ignore_ascii_case("MakerNotes");
     let exif = matches!(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "SubIFD"
-    ) || super::exif_surgical::chain_key_dir(key).is_some();
-    match mie_row(baseline) {
-        Some(mie) if exif => Err(refuse(
+    ) || super::exif_surgical::chain_key_dir(key).is_some()
+        || group_all;
+    if !exif && !makernote {
+        return Ok(());
+    }
+    let trailer = file.and_then(trailer_exif);
+    let Some(mie) = mie_row(baseline)
+        .map(str::to_string)
+        .or_else(|| trailer.as_ref().map(|_| "a MIE trailer".to_string()))
+    else {
+        return Ok(());
+    };
+    if makernote {
+        let untouched = match &trailer {
+            Some(MieExif::Absent) => true,
+            Some(MieExif::Held(blocks)) => {
+                makernote_census(blocks, EXIF_BLOCK_MAGICS).tag_bearing == 0
+            }
+            Some(MieExif::Unknown) | None => false,
+        };
+        if untouched {
+            return Ok(());
+        }
+        return Err(refuse(
+            tag,
+            format!(
+                "the file carries MIE ({mie}) whose EXIF directory holds a maker note (or \
+                 may), where ExifTool also edits {key}, which oxidex cannot write"
+            ),
+        ));
+    }
+    if !removal {
+        return Err(refuse(
             tag,
             format!(
                 "the file carries MIE ({mie}), whose EXIF directory ExifTool also writes \
-                 {key} to, which oxidex cannot write"
+                 {key} to (creating it), which oxidex cannot write"
             ),
-        )),
-        _ => Ok(()),
+        ));
     }
+    let untouched = match &trailer {
+        Some(MieExif::Absent) => true,
+        Some(MieExif::Held(blocks)) => {
+            blocks
+                .iter()
+                .all(|block| scan_entries_with_magics(block, EXIF_BLOCK_MAGICS).is_ok())
+                && exif_request_is_no_op(
+                    blocks,
+                    blocks,
+                    EXIF_BLOCK_MAGICS,
+                    false,
+                    &MetadataMap::new(),
+                    &MetadataMap::new(),
+                    &[key.to_string()],
+                )
+        }
+        Some(MieExif::Unknown) | None => false,
+    };
+    if untouched {
+        return Ok(());
+    }
+    Err(refuse(
+        tag,
+        format!(
+            "the file carries MIE ({mie}) whose EXIF directory holds {key} (or may), \
+             which ExifTool also deletes and oxidex cannot write"
+        ),
+    ))
 }
 
 /// Whether a row the reader files under family-1 `group` can be a candidate
@@ -1273,9 +1363,12 @@ mod tests {
         );
         let mut mie = MetadataMap::new();
         mie.insert("MIE:TrailerSignature", TagValue::new_string("x"));
-        assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &mie).is_err());
-        assert!(ensure_no_mie_copy("PNG:Title", "PNG:Title", &mie).is_ok());
-        assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &MetadataMap::new()).is_ok());
+        let empty = MetadataMap::new();
+        for removal in [false, true] {
+            assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &mie, removal, None).is_err());
+            assert!(ensure_no_mie_copy("PNG:Title", "PNG:Title", &mie, removal, None).is_ok());
+            assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &empty, removal, None).is_ok());
+        }
     }
 
     #[test]

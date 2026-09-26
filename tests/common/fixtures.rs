@@ -77,6 +77,37 @@ pub fn pinned_combined_corpus_dir() -> Option<PathBuf> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// t/images/ExifTool.jpg with its MIE trailer cut out, or `None` when the
+/// pinned fixture is absent: a JPEG with the original's full EXIF and every
+/// other trailer (AFCP, FotoStation x2, CanonVRD, PhotoMechanic, Samsung,
+/// Vivo) and no MIE, which pinned ExifTool 13.59 reads exactly as the
+/// original less its two MIE rows (`[MIE-Doc] Copyright`, `[MIE-Main]
+/// TrailerSignature`). The MIE trailer (`~\x10\x04\xfe0MIE` .. the `zmie`
+/// footer, 90 bytes) lies after the AFCP trailer and nothing locates it by
+/// absolute offset, so cutting it moves no offset any reader follows.
+///
+/// For tests of writes the original's MIE would refuse: pinned 13.59 also
+/// writes every EXIF set into that trailer's EXIF directory, which oxidex
+/// does not write, so oxidex refuses them there.
+pub fn exiftool_jpg_without_mie() -> Option<Vec<u8>> {
+    let path = pinned_t_images_fixture_path("ExifTool.jpg")?;
+    let file = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let find = |needle: &[u8]| {
+        let hits: Vec<usize> = file
+            .windows(needle.len())
+            .enumerate()
+            .filter_map(|(at, window)| (window == needle).then_some(at))
+            .collect();
+        assert_eq!(hits.len(), 1, "ExifTool.jpg: one {needle:?}");
+        hits[0]
+    };
+    let start = find(b"~\x10\x04\xfe0MIE");
+    let footer = b"~\0\x04\0zmie~\0\0\x06";
+    let end = find(footer) + footer.len() + 6;
+    assert_eq!(end - start, 90, "ExifTool.jpg: its 90-byte MIE trailer");
+    Some([&file[..start], &file[end..]].concat())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
