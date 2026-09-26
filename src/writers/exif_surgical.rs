@@ -1970,10 +1970,10 @@ fn plan_exif_write_inner(
             ));
         }
         let Some(descriptor) = get_tag_descriptor(&key) else {
-            return Err(ExifToolError::parse_error(format!(
-                "Cannot add tag '{}': not a known EXIF tag",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                "not a known EXIF tag, so it cannot be added",
+            ));
         };
         validate_changed(&key, value)?;
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
