@@ -128,6 +128,14 @@ pub struct CliArgs {
     /// A path, so kept as the bytes it was given: it need not be UTF-8.
     pub tags_from_file: Option<OsString>,
 
+    /// Where the (last) `-TagsFromFile` stood among the write requests: the
+    /// number of `args` entries given before it (`None` without one). `args`
+    /// keeps the tag arguments in command-line order but not the option
+    /// itself, and ExifTool applies a copy at its place in that order -- a
+    /// later `-all=` clears what it copied, an earlier one clears the file
+    /// before it (13.59: `-TagsFromFile SRC -all= DST` leaves no EXIF).
+    pub tags_from_file_position: Option<usize>,
+
     /// Date format string for DateTime tags in filename patterns (using chrono format).
     /// Example: -d %Y%m%d_%H%M%S
     /// Common specifiers: %Y (year), %m (month), %d (day), %H (hour), %M (minute), %S (second)
@@ -169,6 +177,20 @@ pub struct CliArgs {
     /// `args`, whose accessors classify by spelling (a leading `-` means an
     /// option or tag) and by position (the last argument is the file).
     pub literal_paths: Vec<OsString>,
+}
+
+/// Whether `arg` is ExifTool's `-TagsFromFile` option (`-TagsFromFile SRC`,
+/// `-TagsFromFile=SRC`, either with `--`), in any of the spellings
+/// `normalize_exiftool_option` and `non_utf8_arg` hand to lexopt.
+fn is_tags_from_file_option(arg: &[u8]) -> bool {
+    let Some(rest) = arg
+        .strip_prefix(b"--")
+        .or_else(|| arg.strip_prefix(b"-"))
+        .and_then(|name| name.strip_prefix(b"TagsFromFile"))
+    else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with(b"=")
 }
 
 fn normalize_exiftool_option(arg: String) -> String {
@@ -429,6 +451,7 @@ impl CliArgs {
         // ExifTool's default, and now OxiDex's. See the field's own docs.
         let mut exiftool_compat = true;
         let mut tags_from_file = None;
+        let mut tags_from_file_position = None;
         let mut date_format = None;
         let mut dry_run = false;
         let mut strict = false;
@@ -462,6 +485,11 @@ impl CliArgs {
             if raw_arg == "--" {
                 options_ended = true;
                 continue;
+            }
+            // `-TagsFromFile` goes to lexopt below, away from the tag
+            // arguments; its place among them is recorded here.
+            if is_tags_from_file_option(os_bytes(&raw_arg)) {
+                tags_from_file_position = Some(tag_modifications.len());
             }
 
             // An argument that is not valid UTF-8 can only be a path or the
@@ -715,6 +743,7 @@ impl CliArgs {
             readonly,
             exiftool_compat,
             tags_from_file,
+            tags_from_file_position,
             date_format,
             dry_run,
             strict,
@@ -803,17 +832,44 @@ impl CliArgs {
     /// combining modes apply all of them instead of dispatching on the first
     /// and dropping the rest.
     pub fn plain_tag_modifications(&self) -> Vec<(String, OsString)> {
+        self.plain_tag_modifications_with_positions()
+            .into_iter()
+            .map(|(_, tag, value)| (tag, value))
+            .collect()
+    }
+
+    /// [`Self::plain_tag_modifications`], each with its position among the
+    /// option arguments -- the order ExifTool applies them in, which
+    /// [`Self::clear_all_position`] and [`Self::tags_from_file_position`]
+    /// are measured in too.
+    pub fn plain_tag_modifications_with_positions(&self) -> Vec<(usize, String, OsString)> {
         self.option_args()
             .iter()
-            .filter(|arg| match arg.to_str() {
+            .enumerate()
+            .filter(|(_, arg)| match arg.to_str() {
                 Some(text) => {
-                    let lower = text.to_lowercase();
-                    lower != "-all=" && lower != "--all=" && Self::parse_date_shift(text).is_none()
+                    !Self::is_clear_all_arg(text) && Self::parse_date_shift(text).is_none()
                 }
                 None => true,
             })
-            .filter_map(|arg| Self::parse_modification(arg))
+            .filter_map(|(at, arg)| {
+                Self::parse_modification(arg).map(|(tag, value)| (at, tag, value))
+            })
             .collect()
+    }
+
+    /// The position of the last `-all=` among the option arguments (see
+    /// [`Self::plain_tag_modifications_with_positions`]), `None` without one.
+    /// ExifTool's `-all=` removes every value assigned before it
+    /// (`Writer.pl` `RemoveNewValuesForGroup`) and none assigned after it.
+    pub fn clear_all_position(&self) -> Option<usize> {
+        self.option_args()
+            .iter()
+            .rposition(|arg| arg.to_str().is_some_and(Self::is_clear_all_arg))
+    }
+
+    fn is_clear_all_arg(arg: &str) -> bool {
+        arg.eq_ignore_ascii_case("-all=") || arg.eq_ignore_ascii_case("--all=")
     }
 
     /// Parses a single modification argument in the form -TAG=VALUE. A
@@ -1313,6 +1369,7 @@ mod tests {
             readonly: false,
             exiftool_compat: true,
             tags_from_file: None,
+            tags_from_file_position: None,
             date_format: None,
             dry_run: false,
             strict: false,

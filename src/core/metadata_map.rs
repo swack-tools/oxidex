@@ -199,6 +199,14 @@ impl MetadataMap {
         self.read_source = Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     }
 
+    /// Gives this map `source`'s read provenance ([`Self::read_from`]): for
+    /// a copy that still holds every row of that read under the same keys
+    /// (`tag_normalization::normalize_metadata_map`), so a row its caller
+    /// then removes is a deletion there as it is in the read itself.
+    pub(crate) fn inherit_read_source(&mut self, source: &MetadataMap) {
+        self.read_source.clone_from(&source.read_source);
+    }
+
     /// Whether this map is a complete read of the file at `path`: the one
     /// case in which a row the map lacks is a row its caller removed, and so
     /// a deletion `write_metadata` applies. A map built from scratch, or read

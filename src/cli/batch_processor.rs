@@ -464,12 +464,19 @@ fn apply_modifications(
     modifications: &[(String, OsString)],
     args: &CliArgs,
 ) -> std::result::Result<WriteOutcome, String> {
+    // Every write target is checked as the single-file write checks it
+    // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
+    // over a file list does: a read-only file is refused, never replaced.
+    // The atomic rename below would replace a 0444 file in a writable
+    // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
+    // `-Artist=x ro.jpg` refuses.
+    let target = fs::metadata(path)
+        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    if target.permissions().readonly() {
+        return Err(format!("File is read-only: {}", path.display()));
+    }
     // Preserve original file times if requested
-    let original_metadata = if args.preserve_file_times {
-        Some(fs::metadata(path).map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
+    let original_metadata = args.preserve_file_times.then_some(target);
 
     // Create backup if requested, once the write is known to change the file.
     // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file

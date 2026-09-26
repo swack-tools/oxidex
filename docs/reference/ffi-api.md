@@ -433,6 +433,14 @@ holds nothing in the group, the file is left byte-identical and the call
 succeeds. A group oxidex cannot delete from that file (`XMP:All` where there
 is XMP) fails with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`.
 
+The handle's changes are written in the order of the calls that made them,
+as ExifTool applies a command line's assignments: a group deletion removes
+what was set in the group before it, never a tag set after it.
+`exiftool_remove_tag(h, "EXIF:All")` followed by
+`exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose only
+EXIF is that Artist (ExifTool's `-EXIF:All= -IFD0:Artist=x`); the reverse
+order leaves no EXIF.
+
 #### `exiftool_write_file()`
 
 Writes modified metadata to file.
