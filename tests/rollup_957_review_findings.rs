@@ -4,12 +4,14 @@
 //! 13.59, `OOXML.docx` FileType = DOCX); the `oracle_*` tests re-measure
 //! them through `exiftool_oracle::graded()`.
 
-use oxidex::core::operations::read_metadata;
+use oxidex::core::operations::{read_metadata, write_metadata};
+use oxidex::core::tag_normalization::normalize_metadata_map;
 use oxidex::exiftool_oracle;
 use oxidex::ffi::{
     EXIFTOOL_OK, exiftool_create, exiftool_destroy, exiftool_read_file, exiftool_remove_tag,
     exiftool_set_tag_string, exiftool_write_file,
 };
+use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,10 @@ fn copy_into(dir: &TempDir, fixture: &Path, name: &str) -> PathBuf {
     let path = dir.path().join(name);
     fs::copy(fixture, &path).expect("copy fixture");
     path
+}
+
+fn sha(path: &Path) -> Vec<u8> {
+    Sha256::digest(fs::read(path).expect("read file")).to_vec()
 }
 
 fn oxidex(args: &[&str]) -> Output {
@@ -266,4 +272,30 @@ fn oracle_ffi_call_order_matches_the_command_line_order() {
             );
         }
     }
+}
+
+// --- PRRT_kwDOQNbr5M6mOo0v: a normalized read map keeps its source ---------
+
+/// `normalize_metadata_map` of a read keeps the read's provenance, so a row
+/// the caller then removes is deleted (13.59 `-IFD0:Artist=` removes it)
+/// instead of being silently skipped as a map built from scratch.
+#[test]
+fn a_normalized_read_map_still_deletes_what_its_caller_removed() {
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, Path::new(JPEG), "a.jpg");
+    let mut map = normalize_metadata_map(&read_metadata(&file).unwrap());
+    assert!(map.remove("IFD0:Artist").is_some());
+    write_metadata(&file, &map).expect("write the normalized map");
+    assert_eq!(get(&file, "IFD0:Artist"), None, "the removal was skipped");
+    assert_eq!(
+        get(&file, "IFD0:Make").as_deref(),
+        Some("Synthetic Camera Co")
+    );
+
+    // Unedited, the normalized read requests nothing.
+    let file = copy_into(&dir, Path::new(JPEG), "b.jpg");
+    let before = sha(&file);
+    let map = normalize_metadata_map(&read_metadata(&file).unwrap());
+    write_metadata(&file, &map).expect("write the unedited map");
+    assert_eq!(sha(&file), before);
 }
