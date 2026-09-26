@@ -22,7 +22,7 @@
 //! set is exactly that case.
 
 use crate::cli::args::CliArgs;
-use crate::cli::value_parser::parse_cli_tag_value_os;
+use crate::cli::value_parser::parse_cli_tag_value_os_with_mode;
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report};
 use crate::core::write_transaction::{
@@ -96,6 +96,13 @@ pub struct WritePlan {
     pub warnings: Vec<String>,
     /// Whether any `-TAG=VALUE` was given, defined or not.
     requested_sets: bool,
+    /// ExifTool's `-n` (oxidex's own `-n` is already dry-run, so this is
+    /// `--no-print-conv` here): every `-TAG=VALUE` in `sets` is the tag's
+    /// raw/machine value, with no PrintConv label lookup at all. A single
+    /// `-TAG#=VALUE` gets the same treatment regardless of this flag
+    /// (`apply_sets` checks the tag name's own trailing `#`, independent of
+    /// this global setting).
+    pub raw_values: bool,
     /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
     /// then applied first and cleared with the rest.
     copy_before_clear: bool,
@@ -227,6 +234,7 @@ impl WritePlan {
             sets,
             warnings,
             requested_sets: !raw_sets.is_empty(),
+            raw_values: !args.exiftool_compat(),
             copy_before_clear: args.tags_from_file.is_some()
                 && matches!(
                     (args.tags_from_file_position, clear_at),
@@ -333,7 +341,7 @@ pub fn write_plan_file(
             let (before_copy, after_copy) = plan
                 .sets
                 .split_at(plan.sets_before_copy.min(plan.sets.len()));
-            proven_sets += apply_sets(scratch, before_copy)?;
+            proven_sets += apply_sets(scratch, before_copy, plan.raw_values)?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 copy = Some(copy_metadata_report(src, scratch, filters).map_err(|e| {
@@ -352,7 +360,7 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            proven_sets += apply_sets(scratch, after_copy)?;
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values)?;
             Ok(())
         },
     )?;
@@ -413,24 +421,53 @@ pub fn write_file(
 /// String made Integer/Rational/DateTime tags unsettable), then all of them
 /// are resolved, written in one pass, and proven together -- or none is.
 /// Returns how many sets were proven in effect.
-fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<usize, String> {
+///
+/// `global_raw_values` is `plan.raw_values` (ExifTool's `-n`, always applying
+/// to every set here). A tag's own trailing `#` (`canonical_request_tag`
+/// leaves it on the name, e.g. `"IFD0:Orientation#"`) is stripped here,
+/// before the name reaches either the value parser or the write key: the
+/// address resolvers downstream (`write_request::canonical_write_key`,
+/// `resolve_write_key`) have no `#` handling of their own and either pass a
+/// malformed `"IFD0:Orientation#"` key straight into the writer (which then
+/// refuses it as "not a known EXIF tag") or, for a bare name, resolve the
+/// address correctly but only after the value was already parsed -- and
+/// mistyped -- as a `String`. Stripping it here, once, before either of
+/// those things happens, is what makes `#` actually mean "this one tag's
+/// value is raw" instead of failing outright.
+fn apply_sets(
+    scratch: &Path,
+    sets: &[(String, OsString)],
+    global_raw_values: bool,
+) -> Result<usize, String> {
     if sets.is_empty() {
         return Ok(0);
     }
     let mut changes = Vec::with_capacity(sets.len());
-    for (tag_name, value) in sets {
+    for (set_tag, value) in sets {
+        let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {
+            Some(base) => (base, true),
+            None => (set_tag.as_str(), global_raw_values),
+        };
         if value.is_empty() {
             // Empty value = delete tag (ExifTool -TAG= syntax)
-            changes.push(TagChange::delete(tag_name.clone()));
-        } else {
-            let tag_value = parse_cli_tag_value_os(tag_name, value)
-                .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
-            changes.push(TagChange::set(tag_name.clone(), tag_value));
+            changes.push(TagChange::delete(write_tag.to_string()));
+            continue;
         }
+        let tag_value = parse_cli_tag_value_os_with_mode(write_tag, value, raw_mode)
+            .map_err(|e| describe_value_parse_failure(write_tag, &e, sets.len()))?;
+        changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
     apply_tag_changes_counted(scratch, &changes)
         .map(|(_, proven_sets)| proven_sets)
         .map_err(|e| describe_set_failure(&e, sets))
+}
+
+/// Whether `reason` is one of `value_parser::invert_enum_printconv`'s two
+/// refusal shapes -- ExifTool's own wording for a value that does not match
+/// any entry of a tag's PrintConv, shared by [`apply_sets`] and
+/// [`describe_value_parse_failure`].
+fn is_not_in_print_conv_reason(reason: &str) -> bool {
+    reason.ends_with("(not in PrintConv)") || reason.ends_with("(matches more than one PrintConv)")
 }
 
 /// When every refused tag is one ExifTool itself names this way
@@ -459,13 +496,16 @@ fn sorry_refusal_message(refused: &[crate::error::TagNotWritten]) -> Option<Stri
     Some(message)
 }
 
-/// Whether [`describe_set_failure`] produced ExifTool's own warning text
-/// (see [`sorry_refusal_message`]) rather than oxidex's `Failed to ...`
-/// wrapping -- the two need different framing in `main.rs`'s `finish_write`:
-/// ExifTool's own words are printed as-is, oxidex's diagnosis gets an
-/// `Error:` prefix.
+/// Whether a failure message is ExifTool's own warning text -- either
+/// [`sorry_refusal_message`]'s (`Warning: Sorry, ... \nNothing to do.`, the
+/// PNG `XMP` literal-text-chunk case) or [`describe_value_parse_failure`]'s
+/// (`Warning: Can't convert Group:Tag (not in PrintConv)\nNothing to do.`,
+/// a value that does not match any PrintConv label) -- rather than oxidex's
+/// own `Failed to ...` / `Invalid value for ...` wrapping. The two need
+/// different framing in `main.rs`'s `finish_write`: ExifTool's own words are
+/// printed as-is, oxidex's diagnosis gets an `Error:` prefix.
 pub fn is_exiftool_refusal_message(message: &str) -> bool {
-    message.starts_with("Warning: Sorry, ") && message.ends_with("\nNothing to do.")
+    message.starts_with("Warning: ") && message.ends_with("\nNothing to do.")
 }
 
 /// The CLI's message for a failed `-TAG=` transaction: which request failed,
@@ -499,6 +539,37 @@ fn describe_set_failure(err: &ExifToolError, sets: &[(String, OsString)]) -> Str
         }
         _ => format!("Failed to write tags: {}", err),
     }
+}
+
+/// The value-parse-failure counterpart of [`sorry_refusal_message`]: a
+/// value that does not match any entry of a tag's PrintConv
+/// (`value_parser::invert_enum_printconv`'s reason text always ends
+/// `(not in PrintConv)` or `(matches more than one PrintConv)`) is exactly
+/// the shape of refusal pinned ExifTool 13.59 reports for the same input
+/// (confirmed against the oracle: `-Orientation=6` without `-n` is
+/// `Warning: Can't convert IFD0:Orientation (not in PrintConv)` /
+/// `Nothing to do.`, exit 1, file untouched) -- so it gets ExifTool's own
+/// wording here too, for a single-tag request, rather than oxidex's own
+/// `Invalid value for ...` diagnosis.
+///
+/// `request_count > 1` keeps the existing `Invalid value for ...` wrapping:
+/// this codebase's write transaction does not (yet) apply the tags that
+/// parsed while reporting only the one that did not, so pretending a
+/// multi-tag request is `Nothing to do.` would be wrong whenever the other
+/// requests would have succeeded. That partial-application gap is
+/// pre-existing and unrelated to this fix.
+fn describe_value_parse_failure(
+    tag_name: &str,
+    err: &ExifToolError,
+    request_count: usize,
+) -> String {
+    if request_count == 1
+        && let Some(reason) = err.invalid_tag_value_reason()
+        && is_not_in_print_conv_reason(reason)
+    {
+        return format!("Warning: {reason}\nNothing to do.");
+    }
+    format!("Invalid value for {}: {}", tag_name, err)
 }
 
 /// Runs `apply` against a private copy of `path`, then commits the copy only

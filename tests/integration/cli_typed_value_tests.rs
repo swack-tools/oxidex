@@ -358,7 +358,13 @@ fn jpeg_write_leaves_every_other_tag_alone() {
 
 #[test]
 fn tiff_integer_tag_is_settable_and_serialized_as_an_integer() {
-    let file = write_to_copy(TIFF_FIXTURE, ".tif", "-IFD0:Orientation=6");
+    // `#` (ExifTool's raw-value suffix): a bare `-IFD0:Orientation=6` is
+    // correctly refused since the printconv-inverse fix (pinned ExifTool
+    // 13.59 also refuses it, "Can't convert IFD0:Orientation (not in
+    // PrintConv)", without `-n`/`#`) -- this test is about the tag's
+    // serialized TYPE, not about PrintConv label matching, so it writes the
+    // raw code directly instead.
+    let file = write_to_copy(TIFF_FIXTURE, ".tif", "-IFD0:Orientation#=6");
     let entry = tiff_entry(file.path(), IfdKind::Ifd0, ORIENTATION);
     assert_eq!(entry.field_type, SHORT, "Orientation must stay a SHORT");
     assert_eq!(entry.count, 1);
@@ -404,8 +410,10 @@ fn tiff_write_leaves_every_other_tag_alone() {
     let baseline = scan_exif_entries(&fs::read(before.path()).unwrap()).unwrap();
 
     // Orientation is already present in this fixture, so nothing is added and
-    // the entry count must be identical.
-    let after = write_to_copy(TIFF_FIXTURE, ".tif", "-IFD0:Orientation=6");
+    // the entry count must be identical. `#`: see the comment on
+    // `tiff_integer_tag_is_settable_and_serialized_as_an_integer` -- a bare
+    // numeric value is correctly refused now.
+    let after = write_to_copy(TIFF_FIXTURE, ".tif", "-IFD0:Orientation#=6");
     let updated = scan_exif_entries(&fs::read(after.path()).unwrap()).unwrap();
 
     assert_eq!(baseline.entries.len(), updated.entries.len());
