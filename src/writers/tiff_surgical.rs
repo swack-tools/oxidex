@@ -364,8 +364,10 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     let mut rowless: Vec<(&LocatedEntry, Option<TagValue>)> = Vec::new();
 
     // Surfaced entries the caller's map drops, deleted after every other
-    // edit (`deletable_in_place`, applied by [`delete_entries`]).
+    // edit (`deletable_in_place`), and the entries of an ExifIFD this write
+    // creates; both applied last by [`apply_final_edits`].
     let mut deletions: Vec<entry_edits::ScopedEntryEdit> = Vec::new();
+    let mut created_exif: Vec<entry_edits::ScopedEntryEdit> = Vec::new();
 
     // --- Pass 1: located entries (modify in place, or refuse a removal) ---
     for entry in &scan.entries {
@@ -547,6 +549,24 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
+        // A tag for an ExifIFD the file does not have: the directory is
+        // created with it (`apply_final_edits`), as pinned ExifTool 13.59
+        // creates it (`-ExifIFD:ModifyDate=` on t/images ExifTool.tif).
+        if key.starts_with("ExifIFD:") && scan.exif_ifd_offset.is_none() {
+            if !created_exif.iter().any(|edit| edit.tag_id == tag_id) {
+                created_exif.push(entry_edits::ScopedEntryEdit {
+                    ifd: IfdKind::ExifIfd,
+                    tag_id,
+                    mutation: entry_edits::EntryMutation::Set {
+                        field_type: ft,
+                        count,
+                        bytes,
+                    },
+                });
+            }
+            continue;
+        }
+
         let bucket = if key.starts_with("ExifIFD:") {
             &mut added_exif
         } else if key.starts_with("GPS:") {
@@ -578,8 +598,15 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         });
     }
 
+    if !created_exif.is_empty() {
+        let set: Vec<u16> = created_exif.iter().map(|edit| edit.tag_id).collect();
+        created_exif.extend(crate::writers::exif_ifd_creation::created_exif_ifd_entries(
+            bo, &set,
+        )?);
+        deletions.extend(created_exif);
+    }
     if added_ifd0.is_empty() && added_exif.is_empty() && added_gps.is_empty() {
-        return delete_entries(out, &deletions);
+        return apply_final_edits(out, &deletions);
     }
 
     // --- Pass 3: grow the tables that gained entries ---
@@ -627,7 +654,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         put_u32(&mut out[4..8], new_at, bo);
     }
 
-    delete_entries(out, &deletions)
+    apply_final_edits(out, &deletions)
 }
 
 /// Whether this writer deletes `entry`, a surfaced entry the caller's map
@@ -676,14 +703,15 @@ fn deletable_in_place(
     left + pointers > 1
 }
 
-/// `out` with `deletions` applied: each directory holding one is copied to
-/// the end without it (`entry_edits::apply_entry_edits`), every other byte
-/// kept.
-fn delete_entries(out: Vec<u8>, deletions: &[entry_edits::ScopedEntryEdit]) -> Result<Vec<u8>> {
-    if deletions.is_empty() {
+/// `out` with `edits` applied -- deletions, and the entries of a created
+/// ExifIFD: each directory they touch is copied to the end with them (a new
+/// ExifIFD appended and linked from IFD0), every other byte kept
+/// (`entry_edits::apply_entry_edits`).
+fn apply_final_edits(out: Vec<u8>, edits: &[entry_edits::ScopedEntryEdit]) -> Result<Vec<u8>> {
+    if edits.is_empty() {
         return Ok(out);
     }
-    entry_edits::apply_entry_edits(&out, deletions)
+    entry_edits::apply_entry_edits(&out, edits)
 }
 
 fn too_big(_: std::num::TryFromIntError) -> ExifToolError {

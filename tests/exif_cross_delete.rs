@@ -151,6 +151,26 @@ fn rows_named(rows: &BTreeMap<String, String>, names: &[String]) -> BTreeMap<Str
         .collect()
 }
 
+/// Pinned ExifTool's `-validate` warnings for `path`, less the summary line.
+fn validate_warnings(oracle: &Oracle, path: &Path) -> std::collections::BTreeSet<String> {
+    let out = oracle
+        .command()
+        .args(["-a", "-s3", "-validate", "-Warning"])
+        .arg(path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| {
+            *line != "OK"
+                && !line.split_once(' ').is_some_and(|(n, rest)| {
+                    n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with("Warning")
+                })
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// Runs each `(source, args)` through oxidex and the oracle and returns a
 /// description of every case whose written tags read back differently, or
 /// whose oxidex run failed. `None` when no graded oracle or `t/images`.
@@ -195,6 +215,17 @@ fn mismatches(cases: &[(Source, &[&str])]) -> Option<Vec<String>> {
         if expected != actual {
             failures.push(format!(
                 "{label}:\n    ExifTool {expected:?}\n    oxidex   {actual:?}"
+            ));
+        }
+        // No structural damage the oracle's own edit does not have.
+        let theirs_warnings = validate_warnings(oracle, &theirs);
+        let extra: Vec<String> = validate_warnings(oracle, &ours)
+            .difference(&theirs_warnings)
+            .cloned()
+            .collect();
+        if !extra.is_empty() {
+            failures.push(format!(
+                "{label}: -validate warnings ExifTool's edit does not give: {extra:?}"
             ));
         }
     }
@@ -315,6 +346,80 @@ fn a_tag_moves_between_directories_tiff() {
     let ifd0 = format!("-IFD0:ModifyDate={DATE}");
     let exif = format!("-ExifIFD:ModifyDate={DATE}");
     assert_matches_oracle(&[(TIFF_BOTH, &[ifd0.as_str()]), (TIFF_BOTH, &[exif.as_str()])]);
+}
+
+/// Setting an ExifIFD tag in a file with no ExifIFD creates the directory,
+/// with WriteExif's mandatory ExifVersion, ComponentsConfiguration and
+/// ColorSpace (WriteExif.pl 13.59:714-719), and moves the IFD0 copy: the
+/// maintainer's `-ExifIFD:ModifyDate=` on t/images ExifTool.tif, its
+/// mirrors, and the same on a JPEG and a PNG `eXIf` without an ExifIFD.
+#[test]
+fn a_tag_moves_into_an_exif_ifd_the_write_creates() {
+    const TIFF: Source = Source {
+        image: "ExifTool.tif",
+        setup: &[],
+    };
+    const JPEG_NO_EXIF_IFD: Source = Source {
+        image: "Canon.jpg",
+        setup: &["-ExifIFD:All="],
+    };
+    const PNG_IFD0_ONLY: Source = Source {
+        image: "PNG.png",
+        setup: &["-IFD0:ModifyDate=2003:03:03 03:03:03"],
+    };
+    let exif_modify = format!("-ExifIFD:ModifyDate={DATE}");
+    let ifd0_modify = "-IFD0:ModifyDate=2021:01:01 00:00:00";
+    assert_matches_oracle(&[
+        (TIFF, &[exif_modify.as_str()]),
+        (TIFF, &["-ExifIFD:Software=Me"]),
+        (TIFF, &["-ExifIFD:ISO=200"]),
+        (TIFF, &[exif_modify.as_str(), ifd0_modify]),
+        (JPEG_NO_EXIF_IFD, &[exif_modify.as_str()]),
+        (JPEG_NO_EXIF_IFD, &["-ExifIFD:ISO=200"]),
+        (PNG_IFD0_ONLY, &[exif_modify.as_str()]),
+    ]);
+}
+
+/// `-ExifIFD:XResolution=300` (the maintainer's other example: 13.59 writes
+/// `[ExifIFD] XResolution 300` and removes IFD0's) is refused by name, the
+/// file untouched: XResolution belongs to the generated writer, which
+/// compiles only SetNewValue's IFD<n> qualifier branch, not the %exifDirs
+/// branch that selects ExifIFD. JPEG, TIFF and PNG `eXIf`.
+#[test]
+fn an_exififd_qualifier_the_generated_writer_lacks_is_refused_by_name() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no graded ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let sources = [
+        CANON,
+        Source {
+            image: "ExifTool.tif",
+            setup: &[],
+        },
+        PNG_EXIF,
+    ];
+    for (index, source) in sources.into_iter().enumerate() {
+        let Some(path) = materialize(oracle, source, dir.path(), &format!("x{index}")) else {
+            eprintln!("skipping: pinned fixture {} is absent", source.image);
+            return;
+        };
+        let before = std::fs::read(&path).unwrap();
+        let output = oxidex()
+            .args(["-overwrite_original", "-ExifIFD:XResolution=300"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{}: not refused", source.image);
+        assert!(
+            stderr.contains("'ExifIFD:XResolution'") && stderr.contains("%exifDirs"),
+            "{}: {stderr}",
+            source.image
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{}", source.image);
+    }
 }
 
 /// PNG `eXIf`: the same moves inside the chunk.
