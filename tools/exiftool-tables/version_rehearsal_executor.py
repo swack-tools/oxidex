@@ -1653,9 +1653,12 @@ try:
         failure += chunk
     os.close(failure_read)
     if failure:
-        os.waitpid(primary, 0)
+        _, raw = os.waitpid(primary, 0)
         number, _, message = failure.decode(errors="replace").partition(":")
         report(phase="exec", errno=int(number), error=message)
+        verified, escaped, _ = sweep(primary, raw)
+        report(phase="exit", verified=verified, requested=False, escaped=sorted(escaped),
+               returncode=os.waitstatus_to_exitcode(raw))
         os._exit(0)
     report(phase="exec", ok=True)
 except BaseException as exc:
@@ -1757,6 +1760,9 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
         except ProcessLookupError:
             pass
         child.wait()
+    # Read the supervisor's final verdict (or learn it has none) before the
+    # handle is dropped: an unproven lineage keeps the child registered.
+    _lineage_unverified(child)
     _close_lineage_status(child)
     for stream in (child.stdin, child.stdout, child.stderr):
         if stream is not None:
