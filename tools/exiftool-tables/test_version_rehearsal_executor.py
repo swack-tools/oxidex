@@ -909,6 +909,13 @@ class ExecutorTests(unittest.TestCase):
                           f"the marker must name the hidden command, not only its supervisor: {marker}")
             self.assertTrue(all(str(item.get("identity", "")).startswith("procfs-start:")
                                 for item in hidden if item.get("pid") == command_pid))
+            # A detached grandchild is in neither the command's identity nor its
+            # session: clearance must rest on a condition that covers it.
+            lineage = [item for item in marker["survivors"] if item.get("lineage_primary")]
+            self.assertTrue(lineage and all(type(item.get("lineage_started_at")) is float
+                                            and item.get("uid") == os.getuid() for item in lineage), marker)
+            with self.assertRaisesRegex(executor.Refused, "started at or after"):
+                executor._refuse_unproven_lineage(self.lock.absolute())
         finally:
             for descriptor in (write_fd, read_fd):
                 if descriptor >= 0:
@@ -1011,6 +1018,15 @@ class ExecutorTests(unittest.TestCase):
             stream.close()
         with self.assertRaisesRegex(executor.Refused, "permissions"):
             executor._HeldHostLock.acquire(self.lock, privileged)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_supervised_command_gets_default_signal_dispositions(self):
+        """Like Popen(restore_signals=True): the supervisor's ignored SIGPIPE must not leak."""
+        record = executor._run_record(["/bin/sh", "-c", "kill -PIPE $$; echo survived"],
+                                      cwd=self.root, env=dict(os.environ), run=subprocess.run)
+        self.assertEqual((record["state"], record["exit"]), ("exit_failed", -signal.SIGPIPE), record)
+        self.assertNotIn("survived", record["stdout"])
 
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
