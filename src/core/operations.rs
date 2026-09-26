@@ -3226,7 +3226,7 @@ mod removal_then_set_tests {
             for (carrier, original) in [("r.jpg", jpeg(&tiff)), ("r.png", png(&tiff))] {
                 for group in ["IFD1:All", "EXIF:All"] {
                     let label = format!("{bo:?} {carrier} {group}");
-                    let (result, after) = batch(
+                    let (result, _) = batch(
                         dir.path(),
                         carrier,
                         &original,
@@ -3234,7 +3234,8 @@ mod removal_then_set_tests {
                         &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
                     );
                     result.unwrap_or_else(|e| panic!("{label}: {e}"));
-                    assert!(after.contains_key("IFD1:XResolution"), "{label}: set lost");
+                    // Compared in the block: the PNG reader surfaces no
+                    // IFD1 row.
                     let ours = std::fs::read(dir.path().join(carrier)).unwrap();
 
                     let theirs = dir.path().join(format!("oracle-{carrier}"));
@@ -3306,21 +3307,26 @@ mod removal_then_set_tests {
                 );
                 assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
 
-                // An IFD1 set: honored or refused (file untouched), never
-                // reported done and lost.
-                let (result, after) = batch(
+                // An IFD1 set: honored, never reported done and lost. Read
+                // from the block itself: the PNG reader surfaces no IFD1 row.
+                // (Its recreated IFD1 is pinned against the oracle in
+                // `a_recreated_ifd1_keeps_its_mandatory_entries`.)
+                let (result, _) = batch(
                     dir.path(),
                     carrier,
                     &original,
                     &["IFD1:All"],
                     &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
                 );
-                if result.is_ok() {
-                    assert!(
-                        after.contains_key("IFD1:XResolution"),
-                        "{label}: IFD1 set lost"
-                    );
-                }
+                result.unwrap_or_else(|e| panic!("{label} IFD1: {e}"));
+                let written = std::fs::read(dir.path().join(carrier)).unwrap();
+                assert!(
+                    ifd1_entries(&written)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|(tag, typ, count, _)| (*tag, *typ, *count) == (0x011a, 5, 1)),
+                    "{label}: IFD1 set lost"
+                );
             }
         }
     }
