@@ -594,21 +594,28 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
         write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
         index = end;
     }
-    // The read-back proves every field request no later group removal can
-    // have overridden; one a later `<group>:All` covers was proven by the
-    // writer's verifier in its own pass, and the group removal decides its
-    // final state (as in ExifTool).
-    let last_group = plan
-        .steps
-        .iter()
-        .rposition(|step| matches!(step, Step::Group(_)));
+    // The read-back proves every field request no later group removal
+    // covers -- which, since planning cancels the requests a later deletion
+    // covers, is every one. Proving only the requests after the last group
+    // removal left an unrelated earlier set unproven and uncounted: 13.59's
+    // `-IFD0:Artist=<its value> -GPS:All=` on a JPEG without GPS is
+    // `1 image files updated` by the same-value-set rule, and oxidex said
+    // `unchanged` (#957, PRRT_kwDOQNbr5M6mRRYE).
     let proven: Vec<&Resolved<'_>> = plan
         .steps
         .iter()
         .enumerate()
-        .filter(|(at, _)| last_group.is_none_or(|group| *at > group))
-        .filter_map(|(_, step)| match step {
-            Step::Field(request) => Some(request),
+        .filter_map(|(at, step)| match step {
+            Step::Field(request) => {
+                let covered = plan.steps[at + 1..].iter().any(|later| {
+                    matches!(later, Step::Group(key)
+                    if group_deletion(key).is_some_and(|group| {
+                        group_covers(group, request.requested)
+                            || group_covers(group, &request.key)
+                    }))
+                });
+                (!covered).then_some(request)
+            }
             Step::Group(_) => None,
         })
         .collect();
