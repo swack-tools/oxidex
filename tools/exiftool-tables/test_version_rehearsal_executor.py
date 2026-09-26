@@ -800,6 +800,65 @@ class ExecutorTests(unittest.TestCase):
         finally:
             child.wait(timeout=10)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_sweep_request_before_supervisor_wait_still_sweeps(self):
+        """A SIGUSR1 sweep request between the exec report and the wait loop must sweep.
+
+        The supervisor is slowed right after it reports a successful exec, so
+        the 0.2 s command timeout's sweep request lands in that interval. The
+        command left the supervisor's session and closed its inherited
+        descriptors, so only the supervisor's sweep can reach it.
+        """
+        slowed = executor._LINUX_LINEAGE_SUPERVISOR.replace(
+            'report(phase="exec", ok=True)\n', 'report(phase="exec", ok=True)\n    time.sleep(1.5)\n', 1)
+        self.assertNotEqual(slowed, executor._LINUX_LINEAGE_SUPERVISOR)
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        command_pid = None
+        program = (
+            "import os, sys, time\n"
+            "os.setsid()\n"
+            "report = int(sys.argv[1])\n"
+            "for name in os.listdir('/proc/self/fd'):\n"
+            "    if name.isdigit() and int(name) > 2 and int(name) != report:\n"
+            "        try:\n"
+            "            os.close(int(name))\n"
+            "        except OSError:\n"
+            "            pass\n"
+            "os.write(report, f'{os.getpid()}\\n'.encode())\n"
+            "os.close(report)\n"
+            "time.sleep(60)\n"
+        )
+        try:
+            with patch.object(executor, "_LINUX_LINEAGE_SUPERVISOR", slowed), \
+                 patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 0.2):
+                try:
+                    executor._run_record([sys.executable, "-c", program, str(write_fd)],
+                                         cwd=self.root, env=dict(os.environ), run=subprocess.run)
+                except executor.OwnedChildCleanupIncomplete:
+                    pass
+            os.close(write_fd)
+            write_fd = -1
+            command_pid = int(_read_reported_line(read_fd))
+            deadline = time.monotonic() + 10
+            while executor._pid_live(command_pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(executor._pid_live(command_pid),
+                             "a sweep request before the wait loop left the command running")
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if command_pid is not None:
+                try:
+                    os.kill(command_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
