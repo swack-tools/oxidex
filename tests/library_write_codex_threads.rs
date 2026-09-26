@@ -246,34 +246,43 @@ fn rows_of_an_optioned_read_are_not_sets() {
 }
 
 /// Thread 6b. An explicit re-set of the text an XP tag already reads as is
-/// the caller's set, not a carried row: here the stored XPTitle is typed
-/// `undef` (7), which 13.59 rewrites as `int8u` for `-XPTitle=v`. It must be
-/// applied or refused by name -- never dropped as `Unchanged`.
+/// the caller's set, not a carried row. Here the stored XPTitle is `A` plus
+/// the surrogate pair of U+1F38C, which reads as `A🎌`; 13.59's
+/// `-XPTitle=A🎌` rewrites it as `41 00 8c f3 00 00` (the code point's low 16
+/// bits, `Encode($val,"UCS2","II")`). The set must be applied or refused by
+/// name -- never dropped as `Unchanged` with the surrogate pair still there.
 #[test]
 fn an_explicit_same_text_xp_set_is_not_discarded() {
     let dir = TempDir::new().unwrap();
     let file = copy_into(&dir, JPEG, "a.jpg");
-    modify_tag(&file, "IFD0:XPTitle", TagValue::new_string("v")).unwrap();
+    modify_tag(&file, "IFD0:XPTitle", TagValue::new_string("ABC")).unwrap();
     let mut bytes = fs::read(&file).unwrap();
-    // synthetic_001.jpg is big-endian: tag 0x9c9b, type 0x0001 -> 0x0007.
     let at = bytes
-        .windows(4)
-        .position(|w| w == [0x9c, 0x9b, 0x00, 0x01])
-        .expect("the XPTitle entry");
-    bytes[at + 3] = 0x07;
+        .windows(8)
+        .position(|w| w == [0x41, 0, 0x42, 0, 0x43, 0, 0, 0])
+        .expect("the XPTitle bytes");
+    bytes[at + 2..at + 6].copy_from_slice(&[0x3c, 0xd8, 0x8c, 0xdf]);
     fs::write(&file, &bytes).unwrap();
-    assert_eq!(
-        read_metadata(&file).unwrap().get_string("IFD0:XPTitle"),
-        Some("v")
-    );
+    let text = read_metadata(&file)
+        .unwrap()
+        .get_string("IFD0:XPTitle")
+        .map(str::to_string)
+        .expect("the stored XPTitle reads");
+    assert_eq!(text, "A\u{1f38c}");
     let before = fs::read(&file).unwrap();
     let mut map = read_metadata(&file).unwrap();
-    map.insert("IFD0:XPTitle", TagValue::new_string("v"));
+    map.insert("IFD0:XPTitle", TagValue::new_string(text));
     match write_metadata(&file, &map) {
         Ok(WriteOutcome::Unchanged) => {
             panic!("an explicit XP set was dropped as a carried row")
         }
-        Ok(_) => assert_ne!(fs::read(&file).unwrap(), before),
+        Ok(_) => {
+            let after = fs::read(&file).unwrap();
+            assert!(
+                after.windows(6).any(|w| w == [0x41, 0, 0x8c, 0xf3, 0, 0]),
+                "written, but not as 13.59 writes it"
+            );
+        }
         Err(err) => {
             assert!(
                 matches!(&err, ExifToolError::TagsNotWritten { .. })

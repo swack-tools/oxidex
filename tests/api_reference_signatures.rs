@@ -9,7 +9,7 @@ use oxidex::core::operations::{
     CopyReport, clear_all_metadata, copy_metadata, copy_metadata_report, modify_tag, remove_tag,
     write_metadata,
 };
-use oxidex::core::{MetadataMap, TagValue, WriteOutcome};
+use oxidex::core::{MetadataMap, TagChange, TagValue, WriteOutcome, apply_tag_changes};
 use oxidex::error::Result;
 use std::path::Path;
 
@@ -21,6 +21,7 @@ fn write_signatures_match_the_api_reference() {
     let _: fn(&Path) -> Result<WriteOutcome> = clear_all_metadata;
     let _: fn(&Path, &Path, Option<&[String]>) -> Result<WriteOutcome> = copy_metadata;
     let _: fn(&Path, &Path, Option<&[String]>) -> Result<CopyReport> = copy_metadata_report;
+    let _: fn(&Path, &[TagChange]) -> Result<WriteOutcome> = apply_tag_changes;
     let _: fn(&Metadata) -> Result<WriteOutcome> = Metadata::save;
     fn write_to(metadata: &Metadata, path: &Path) -> Result<WriteOutcome> {
         metadata.write_to(path)

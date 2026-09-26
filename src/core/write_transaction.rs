@@ -139,9 +139,17 @@ pub(crate) fn apply_tag_changes_counted(
     path: &Path,
     changes: &[TagChange],
 ) -> Result<(WriteOutcome, usize)> {
+    // Every request is resolved, and every no-op decided, against the file
+    // itself -- before any scratch file exists. A request that is all no-ops
+    // (an absent tag's deletion, an EXIF group in a PDF, nothing at all)
+    // writes nothing and so needs no writable directory.
+    let plan = plan_changes(path, changes)?;
+    if plan.steps.is_empty() {
+        return Ok((WriteOutcome::Unchanged, 0));
+    }
     let mut proven_sets = 0;
     let outcome = transact(path, |scratch| {
-        proven_sets = apply_on(scratch, changes)?;
+        proven_sets = execute_plan(scratch, &plan)?;
         Ok(())
     })?;
     Ok((outcome, proven_sets))
@@ -214,10 +222,26 @@ pub(crate) fn changes_between(
 ) -> Vec<TagChange> {
     let mut changes = Vec::new();
     for (key, value) in desired.iter() {
-        if is_file_system_fact(key) || baseline.get(key) == Some(value) {
+        if is_file_system_fact(key) {
             continue;
         }
-        changes.push(TagChange::set(key.clone(), value.clone()));
+        // Provenance first (`MetadataMap::assigned_after_read`): a value the
+        // caller assigned is a set whatever it equals -- an explicit
+        // same-text XP set can need different bytes. In a read of this file,
+        // a row the caller did not assign is the file's own: a set only if
+        // the file holds that row with another value (an in-place
+        // `get_mut`), never because a read with options (a requested
+        // `File:JPEGQualityEstimate`) produced a row the default read lacks.
+        // Any other map is judged by value.
+        let assigned = desired.assigned_after_read(key);
+        let is_set = if deletions {
+            assigned || baseline.get(key).is_some_and(|held| held != value)
+        } else {
+            assigned || baseline.get(key) != Some(value)
+        };
+        if is_set {
+            changes.push(TagChange::set(key.clone(), value.clone()));
+        }
     }
     if !deletions {
         return changes;
@@ -238,22 +262,54 @@ struct Resolved<'a> {
     value: Option<&'a TagValue>,
 }
 
+/// One step of a planned transaction, in request order.
+enum Step<'a> {
+    /// A set or deletion of one resolved field.
+    Field(Resolved<'a>),
+    /// A `<group>:All` removal handed to the writers' group-wide expansion
+    /// (#943), as `operations::plan_group_deletion` (#945) decides it.
+    Group(String),
+}
+
+/// A transaction, resolved against the file before anything is written.
+struct Plan<'a> {
+    /// The file's map at planning time: what the proof compares against.
+    baseline: MetadataMap,
+    /// The requests that are not no-ops, in request order.
+    steps: Vec<Step<'a>>,
+}
+
 /// Whether two resolved keys address the same field (a PDF Info field has
 /// two spellings).
 fn same_field(a: &str, b: &str) -> bool {
     a == b || field_spellings(a).contains(&b)
 }
 
-/// The transaction body, run on the private copy at `path`.
-/// Returns the number of sets applied and proven.
-fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
+/// A field request before its writer-address check.
+struct Pending<'a> {
+    request: Resolved<'a>,
+    addressed: Result<()>,
+    /// Position among all steps, so group removals keep their place.
+    at: usize,
+}
+
+/// Resolves every request against the file at `path`, in request order, and
+/// drops the no-ops: all refusals are collected into one
+/// [`ExifToolError::TagsNotWritten`]. Nothing is written.
+///
+/// ExifTool applies a file's requests in order, a later one for the same
+/// field replacing an earlier one (13.59: `-IFD0:Artist=x -IFD0:Artist=`
+/// deletes Artist; `-IFD0:XPTitle=x -IFD0:XPTitle=` on a file without one is
+/// `unchanged`). So same-field requests are reduced to the last one *first*,
+/// and only then is a surviving deletion asked whether it names nothing
+/// (#945's `removal_is_no_op`) -- an earlier set of the field cannot be
+/// written by a deletion the baseline alone calls a no-op.
+fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let baseline = read_metadata(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
-    let mut resolved: Vec<Resolved<'_>> = Vec::new();
-    // `<group>:All` removals handed to the writers' group-wide expansion
-    // (#943), as `operations::plan_group_deletion` (#945) decides them.
-    let mut group_removals: Vec<String> = Vec::new();
-    for change in changes {
+    let mut groups: Vec<(usize, String)> = Vec::new();
+    let mut pending: Vec<Pending<'a>> = Vec::new();
+    for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
         if let Some(group) = group_deletion(change.tag()) {
@@ -268,7 +324,7 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
                 continue;
             }
             match plan_group_deletion(path, change.tag(), group) {
-                Ok(Some(key)) => group_removals.push(key),
+                Ok(Some(key)) => groups.push((at, key)),
                 Ok(None) => {} // provably nothing to delete
                 Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
                 Err(other) => return Err(other),
@@ -280,27 +336,48 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
         if exif_group_in_pdf(path, change.tag())? {
             continue;
         }
-        let (key, addressed) = match resolve_write_key_for(path, change.tag(), &baseline) {
-            Ok(resolution) => resolution,
-            Err(ExifToolError::TagsNotWritten { tags }) => {
-                refused.extend(tags);
-                continue;
-            }
+        match resolve_write_key_for(path, change.tag(), &baseline) {
+            Ok((key, addressed)) => pending.push(Pending {
+                request: Resolved {
+                    requested: change.tag(),
+                    key,
+                    value: change.value(),
+                },
+                addressed,
+                at,
+            }),
+            Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
             Err(other) => return Err(other),
-        };
+        }
+    }
+
+    // The last request for a field replaces every earlier one.
+    let replaced: Vec<bool> = (0..pending.len())
+        .map(|index| {
+            pending[index + 1..]
+                .iter()
+                .any(|later| same_field(&later.request.key, &pending[index].request.key))
+        })
+        .collect();
+    let last: Vec<Pending<'a>> = pending
+        .into_iter()
+        .zip(replaced)
+        .filter_map(|(candidate, replaced)| (!replaced).then_some(candidate))
+        .collect();
+
+    let mut fields: Vec<(usize, Resolved<'a>)> = Vec::new();
+    for candidate in last {
         // #945 / #943: a deletion that names nothing -- no row under any
         // spelling, and no entry of any EXIF block (`exif_surgical::
         // exif_request_is_no_op`) -- is a no-op, decided before the writer's
         // address guard (ExifTool 13.59: `1 image files unchanged`).
-        if change.value().is_none() && removal_is_no_op(path, &key, &baseline)? {
+        if candidate.request.value.is_none()
+            && removal_is_no_op(path, &candidate.request.key, &baseline)?
+        {
             continue;
         }
-        match addressed {
-            Ok(()) => resolved.push(Resolved {
-                requested: change.tag(),
-                key,
-                value: change.value(),
-            }),
+        match candidate.addressed {
+            Ok(()) => fields.push((candidate.at, candidate.request)),
             Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
             Err(other) => return Err(other),
         }
@@ -309,49 +386,85 @@ fn apply_on(path: &Path, changes: &[TagChange]) -> Result<usize> {
         return Err(ExifToolError::TagsNotWritten { tags: refused });
     }
 
-    // A later request for the same field replaces an earlier one, as a later
-    // `-TAG=` does in ExifTool; only the last is applied and proven.
-    let effective: Vec<&Resolved<'_>> = resolved
+    let mut steps: Vec<(usize, Step<'a>)> = fields
+        .into_iter()
+        .map(|(at, request)| (at, Step::Field(request)))
+        .chain(groups.into_iter().map(|(at, key)| (at, Step::Group(key))))
+        .collect();
+    steps.sort_by_key(|(at, _)| *at);
+    Ok(Plan {
+        baseline,
+        steps: steps.into_iter().map(|(_, step)| step).collect(),
+    })
+}
+
+/// Runs a [`Plan`] on the private copy at `path`; returns the number of sets
+/// applied and proven.
+///
+/// Field requests and `<group>:All` removals keep their request order: each
+/// maximal run of field requests is one writer pass, as is each run of
+/// group removals (13.59: `-EXIF:All= -IFD0:Artist=x` leaves exactly
+/// `[IFD0] Artist`, `-IFD0:Artist=x -EXIF:All=` leaves no EXIF). A plan with
+/// no group removal is one pass, as ExifTool applies all of a file's tags at
+/// once (a mandatory-tag seeding decision, for instance, sees the whole
+/// request). The writer's own no-op decision and post-write check
+/// (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`, #943) run
+/// inside every pass (`write_metadata_with_removals`).
+fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
+    let mut index = 0;
+    while index < plan.steps.len() {
+        let is_group = matches!(plan.steps[index], Step::Group(_));
+        let end = plan.steps[index..]
+            .iter()
+            .position(|step| matches!(step, Step::Group(_)) != is_group)
+            .map_or(plan.steps.len(), |offset| index + offset);
+        let mut desired = read_metadata(path)?;
+        let mut removed: Vec<String> = Vec::new();
+        for step in &plan.steps[index..end] {
+            match step {
+                // A group removal's post-condition is the writer's: #943's
+                // expansion decides which blocks the group names (and
+                // whether the request is a no-op for this file), and its
+                // verifier refuses a write that leaves any of them.
+                Step::Group(key) => removed.push(key.clone()),
+                Step::Field(request) => {
+                    remove_field(&mut desired, &request.key);
+                    match request.value {
+                        Some(value) => {
+                            desired.insert(request.key.clone(), value.clone());
+                        }
+                        // The key goes along: an EXIF entry the reader
+                        // surfaces no row for has no key to take out of the
+                        // map, yet `-ExifIFD:ApplicationNotes=` still names
+                        // it for deletion.
+                        None => removed.push(request.key.clone()),
+                    }
+                }
+            }
+        }
+        write_metadata_with_removals(path, &desired, &removed).map_err(typed_refusal)?;
+        index = end;
+    }
+    // The read-back proves every field request no later group removal can
+    // have overridden; one a later `<group>:All` covers was proven by the
+    // writer's verifier in its own pass, and the group removal decides its
+    // final state (as in ExifTool).
+    let last_group = plan
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, Step::Group(_)));
+    let proven: Vec<&Resolved<'_>> = plan
+        .steps
         .iter()
         .enumerate()
-        .filter(|(at, request)| {
-            !resolved[at + 1..]
-                .iter()
-                .any(|later| same_field(&later.key, &request.key))
+        .filter(|(at, _)| last_group.is_none_or(|group| *at > group))
+        .filter_map(|(_, step)| match step {
+            Step::Field(request) => Some(request),
+            Step::Group(_) => None,
         })
-        .map(|(_, request)| request)
         .collect();
-    if effective.is_empty() && group_removals.is_empty() {
-        return Ok(0); // every request was a no-op: nothing to write
-    }
-
-    // All requests in one writer pass, as ExifTool applies all of a file's
-    // tags at once (a mandatory-tag seeding decision, for instance, sees
-    // the whole request). The writer's own no-op decision and post-write
-    // check (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`,
-    // #943) run inside `write_metadata_with_removals`.
-    let mut desired = baseline.clone();
-    let mut removed: Vec<String> = Vec::new();
-    for request in &effective {
-        remove_field(&mut desired, &request.key);
-        match request.value {
-            Some(value) => {
-                desired.insert(request.key.clone(), value.clone());
-            }
-            // The key goes along: an EXIF entry the reader surfaces no row
-            // for has no key to take out of the map, yet
-            // `-ExifIFD:ApplicationNotes=` still names it for deletion.
-            None => removed.push(request.key.clone()),
-        }
-    }
-    // A group removal's post-condition is the writer's: #943's expansion
-    // decides which blocks the group names (and whether the request is a
-    // no-op for this file), and its verifier refuses a write that leaves any
-    // of them. It is not re-derived here.
-    removed.extend(group_removals);
-    write_metadata_with_removals(path, &desired, &removed).map_err(typed_refusal)?;
-    prove_in_effect(path, &effective)?;
-    Ok(effective
+    prove_in_effect(path, &proven, &plan.baseline)?;
+    Ok(proven
         .iter()
         .filter(|request| request.value.is_some())
         .count())
@@ -532,6 +645,7 @@ fn set_not_in_effect(
     stored: &MetadataMap,
     key: &str,
     value: &TagValue,
+    packets: Option<Vec<&[u8]>>,
 ) -> Option<String> {
     match crate::writers::exif_surgical::stored_entry_matches(exif_payload(file_bytes), key, value)
     {
@@ -544,7 +658,7 @@ fn set_not_in_effect(
         }
         None => {}
     }
-    if let Some(packets) = png_xmp_packets(file_bytes, key) {
+    if let Some(packets) = packets {
         let requested = value.as_string().map(str::as_bytes);
         return (!packets.iter().any(|packet| Some(*packet) == requested)).then(|| {
             "after writing, the PNG holds no XMP packet equal to the requested one; \
@@ -568,17 +682,25 @@ fn set_not_in_effect(
 
 /// The read-back proof: every set's address holds its value and every
 /// deletion's address is gone, in the file at `path` as written.
-fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>]) -> Result<()> {
+fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataMap) -> Result<()> {
     let stored = read_metadata(path)?;
     let file_bytes = fs::read(path)?;
     let mut failed = Vec::new();
     for request in requests {
+        // `PNG:XMP` names an ordinary text chunk when the file had one whose
+        // keyword is literally `XMP` (the reader reported it, and the PNG
+        // writer edits that chunk: `png_writer::plan_text_chunks`); only
+        // otherwise is it the raw `XML:com.adobe.xmp` packet route.
+        let packets = if baseline.contains_key(&request.key) {
+            None
+        } else {
+            png_xmp_packets(&file_bytes, &request.key)
+        };
         let reason = match request.value {
-            Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value),
-            None if png_xmp_packets(&file_bytes, &request.key)
-                .map_or(!rows_at(&stored, &request.key).is_empty(), |packets| {
-                    !packets.is_empty()
-                }) =>
+            Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets),
+            None if packets.map_or(!rows_at(&stored, &request.key).is_empty(), |packets| {
+                !packets.is_empty()
+            }) =>
             {
                 Some(format!(
                     "after writing, {} is still present; nothing was written",
@@ -675,43 +797,62 @@ mod tests {
         TagValue::new_string(text)
     }
 
+    /// A map read from the file, then edited: the rows the caller
+    /// assigned (whatever their value) and the rows it removed are the
+    /// requests; the read's own rows are not.
     #[test]
-    fn a_whole_map_write_requests_what_differs() {
+    fn a_read_map_requests_what_its_caller_assigned_and_removed() {
         let baseline = map(&[
             ("File:FileName", s("a.jpg")),
-            ("File:FileAccessDate", s("then")),
             ("File:FileType", s("JPEG")),
             ("Composite:ImageSize", s("8x6")),
             ("IFD0:Make", s("Canon")),
             ("IFD0:Model", s("R6")),
+            ("IFD0:Artist", s("me")),
             ("XMP:Title", s("t")),
         ]);
-        let desired = map(&[
-            ("File:FileName", s("b.jpg")),
-            ("File:FileAccessDate", s("now")),
-            ("IFD0:Make", s("Canon")),
-            ("IFD0:Model", s("R5")),
-            ("XPTitle", s("v")),
-            ("File:Comment", s("c")),
-        ]);
+        let mut desired = baseline.clone();
+        // A row an optioned read adds that the default read lacks.
+        desired.insert("File:JPEGQualityEstimate", s("92"));
+        desired.mark_read_complete();
+        desired.insert("IFD0:Model", s("R5"));
+        desired.insert("IFD0:Artist", s("me")); // explicit same-value set
+        desired.insert("XPTitle", s("v"));
+        desired.insert("File:Comment", s("c"));
+        desired.insert("File:FileName", s("b.jpg")); // a file-system fact
+        desired.remove("XMP:Title");
+        desired.remove("File:FileType"); // descriptive: never a deletion
         assert_eq!(
             changes_between(&baseline, &desired, true),
             vec![
                 TagChange::set("IFD0:Model", s("R5")),
+                TagChange::set("IFD0:Artist", s("me")),
                 TagChange::set("XPTitle", s("v")),
                 TagChange::set("File:Comment", s("c")),
                 TagChange::delete("XMP:Title"),
             ]
         );
-        // The file's own map requests nothing.
-        assert!(changes_between(&baseline, &baseline, true).is_empty());
-        // A map that is not a read of this file only sets.
+        // The file's own map, read and untouched, requests nothing.
+        let mut read = baseline.clone();
+        read.mark_read_complete();
+        assert!(changes_between(&baseline, &read, true).is_empty());
+    }
+
+    /// A map built from scratch: every row is the caller's, a set whatever
+    /// it equals, and nothing is deleted.
+    #[test]
+    fn a_from_scratch_map_sets_every_row_and_deletes_nothing() {
+        let baseline = map(&[("IFD0:Make", s("Canon")), ("XMP:Title", s("t"))]);
+        let desired = map(&[
+            ("IFD0:Make", s("Canon")),
+            ("IFD0:Model", s("R5")),
+            ("File:FileAccessDate", s("now")),
+        ]);
         assert_eq!(
             changes_between(&baseline, &desired, false),
             vec![
+                TagChange::set("IFD0:Make", s("Canon")),
                 TagChange::set("IFD0:Model", s("R5")),
-                TagChange::set("XPTitle", s("v")),
-                TagChange::set("File:Comment", s("c")),
             ]
         );
     }
@@ -722,7 +863,8 @@ mod tests {
             ("PDF:CreateDate", s("2024:01:01 00:00:00")),
             ("PDF:CreationDate", s("2024:01:01 00:00:00")),
         ]);
-        let desired = map(&[("PDF:CreateDate", s("2024:01:01 00:00:00"))]);
+        let mut desired = map(&[("PDF:CreateDate", s("2024:01:01 00:00:00"))]);
+        desired.mark_read_complete();
         assert!(changes_between(&baseline, &desired, true).is_empty());
     }
 

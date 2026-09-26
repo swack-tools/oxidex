@@ -14,6 +14,7 @@ Example:
 
 import ctypes
 import ctypes.util
+import operator
 from enum import IntEnum
 import os
 import sys
@@ -30,6 +31,10 @@ OXIDEX_ERR_UNSUPPORTED_FORMAT = 5
 OXIDEX_ERR_NULL_POINTER = 6
 OXIDEX_ERR_TAG_NOT_WRITTEN = 7
 OXIDEX_ERR_INTERNAL = 99
+
+# The C ABI's integer type is int64_t.
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
 
 # exiftool_write_file_with_outcome's outcomes (ExifTool WriteInfo's 1 / 2)
 OXIDEX_WRITE_UPDATED = 1
@@ -441,9 +446,22 @@ class Oxidex:
         )
 
     def set_tag_integer(self, tag_name: str, value: int) -> None:
-        """Set a tag to an integer value in the loaded metadata (not the file)."""
+        """
+        Set a tag to an integer value in the loaded metadata (not the file).
+
+        Raises:
+            OxidexError: If ``value`` is outside the C ABI's signed 64-bit
+                range. ctypes would otherwise wrap it silently (2**63 becomes
+                -2**63, 2**64 becomes 0) and the setter would report success.
+        """
         if not self._handle:
             raise OxidexError("Oxidex handle has been destroyed")
+        value = operator.index(value)
+        if not INT64_MIN <= value <= INT64_MAX:
+            raise OxidexError(
+                f"Integer {value} for {tag_name} is outside the signed 64-bit range "
+                f"[{INT64_MIN}, {INT64_MAX}]"
+            )
         self._check_error(
             _lib.exiftool_set_tag_integer(self._handle, tag_name.encode('utf-8'), value)
         )
