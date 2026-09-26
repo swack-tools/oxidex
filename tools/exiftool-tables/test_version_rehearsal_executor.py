@@ -859,6 +859,74 @@ class ExecutorTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_unverified_lineage_keeps_host_lock_held(self):
+        """A supervisor killed after exec leaves its lineage unproven, and the lock held.
+
+        The command left the session and closed every descriptor (so neither
+        the process group nor the ownership probe can see it); only the
+        supervisor's missing verdict says it may still run.
+        """
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        command_pid = None
+        program = (
+            "import os, sys, time\n"
+            "os.setsid()\n"
+            "report = int(sys.argv[1])\n"
+            "for name in os.listdir('/proc/self/fd'):\n"
+            "    if name.isdigit() and int(name) != report:\n"
+            "        try:\n"
+            "            os.close(int(name))\n"
+            "        except OSError:\n"
+            "            pass\n"
+            "os.write(report, f'{os.getpid()}\\n'.encode())\n"
+            "os.close(report)\n"
+            "time.sleep(60)\n"
+        )
+
+        def kill_supervisor_after_detach(pid, _pgid):
+            nonlocal command_pid, write_fd
+            os.close(write_fd)
+            write_fd = -1
+            command_pid = int(_read_reported_line(read_fd))
+            os.kill(pid, signal.SIGKILL)
+
+        try:
+            with self.assertRaises(executor.LockRetained):
+                with executor._HostLock(self.lock):
+                    with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                        executor._run_record([sys.executable, "-c", program, str(write_fd)],
+                                             cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                                             started=kill_supervisor_after_detach)
+            self.assertTrue(executor._pid_live(command_pid))
+            self.assertEqual(_contend(self.lock), "blocked")
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if command_pid is not None:
+                try:
+                    os.kill(command_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_inherited_ignored_sigchld_does_not_break_supervision(self):
+        """A launcher that ignores SIGCHLD must not make ordinary stages unverifiable."""
+        previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        try:
+            record = executor._run_record(["/bin/true"], cwd=self.root, env=dict(os.environ),
+                                          run=subprocess.run)
+        finally:
+            signal.signal(signal.SIGCHLD, previous)
+        self.assertEqual((record["state"], record["exit"]), ("ok", 0), record)
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
