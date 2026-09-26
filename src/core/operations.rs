@@ -3216,10 +3216,7 @@ mod removal_then_set_tests {
     /// refused.
     #[test]
     fn a_recreated_ifd1_keeps_its_mandatory_entries() {
-        let Some(oracle) = crate::exiftool_oracle::available()
-            .then(crate::exiftool_oracle::shared)
-            .and_then(std::result::Result::ok)
-        else {
+        let Some(oracle) = crate::exiftool_oracle::graded() else {
             eprintln!("skipping: no usable ExifTool oracle");
             return;
         };

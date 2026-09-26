@@ -2880,10 +2880,7 @@ fn cli_group_removal_and_set_follow_argument_order() {
             assert!(!after.contains_key("ExifIFD:ISO"), "{label}: ISO kept");
             let args = ["-EXIF:All=", "-IFD0:Make=x"];
             assert_validate_parity(&original, name, &args, &path, &label);
-            if let Some(oracle) = exiftool_oracle::available()
-                .then(exiftool_oracle::shared)
-                .and_then(Result::ok)
-            {
+            if let Some(oracle) = exiftool_oracle::graded() {
                 let theirs = write(dir.path(), &format!("oracle-{name}"), &original);
                 assert!(
                     oracle
@@ -3356,9 +3353,7 @@ fn exif_block_at(path: &Path) -> Option<Vec<u8>> {
 /// Pinned ExifTool 13.59's read-back of `path`'s EXIF: every EXIF tag with
 /// its family-1 group, raw (`-n`), plus the block's byte order.
 fn oracle_exif_readback(path: &Path) -> Option<String> {
-    let oracle = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)?;
+    let oracle = exiftool_oracle::graded()?;
     let out = oracle
         .command()
         .args(["-a", "-G1", "-s", "-n", "-EXIF:all", "-ExifByteOrder"])
@@ -3387,10 +3382,7 @@ fn oracle_exif_readback(path: &Path) -> Option<String> {
 /// and the same entries (type, count, bytes) in every directory.
 #[test]
 fn created_directories_get_the_writeexif_mandatory_entries() {
-    let Some(oracle) = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)
-    else {
+    let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping: no usable ExifTool oracle");
         return;
     };
@@ -3559,10 +3551,7 @@ fn created_directories_get_the_writeexif_mandatory_entries() {
 /// rather than create ExifIFD without them.
 #[test]
 fn a_mixed_write_seeds_the_directories_it_creates() {
-    let Some(oracle) = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)
-    else {
+    let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping: no usable ExifTool oracle");
         return;
     };
@@ -3631,10 +3620,7 @@ fn a_mixed_write_seeds_the_directories_it_creates() {
 /// only after the removal, found nothing left and dropped the whole block.
 #[test]
 fn ifd1_removal_behind_an_empty_ifd0_leaves_the_mandatory_ifd0() {
-    let Some(oracle) = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)
-    else {
+    let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping: no usable ExifTool oracle");
         return;
     };
