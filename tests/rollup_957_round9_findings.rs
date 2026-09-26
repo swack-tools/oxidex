@@ -1,12 +1,13 @@
 //! The ninth round of Codex review threads on the beta.1 roll-up (#957) at
-//! 12d92b11: deleting a chunk-backed PNG tag. Oracle rows are pinned
-//! ExifTool 13.59 (`perl5.38.2 -I<pinned>/lib <pinned>/exiftool`; probes
-//! `-ver` = 13.59, `OOXML.docx` FileType = DOCX), re-measured through
-//! `exiftool_oracle::graded()`.
+//! 12d92b11: deleting a chunk-backed PNG tag, and a batch read of a
+//! malformed file. Oracle rows are pinned ExifTool 13.59 (`perl5.38.2
+//! -I<pinned>/lib <pinned>/exiftool`; probes `-ver` = 13.59, `OOXML.docx`
+//! FileType = DOCX), re-measured through `exiftool_oracle::graded()`.
 
 use oxidex::core::WriteOutcome;
 use oxidex::core::operations::{read_metadata, remove_tag, write_metadata};
 use oxidex::exiftool_oracle;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -248,4 +249,154 @@ fn unchanged_or_absent_chunk_tags_are_carried_or_no_ops() {
         out(&oxidex(&["-s3", "-PNG:ModifyDate"], &[&path])),
         "2021:05:06 07:08:09\n"
     );
+}
+
+// --- PRRT_kwDOQNbr5M6mTtBR: a batch read of a malformed file ----------------
+
+/// A JPEG whose APP1 claims 4096 bytes and the file ends after 20: read
+/// alone it is `Partial` -- filesystem and identity tags plus 13.59's
+/// `Warning: JPEG format error`.
+fn truncated_jpeg() -> Vec<u8> {
+    b"\xff\xd8\xff\xe1\x10\x00Exif\x00\x00II*\x00\x08\x00\x00\x00".to_vec()
+}
+
+/// A PNG whose tEXt chunk claims 500 bytes past the end of the file.
+fn truncated_png() -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    out.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]));
+    out.extend(500u32.to_be_bytes());
+    out.extend(b"tEXtAuthor\0x");
+    out
+}
+
+/// The `-s` lines ExifTool prints for `file` (`Tag : value`), from a run
+/// over one or several files: the block after `======== <file>` when there
+/// is one. The access date is left out (reading a file moves it), and so
+/// is ExifTool's own `ExifToolVersion`.
+fn block_for(stdout: &str, file: &Path) -> BTreeSet<String> {
+    let header = format!("======== {}", file.display());
+    let lines: Vec<&str> = stdout.lines().collect();
+    let body: Vec<&str> = match lines.iter().position(|line| *line == header) {
+        Some(start) => lines[start + 1..]
+            .iter()
+            .take_while(|line| !line.starts_with("======== ") && !line.starts_with("    "))
+            .copied()
+            .collect(),
+        None => lines
+            .iter()
+            .take_while(|line| !line.starts_with("    "))
+            .copied()
+            .collect(),
+    };
+    body.into_iter()
+        .filter(|line| !line.starts_with("FileAccessDate") && !line.starts_with("ExifToolVersion"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Reading a malformed JPEG (and PNG) alone, beside another file, and in a
+/// directory walk prints the same per-file lines and no error, as 13.59
+/// does on each path; oxidex's file-list and directory reads used the
+/// fail-fast read, turned the `Partial` read into `Error reading ...`,
+/// dropped the file's metadata and counted it `could not be read`.
+#[test]
+fn a_malformed_file_reads_the_same_alone_in_a_list_and_in_a_directory() {
+    let dir = TempDir::new().unwrap();
+    let walk = dir.path().join("walk");
+    fs::create_dir(&walk).unwrap();
+    let bad = walk.join("bad.jpg");
+    let bad_png = walk.join("bad.png");
+    let good = walk.join("good.png");
+    fs::write(&bad, truncated_jpeg()).unwrap();
+    fs::write(&bad_png, truncated_png()).unwrap();
+    fs::write(&good, png(&[b"tEXt"])).unwrap();
+    let oracle = exiftool_oracle::graded();
+
+    for malformed in [&bad, &bad_png] {
+        let alone = oxidex(&["-s"], &[malformed]);
+        assert_eq!(alone.status.code(), Some(0), "{}", err(&alone));
+        assert_eq!(err(&alone), "");
+        let single = block_for(&out(&alone), malformed);
+        assert!(
+            single.iter().any(|line| line.starts_with("Warning ")),
+            "{single:?}"
+        );
+
+        let list = oxidex(&["-s"], &[malformed, &good]);
+        assert_eq!(err(&list), "", "file list");
+        assert_eq!(list.status.code(), Some(0));
+        assert_eq!(block_for(&out(&list), malformed), single, "file list");
+        assert!(
+            out(&list).ends_with("    2 image files read\n"),
+            "{}",
+            out(&list)
+        );
+
+        // `-j` carries the same Status marker single-file `-j` does.
+        let json = |o: &Output| -> serde_json::Value {
+            let all: Vec<serde_json::Value> = serde_json::from_slice(&o.stdout).unwrap();
+            all.into_iter()
+                .find(|object| {
+                    object
+                        .get("SourceFile")
+                        .is_none_or(|source| source.as_str() == Some(malformed.to_str().unwrap()))
+                })
+                .unwrap()
+        };
+        let single_json = json(&oxidex(&["-j"], &[malformed]));
+        let list_json = json(&oxidex(&["-j"], &[malformed, &good]));
+        assert_eq!(single_json["Status"], "Partial");
+        assert_eq!(list_json["Status"], "Partial");
+        assert_eq!(list_json["File:Warning"], single_json["File:Warning"]);
+    }
+
+    let walked = oxidex(&["-s"], &[&walk]);
+    assert_eq!(err(&walked), "", "directory");
+    assert_eq!(walked.status.code(), Some(0));
+    for malformed in [&bad, &bad_png] {
+        let single = block_for(&out(&oxidex(&["-s"], &[malformed])), malformed);
+        assert_eq!(block_for(&out(&walked), malformed), single, "directory");
+    }
+    assert!(
+        out(&walked).contains("    3 image files read\n"),
+        "{}",
+        out(&walked)
+    );
+    assert!(!out(&walked).contains("could not be read"));
+
+    // `--strict` refuses the partial read on every path alike.
+    let strict = oxidex(&["-s", "--strict"], &[&bad, &good]);
+    assert_eq!(strict.status.code(), Some(1));
+    assert!(
+        err(&strict).contains("JPEG format error"),
+        "{}",
+        err(&strict)
+    );
+    assert!(out(&strict).contains("    1 files could not be read\n"));
+
+    // 13.59: the JPEG's lines (ExifTool's own tag order aside) are oxidex's
+    // on every path, it is counted read, and nothing goes to stderr; the
+    // truncated PNG is read (with 13.59's own warning text) on every path.
+    if let Some(oracle) = oracle {
+        let run = |paths: &[&Path]| oracle.command().arg("-s").args(paths).output().unwrap();
+        let ours = block_for(&out(&oxidex(&["-s"], &[&bad])), &bad);
+        for (label, theirs) in [
+            ("alone", run(&[&bad])),
+            ("file list", run(&[&bad, &good])),
+            ("directory", run(&[&walk])),
+        ] {
+            assert_eq!(err(&theirs), "", "13.59 {label}");
+            assert_eq!(theirs.status.code(), Some(0), "13.59 {label}");
+            assert_eq!(block_for(&out(&theirs), &bad), ours, "13.59 {label}");
+            let png_lines = block_for(&out(&theirs), &bad_png);
+            if label != "alone" {
+                assert!(
+                    png_lines.iter().any(|line| line.starts_with("Warning ")),
+                    "13.59 {label}: {png_lines:?}"
+                );
+            }
+        }
+        assert!(out(&run(&[&bad, &good])).ends_with("    2 image files read\n"));
+        assert!(out(&run(&[&walk])).ends_with("    3 image files read\n"));
+    }
 }

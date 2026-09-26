@@ -12,7 +12,8 @@ use crate::cli::output_formatter::{
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
 use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
 use crate::core::MetadataMap;
-use crate::core::operations::read_metadata_with_detector_and_options;
+use crate::core::operations::read_metadata_report_with_detector_and_options;
+use crate::core::read_report::{ParseStatus, ReadReport};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -276,7 +277,7 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
 /// This is a fast pre-filter, not the identification itself. A file that
 /// passes still goes through the exact same magic-number pipeline
 /// single-file mode uses --
-/// [`read_metadata_with_detector_and_options`](crate::core::operations::read_metadata_with_detector_and_options)
+/// [`read_metadata_report_with_detector_and_options`](crate::core::operations::read_metadata_report_with_detector_and_options)
 /// -- which is what actually decides whether the file can be read; a
 /// recognized extension whose header disagrees, or whose format has no
 /// parser, is still counted correctly afterward (as a read error or, per
@@ -345,12 +346,22 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     let read_options =
         crate::core::ReadOptions::new(tag_filter.as_deref().unwrap_or(&[]), args.extended_output);
 
-    // Process files in parallel
-    let results: Vec<_> = files
+    // Process files in parallel. Every file goes through the same
+    // report-carrying read single-file mode uses
+    // (`main.rs::handle_read_operation`), not the fail-fast
+    // `read_metadata_with_detector_and_options`: a malformed JPEG or PNG
+    // that reads alone as `ParseStatus::Partial` (filesystem and identity
+    // tags plus ExifTool's `Warning: JPEG format error`) must read the same
+    // way when another path is on the command line or when a directory walk
+    // finds it, rather than turning into an error that drops its metadata
+    // (#957, PRRT_kwDOQNbr5M6mTtBR). `--strict` refuses such a read here
+    // exactly as it does for one file.
+    let results: Vec<(PathBuf, Result<ReadReport>)> = files
         .par_iter()
         .map(|path| {
             let result =
-                read_metadata_with_detector_and_options(path, args.detector, &read_options);
+                read_metadata_report_with_detector_and_options(path, args.detector, &read_options)
+                    .and_then(|report| refuse_degraded_when_strict(report, args));
 
             match &result {
                 Ok(_) => {
@@ -400,6 +411,31 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
     })
+}
+
+/// `--strict`'s refusal of a read that did not fully parse, as
+/// `main.rs::handle_read_operation` applies it to one file: anything but
+/// [`ParseStatus::Parsed`] or [`ParseStatus::IdentifiedOnly`] is an error,
+/// reported with the first diagnostic and the status. Without `--strict`
+/// the report passes through and its status travels into formatting.
+fn refuse_degraded_when_strict(report: ReadReport, args: &CliArgs) -> Result<ReadReport> {
+    if args.strict
+        && !matches!(
+            report.status,
+            ParseStatus::Parsed | ParseStatus::IdentifiedOnly
+        )
+    {
+        let reason = report
+            .diagnostics
+            .first()
+            .map(|d| d.message.clone())
+            .unwrap_or_else(|| report.status.to_string());
+        return Err(ExifToolError::parse_error(format!(
+            "{reason} (status: {})",
+            report.status
+        )));
+    }
+    Ok(report)
 }
 
 /// Performs batch write operations on a collection of files.
@@ -557,7 +593,7 @@ fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArg
     }
 }
 
-fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
+fn output_csv_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     let formatter = CsvFormatter;
     let mut writer = csv::Writer::from_writer(Vec::new());
 
@@ -566,8 +602,8 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
         .map_err(|e| ExifToolError::parse_error(format!("CSV formatting failed: {e}")))?;
 
     for (path, result) in results {
-        if let Ok(metadata) = result {
-            let metadata = resolved_metadata_for_structured_output(metadata, args);
+        if let Ok(report) = result {
+            let metadata = resolved_metadata_for_structured_output(&report.metadata, args);
             let rendered = formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
             // The path's own bytes, as ExifTool's `-csv` prints them.
             let source_file = os_bytes(path.as_os_str());
@@ -618,13 +654,13 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
 /// (`exiftool`:2328-2332, printed whenever more than one file is processed),
 /// including a file that has none of the requested tags; the caller prints
 /// the `%5d image files read` summary after the last one.
-fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
+fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
     let formatter = ShortFormatter;
 
     for (path, result) in results {
-        if let Ok(metadata) = result {
+        if let Ok(report) = result {
             PathLine::new("======== ").path(path).print();
-            match resolve_file_output(metadata, args) {
+            match resolve_file_output(&report.metadata, args) {
                 ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                 ResolvedFileOutput::Metadata(metadata) => {
                     let output =
@@ -642,7 +678,7 @@ fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliAr
 /// - SourceFile: file path
 /// - All metadata tags (for successful reads)
 /// - Error message (for failed reads)
-fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
+fn output_json_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     let formatter = JsonFormatter;
 
     // Build each object as a `JsonNode` tree directly. Rendering to text and
@@ -653,9 +689,20 @@ fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArg
         .iter()
         .map(|(path, result)| {
             let mut map = match result {
-                Ok(metadata) => {
-                    let metadata = resolved_metadata_for_structured_output(metadata, args);
-                    formatter.build_json_map(&metadata, None, !args.exiftool_compat())
+                Ok(report) => {
+                    let metadata = resolved_metadata_for_structured_output(&report.metadata, args);
+                    let mut map =
+                        formatter.build_json_map(&metadata, None, !args.exiftool_compat());
+                    // The `Status` marker single-file `-j` carries for a read
+                    // that did not fully parse (`JsonFormatter::
+                    // format_with_status_and_mode`); absent for `Parsed`.
+                    if report.status != ParseStatus::Parsed {
+                        map.insert(
+                            "Status".to_string(),
+                            JsonNode::String(report.status.as_str().to_string()),
+                        );
+                    }
+                    map
                 }
                 Err(e) => BTreeMap::from([("Error".to_string(), JsonNode::String(e.to_string()))]),
             };
@@ -765,14 +812,14 @@ mod json_ordering_tests {
 /// Outputs results in human-readable format.
 ///
 /// Prints each file's metadata with a file path header.
-fn output_human_readable_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
+fn output_human_readable_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
     let formatter = HumanReadableFormatter;
 
     for (path, result) in results {
         match result {
-            Ok(metadata) => {
+            Ok(report) => {
                 PathLine::new("File: ").path(path).print();
-                match resolve_file_output(metadata, args) {
+                match resolve_file_output(&report.metadata, args) {
                     ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                     ResolvedFileOutput::Metadata(metadata) => {
                         let output =
