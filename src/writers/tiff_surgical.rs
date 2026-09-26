@@ -938,10 +938,12 @@ mod tests {
     /// 0x9205 MaxApertureValue after D-2; ExposureProgram stands in here) is
     /// still the entry an explicit edit of its name writes: patched in place
     /// exactly as while the reader surfaced it, where its names used to be
-    /// consumed and the edit dropped in silence. A deletion by name is
-    /// refused, as every deletion here is, not carried in silence.
+    /// consumed and the edit dropped in silence. A deletion by name deletes
+    /// it (pinned ExifTool 13.59 deletes `-ExifIFD:ExposureProgram=`), and
+    /// one that would empty the directory is refused, not carried in
+    /// silence.
     #[test]
-    fn a_rowless_entry_is_edited_in_place_and_its_deletion_refused() {
+    fn a_rowless_entry_is_edited_in_place_and_deleted_by_name() {
         let (file, surfaced) = tiff_with_exif_shorts(&[(0x8822, 2), (0xa001, 1)]);
         assert!(surfaced.contains_key("ExifIFD:ExposureProgram"));
         let mut rowless = surfaced.clone();
@@ -966,13 +968,22 @@ mod tests {
         assert!(rewrite_tiff_file(&file, &rowless, &both).is_err());
 
         let removed = ["ExifIFD:ExposureProgram".to_string()];
-        let err = rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("Removing tag 'ExifIFD:ExposureProgram'"),
-            "{err}"
-        );
+        let deleted = rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed).unwrap();
+        assert_eq!(exif_ifd_shorts(&deleted), [(0xa001, 1)]);
+        // ... but never the last entry of its directory.
+        let exposure = |file: &[u8]| {
+            let scan = scan_tiff(file).unwrap();
+            let entry = scan
+                .entries
+                .iter()
+                .find(|entry| entry.tag_id == 0x8822)
+                .unwrap()
+                .clone();
+            deletable_in_place(&scan, &entry, &[])
+        };
+        assert!(exposure(&file));
+        let (alone, _) = tiff_with_exif_shorts(&[(0x8822, 2)]);
+        assert!(!exposure(&alone));
         // Another IFD's name is not this entry's.
         let removed = ["IFD0:ExposureProgram".to_string()];
         assert_eq!(
@@ -1124,18 +1135,37 @@ mod tests {
         }
     }
 
+    /// A located plain tag the map drops is deleted in place, as pinned
+    /// ExifTool 13.59 deletes `-IFD0:Make=` from t/images ExifTool.tif; a
+    /// data pointer (StripOffsets, `Protected` in `Exif::Main`) is refused,
+    /// never deleted or silently kept.
     #[test]
-    fn removing_a_located_tag_is_refused_not_silently_ignored() {
-        let file = build_tiff(ByteOrder::LittleEndian);
-        let original = original_map();
-        let mut desired = original.clone();
-        desired.remove("IFD0:Make");
-        let err = rewrite_tiff_file(&file, &original, &desired).unwrap_err();
-        assert!(
-            err.to_string().contains("Removing tag 'IFD0:Make'"),
-            "got: {}",
-            err
-        );
+    fn removing_a_located_tag_deletes_it_and_a_pointer_is_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let file = build_tiff(bo);
+            let original = original_map();
+            let mut desired = original.clone();
+            desired.remove("IFD0:Make");
+            let out = rewrite_tiff_file(&file, &original, &desired).unwrap();
+            let ids: Vec<u16> = scan_tiff(&out)
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| entry.tag_id)
+                .collect();
+            assert_eq!(ids, [0x0111, 0x0112], "{bo:?}");
+            // The image data the kept StripOffsets locates is untouched.
+            assert_eq!(&out[80..88], &[0xAA; 8], "{bo:?}");
+
+            let mut desired = original.clone();
+            desired.remove("IFD0:StripOffsets");
+            let err = rewrite_tiff_file(&file, &original, &desired).unwrap_err();
+            assert!(
+                err.to_string().contains("Removing tag 'IFD0:StripOffsets'"),
+                "got: {}",
+                err
+            );
+        }
     }
 
     #[test]
