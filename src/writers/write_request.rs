@@ -694,9 +694,16 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
 ///   that holds the tag (`-IFD0:Artist=` on the output above shrinks the
 ///   trailer from 188 to 90 bytes) and leaves a trailer without it as it was
 ///   (ExifTool.jpg's own, which has no EXIF; `-IFD0:Software=` on the 188):
-///   refused unless the trailer is proven not to hold the tag
+///   refused unless every MIE trailer is proven not to hold the tag
 ///   (`parsers::mie::trailer_exif`, then the no-op scan every EXIF deletion
-///   is decided by, `exif_surgical::exif_request_is_no_op`).
+///   is decided by, `exif_surgical::exif_request_is_no_op`). An EXIF block
+///   that scan cannot read proves nothing: 13.59 reads one whose TIFF magic
+///   is not 42 anyway and deletes from it.
+/// - A maker-note tag (`-MakerNotes:OwnerName=`, set or deletion) is edited
+///   in MIE's EXIF where that carries a maker note (Writer.jpg with a MIE
+///   holding Canon.jpg's EXIF: `[Canon] OwnerName` emptied, 2490 -> 2496
+///   bytes, although the main EXIF has no maker note); ExifTool creates no
+///   maker note, so a MIE without one is left alone.
 ///
 /// `file` is the file's bytes where ExifTool reads a MIE trailer (after a
 /// JPEG or a TIFF-structured file, not after a PNG's IEND), else `None`;
@@ -708,14 +715,20 @@ pub(crate) fn ensure_no_mie_copy(
     removal: bool,
     file: Option<&[u8]>,
 ) -> Result<()> {
+    use super::exif_surgical::{
+        EXIF_BLOCK_MAGICS, exif_request_is_no_op, group_removal, makernote_census,
+        scan_entries_with_magics,
+    };
     use crate::parsers::mie::{MieExif, trailer_exif};
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    let group_all = removal && group_removal(key).is_some();
+    let makernote = !group_all && group.eq_ignore_ascii_case("MakerNotes");
     let exif = matches!(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "SubIFD"
     ) || super::exif_surgical::chain_key_dir(key).is_some()
-        || (removal && super::exif_surgical::group_removal(key).is_some());
-    if !exif {
+        || group_all;
+    if !exif && !makernote {
         return Ok(());
     }
     let trailer = file.and_then(trailer_exif);
@@ -725,6 +738,25 @@ pub(crate) fn ensure_no_mie_copy(
     else {
         return Ok(());
     };
+    if makernote {
+        let untouched = match &trailer {
+            Some(MieExif::Absent) => true,
+            Some(MieExif::Held(blocks)) => {
+                makernote_census(blocks, EXIF_BLOCK_MAGICS).tag_bearing == 0
+            }
+            Some(MieExif::Unknown) | None => false,
+        };
+        if untouched {
+            return Ok(());
+        }
+        return Err(refuse(
+            tag,
+            format!(
+                "the file carries MIE ({mie}) whose EXIF directory holds a maker note (or \
+                 may), where ExifTool also edits {key}, which oxidex cannot write"
+            ),
+        ));
+    }
     if !removal {
         return Err(refuse(
             tag,
@@ -736,15 +768,20 @@ pub(crate) fn ensure_no_mie_copy(
     }
     let untouched = match &trailer {
         Some(MieExif::Absent) => true,
-        Some(MieExif::Held(blocks)) => super::exif_surgical::exif_request_is_no_op(
-            blocks,
-            blocks,
-            super::exif_surgical::EXIF_BLOCK_MAGICS,
-            false,
-            &MetadataMap::new(),
-            &MetadataMap::new(),
-            &[key.to_string()],
-        ),
+        Some(MieExif::Held(blocks)) => {
+            blocks
+                .iter()
+                .all(|block| scan_entries_with_magics(block, EXIF_BLOCK_MAGICS).is_ok())
+                && exif_request_is_no_op(
+                    blocks,
+                    blocks,
+                    EXIF_BLOCK_MAGICS,
+                    false,
+                    &MetadataMap::new(),
+                    &MetadataMap::new(),
+                    &[key.to_string()],
+                )
+        }
         Some(MieExif::Unknown) | None => false,
     };
     if untouched {

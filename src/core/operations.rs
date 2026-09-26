@@ -1684,26 +1684,67 @@ pub(crate) fn resolve_write_address(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<String> {
-    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline, false)?;
+    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    ensure_no_mie_copy_for(path, tag_name, &key, baseline, false)?;
     addressed?;
     Ok(key)
+}
+
+/// Refuses the request `tag_name`, resolved to `key`, where pinned 13.59
+/// would also edit the EXIF copy a MIE trailer of the file at `path` carries
+/// (`write_request::ensure_no_mie_copy`), which oxidex does not write.
+/// `removal` says whether the request is a deletion, which 13.59 applies
+/// to fewer copies than a set.
+///
+/// A transaction asks this only of the requests left after its same-field
+/// reduction (`core::write_transaction::plan_changes`): a set a later
+/// deletion of the field overrides is never ExifTool's to write (13.59:
+/// `-IFD0:XPTitle=x -IFD0:XPTitle=` on t/images/ExifTool.jpg is
+/// `unchanged`, `-IFD0:Artist=x -IFD0:Artist=` deletes the main Artist and
+/// leaves the MIE trailer's 90 bytes as they were). ExifTool reads a MIE
+/// trailer after a JPEG or a TIFF-structured file (DNG, CR2), not after a
+/// PNG's IEND; oxidex's reader surfaces rows for the JPEG's only. A `.mie`
+/// document itself is no trailer carrier: oxidex writes no MIE file at all,
+/// and its writer's refusal answers for it.
+pub(crate) fn ensure_no_mie_copy_for(
+    path: &Path,
+    tag_name: &str,
+    key: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+) -> Result<()> {
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    if matches!(format, FileFormat::MIE) {
+        return Ok(());
+    }
+    let trailer_file =
+        if matches!(format, FileFormat::JPEG) || is_surgical_tiff_target(format, &reader) {
+            Some(reader.read(0, reader.size() as usize)?)
+        } else {
+            None
+        };
+    crate::writers::write_request::ensure_no_mie_copy(
+        tag_name.strip_suffix('#').unwrap_or(tag_name),
+        key,
+        baseline,
+        removal,
+        trailer_file,
+    )
 }
 
 /// [`resolve_write_address`] in two parts: the resolved key (or the error
 /// resolving it), and whether the format's writer addresses that key. A
 /// removal asks whether it is a no-op between the two (`remove_tag`): a
 /// deletion that names nothing succeeds untouched even where the writer
-/// could not have written the key. `removal` says whether the request is a
-/// deletion, which pinned 13.59 applies to fewer copies than a set (see
-/// `write_request::ensure_no_mie_copy`); [`resolve_write_address`] answers
-/// for a set.
+/// could not have written the key. Whether a MIE trailer's EXIF copy also
+/// takes the request is asked separately ([`ensure_no_mie_copy_for`]).
 pub(crate) fn resolve_write_key_for(
     path: &Path,
     tag_name: &str,
     baseline: &MetadataMap,
-    removal: bool,
 ) -> Result<(String, Result<()>)> {
-    resolve_write_key_in_request(path, tag_name, baseline, removal, false)
+    resolve_write_key_in_request(path, tag_name, baseline, false)
 }
 
 /// [`resolve_write_key_for`] for one request of a transaction whose other
@@ -1718,7 +1759,6 @@ pub(crate) fn resolve_write_key_in_request(
     path: &Path,
     tag_name: &str,
     baseline: &MetadataMap,
-    removal: bool,
     makernote_deleted: bool,
 ) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
@@ -1833,28 +1873,6 @@ pub(crate) fn resolve_write_key_in_request(
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
-    // An EXIF write in a file with MIE -- grouped (`-IFD0:Artist=x`) or not
-    // -- is written into MIE's own EXIF directory too (pinned 13.59), and a
-    // deletion is applied there where that directory exists; oxidex writes
-    // no MIE, so such a request is refused, never half-done. ExifTool reads
-    // a MIE trailer after a JPEG or a TIFF-structured file (DNG, CR2), not
-    // after a PNG's IEND; oxidex's reader surfaces rows for the JPEG's only.
-    // A `.mie` document itself is no trailer carrier: oxidex writes no MIE
-    // file at all, and its writer's refusal answers for it.
-    let trailer_file = if matches!(format, FileFormat::JPEG) || surgical {
-        Some(reader.read(0, reader.size() as usize)?)
-    } else {
-        None
-    };
-    if !matches!(format, FileFormat::MIE) {
-        crate::writers::write_request::ensure_no_mie_copy(
-            tag_name,
-            &key,
-            baseline,
-            removal,
-            trailer_file,
-        )?;
-    }
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose

@@ -73,9 +73,49 @@ pub(crate) enum MieExif<'a> {
 /// output shrinks the trailer back from 188 to 90 bytes) -- but a deletion
 /// leaves a trailer with no `EXIF` element, or one without the tag, as it
 /// was (ExifTool.jpg's own 90 bytes; `-IFD0:Software=` on the 188).
+///
+/// Every MIE trailer the file carries is walked, not just the last: 13.59
+/// reads a chain of them as one (Writer.jpg + a MIE holding EXIF + one
+/// without: `MIE trailer (278 bytes)`, `[MIE-Doc]` and `[MIE2-Doc]`) and
+/// `-IFD0:Artist=` deletes the inner copy (278 -> 266 bytes).
 pub(crate) fn trailer_exif(file: &[u8]) -> Option<MieExif<'_>> {
-    let trailer = find_trailer(file)?;
-    Some(trailer_exif_elements(file, trailer.start, trailer.end))
+    let trailers = all_trailers(file);
+    if trailers.is_empty() {
+        return None;
+    }
+    let mut held = Vec::new();
+    for trailer in trailers {
+        match trailer_exif_elements(file, trailer.start, trailer.end) {
+            MieExif::Absent => {}
+            MieExif::Held(blocks) => held.extend(blocks),
+            MieExif::Unknown => return Some(MieExif::Unknown),
+        }
+    }
+    Some(if held.is_empty() {
+        MieExif::Absent
+    } else {
+        MieExif::Held(held)
+    })
+}
+
+/// Every valid MIE trailer of `file` (validated at both ends as
+/// [`find_trailer`] validates one, for each `zmie` footer anywhere in the
+/// file), in file order.
+fn all_trailers(file: &[u8]) -> Vec<MieTrailer> {
+    let mut trailers: Vec<MieTrailer> = [(SHORT_TRAILER_MARKER, 4), (LONG_TRAILER_MARKER, 8)]
+        .into_iter()
+        .flat_map(|(marker, length_width)| {
+            memchr::memmem::find_iter(file, marker).filter_map(move |at| {
+                let end = at.checked_add(marker.len() + length_width + 2)?;
+                (end <= file.len())
+                    .then(|| trailer_start(file, end, length_width))
+                    .flatten()
+                    .map(|start| MieTrailer { start, end })
+            })
+        })
+        .collect();
+    trailers.sort_by_key(|trailer| (trailer.start, trailer.end));
+    trailers
 }
 
 /// Walks the MIE elements in `file[start..end]` (MIE.pm:1483-1580's element
@@ -1295,6 +1335,10 @@ mod tests {
             assert_eq!(trailer_exif(&file), Some(MieExif::Unknown), "{opaque:?}");
         }
         assert_eq!(trailer_exif(b"image data with no trailer"), None);
+        // An inner trailer holding EXIF before an outer one without it.
+        let inner = trailer_holding(streamed);
+        let two = [&inner[..], &trailer_holding(doc)[b"image data".len()..]].concat();
+        assert_eq!(trailer_exif(&two), Some(MieExif::Held(vec![tiff])));
         if let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") {
             let file = std::fs::read(&path).expect("pinned ExifTool.jpg");
             assert_eq!(
