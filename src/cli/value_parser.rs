@@ -45,6 +45,7 @@
 //! leaving the file untouched ("Warning: Not an integer for ...",
 //! "Nothing to do.").
 
+use crate::core::FormatFamily;
 use crate::core::ValueType;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
@@ -773,7 +774,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             leaf @ ("Orientation" | "ResolutionUnit" | "Compression" | "YCbCrPositioning"
             | "ExposureMode" | "MeteringMode" | "ExposureProgram" | "WhiteBalance"
             | "SceneCaptureType" | "GainControl" | "GrayResponseUnit"),
-        ) if !raw_mode => {
+        ) if !raw_mode && exif_or_gps_module_for(declared_tag_name) == Some("Exif") => {
             return invert_table_printconv_label(tag_name, declared_tag_name, leaf, raw);
         }
         // LightSource (0x9208) repeats the "Daylight" label at codes 1 and
@@ -808,7 +809,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             | "CalibrationIlluminant1"
             | "CalibrationIlluminant2"
             | "CalibrationIlluminant3"),
-        ) if !raw_mode => {
+        ) if !raw_mode && exif_or_gps_module_for(declared_tag_name) == Some("Exif") => {
             return match invert_int_enum(LIGHT_SOURCE_LABELS, raw) {
                 Ok(code) => Ok(TagValue::Integer(code)),
                 Err(EnumInverseError::Ambiguous) => Err(invalid(
@@ -835,7 +836,17 @@ pub(crate) fn parse_cli_tag_value_with_mode(
 
     match declared {
         None | Some(ValueType::String) => Ok(TagValue::String(raw.to_string())),
-        Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Sharpness") => {
+        // Exif.pm 0xa40a (Sharpness) is ConvertParameter too, same family as
+        // Contrast/Saturation above -- `raw_mode` (`#`, `--no-print-conv`)
+        // must take the raw code directly rather than running it through
+        // `parse_sharpness`'s word-initial/sign mapping (confirmed against
+        // the oracle: `-ExifIFD:Sharpness#=1` writes `1`, not `2`). This arm
+        // is gated the same way the generic enum-dispatch arm below is
+        // gated for its own list of hand-written conversions; when the guard
+        // fails, `raw` falls through unchanged to the plain integer parser.
+        Some(ValueType::Integer)
+            if !raw_mode && declared_tag_name.rsplit(':').next() == Some("Sharpness") =>
+        {
             parse_sharpness(tag_name, raw)
         }
         Some(ValueType::Integer)
@@ -883,6 +894,16 @@ pub(crate) fn parse_cli_tag_value_with_mode(
         // label -- looking `"1"` up in `PlanarConfiguration`'s own table
         // (labels `"Chunky"`/`"Planar"`) would find no match and wrongly
         // refuse an already-correct conversion.
+        // `exif_or_gps_module_for` (PR #959 finding `4111785371`) additionally
+        // requires the descriptor's OWN table to be Exif::Main/GPS::Main
+        // before this generic dispatch runs at all: a leaf-name match alone
+        // is not enough, since a MakerNotes tag can declare the same leaf
+        // name as an Exif::Main/GPS::Main tag while being a different tag at
+        // a different id with (if any) its own unrelated PrintConv. When the
+        // guard fails, `raw` falls through unchanged to the plain declared-
+        // type parser below, which refuses a label it cannot parse as an
+        // integer -- exactly the outcome the pinned oracle gives for such a
+        // tag today.
         Some(ValueType::Integer)
             if !raw_mode
                 && !matches!(
@@ -904,17 +925,15 @@ pub(crate) fn parse_cli_tag_value_with_mode(
                             | "CalibrationIlluminant2"
                             | "CalibrationIlluminant3"
                     )
-                ) =>
+                )
+                && exif_or_gps_module_for(declared_tag_name).is_some() =>
         {
             let leaf = declared_tag_name
                 .rsplit(':')
                 .next()
                 .unwrap_or(declared_tag_name);
-            let module = if declared_tag_name.starts_with("GPS:") {
-                "GPS"
-            } else {
-                "Exif"
-            };
+            let module = exif_or_gps_module_for(declared_tag_name)
+                .expect("guarded above: exif_or_gps_module_for(...).is_some()");
             match invert_enum_printconv(module, leaf, declared_tag_name, raw) {
                 Some(Ok(code)) => Ok(TagValue::Integer(code)),
                 Some(Err(EnumInverseError::Ambiguous)) => Err(invalid(
@@ -1054,6 +1073,54 @@ fn invert_int_enum(
         (Some(&(value, _)), None) => Ok(value),
         (Some(_), Some(_)) => Err(EnumInverseError::Ambiguous),
         (None, _) => Err(EnumInverseError::NoMatch),
+    }
+}
+
+/// Whether `declared_tag_name` may be inverted against `Exif::Main`
+/// (`FormatFamily::EXIF`) or `GPS::Main` (`FormatFamily::GPS`) -- the only two
+/// tables this file's enum PrintConv inversion draws from (the leaf-name
+/// dispatch above `invert_table_printconv_label`, the
+/// `LightSource`/`CalibrationIlluminant1/2/3` arm, and the generic fallback
+/// dispatch). Every one of those matches by LEAF name only
+/// (`declared_tag_name.rsplit(':').next()`), which is not enough on its own:
+/// MakerNotes tables reuse EXIF's own leaf names for entirely different tags
+/// at different ids with (if any) their own PrintConv -- `Sony:ExposureMode`
+/// (Sony.pm 0x0119, `FormatFamily::MakerNotes`) shares its leaf with Exif.pm's
+/// `ExposureMode` (0xa402), so a bare leaf match sent `-Sony:ExposureMode=Auto`
+/// through `Exif::Main`'s inversion and would have silently stored the wrong
+/// code under the wrong tag's meaning (confirmed against the oracle: pinned
+/// ExifTool 13.59 refuses that value entirely, since Sony's tag has no such
+/// label).
+///
+/// The candidate module is `declared_tag_name`'s own group prefix, same as
+/// every caller already assumed (`"GPS"` for a `GPS:` tag, `"Exif"`
+/// otherwise) -- this function's job is only to VETO that guess when the tag
+/// registry has positive evidence it is wrong. `get_tag_descriptor` is a hand
+/// + generated registry that does not cover every transcribed `Exif::Main`
+/// row (`EXIF:ShadingCorrection`/`EXIF:NoiseReduction`, confirmed absent by a
+/// registry audit, are genuine Exif::Main tags with nobody's descriptor at
+/// all); refusing whenever the registry has NO entry would silently regress
+/// those already-fixed tags back to accepting an unmatched value. So `None`
+/// (no registry entry) trusts the candidate, exactly as before this fix,
+/// while `Some` VERIFIES it -- vetoing only a descriptor that names a
+/// genuinely different table (`FormatFamily::MakerNotes` etc.), which is
+/// exactly the evidence `Sony:ExposureMode` supplies and `ShadingCorrection`
+/// does not. Every caller treats a veto (`None` from this function) the same
+/// way: skip this file's Exif/GPS-table inversion and let `raw` fall through
+/// to the plain declared-type parser, which naturally refuses a label it
+/// cannot parse as an integer -- "refuse" rather than "guess", per this
+/// codebase's rule against approximating a conversion.
+fn exif_or_gps_module_for(declared_tag_name: &str) -> Option<&'static str> {
+    let candidate = if declared_tag_name.starts_with("GPS:") {
+        "GPS"
+    } else {
+        "Exif"
+    };
+    match get_tag_descriptor(declared_tag_name).map(|descriptor| descriptor.format()) {
+        None => Some(candidate),
+        Some(FormatFamily::EXIF) if candidate == "Exif" => Some("Exif"),
+        Some(FormatFamily::GPS) if candidate == "GPS" => Some("GPS"),
+        Some(_) => None,
     }
 }
 
@@ -2027,6 +2094,64 @@ mod tests {
     /// skips every PrintConv label lookup, parsing purely by declared type.
     fn parse_raw(tag: &str, raw: &str) -> Result<TagValue> {
         parse_cli_tag_value_with_mode(tag, raw, true)
+    }
+
+    /// PR #959 review finding (`4111785371`): leaf-only dispatch must not
+    /// send a MakerNotes tag that happens to share a leaf name with an
+    /// Exif::Main/GPS::Main tag (`Sony:ExposureMode` vs. Exif.pm's
+    /// `ExposureMode`) through this file's Exif/GPS enum inversion.
+    #[test]
+    fn exif_or_gps_module_for_is_gated_by_the_tags_actual_table() {
+        for tag in [
+            "EXIF:Orientation",
+            "IFD0:Orientation",
+            "EXIF:ResolutionUnit",
+            "EXIF:Compression",
+            "EXIF:YCbCrPositioning",
+            "EXIF:ExposureMode",
+            "ExifIFD:ExposureMode",
+            "EXIF:MeteringMode",
+            "EXIF:ExposureProgram",
+            "EXIF:WhiteBalance",
+            "EXIF:SceneCaptureType",
+            "EXIF:GainControl",
+            "EXIF:GrayResponseUnit",
+            "EXIF:LightSource",
+            "EXIF:CalibrationIlluminant1",
+            "EXIF:CalibrationIlluminant2",
+            "EXIF:CalibrationIlluminant3",
+        ] {
+            assert_eq!(
+                exif_or_gps_module_for(tag),
+                Some("Exif"),
+                "{tag} should resolve to Exif::Main"
+            );
+        }
+        for tag in ["GPS:GPSStatus", "GPS:GPSDifferential"] {
+            assert_eq!(
+                exif_or_gps_module_for(tag),
+                Some("GPS"),
+                "{tag} should resolve to GPS::Main"
+            );
+        }
+        // MakerNotes tags sharing a leaf name with an Exif::Main tag must
+        // NOT resolve to either table.
+        for tag in ["Sony:ExposureMode", "Canon:CanonExposureMode"] {
+            assert_eq!(
+                exif_or_gps_module_for(tag),
+                None,
+                "{tag} must not be treated as Exif::Main/GPS::Main"
+            );
+        }
+    }
+
+    /// Same finding, exercised end to end: `-Sony:ExposureMode=Auto` must not
+    /// be silently accepted as if it were Exif.pm's `ExposureMode` (0xa402).
+    /// Confirmed against pinned ExifTool 13.59 on Canon.jpg: it refuses this
+    /// exact value (`Sony:ExposureMode` has no such PrintConv label).
+    #[test]
+    fn sony_exposure_mode_is_not_inverted_through_exif_main() {
+        assert!(parse("Sony:ExposureMode", "Auto").is_err());
     }
 
     // -- shape predicates, against ExifTool.pm:5924-5933 --------------------
@@ -3163,5 +3288,58 @@ mod tests {
         for raw in ["2020:01:02", "junk", "2020:13:02 03:04:05"] {
             assert!(parse("PDF:CreateDate", raw).is_err(), "{raw}");
         }
+    }
+}
+
+/// A mechanical audit, run over every writable plain-`IntEnum` tag in the
+/// transcribed `Exif::Main`/`GPS::Main` tables (the same universe
+/// `breadth_measure.py`'s duplicate-name audit and `parse_enum_tags` cover),
+/// proving `exif_or_gps_module_for`'s "veto only on positive evidence" design
+/// (see its doc comment) does not regress any of them: a first draft of the
+/// gate rejected any tag absent from the hand/generated registry outright,
+/// which silently un-fixed `EXIF:ShadingCorrection` (0xa411) and
+/// `EXIF:NoiseReduction` (0xa412) -- genuine `Exif::Main` rows with no
+/// registry descriptor at all -- caught by running exactly this sweep before
+/// shipping the fix.
+#[cfg(test)]
+mod module_gate_regression_audit {
+    use super::*;
+    use crate::exiftool_tables::{PrintConv, find_ifd_table};
+
+    #[test]
+    fn every_writable_enum_tag_in_exif_or_gps_main_still_passes_the_module_gate() {
+        let mut vetoed = Vec::new();
+        for (module_str, prefix) in [("Exif", "EXIF"), ("GPS", "GPS")] {
+            let table = find_ifd_table(module_str, "Main").expect("table exists");
+            for tag in table.tags.iter() {
+                if tag.writable.is_none() {
+                    continue;
+                }
+                if !matches!(tag.print_conv, PrintConv::IntEnum(_)) {
+                    continue;
+                }
+                let declared = format!("{prefix}:{}", tag.name);
+                if exif_or_gps_module_for(&declared).is_none() {
+                    vetoed.push(format!("{declared} (id={:#06x})", tag.id));
+                }
+            }
+        }
+        assert!(
+            vetoed.is_empty(),
+            "these Exif::Main/GPS::Main tags were wrongly vetoed: {vetoed:#?}"
+        );
+    }
+
+    /// The two tags the sweep above caught during development: absent from
+    /// the tag registry entirely, so the gate must trust the group prefix
+    /// (`declared_tag_name` starts with `"EXIF:"`, not `"GPS:"`) rather than
+    /// treating "no registry entry" as "not Exif::Main".
+    #[test]
+    fn tags_missing_from_the_registry_still_pass_the_module_gate() {
+        assert_eq!(
+            exif_or_gps_module_for("EXIF:ShadingCorrection"),
+            Some("Exif")
+        );
+        assert_eq!(exif_or_gps_module_for("EXIF:NoiseReduction"), Some("Exif"));
     }
 }
