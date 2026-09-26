@@ -303,6 +303,10 @@ fn a_makernote_deletion_oxidex_cannot_rule_out_is_refused() {
     assert_eq!(std::fs::read(&ox_path).unwrap(), original);
 }
 
+/// One review-round case: file label, bytes, extension, graded name, the
+/// command line, and its pinned outcome.
+type Case<'a> = (&'a str, &'a [u8], &'a str, &'a str, Vec<String>, Expect);
+
 /// `original` with the first EXIF APP1 of `donor` inserted after its own
 /// first EXIF APP1: two EXIF blocks, as no corpus file has.
 fn with_second_app1(original: &[u8], donor: &[u8]) -> Vec<u8> {
@@ -368,7 +372,7 @@ fn review_round_shapes_match_the_oracle_or_are_refused() {
     foreign[at + 6..at + 10].copy_from_slice(b"XxxN");
     let two_app1 = with_second_app1(&nikon, &lsi);
     let s = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-    let cases: Vec<(&str, &[u8], &str, &str, Vec<String>, Expect)> = vec![
+    let cases: Vec<Case<'_>> = vec![
         (
             "DNG.dng (MakN renamed)",
             &foreign,
