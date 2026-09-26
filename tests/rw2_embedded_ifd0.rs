@@ -784,3 +784,64 @@ fn rw2_permanent_tags_the_camera_omitted_are_never_created() {
         eprintln!("skipping oracle grading: no grading ExifTool oracle");
     }
 }
+
+/// Review of #956 (rw2_ifd0.rs:539): an explicit library set of the value the
+/// reader reports, print-converted (`IFD0:ResolutionUnit` "inches" for the
+/// JpgFromRaw's SHORT 2; `IFD0:YCbCrPositioning` "Co-sited" for its SHORT
+/// 2), is compared through the tag's inverse PrintConv -- ExifTool's
+/// `ReverseLookup` (Writer.pl 13.59:3609-3650) of the `Exif::Main` hash --
+/// not as ASCII text. Neither is in the outer `PanasonicRaw::Main` IFD0. Pinned
+/// ExifTool 13.59 rewrites each entry with its own value ("- IFD0:
+/// ResolutionUnit = '2' / + ... '2'"), a read-back identical to the file's;
+/// the library reported "writes it into the IFD0 of the embedded
+/// JpgFromRaw" and refused at e4d2d79a.
+#[test]
+fn rw2_same_value_print_converted_sets_compare_through_the_inverse() {
+    use oxidex::core::operations::write_metadata;
+    use oxidex::core::write_transaction::WriteOutcome;
+    let Some(original) = sample() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = {
+        let path = write(dir.path(), "read.rw2", &original);
+        read_metadata(&path).unwrap()
+    };
+    for (key, printed) in [
+        ("IFD0:ResolutionUnit", "inches"),
+        ("IFD0:YCbCrPositioning", "Co-sited"),
+    ] {
+        let value = baseline.get(key).cloned().expect(key);
+        assert_eq!(
+            value,
+            TagValue::new_string(printed),
+            "{key} as the reader reports it"
+        );
+        let path = write(dir.path(), "lib.rw2", &original);
+        let outcome = modify_tag(&path, key, value.clone())
+            .unwrap_or_else(|err| panic!("modify_tag {key}={printed}: {err}"));
+        assert_eq!(outcome, WriteOutcome::Unchanged, "modify_tag {key}");
+        assert!(
+            std::fs::read(&path).unwrap() == original,
+            "{key}: file changed"
+        );
+
+        let mut map = read_metadata(&path).unwrap();
+        map.insert(key, value);
+        let outcome = write_metadata(&path, &map)
+            .unwrap_or_else(|err| panic!("write_metadata {key}={printed}: {err}"));
+        assert_eq!(outcome, WriteOutcome::Unchanged, "write_metadata {key}");
+        assert!(
+            std::fs::read(&path).unwrap() == original,
+            "{key}: file changed"
+        );
+        assert_oracle_parity(&original, &original, &format!("-{key}={printed}"), key);
+    }
+    // A label the entry does not hold is still a change ExifTool makes in
+    // the JpgFromRaw: refused by name, file untouched.
+    let path = write(dir.path(), "lib.rw2", &original);
+    let err = modify_tag(&path, "IFD0:ResolutionUnit", TagValue::new_string("cm"))
+        .expect_err("ResolutionUnit=cm reported done");
+    assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    assert!(std::fs::read(&path).unwrap() == original);
+}

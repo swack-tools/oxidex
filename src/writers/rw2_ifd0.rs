@@ -54,7 +54,7 @@
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::{IfdTag, find_ifd_table};
+use crate::exiftool_tables::{IfdTag, PrintConv, find_ifd_table};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::writers::exif_surgical::{
     ExifScan, IfdKind, jpeg_exif_payload, native_to_byte_order, scan_entries_with_magics,
@@ -613,19 +613,63 @@ pub(crate) fn refuse_rw2_same_value_sets(
 }
 
 /// Whether `scan`'s directory `ifd` holds `value` for `tag`, byte for byte
-/// as the planner would encode it under `key`.
+/// as the planner would encode it under `key` -- or, for a value the reader
+/// print-converts, as it would encode the code ExifTool's inverse
+/// conversion gives it ([`inverse_print_conv`]): the RW2 reader reports the
+/// JpgFromRaw's `IFD0:ResolutionUnit` SHORT 2 as "inches", and an explicit
+/// set of that same "inches" is no change (#956 review, rw2_ifd0.rs:539).
 fn holds(scan: &ExifScan, ifd: IfdKind, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
-    scan.entries
+    let Some(entry) = scan
+        .entries
         .iter()
         .find(|entry| entry.ifd == ifd && entry.tag_id == tag.id)
-        .is_some_and(|entry| {
-            tag_value_to_field_for_key(key, value, Some(entry.field_type), scan.byte_order)
-                .is_ok_and(|(field_type, count, native)| {
-                    field_type == entry.field_type
-                        && count == entry.count
-                        && native_to_byte_order(field_type, &native, scan.byte_order) == entry.value
-                })
-        })
+    else {
+        return false;
+    };
+    let encodes = |value: &TagValue| {
+        tag_value_to_field_for_key(key, value, Some(entry.field_type), scan.byte_order).is_ok_and(
+            |(field_type, count, native)| {
+                field_type == entry.field_type
+                    && count == entry.count
+                    && native_to_byte_order(field_type, &native, scan.byte_order) == entry.value
+            },
+        )
+    };
+    encodes(value) || inverse_print_conv(tag, value).is_some_and(|raw| encodes(&raw))
+}
+
+/// ExifTool's `PrintConvInv` of the text `value` for `tag` when the tag's
+/// `PrintConv` is a plain integer hash (`Exif::Main` ResolutionUnit and
+/// YCbCrPositioning): `ReverseLookup` (Writer.pl
+/// 13.59:3609-3650) takes the key whose label is `value`, trailing
+/// whitespace dropped, exactly -- else case-insensitively. Only a single
+/// match is taken here. ExifTool's prefix and substring passes, `Unknown
+/// (..)`, `OTHER` and every other kind of conversion are not modelled and
+/// give `None`, so the value is compared as given, and one that differs is a
+/// change: refused, never guessed at.
+fn inverse_print_conv(tag: &IfdTag, value: &TagValue) -> Option<TagValue> {
+    let PrintConv::IntEnum(map) = tag.print_conv else {
+        return None;
+    };
+    let text = value.as_string()?.trim_end();
+    let single = |matches: &mut dyn Iterator<Item = i64>| match (matches.next(), matches.next()) {
+        (Some(code), None) => Some(TagValue::Integer(code)),
+        _ => None,
+    };
+    single(
+        &mut map
+            .iter()
+            .filter(|(_, label)| *label == text)
+            .map(|(code, _)| *code),
+    )
+    .or_else(|| {
+        single(
+            &mut map
+                .iter()
+                .filter(|(_, label)| label.eq_ignore_ascii_case(text))
+                .map(|(code, _)| *code),
+        )
+    })
 }
 
 /// Post-condition of a write to a Panasonic RAW/RW2/RWL file: the outer
