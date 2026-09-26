@@ -1121,6 +1121,17 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaises(executor.OwnedChildCleanupIncomplete):
                 executor._await_supervised_exec(Unreapable())
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_group_signals_from_the_command_do_not_reach_the_supervisor(self):
+        """A command's own group broadcast is not a cleanup request and must not kill its supervisor."""
+        for script in ("trap '' USR1; kill -USR1 0; sleep 0.2; exit 0",
+                       "trap '' TERM; kill -TERM 0; sleep 0.2; exit 0"):
+            with self.subTest(script=script):
+                record = executor._run_record(["/bin/sh", "-c", script], cwd=self.root,
+                                              env=dict(os.environ), run=subprocess.run)
+                self.assertEqual((record["state"], record["exit"]), ("ok", 0), record)
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
