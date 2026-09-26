@@ -1254,26 +1254,45 @@ fn exif_ifd_key(name: &str) -> String {
     format!("ExifIFD:{name}")
 }
 
-/// The names of the IFD0 entries stored after the 0x8769 `ExifOffset` entry
-/// that points at `exif_ifd`, in `reader`'s TIFF block (IFD0 at the offset
-/// its header declares). Empty when IFD0 carries no such entry: an ExifIFD
-/// reached from another directory (a later TIFF page) or from a block of its
-/// own (Canon CR3's CMT2) is walked after the whole of IFD0.
+/// What ExifTool's arbitration needs to know about the IFD0 copies of one
+/// tag name, relative to the 0x8769 `ExifOffset` entry that leads to the
+/// ExifIFD being walked. See [`loses_to_ifd0_twin`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Ifd0Twin {
+    /// An IFD0 copy is stored before the pointer, so ExifTool finds it
+    /// before every ExifIFD/InteropIFD copy.
+    before: bool,
+    /// An IFD0 copy stored after the pointer -- found after every sub-IFD
+    /// copy -- arrives with an effective priority of at least 1, so it
+    /// displaces whichever copy holds the name by then.
+    after_displaces: bool,
+}
+
+/// The IFD0 copies of every tag name, keyed by name for constant-time
+/// lookup (IFD0 may hold 65,535 entries, and every ExifIFD and InteropIFD
+/// row asks). Empty when IFD0 carries no 0x8769 entry aimed at `exif_ifd`:
+/// an ExifIFD reached from another directory (a later TIFF page) or from a
+/// block of its own (Canon CR3's CMT2) is walked after the whole of IFD0,
+/// and [`loses_to_ifd0_twin`] then treats every twin as found first.
+#[derive(Debug, Default)]
+struct Ifd0Twins(HashMap<String, Ifd0Twin>);
+
+/// Reads IFD0 (at the offset `reader`'s TIFF header declares) in physical
+/// order, as ExifTool's `ProcessExif` does, and ranks each entry as
+/// `FoundTag` would (ExifTool.pm 13.59:9468-9472, 9552-9561): the tag's own
+/// `Priority`, else 0 for `Avoid`, else 1 -- with a defined 0 raised to 1
+/// once IFD0 is the priority directory (`SetPriorityDir`, run by the
+/// RawConv of a SubfileType 0 / OldSubfileType 1 entry, Exif.pm
+/// 13.59:450-472). No `Exif::Main` tag declares a priority above 1.
 ///
-/// ExifTool processes a `SubDirectory` inline, at its entry (Exif.pm's
-/// `ProcessExif` entry loop), so every tag of the ExifIFD -- and of the
-/// InteropIFD and MakerNotes inside it -- is found *before* these IFD0
-/// entries, and *after* the IFD0 entries stored before the pointer. oxidex
-/// walks the ExifIFD once IFD0 is complete, so for an IFD0 twin in this list
-/// the recording order is the reverse of ExifTool's.
-fn ifd0_names_after_exif_pointer(
-    reader: &dyn FileReader,
-    byte_order: ByteOrder,
-    exif_ifd: u64,
-) -> Vec<String> {
+/// ExifTool processes a `SubDirectory` inline, at its entry, so the ExifIFD
+/// -- and the InteropIFD and MakerNotes inside it -- is found after the
+/// IFD0 entries stored before the pointer and before those stored after it.
+/// oxidex walks the ExifIFD once IFD0 is complete.
+fn ifd0_twins(reader: &dyn FileReader, byte_order: ByteOrder, exif_ifd: u64) -> Ifd0Twins {
     const EXIF_IFD_POINTER: u16 = 0x8769;
     let Some(ifd0) = tiff_ifd0_offset(reader, byte_order).filter(|&ifd0| ifd0 != exif_ifd) else {
-        return Vec::new();
+        return Ifd0Twins::default();
     };
     let Some(count) = reader
         .read(ifd0, 2)
@@ -1281,53 +1300,75 @@ fn ifd0_names_after_exif_pointer(
         .filter(|bytes| bytes.len() == 2)
         .map(|bytes| usize::from(read_u16(bytes, byte_order)))
     else {
-        return Vec::new();
+        return Ifd0Twins::default();
     };
     let Ok(entries) = reader.read(ifd0.saturating_add(2), count * 12) else {
-        return Vec::new();
+        return Ifd0Twins::default();
     };
+    let table = find_ifd_table("Exif", "Main");
+    let mut priority_dir = false;
     let mut past_pointer = false;
-    let mut names = Vec::new();
+    let mut twins: HashMap<String, Ifd0Twin> = HashMap::new();
     for entry in entries.chunks_exact(12) {
         let id = read_u16(&entry[0..2], byte_order);
-        if past_pointer {
-            let key = lookup_tag_name(id, "IFD0");
-            names.push(
-                key.split_once(':')
-                    .map_or(key.as_str(), |(_, name)| name)
-                    .to_string(),
-            );
-        } else if id == EXIF_IFD_POINTER
-            && u64::from(read_u32(&entry[8..12], byte_order)) == exif_ifd
-        {
+        let value = match read_u16(&entry[2..4], byte_order) {
+            3 => Some(u32::from(read_u16(&entry[8..10], byte_order))),
+            4 => Some(read_u32(&entry[8..12], byte_order)),
+            _ => None,
+        };
+        if matches!((id, value), (0x00fe, Some(0)) | (0x00ff, Some(1))) {
+            priority_dir = true;
+        }
+        if id == EXIF_IFD_POINTER && u64::from(read_u32(&entry[8..12], byte_order)) == exif_ifd {
             past_pointer = true;
+            continue;
+        }
+        let key = lookup_tag_name(id, "IFD0");
+        let name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
+        let twin = twins.entry(name.to_string()).or_default();
+        if past_pointer {
+            let priority_zero =
+                table.is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, id));
+            twin.after_displaces |= !priority_zero || priority_dir;
+        } else {
+            twin.before = true;
         }
     }
-    names
+    if past_pointer {
+        Ifd0Twins(twins)
+    } else {
+        Ifd0Twins::default()
+    }
 }
 
 /// Whether a row named `name` of a directory under IFD0's `ExifOffset` edge
-/// (the ExifIFD, its InteropIFD) loses a bare `-<name>` to an `IFD0:<name>`
-/// twin in ExifTool, so is recorded at priority 0 -- kept, never dropped:
-/// `FoundTag` files the second copy under its own key, and `-a -G1` and
-/// `-<Group>:<name>` read it (ExifTool.pm 13.59:9536-9591).
+/// (the ExifIFD, its InteropIFD), whose own ExifTool priority is 0 exactly
+/// when `priority_zero` (`Priority => 0` or `Avoid`), loses a bare
+/// `-<name>` to an `IFD0:<name>` twin, so is recorded at priority 0 -- kept,
+/// never dropped: `FoundTag` files a second copy under its own key, and
+/// `-a -G1` and `-<Group>:<name>` read it.
 ///
-/// The twin wins when the row's own priority is 0 (`Priority => 0`, e.g.
-/// ImageDescription, X/YResolution, Compression): the first copy found,
-/// IFD0's, is never displaced by a second priority-0 one. At equal priority
-/// the copy found last wins, which is the IFD0 twin exactly when it is
-/// stored after the pointer (`ifd0_after_edge`, see
-/// [`ifd0_names_after_exif_pointer`]); a twin stored before it (Make,
-/// ModifyDate) loses to the ExifIFD row, as the recording order already has
-/// it.
+/// `FoundTag` (ExifTool.pm 13.59:9540-9591) keeps the copy holding the name
+/// unless a later one arrives with `priority >= old`, an old 0 counting as
+/// 1. In ExifTool's order -- IFD0 before the pointer, this row, IFD0 after
+/// it -- the row therefore loses when an earlier IFD0 copy exists and the
+/// row's priority is 0, or when a later IFD0 copy arrives with priority 1
+/// (whatever the row's). A twin not found in `twins` (no pointer entry, or
+/// a key another producer recorded) counts as found first.
 fn loses_to_ifd0_twin(
     metadata: &MetadataMap,
+    twins: &Ifd0Twins,
     name: &str,
     priority_zero: bool,
-    ifd0_after_edge: &[String],
 ) -> bool {
-    metadata.get(&format!("IFD0:{name}")).is_some()
-        && (priority_zero || ifd0_after_edge.iter().any(|after| after == name))
+    if metadata.get(&format!("IFD0:{name}")).is_none() {
+        return false;
+    }
+    let twin = twins.0.get(name).copied().unwrap_or(Ifd0Twin {
+        before: true,
+        after_displaces: false,
+    });
+    (twin.before && priority_zero) || twin.after_displaces
 }
 
 /// [`parse_exif_subifd`] with the table decision made: `table` is the
@@ -1364,7 +1405,7 @@ fn parse_exif_directory_with_session(
 
         // IFD0 entries ExifTool finds after this directory, which it walks
         // inline at IFD0's pointer entry: see `loses_to_ifd0_twin`.
-        let ifd0_after_edge = ifd0_names_after_exif_pointer(reader, byte_order, offset);
+        let twins = ifd0_twins(reader, byte_order, offset);
 
         // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
         // offsets from its byte 0); the hand arm reads `reader`. `None` = the
@@ -1400,7 +1441,7 @@ fn parse_exif_directory_with_session(
                     table, tiff, tiff_base, offset, byte_order, "ExifIFD", metadata, session, ctx,
                 )
                 .demote(|name, priority_zero| {
-                    loses_to_ifd0_twin(metadata, name, priority_zero, &ifd0_after_edge)
+                    loses_to_ifd0_twin(metadata, &twins, name, priority_zero)
                 })
                 .at_priority(SHIM_DEFAULT_PRIORITY)
                 .keep_hand(EXIF_IFD_HAND_KEPT)
@@ -1521,12 +1562,11 @@ fn parse_exif_directory_with_session(
             // An IFD0 twin (Padding, Compression, a re-written CreateDate)
             // keeps this row -- ExifTool's `-a -G1` prints both -- and wins
             // a bare request only where ExifTool's priority and order give
-            // it the win (the engine rows get the same `demote`). Without
-            // the table, no priority is known: the twin wins, as it did
-            // when this row was dropped.
-            let priority_zero =
-                table.is_none_or(|table| exif_dir_engine::tag_priority_is_zero(table, *tag_id));
-            if loses_to_ifd0_twin(metadata, base_name, priority_zero, &ifd0_after_edge) {
+            // it the win (the engine rows get the same `demote`). The
+            // priority is the static table's, in force or not.
+            let priority_zero = find_ifd_table("Exif", "Main")
+                .is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, *tag_id));
+            if loses_to_ifd0_twin(metadata, &twins, base_name, priority_zero) {
                 priority = 0;
             }
 
@@ -1620,15 +1660,7 @@ fn parse_exif_directory_with_session(
             && Some(iop_offset) != tiff_ifd0_offset(reader, byte_order)
         {
             parse_interop_subifd_with_session(
-                reader,
-                iop_offset,
-                byte_order,
-                tiff_base,
-                tiff_len,
-                &ifd0_after_edge,
-                session,
-                ctx,
-                metadata,
+                reader, iop_offset, byte_order, tiff_base, tiff_len, &twins, session, ctx, metadata,
             );
         }
     }
@@ -1774,7 +1806,7 @@ fn parse_interop_subifd_with_session(
     byte_order: ByteOrder,
     tiff_base: u64,
     tiff_len: u64,
-    ifd0_after_edge: &[String],
+    twins: &Ifd0Twins,
     session: &mut Session,
     ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
@@ -1784,16 +1816,7 @@ fn parse_interop_subifd_with_session(
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
     parse_interop_directory_with_session(
-        reader,
-        offset,
-        byte_order,
-        tiff_base,
-        tiff_len,
-        table,
-        ifd0_after_edge,
-        session,
-        ctx,
-        metadata,
+        reader, offset, byte_order, tiff_base, tiff_len, table, twins, session, ctx, metadata,
     );
 }
 
@@ -1806,7 +1829,7 @@ fn parse_interop_directory_with_session(
     tiff_base: u64,
     tiff_len: u64,
     table: Option<&'static IfdTable>,
-    ifd0_after_edge: &[String],
+    twins: &Ifd0Twins,
     session: &mut Session,
     ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
@@ -1853,9 +1876,7 @@ fn parse_interop_directory_with_session(
                 session,
                 ctx,
             )
-            .demote(|name, priority_zero| {
-                loses_to_ifd0_twin(metadata, name, priority_zero, ifd0_after_edge)
-            })
+            .demote(|name, priority_zero| loses_to_ifd0_twin(metadata, twins, name, priority_zero))
             .at_priority(SHIM_DEFAULT_PRIORITY)
         });
 
@@ -1907,7 +1928,7 @@ fn parse_interop_directory_with_session(
                     .map_or(tag_name.as_str(), |(_, n)| n);
                 let tag_value =
                     raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
-                if loses_to_ifd0_twin(metadata, base_name, true, ifd0_after_edge) {
+                if loses_to_ifd0_twin(metadata, twins, base_name, true) {
                     metadata.insert_occurrence(tag_name, tag_value, 0, "", Instance::default());
                 } else {
                     metadata.insert(tag_name, tag_value);
@@ -4840,7 +4861,7 @@ fn parse_interop_subifd(
         byte_order,
         tiff_base,
         tiff_len,
-        &[],
+        &Ifd0Twins::default(),
         &mut session,
         &mut ctx,
         metadata,
@@ -4868,7 +4889,7 @@ fn parse_interop_directory(
         tiff_base,
         tiff_len,
         table,
-        &[],
+        &Ifd0Twins::default(),
         &mut session,
         &mut ctx,
         metadata,
@@ -5353,11 +5374,18 @@ mod exif_subifd_tests {
         data.extend_from_slice(b"2003:12:04 06:46:52\0");
         let reader = TestReader::new(data);
 
-        assert_eq!(
-            ifd0_names_after_exif_pointer(&reader, ByteOrder::LittleEndian, 50),
-            vec!["CreateDate".to_string()]
-        );
-        assert!(ifd0_names_after_exif_pointer(&reader, ByteOrder::LittleEndian, 8).is_empty());
+        let twins = ifd0_twins(&reader, ByteOrder::LittleEndian, 50);
+        let make = Ifd0Twin {
+            before: true,
+            after_displaces: false,
+        };
+        let create_date = Ifd0Twin {
+            before: false,
+            after_displaces: true,
+        };
+        assert_eq!(twins.0.get("Make"), Some(&make));
+        assert_eq!(twins.0.get("CreateDate"), Some(&create_date));
+        assert!(ifd0_twins(&reader, ByteOrder::LittleEndian, 8).0.is_empty());
 
         let mut metadata = MetadataMap::new();
         parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata).unwrap();
@@ -5380,6 +5408,49 @@ mod exif_subifd_tests {
             0
         );
         assert_eq!(winner("CreateDate"), "IFD0:CreateDate");
+    }
+
+    /// `FoundTag`'s order rule, both review cases included: a
+    /// priority-0 row loses only to a twin found first (before the
+    /// pointer); a twin found later (after it) displaces the row only when
+    /// it arrives with priority 1, whatever the row's own priority.
+    #[test]
+    fn loses_to_ifd0_twin_follows_found_tag_order() {
+        let mut metadata = MetadataMap::new();
+        for name in ["Before", "After0", "After1", "Unranked"] {
+            metadata.insert(format!("IFD0:{name}"), TagValue::new_string("x"));
+        }
+        let twins = Ifd0Twins(HashMap::from([
+            (
+                "Before".to_string(),
+                Ifd0Twin {
+                    before: true,
+                    after_displaces: false,
+                },
+            ),
+            (
+                "After0".to_string(),
+                Ifd0Twin {
+                    before: false,
+                    after_displaces: false,
+                },
+            ),
+            (
+                "After1".to_string(),
+                Ifd0Twin {
+                    before: false,
+                    after_displaces: true,
+                },
+            ),
+        ]));
+        let loses = |name, zero| loses_to_ifd0_twin(&metadata, &twins, name, zero);
+        assert!(loses("Before", true) && !loses("Before", false));
+        assert!(!loses("After0", true) && !loses("After0", false));
+        assert!(loses("After1", true) && loses("After1", false));
+        // Not in IFD0's walk: found first.
+        assert!(loses("Unranked", true) && !loses("Unranked", false));
+        // No twin at all.
+        assert!(!loses("Absent", true));
     }
 
     #[test]
