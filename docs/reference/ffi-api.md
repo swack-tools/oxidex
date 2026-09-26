@@ -145,6 +145,7 @@ if (result != EXIFTOOL_OK) {
 | 4 | `EXIFTOOL_ERR_INVALID_TAG_VALUE` | Invalid tag value (type mismatch, out of range) |
 | 5 | `EXIFTOOL_ERR_UNSUPPORTED_FORMAT` | The format cannot be read or written |
 | 6 | `EXIFTOOL_ERR_NULL_POINTER` | A required pointer was NULL |
+| 7 | `EXIFTOOL_ERR_TAG_NOT_WRITTEN` | A write named tags that would not be written; nothing was written, and the last error message names each tag |
 | 99 | `EXIFTOOL_ERR_INTERNAL` | Internal error (a Rust panic was caught) |
 
 These values are defined in `src/ffi/error.rs`.

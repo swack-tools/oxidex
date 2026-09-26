@@ -1,0 +1,23 @@
+JPEGs carrying two EXIF APP1 records, synthesized from pinned ExifTool 13.59
+samples (no file in the 13.59 combined-samples corpus has this shape: 0 of
+4096 JPEGs, by a structural APP1 count and by the oracle's per-block
+File:ExifByteOrder rows).
+
+multi-app1-nikon-lsi1.jpg
+  sha256 ebe704e398651ad273d47c921286cd368599c57e43493bb9f3c9579a9c628958
+  t/images/Nikon.jpg (sha256 26e9f266...) with combined-samples
+  Nikon/NikonLS-50.jpg's (sha256 b2f088c7...) EXIF APP1 inserted directly
+  after Nikon.jpg's own EXIF APP1.
+
+multi-app1-lsi1-nikon.jpg
+  sha256 f55bf193d337905877d70d73712830410de010bd4d3eb6008dc49f837f2cf4a9
+  The reverse: NikonLS-50.jpg with Nikon.jpg's EXIF APP1 inserted after its
+  own.
+
+Rebuild: python3 make_fixtures.py <pinned 13.59 cache dir>.
+tests/jpeg_multi_exif_app1.rs re-derives both from the pinned sources when
+they are present and requires the committed bytes to match.
+
+Nikon.jpg is from the ExifTool distribution's test images and NikonLS-50.jpg
+from the ExifTool sample collection; both are used here as in the other
+pinned-fixture tests of this repository.

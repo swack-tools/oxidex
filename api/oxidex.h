@@ -44,6 +44,12 @@
 #define EXIFTOOL_ERR_NULL_POINTER 6
 
 /*
+ A write named tags that would not be written, so nothing was written (the
+ file is byte-identical). The last error message names each one.
+ */
+#define EXIFTOOL_ERR_TAG_NOT_WRITTEN 7
+
+/*
  Internal error (panic caught)
  */
 #define EXIFTOOL_ERR_INTERNAL 99
