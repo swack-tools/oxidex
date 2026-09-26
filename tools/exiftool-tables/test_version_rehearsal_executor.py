@@ -902,6 +902,12 @@ class ExecutorTests(unittest.TestCase):
                                              started=kill_supervisor_after_detach)
             self.assertTrue(executor._pid_live(command_pid))
             self.assertEqual(_contend(self.lock), "blocked")
+            marker = json.loads(executor._unproven_lineage_marker(self.lock.absolute()).read_text())
+            hidden = [item.get("lineage_primary") or {} for item in marker["survivors"]]
+            self.assertIn(command_pid, [item.get("pid") for item in hidden],
+                          f"the marker must name the hidden command, not only its supervisor: {marker}")
+            self.assertTrue(all(str(item.get("identity", "")).startswith("procfs-start:")
+                                for item in hidden if item.get("pid") == command_pid))
         finally:
             for descriptor in (write_fd, read_fd):
                 if descriptor >= 0:
@@ -960,6 +966,27 @@ class ExecutorTests(unittest.TestCase):
             release_receipt=self.root / "release.json")
         with self.assertRaisesRegex(executor.Refused, "unproven"):
             with lease:
+                pass
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "file modes do not bind root")
+    def test_unverified_lineage_refusal_survives_a_failed_marker_write(self):
+        """If the marker cannot be written, the refusal must still outlive the owner."""
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        self.lock.touch()
+        self.addCleanup(os.chmod, self.lock, 0o644)
+        verdict = "exited; its lineage supervisor never proved every descendant gone"
+        with patch.object(executor, "_lineage_unverified", return_value=verdict), \
+             patch.object(executor, "_atomic", side_effect=OSError(28, "No space left on device")):
+            with self.assertRaises(executor.LockRetained):
+                with executor._HostLock(self.lock):
+                    pass
+        for stream in list(executor._RETAINED_LOCKS):
+            executor._RETAINED_LOCKS.remove(stream)
+            stream.close()
+        with self.assertRaises(OSError):
+            with executor._HostLock(self.lock):
                 pass
 
     @_without_lineage_supervisor
