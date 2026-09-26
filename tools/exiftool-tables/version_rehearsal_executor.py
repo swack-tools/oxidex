@@ -963,12 +963,13 @@ def _mark_unproven_lineage(stream: Any, survivors: list[dict[str, Any]]) -> None
 def _refuse_unproven_lineage(path: Path) -> None:
     marker = _unproven_lineage_marker(path)
     if marker.exists() or marker.is_symlink():
-        raise Refused(f"host lock {path} carries an unproven owned-lineage marker ({marker}): a prior "
-                      "run could not prove its command's descendants gone, and a descendant that "
-                      "detached is named by nothing. Verify that no process of the listed uid "
-                      "started at or after each lineage_started_at remains from that run (the listed "
-                      "lineage_primary PID and kernel start time identify the command itself), then "
-                      "remove the marker before running or recovering")
+        raise Refused(
+            f"host lock {path} is refused by an unproven owned-lineage marker, {marker}. A prior run's "
+            "supervisor exited without proving its command's descendants gone, and a descendant that "
+            "detached is named by nothing. Remove it (rm " + str(marker) + ") only after verifying that "
+            "no process of the marker's uid started at or after its lineage_started_at remains from that "
+            "run (lineage_primary gives the command's own PID and kernel start time); removing it while "
+            "such a process lives lets another run share the host with it")
 
 
 def release_retained_locks() -> list[dict[str, Any]]:
@@ -2408,9 +2409,12 @@ class _HeldHostLock:
             # The unproven-lineage fallback removes every permission bit when
             # its marker cannot be written. Root (or CAP_DAC_OVERRIDE) can
             # still open such a file, so acquisition checks the mode itself.
-            raise Refused(f"host lock {path} has had its permissions removed as an unproven owned-lineage "
-                          "refusal (the marker could not be written). Verify the prior run's command and "
-                          "its session have exited, then restore the lock file's mode")
+            raise Refused(
+                f"host lock {path} has had its permissions removed as an unproven owned-lineage refusal "
+                f"(its marker {_unproven_lineage_marker(path)} could not be written). Restore it "
+                f"(chmod 644 {path}) only after verifying that no process of your uid started since the "
+                "prior run began remains from that run; restoring it while such a process lives lets "
+                "another run share the host with it")
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             current = os.stat(path, follow_symlinks=False)

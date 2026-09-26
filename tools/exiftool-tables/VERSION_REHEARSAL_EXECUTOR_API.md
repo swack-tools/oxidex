@@ -216,22 +216,36 @@ reporting the command's status. Cleanup asks it to sweep over a private
 control pipe; it ignores catchable signals the command broadcasts to its own
 process group, and the command gets its inherited dispositions back before
 `exec`. A command that left live descendants is
-refused with record state `escaped_descendants`. If the supervisor exits
+refused with record state `escaped_descendants`.
+
+**Unproven-lineage marker (manual clearance).** If the supervisor exits
 without proving its lineage empty (for example it was killed after the
 command left its session and closed every descriptor), the child stays
-unproven and nothing holds the lock's description, so the owner also writes
-`<lock>.unproven-lineage.json` beside the lock, naming the command's own PID
-and kernel start time (`lineage_primary`), the uid and the time the lineage
-started (`lineage_started_at`): every later lock owner and standalone
-`recover` refuses until an operator has verified that no process of that uid
-started at or after that time remains from the run (a descendant that
-detached from the command is named by nothing else) and removed the marker. If the marker cannot be written,
-the owner removes the lock file's permissions instead, which needs no free
-space and makes every later open of the lock fail until it is restored;
-acquisition also refuses a mode-000 lock explicitly, so privileged owners
-that can still open it are refused too. macOS has no subreaper: there
-a descendant that detaches and closes every inherited descriptor (and so no
-longer holds the lock) is not tracked.
+unproven and nothing holds the lock's description, so the owner writes
+`<lock>.unproven-lineage.json` beside the lock. It names the command's own
+PID and kernel start time (`lineage_primary`), the uid, and the time the
+lineage started (`lineage_started_at`). Every later lock owner, the
+transition wrapper and standalone `recover` refuse while it exists, and the
+refusal prints the exact `rm <lock>.unproven-lineage.json` command. It is
+safe to run only after verifying that no process of that uid started at or
+after `lineage_started_at` remains from that run (a descendant that detached
+from the command is named by nothing else); removing it earlier lets another
+run share the host with surviving work. If the marker itself cannot be
+written, the owner removes the lock file's permissions instead (no free
+space needed), acquisition refuses a mode-000 lock explicitly (so privileged
+owners are refused too), and the refusal prints the exact `chmod 644 <lock>`
+to run under the same condition.
+
+**macOS residual (documented, accepted).** macOS has no subreaper, so a
+descendant that starts a new session and closes every inherited descriptor
+cannot be bounded there: the command is accepted and that descendant keeps
+running. It holds no lock descriptor, so the lock is released normally for
+the next run; every process that does hold an inherited
+descriptor is covered by the ownership probe and keeps the lock held (#919's
+fail-closed rule). Linux runs are bounded by the subreaper supervisor above.
+`test_darwin_residual_detached_descendant_is_unbounded_but_holds_no_lock`
+pins this behaviour on macOS.
+
 An interruption whose cleanup is incomplete leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an

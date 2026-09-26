@@ -1132,6 +1132,85 @@ class ExecutorTests(unittest.TestCase):
                                               env=dict(os.environ), run=subprocess.run)
                 self.assertEqual((record["state"], record["exit"]), ("ok", 0), record)
 
+    def test_unproven_lineage_refusal_names_the_exact_file_and_when_removal_is_safe(self):
+        """The operator is told which file to remove, and only after what."""
+        self.lock.touch()
+        marker = executor._unproven_lineage_marker(self.lock.absolute())
+        marker.write_text(json.dumps({"kind": "oxidex_unproven_owned_lineage", "survivors": []}))
+        with self.assertRaises(executor.Refused) as refused:
+            executor._refuse_unproven_lineage(self.lock.absolute())
+        message = str(refused.exception)
+        self.assertIn(f"rm {marker}", message)
+        self.assertIn("only after", message)
+        self.assertIn("lineage_started_at", message)
+        self.assertIn(str(self.lock.absolute()), message)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "file modes do not bind root")
+    def test_permission_fallback_refusal_names_the_exact_restore_command(self):
+        self.lock.touch()
+        self.addCleanup(os.chmod, self.lock, 0o644)
+        stream = self.lock.open("a+")
+        self.addCleanup(stream.close)
+        os.chmod(self.lock, 0)
+        with self.assertRaises(executor.Refused) as refused:
+            executor._HeldHostLock.acquire(self.lock, stream)
+        message = str(refused.exception)
+        self.assertIn(f"chmod 644 {self.lock.absolute()}", message)
+        self.assertIn("only after", message)
+
+    @unittest.skipUnless(sys.platform == "darwin",
+                         "documented macOS residual; Linux runs are bounded by the subreaper supervisor")
+    def test_darwin_residual_detached_descendant_is_unbounded_but_holds_no_lock(self):
+        """Pins the documented macOS residual exactly as VERSION_REHEARSAL_EXECUTOR_API.md states it.
+
+        macOS has no subreaper, so a new-session descendant that closes every
+        inherited descriptor is not bounded: the command is accepted and the
+        descendant keeps running. It holds no lock descriptor, so the lock is
+        released for the next owner; every descriptor holder is still covered
+        by the ownership probe (test_unreleased_inherited_ownership_keeps_host_lock_held).
+        """
+        self.assertFalse(executor._LINEAGE_SUPERVISED)
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import os, subprocess, sys\n"
+            "report = int(sys.argv[1])\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], str(report)], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=True, pass_fds=(report,))\n"
+        )
+        try:
+            with executor._HostLock(self.lock):
+                record = executor._run_record(
+                    [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run)
+                os.close(write_fd)
+                write_fd = -1
+                descendant_pid = int(_read_reported_line(read_fd))
+            self.assertEqual(record["state"], "ok", record)
+            self.assertTrue(executor._pid_live(descendant_pid), "the residual is that it keeps running")
+            self.assertEqual(_contend(self.lock), "acquired",
+                             "the detached descendant must hold no lock descriptor")
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
