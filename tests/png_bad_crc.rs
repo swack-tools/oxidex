@@ -311,11 +311,10 @@ fn an_oversized_idat_is_not_checked_and_keeps_its_crc() {
 /// bad IEND CRC, keeping it.
 #[test]
 fn the_oracle_refuses_the_same_files() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     for (label, _, _) in chunks() {
         let bytes = png(Some(label));
         let dir = tempfile::tempdir().unwrap();
@@ -377,11 +376,12 @@ fn a_no_op_request_over_a_bad_crc_is_refused_like_exiftool() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 
-    if !exiftool_oracle::available() {
-        eprintln!("skipping the oracle half: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!(
+            "skipping the oracle half: no ExifTool oracle may grade output (pinned -ver + DOCX probe)"
+        );
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     for label in ["IDAT", "tEXt", "eXIf", "IHDR"] {
         let bytes = png(Some(label));
         for edit in no_ops {

@@ -537,11 +537,10 @@ fn user_comment_reads_back_as_written() {
 /// own, with no warning.
 #[test]
 fn oracle_writes_the_same_exif_text_bytes() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     let et = |args: &[&std::ffi::OsStr]| {
         let out = oracle.command().args(args).output().unwrap();
         assert!(
@@ -649,11 +648,10 @@ fn gps_text_reads_back_as_written_in_both_byte_orders() {
 /// combined-samples tree is present.
 #[test]
 fn oracle_reads_unicode_gps_text_as_oxidex_does() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     let et_value = |path: &Path, key: &str| -> Option<String> {
         let out = oracle
             .command()
