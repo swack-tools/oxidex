@@ -299,3 +299,38 @@ fn a_normalized_read_map_still_deletes_what_its_caller_removed() {
     write_metadata(&file, &map).expect("write the unedited map");
     assert_eq!(sha(&file), before);
 }
+
+// --- PRRT_kwDOQNbr5M6mOo0y: every write target's read-only check ---------
+
+/// The single-file write refuses a read-only file; a sets-only write over a
+/// file list replaced it through the atomic rename. Every target is now
+/// checked alike: the read-only one is refused and left byte-identical, the
+/// other written, exit 1. (ExifTool 13.59 writes a 0444 file in a writable
+/// directory; oxidex refuses it on every path rather than on some.)
+#[cfg(unix)]
+#[test]
+fn a_file_list_write_refuses_a_read_only_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let readonly = copy_into(&dir, Path::new(JPEG), "ro.jpg");
+    let writable = copy_into(&dir, Path::new(JPEG), "ok.jpg");
+    fs::set_permissions(&readonly, fs::Permissions::from_mode(0o444)).unwrap();
+    let before = sha(&readonly);
+    let o = oxidex(&["-IFD0:Artist=x", s(&readonly), s(&writable)]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(err(&o).contains("read-only"), "{}", err(&o));
+    assert!(out(&o).contains("1 image files updated"), "{}", out(&o));
+    assert_eq!(sha(&readonly), before, "the read-only file was replaced");
+    assert_eq!(get(&writable, "IFD0:Artist").as_deref(), Some("x"));
+
+    // A directory's sets go through the same per-file write.
+    let sub = dir.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    let inside = sub.join("ro.jpg");
+    fs::copy(JPEG, &inside).unwrap();
+    fs::set_permissions(&inside, fs::Permissions::from_mode(0o444)).unwrap();
+    let before = sha(&inside);
+    let o = oxidex(&["-IFD0:Artist=x", s(&sub)]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert_eq!(sha(&inside), before, "the read-only file was replaced");
+}
