@@ -119,7 +119,14 @@ fn shown_n(metadata: &MetadataMap, key: &str) -> Option<String> {
         .map(str::to_string)
         .or_else(|| value.as_integer().map(|i| i.to_string()))
         .or_else(|| match value {
-            oxidex::core::TagValue::Float(f) => Some(f.to_string()),
+            // As the CLI's own `--no-print-conv` path renders a `Float`
+            // (`format_tag_value`'s `no_print_conv` arm,
+            // `src/cli/output_formatter.rs`): Perl's default double
+            // stringification, 15 significant digits, not Rust's
+            // shortest-round-trip `Display` (17 digits, no exponent switch).
+            oxidex::core::TagValue::Float(f) => {
+                Some(oxidex::core::formatters::numeric_precision::perl_number(*f))
+            }
             oxidex::core::TagValue::DateTime(dt) => {
                 Some(dt.format("%Y:%m:%d %H:%M:%S").to_string())
             }
@@ -587,11 +594,15 @@ fn census_exif_ifd_carriers_match_the_pinned_oracle() {
 /// 2d8ff775 alone would restore the absence this test used to pin.
 ///
 /// Pinned ExifTool 13.59 (`-j -G1 -ExifIFD:MaxApertureValue`): `2.8`;
-/// (`-n -j -G1`): `2.80014201831531`. oxidex's `-j`/`shown` also prints
-/// `2.8`; its `-n`/`shown_n` prints the same `f64` (`2**(2.971/2)`) as
-/// `2.8001420183153147` -- Rust's shortest round-trip `Display` where
-/// Perl's JSON encoder rounds to 15 significant digits (`%.15g`); both
-/// spellings are bit-identical (verified with Python's `%.17g`).
+/// (`-n -j -G1`): `2.80014201831531`. oxidex's CLI matches both: `-j`
+/// prints `2.8`, and `oxidex --no-print-conv -j -G1
+/// -ExifIFD:MaxApertureValue` prints the oracle's exact `2.80014201831531`
+/// (`-s` too) -- `format_tag_value`'s `no_print_conv` arm for a `Float`
+/// (`src/cli/output_formatter.rs`) renders it with
+/// `numeric_precision::perl_number`, Perl's own `%.15g` double
+/// stringification, not Rust's 17-digit shortest-round-trip `Display`.
+/// `shown_n` now calls the same `perl_number` rather than `f.to_string()`,
+/// so it renders this tag exactly as the CLI and the oracle do.
 #[test]
 #[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples"]
 fn census_d2_max_aperture_value_matches_exiftool() {
@@ -603,7 +614,7 @@ fn census_d2_max_aperture_value_matches_exiftool() {
     );
     assert_eq!(
         shown_n(&b2710, "ExifIFD:MaxApertureValue").as_deref(),
-        Some("2.8001420183153147")
+        Some("2.80014201831531")
     );
 }
 
