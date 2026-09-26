@@ -827,3 +827,207 @@ fn request_orderings_match_pinned_exiftool() {
         "{mismatched} orderings differ from pinned 13.59 (listed above)"
     );
 }
+
+/// Counts one CLI write run reported: (updated, unchanged, errors).
+fn cli_counts(stdout: &str) -> (u32, u32, u32) {
+    let count = |what: &str| {
+        stdout
+            .lines()
+            .find(|line| line.trim_end().ends_with(what))
+            .and_then(|line| line.split_whitespace().next()?.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    (
+        count("image files updated"),
+        count("image files unchanged"),
+        count("files weren't updated due to errors"),
+    )
+}
+
+/// One CLI path's run of a case: the counts it printed, its exit code, and
+/// the bytes each file ended with.
+#[derive(Debug, PartialEq)]
+struct PathRun {
+    counts: (u32, u32, u32),
+    exit: Option<i32>,
+    files: Vec<Vec<u8>>,
+}
+
+fn run_oxidex(args: &[String], targets: &[PathBuf], files: &[PathBuf]) -> PathRun {
+    let o = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(args)
+        .args(targets)
+        .output()
+        .unwrap();
+    PathRun {
+        counts: cli_counts(&String::from_utf8_lossy(&o.stdout)),
+        exit: o.status.code(),
+        files: files.iter().map(|file| fs::read(file).unwrap()).collect(),
+    }
+}
+
+/// The same requests through the CLI's three write paths -- one file
+/// (`write_plan_file`), several files (`batch_write` over the list) and a
+/// directory (`batch_process`) -- give every file the same outcome: the
+/// same bytes, and the per-file count the single-file run reports, times
+/// the number of files. Graded against pinned 13.59 running the same
+/// command over the same two files and the same directory (its counts; the
+/// tags themselves are graded by `request_orderings_match_pinned_exiftool`),
+/// except where oxidex refuses a request by name there.
+///
+/// The cases: every CLI case of the matrix that the list and directory
+/// paths take (`-all=` is a single-file or file-list write only), and
+/// defined sets beside an undefined name, which ExifTool warns about and
+/// drops (#957, PRRT_kwDOQNbr5M6mR8dA).
+#[test]
+fn single_file_list_and_directory_writes_agree() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let mut cases: Vec<(&'static str, Vec<String>)> = cases()
+        .into_iter()
+        .filter(|case| case.runs_in(Mode::Cli) && !case.ops.iter().any(|op| op.tag() == "all"))
+        .map(|case| {
+            let args = case.ops.iter().map(|op| op.cli.clone().unwrap()).collect();
+            (case.fixture, args)
+        })
+        .collect();
+    for (fixture, set) in [
+        (JPEG_NO_GPS, "-IFD0:Artist=x"),
+        (JPEG_EXIF_XMP, "-IFD0:Artist=x"),
+        (PNG, "-IFD0:Artist=x"),
+        (PDF, "-PDF:Title=x"),
+        (TIFF, "-IFD0:Artist=x"),
+    ] {
+        for args in [
+            vec![set.to_string(), "-NoSuchTag=y".to_string()],
+            vec!["-NoSuchTag=y".to_string(), set.to_string()],
+            vec![
+                set.to_string(),
+                "-NoSuchTag=".to_string(),
+                "-GPS:All=".to_string(),
+            ],
+        ] {
+            cases.push((fixture, args));
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let mismatches = Mutex::new(Vec::new());
+    let next = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(6));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((fixture, args)) = cases.get(index) else {
+                        break;
+                    };
+                    let ext = Path::new(fixture).extension().unwrap().to_str().unwrap();
+                    let base = root.path().join(index.to_string());
+                    let place = |dir: &str, names: &[&str]| -> Vec<PathBuf> {
+                        let dir = base.join(dir);
+                        fs::create_dir_all(&dir).unwrap();
+                        names
+                            .iter()
+                            .map(|name| {
+                                let path = dir.join(format!("{name}.{ext}"));
+                                fs::copy(fixture, &path).unwrap();
+                                path
+                            })
+                            .collect()
+                    };
+                    let single = place("single", &["a"]);
+                    let listed = place("list", &["a", "b"]);
+                    let walked = place("dir", &["a"]);
+                    let single = run_oxidex(args, &single, &single);
+                    let listed = run_oxidex(args, &listed, &listed);
+                    let walked = run_oxidex(args, &[base.join("dir")], &walked);
+                    let label = format!(
+                        "{} {args:?}",
+                        Path::new(fixture).file_name().unwrap().to_string_lossy()
+                    );
+                    let mut problems = Vec::new();
+                    let times = |(u, n, e): (u32, u32, u32), k: u32| (u * k, n * k, e * k);
+                    let bytes = &single.files[0];
+                    if listed.files.iter().any(|file| file != bytes) {
+                        problems.push("file-list bytes differ from the single-file write".into());
+                    }
+                    if walked.files[0] != *bytes {
+                        problems.push("directory bytes differ from the single-file write".into());
+                    }
+                    // A single-file refusal is an error count of one in a batch.
+                    let per_file = match single.counts {
+                        (0, 0, 0) if single.exit != Some(0) => (0, 0, 1),
+                        counts => counts,
+                    };
+                    if listed.counts != times(per_file, 2) || listed.exit != single.exit {
+                        problems.push(format!(
+                            "file list {:?} exit {:?}; single file {:?} exit {:?}",
+                            listed.counts, listed.exit, single.counts, single.exit
+                        ));
+                    }
+                    if walked.counts != per_file || walked.exit != single.exit {
+                        problems.push(format!(
+                            "directory {:?} exit {:?}; single file {:?} exit {:?}",
+                            walked.counts, walked.exit, single.counts, single.exit
+                        ));
+                    }
+                    // The oracle's counts over the same list and directory,
+                    // where oxidex wrote (its refusals are graded above).
+                    if per_file.2 == 0 {
+                        let theirs = place("theirs-list", &["a", "b"]);
+                        let o = oracle
+                            .command()
+                            .arg("-overwrite_original")
+                            .args(args)
+                            .args(&theirs)
+                            .output()
+                            .unwrap();
+                        let counts = cli_counts(&String::from_utf8_lossy(&o.stdout));
+                        if counts != listed.counts {
+                            problems
+                                .push(format!("file list {:?}, 13.59 {counts:?}", listed.counts));
+                        }
+                        place("theirs-dir", &["a"]);
+                        let o = oracle
+                            .command()
+                            .arg("-overwrite_original")
+                            .args(args)
+                            .arg(base.join("theirs-dir"))
+                            .output()
+                            .unwrap();
+                        let counts = cli_counts(&String::from_utf8_lossy(&o.stdout));
+                        if counts != walked.counts {
+                            problems
+                                .push(format!("directory {:?}, 13.59 {counts:?}", walked.counts));
+                        }
+                    }
+                    if !problems.is_empty() {
+                        mismatches
+                            .lock()
+                            .unwrap()
+                            .push(format!("{label}: {}", problems.join("; ")));
+                    }
+                }
+            });
+        }
+    });
+    let mismatches = mismatches.into_inner().unwrap();
+    eprintln!(
+        "write paths: {} cases x 3 CLI paths: {} agree, {} differ",
+        cases.len(),
+        cases.len() - mismatches.len(),
+        mismatches.len()
+    );
+    for mismatch in &mismatches {
+        eprintln!("  PATHS DIFFER {mismatch}");
+    }
+    assert!(cases.len() >= 150, "only {} cases", cases.len());
+    assert!(
+        mismatches.is_empty(),
+        "{} cases differ by write path",
+        mismatches.len()
+    );
+}

@@ -184,14 +184,35 @@ fn group_and_name(key: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Whether `name` is one of `names`, compared as request resolution
+/// compares group and tag names: without regard to case (ExifTool's
+/// `-file:filename=` names `File:FileName`).
+fn one_of(names: &[&str], name: &str) -> bool {
+    names.iter().any(|known| known.eq_ignore_ascii_case(name))
+}
+
+/// `map`'s row for `key` under any spelling of its case, with the key it is
+/// stored under: the exact key first, then a differently cased one
+/// (`ifd0:artist` for `IFD0:Artist`).
+fn row_of<'m>(map: &'m MetadataMap, key: &str) -> Option<(String, &'m TagValue)> {
+    if let Some(value) = map.get(key) {
+        return Some((key.to_string(), value));
+    }
+    map.iter()
+        .find(|(row, _)| row.eq_ignore_ascii_case(key))
+        .map(|(row, value)| (row.clone(), value))
+}
+
 fn is_descriptive(key: &str) -> bool {
-    matches!(group_and_name(key).0, Some(group) if DESCRIPTIVE_GROUPS.contains(&group))
+    matches!(group_and_name(key).0, Some(group) if one_of(DESCRIPTIVE_GROUPS, group))
 }
 
 fn is_file_system_fact(key: &str) -> bool {
     match group_and_name(key) {
-        (Some("ExifTool"), _) => true,
-        (Some("File" | "System"), name) => FILE_SYSTEM_FACTS.contains(&name),
+        (Some(group), _) if group.eq_ignore_ascii_case("ExifTool") => true,
+        (Some(group), name) if one_of(&["File", "System"], group) => {
+            one_of(FILE_SYSTEM_FACTS, name)
+        }
         _ => false,
     }
 }
@@ -249,12 +270,12 @@ pub(crate) fn changes_between(
         // differs. A map cleared and refilled with the file's own rows
         // (#949's `values_reinserted_after_clear_are_assignments`) sets
         // nothing there.
-        let assigned =
-            desired.is_assigned(key) && !(is_descriptive(key) && baseline.get(key) == Some(value));
+        let held = row_of(baseline, key).map(|(_, held)| held);
+        let assigned = desired.is_assigned(key) && !(is_descriptive(key) && held == Some(value));
         let is_set = if deletions {
             assigned
         } else {
-            assigned || baseline.get(key) != Some(value)
+            assigned || held != Some(value)
         };
         if is_set {
             changes.push(TagChange::set(key.clone(), value.clone()));
@@ -268,14 +289,19 @@ pub(crate) fn changes_between(
         // file gained since (a write from this same map seeding an
         // ExifIFD's mandatory entries) is not a deletion -- when unsure,
         // nothing is deleted.
-        if desired.contains_key(key) || is_descriptive(key) || !desired.read_saw(key) {
+        if row_of(desired, key).is_some() || is_descriptive(key) || !desired.read_saw(key) {
             continue;
         }
         let spellings = field_spellings(key);
+        // Any row spelling the alias, in any case, that sets it (a read
+        // map can hold the file's `PDF:CreateDate` beside the caller's
+        // `pdf:createdate`).
         let set_under_alias = spellings.iter().any(|alias| {
-            *alias != key.as_str()
-                && desired.get(alias).is_some_and(|value| {
-                    desired.is_assigned(alias) || baseline.get(alias) != Some(value)
+            !alias.eq_ignore_ascii_case(key)
+                && desired.iter().any(|(row, value)| {
+                    row.eq_ignore_ascii_case(alias)
+                        && (desired.is_assigned(row)
+                            || row_of(baseline, alias).map(|(_, held)| held) != Some(value))
                 })
         });
         if set_under_alias {
@@ -317,7 +343,7 @@ struct Plan<'a> {
 /// Whether two resolved keys address the same field (a PDF Info field has
 /// two spellings).
 fn same_field(a: &str, b: &str) -> bool {
-    a == b || field_spellings(a).contains(&b)
+    a.eq_ignore_ascii_case(b) || one_of(field_spellings(a), b)
 }
 
 /// A field request before its writer-address check.
@@ -660,7 +686,7 @@ fn rows_at<'a>(stored: &'a MetadataMap, key: &str) -> Vec<&'a TagValue> {
             .iter()
             .filter(|(row, _)| {
                 matches!(group_and_name(row), (Some(g), n)
-                    if EXIF_DIRECTORIES.contains(&g) && n.eq_ignore_ascii_case(name))
+                    if one_of(EXIF_DIRECTORIES, g) && n.eq_ignore_ascii_case(name))
             })
             .map(|(_, value)| value)
             .collect(),
