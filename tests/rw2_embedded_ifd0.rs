@@ -711,3 +711,76 @@ fn rw2_ifd0_sets_ignore_embedded_copies_exiftool_does_not_move() {
     assert!(after == original, "Panasonic.rw2 {arg}: file changed");
     assert_oracle_parity(&original, &after, arg, "Panasonic.rw2");
 }
+
+/// Review of #956 (rw2_ifd0.rs:265): on an RW2 with no JpgFromRaw and no
+/// outer Artist or Copyright (both `Permanent` in `PanasonicRaw::Main`,
+/// PanasonicRaw.pm 13.59:307-313, :337-346), pinned ExifTool 13.59 creates
+/// neither under any spelling: "0 image files updated", file byte-identical.
+/// Every library entry point answers the same, under the bare, `EXIF:` and
+/// `IFD0:` spellings -- the transaction resolves the first two to `IFD0:`
+/// (`rw2_ifd0::route_rw2_name`) before any destination check, so the
+/// family/bare branch of `check_set` never sees them. Did not reproduce at
+/// e4d2d79a (roll-up evidence `rollup-fixes/`); pinned here, oracle-graded.
+#[test]
+fn rw2_permanent_tags_the_camera_omitted_are_never_created() {
+    use oxidex::core::operations::write_metadata;
+    use oxidex::core::write_transaction::WriteOutcome;
+    let Some(original) = sample() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let no_jpeg = without_jpg_from_raw(&original);
+    let outer_ids =
+        |b: &[u8]| -> Vec<u16> { ifd0_records(b, 0).into_iter().map(|(_, t)| t).collect() };
+    assert!(!outer_ids(&no_jpeg).contains(&0x013b));
+    assert!(!outer_ids(&no_jpeg).contains(&0x8298));
+    let oracle = exiftool_oracle::graded();
+    for (name, value) in [("Artist", "x"), ("Copyright", "c")] {
+        for key in [
+            name.to_string(),
+            format!("EXIF:{name}"),
+            format!("IFD0:{name}"),
+        ] {
+            if let Some(oracle) = oracle {
+                let reference = write(dir.path(), "oracle.rw2", &no_jpeg);
+                let status = oracle
+                    .command()
+                    .args([
+                        "-q",
+                        "-q",
+                        "-overwrite_original",
+                        &format!("-{key}={value}"),
+                    ])
+                    .arg(&reference)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "oracle -{key}={value}");
+                assert!(
+                    std::fs::read(&reference).unwrap() == no_jpeg,
+                    "the oracle changed the file for -{key}={value}"
+                );
+            }
+            let path = write(dir.path(), "lib.rw2", &no_jpeg);
+            let outcome = modify_tag(&path, &key, TagValue::new_string(value))
+                .unwrap_or_else(|err| panic!("modify_tag {key}: {err}"));
+            assert_eq!(outcome, WriteOutcome::Unchanged, "modify_tag {key}");
+            assert!(
+                std::fs::read(&path).unwrap() == no_jpeg,
+                "modify_tag {key}: file changed"
+            );
+
+            let mut map = read_metadata(&path).unwrap();
+            map.insert(key.clone(), TagValue::new_string(value));
+            let outcome = write_metadata(&path, &map)
+                .unwrap_or_else(|err| panic!("write_metadata {key}: {err}"));
+            assert_eq!(outcome, WriteOutcome::Unchanged, "write_metadata {key}");
+            assert!(
+                std::fs::read(&path).unwrap() == no_jpeg,
+                "write_metadata {key}: file changed"
+            );
+        }
+    }
+    if oracle.is_none() {
+        eprintln!("skipping oracle grading: no grading ExifTool oracle");
+    }
+}
