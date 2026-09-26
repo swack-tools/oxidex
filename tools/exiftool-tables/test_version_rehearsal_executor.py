@@ -990,6 +990,28 @@ class ExecutorTests(unittest.TestCase):
             with executor._HostLock(self.lock):
                 pass
 
+    def test_permission_fallback_refusal_binds_privileged_owners(self):
+        """A privileged owner can open a mode-000 lock; acquisition itself must refuse."""
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        self.lock.touch()
+        self.addCleanup(os.chmod, self.lock, 0o644)
+        # Opened before the refusal, as root (or CAP_DAC_OVERRIDE) could open it after.
+        privileged = self.lock.open("a+")
+        self.addCleanup(privileged.close)
+        verdict = "exited; its lineage supervisor never proved every descendant gone"
+        with patch.object(executor, "_lineage_unverified", return_value=verdict), \
+             patch.object(executor, "_atomic", side_effect=OSError(28, "No space left on device")):
+            with self.assertRaises(executor.LockRetained):
+                with executor._HostLock(self.lock):
+                    pass
+        for stream in list(executor._RETAINED_LOCKS):
+            executor._RETAINED_LOCKS.remove(stream)
+            stream.close()
+        with self.assertRaisesRegex(executor.Refused, "permissions"):
+            executor._HeldHostLock.acquire(self.lock, privileged)
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
