@@ -668,7 +668,6 @@ class ExecutorTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
-    @_without_lineage_supervisor
     def test_reaped_leader_group_is_never_signalled_by_numeric_pgid(self):
         """After the leader is reaped its PGID may be reused; signal only verified members."""
         child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
@@ -801,6 +800,7 @@ class ExecutorTests(unittest.TestCase):
         finally:
             child.wait(timeout=10)
 
+    @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
 
