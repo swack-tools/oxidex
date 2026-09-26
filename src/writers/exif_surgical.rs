@@ -427,11 +427,14 @@ pub(crate) fn resolve_tiff_group_removals(
             } else {
                 ""
             };
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing '{key}' from a {file_type} file is not supported: pinned \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing '{key}' from a {file_type} file is not supported: pinned \
                  ExifTool 13.59 deletes that directory{place}, and this writer edits \
                  entries in place and cannot delete a directory"
-            )));
+                ),
+            ));
         }
         // Pinned ExifTool 13.59 leaves the file unchanged: a no-op here too.
     }
@@ -519,11 +522,14 @@ pub(crate) fn refuse_embedded_jpeg_edits(
     };
     let file_type = baseline.get_string("File:FileType").unwrap_or("TIFF");
     if let Some(key) = sets.first() {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Writing '{key}' to a {file_type} file is not supported: pinned ExifTool \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Writing '{key}' to a {file_type} file is not supported: pinned ExifTool \
              13.59 writes it into the EXIF of the embedded JpgFromRaw (PanasonicRaw \
              0x002e), which this writer does not edit"
-        )));
+            ),
+        ));
     }
     // An embedded EXIF that does not scan is refused rather than taken for
     // one without the tag.
@@ -552,12 +558,15 @@ pub(crate) fn refuse_embedded_jpeg_edits(
                     && holds_makernote(emb))
         });
         if in_embedded {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing '{key}' from a {file_type} file is not supported: the tag lives \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing '{key}' from a {file_type} file is not supported: the tag lives \
                  in the EXIF of the embedded JpgFromRaw (PanasonicRaw 0x002e), where \
                  pinned ExifTool 13.59 deletes it, and this writer does not edit that \
                  JPEG"
-            )));
+                ),
+            ));
         }
     }
     Ok(())
@@ -888,12 +897,15 @@ fn removal_names_carried_entry(key: &str, scan: &ExifScan, original_map: &Metada
 
 /// The refusal for an added or changed [`is_carried_only_key`] key.
 pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
-    ExifToolError::unsupported_format(format!(
-        "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
+    ExifToolError::tag_not_written(
+        key.to_string(),
+        format!(
+            "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
          class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain past IFD1) that this \
          writer always raw-carries and cannot add to or edit",
-        key
-    ))
+            key
+        ),
+    )
 }
 
 /// The IFD a group-qualified write key names, for the three IFDs this
@@ -1464,12 +1476,15 @@ fn plan_exif_write_inner(
     if let Some(key) = removed.iter().find(|key| {
         group_removal(key).is_none() && removal_names_carried_entry(key, scan, original_map)
     }) {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Removing tag '{}' is not yet supported: it belongs to an \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Removing tag '{}' is not yet supported: it belongs to an \
              unsurfaced IFD class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain \
              past IFD1) that this writer always raw-carries",
-            key
-        )));
+                key
+            ),
+        ));
     }
 
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all.
@@ -1541,10 +1556,13 @@ fn plan_exif_write_inner(
             .keys()
             .find(|key| chain_key_dir(key).is_some() && !desired.contains_key(key.as_str()))
         {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing tag '{key}' is not yet supported: it belongs to the directory \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Removing tag '{key}' is not yet supported: it belongs to the directory \
                  chain past IFD1 (IFD2 on), which this writer always raw-carries"
-            )));
+                ),
+            ));
         }
         plan.chain = Some(chain.clone());
     }
@@ -1770,12 +1788,15 @@ fn plan_exif_write_inner(
                     && original_map.contains_key(reader_key)
                     && !desired.contains_key(reader_key)
                 {
-                    return Err(ExifToolError::unsupported_format(format!(
-                        "Removing tag '{}' is not yet supported: it belongs to an \
+                    return Err(ExifToolError::tag_not_written(
+                        reader_key.to_string(),
+                        format!(
+                            "Removing tag '{}' is not yet supported: it belongs to an \
                          unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                          writer always raw-carries",
-                        reader_key
-                    )));
+                            reader_key
+                        ),
+                    ));
                 }
             }
             if entry.ifd == IfdKind::Interop
@@ -1896,12 +1917,15 @@ fn plan_exif_write_inner(
             if original_map.get(&key).or_else(|| original_map.get(native)) == Some(value) {
                 continue;
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported: it belongs to an \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Editing tag '{}' is not yet supported: it belongs to an \
                  unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                  writer always raw-carries",
-                key
-            )));
+                    key
+                ),
+            ));
         }
         // Keys whose physical entry lives in an always-carried IFD class
         // (InteropIFD, IFD1, MakerNote — Design Rule: "unsurfaced classes")
@@ -1920,12 +1944,15 @@ fn plan_exif_write_inner(
             if value == original_value {
                 continue;
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported: it belongs to an \
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Editing tag '{}' is not yet supported: it belongs to an \
                  unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
                  writer always raw-carries",
-                key
-            )));
+                    key
+                ),
+            ));
         }
         let value = desired.get(&key).unwrap();
         // A borrowed engine name with its reader value is the carried entry
@@ -1934,10 +1961,13 @@ fn plan_exif_write_inner(
             continue;
         }
         if requires_subifd_write(&key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
+                    key
+                ),
+            ));
         }
         let Some(descriptor) = get_tag_descriptor(&key) else {
             return Err(ExifToolError::parse_error(format!(
@@ -4133,12 +4163,15 @@ pub(crate) fn dropped_makernote_rows(
 pub(crate) fn refuse_dropped_makernote_rows(dropped: &[String]) -> Result<()> {
     match dropped.first() {
         None => Ok(()),
-        Some(key) => Err(ExifToolError::unsupported_format(format!(
-            "Deleting '{key}' is not supported: it is decoded from the MakerNote, \
+        Some(key) => Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Deleting '{key}' is not supported: it is decoded from the MakerNote, \
              which this writer carries byte-for-byte and cannot delete one tag of \
              (remove the whole MakerNote with MakerNotes:All instead); nothing was \
              written"
-        ))),
+            ),
+        )),
     }
 }
 
@@ -4161,10 +4194,13 @@ pub(crate) fn changed_makernote_rows(baseline: &MetadataMap, desired: &MetadataM
 pub(crate) fn refuse_changed_makernote_rows(changed: &[String]) -> Result<()> {
     match changed.first() {
         None => Ok(()),
-        Some(key) => Err(ExifToolError::unsupported_format(format!(
-            "Setting '{key}' is not supported: it is decoded from the MakerNote, which \
+        Some(key) => Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Setting '{key}' is not supported: it is decoded from the MakerNote, which \
              this writer carries byte-for-byte and cannot edit; nothing was written"
-        ))),
+            ),
+        )),
     }
 }
 
