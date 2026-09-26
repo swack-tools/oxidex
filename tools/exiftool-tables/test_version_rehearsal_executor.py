@@ -1709,6 +1709,65 @@ class ExecutorTests(unittest.TestCase):
                     pass
                 executor._close_ownership_probe(child)
 
+    def test_native_oracle_record_cannot_hide_incomplete_cleanup(self):
+        """The native oracle folds runner OSErrors into command records.
+
+        OwnedChildCleanupIncomplete is an OSError, so the oracle's own
+        ``_run`` turns it into an ordinary ``spawn_failed`` row. The native
+        stage must still keep its active child and refuse a terminal state.
+        """
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        rows: list[dict] = []
+
+        def track_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            created.append(child)
+            return child
+
+        def oracle_probe(*_args, run, **_kwargs):
+            # The real oracle runner: it catches OSError into a record.
+            rows.append(executor.native_oracle._run(
+                [sys.executable, "-c", "import time; time.sleep(60)"], run))
+            return {"state": "refused", "cases": [], "commands": rows}
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=oracle_probe), \
+                 patch.object(executor.native_oracle, "TIMEOUT", 0.05), \
+                 patch.object(executor.subprocess, "Popen", side_effect=track_creation), \
+                 patch.object(executor, "_bounded_timeout_cleanup", side_effect=OSError("bounded failed")), \
+                 patch.object(executor, "_emergency_reap_group", side_effect=OSError("emergency failed")), \
+                 patch.object(executor, "_group_live", return_value=True):
+                with self.assertRaisesRegex(executor.OwnedChildCleanupIncomplete, "cleanup remains incomplete"):
+                    executor._run_native(self.run_dir, journal, release, docs, config,
+                                         self.cache, self.sources, subprocess.run)
+            self.assertEqual(rows[0]["state"], "spawn_failed")
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertEqual(persisted["releases"][release]["stages"]["native"], "running")
+            self.assertIsInstance(persisted["active"]["child"]["pid"], int)
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                executor._close_ownership_probe(child)
+
+    def test_checkout_head_verification_cannot_hide_incomplete_cleanup(self):
+        """A HEAD probe whose cleanup is unverified is not an ordinary refusal."""
+        with patch.object(executor, "_tracked_run",
+                          side_effect=executor.OwnedChildCleanupIncomplete("cleanup remains incomplete")):
+            with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                executor._verify_checkout_head(self.root, "0" * 40, subprocess.run)
+
     def test_native_timeout_marker_bypass_preserves_active_journal(self):
         self.initialize(self.config())
         journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)

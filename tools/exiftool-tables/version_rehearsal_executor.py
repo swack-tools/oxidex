@@ -1591,6 +1591,8 @@ def _verify_checkout_head(checkout: Path, expected_commit: str,
     try:
         result = runner(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
                         text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+    except OwnedChildCleanupIncomplete:
+        raise  # an unverified owned child is not an ordinary HEAD refusal
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused("cannot verify owned checkout HEAD") from exc
     if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
@@ -1723,6 +1725,7 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     _event(journal, "stage_started", release=release, stage="native")
     _store_journal(run_dir, journal)
     capture, catalog, plan, resolution, materialization = docs
+    incomplete_cleanup: list[OwnedChildCleanupIncomplete] = []
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
@@ -1730,14 +1733,29 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
         def started(pid: int, pgid: int) -> None:
             journal["active"]["child"] = {"pid": pid, "pgid": pgid}
             _store_journal(run_dir, journal)
-        return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=True, close_fds=False, started=started, **kwargs)
+        try:
+            return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True, close_fds=False, started=started, **kwargs)
+        except OwnedChildCleanupIncomplete as incomplete:
+            # The oracle folds runner OSErrors into per-command records, so
+            # remember this one: the stage must keep its active child.
+            incomplete_cleanup.append(incomplete)
+            raise
     try:
         if stage_guard is not None:
             stage_guard(release, "native", "before")
-        report = native_oracle.probe_materialized_native(materialization, plan, catalog, capture, resolution,
-                                                         archive_cache, source_root, release, config["perls"][release],
-                                                         config["native_cases"][release], run=native_run)
+        try:
+            report = native_oracle.probe_materialized_native(
+                materialization, plan, catalog, capture, resolution, archive_cache, source_root, release,
+                config["perls"][release], config["native_cases"][release], run=native_run)
+        except (KeyboardInterrupt, SystemExit):
+            raise  # an interruption carries its own cleanup verdict
+        except BaseException:
+            if incomplete_cleanup:
+                raise incomplete_cleanup[0]
+            raise
+        if incomplete_cleanup:
+            raise incomplete_cleanup[0]
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
