@@ -182,10 +182,14 @@ pub fn shift_jpeg_exif_dates(
     let (tiff_start, tiff_len) = {
         let reader = SliceReader(&file_bytes);
         let segments = parse_segments(&reader)?;
-        let exif_seg = segments
+        // No EXIF, no date to shift: nothing is written (13.59: the file is
+        // `unchanged`).
+        let Some(exif_seg) = segments
             .iter()
             .find(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
-            .ok_or_else(|| ExifToolError::parse_error("No EXIF data found in JPEG"))?;
+        else {
+            return Ok(0);
+        };
         (
             exif_seg.offset as usize + 4 + EXIF_IDENTIFIER.len(),
             exif_seg.data.len() - EXIF_IDENTIFIER.len(),

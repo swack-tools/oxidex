@@ -165,7 +165,24 @@ impl WritePlan {
         let mut warnings = Vec::new();
         let mut sets = Vec::new();
         for (at, tag, value) in &raw_sets {
-            let (mut warned, defined) = partition_defined(&[(tag.clone(), value.clone())]);
+            // ExifTool's `AllDates` shortcut (Shortcuts.pm): the three EXIF
+            // dates, in its order, each under the shortcut's group if any.
+            let (group, name) = match tag.rsplit_once(':') {
+                Some((group, name)) => (Some(group), name),
+                None => (None, tag.as_str()),
+            };
+            let expanded: Vec<(String, OsString)> = if name.eq_ignore_ascii_case("AllDates") {
+                ["DateTimeOriginal", "CreateDate", "ModifyDate"]
+                    .iter()
+                    .map(|date| {
+                        let tag = group.map_or_else(|| date.to_string(), |g| format!("{g}:{date}"));
+                        (tag, value.clone())
+                    })
+                    .collect()
+            } else {
+                vec![(tag.clone(), value.clone())]
+            };
+            let (mut warned, defined) = partition_defined(&expanded);
             warnings.append(&mut warned);
             if clear_at.is_none_or(|clear| *at > clear) {
                 sets.extend(defined);
