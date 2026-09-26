@@ -836,6 +836,9 @@ def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
     inherited = _inherited_ownership_state(child)
     if inherited is not None:
         return inherited
+    lineage = _lineage_unverified(child)
+    if lineage is not None:
+        return lineage
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
@@ -850,8 +853,6 @@ def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
 
 
 def _settle(child: subprocess.Popen[Any]) -> None:
-    if child.poll() is not None:
-        _close_lineage_status(child)
     owned = _OWNED
     with owned.lock:
         if owned.children.get(child.pid) is child and _unproven_state(child) is None:
@@ -1625,12 +1626,17 @@ try:
     # it can never unwind the supervisor past its sweep.
     signal.signal(signal.SIGUSR1, request_sweep)
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
+    # An inherited SIG_IGN for SIGCHLD would make the kernel reap our children
+    # itself, hiding the command's status and defeating the ECHILD proof.
+    # The command gets the launcher's disposition back before exec.
+    inherited_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     failure_read, failure_write = os.pipe()  # close-on-exec in the command
     primary = os.fork()
     if primary == 0:
         try:
             os.close(status_fd)
             os.close(failure_read)
+            signal.signal(signal.SIGCHLD, inherited_sigchld)
             signal.signal(signal.SIGUSR1, signal.SIG_DFL)
             signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
             os.execvp(argv[0], argv)
@@ -1785,8 +1791,34 @@ def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATI
             or any(type(pid) is not int for pid in finished["escaped"])):
         raise OwnedChildCleanupIncomplete(f"owned command lineage was not proven empty: {reports}")
     child.returncode = finished["returncode"]
+    setattr(child, "_oxidex_lineage_verified", True)
     setattr(child, "_oxidex_lineage_finished", finished["escaped"])
+    _close_lineage_status(child)  # the exit report is the supervisor's last line
     return finished["escaped"]
+
+
+def _lineage_unverified(child: subprocess.Popen[Any]) -> str | None:
+    """None unless an exited supervised child never proved its lineage empty.
+
+    The verdict is sticky: once the supervisor is gone without a verified
+    exit report, nothing else can see a descendant that left the session and
+    closed its descriptors, so the child stays unproven for the lock owner.
+    """
+    if not hasattr(child, "_oxidex_lineage_status_fd"):
+        return None
+    if getattr(child, "_oxidex_lineage_verified", False) is True:
+        return None
+    try:
+        reports = _lineage_reports(child, timeout=_TERMINATION_GRACE_SECONDS, phase="exit")
+    except OSError as exc:
+        return f"exited; its lineage report cannot be read: {exc}"
+    finished = next((row for row in reports if row.get("phase") == "exit"), None)
+    if (finished is not None and finished.get("verified") is True
+            and type(finished.get("returncode")) is int):
+        setattr(child, "_oxidex_lineage_verified", True)
+        _close_lineage_status(child)  # the exit report is the supervisor's last line
+        return None
+    return "exited; its lineage supervisor never proved every descendant gone"
 
 
 def _request_lineage_sweep(child: subprocess.Popen[Any]) -> None:
