@@ -1095,6 +1095,16 @@ impl CliArgs {
             let tag = arg[1..pos].to_string();
             let value = arg[pos + 1..].to_string();
 
+            // `-TAG#=VALUE` is a raw write (ExifTool's per-tag `-n`), never a
+            // date shift: the shift path neither strips the `#` nor knows a
+            // raw value, so `-DateTimeOriginal#=2020:01:02 03:04:05` failed
+            // there as "Shifting tag 'DateTimeOriginal#' is not supported"
+            // while pinned 13.59 writes it. The ordinary write path strips the
+            // `#` (`cli::write_transaction::apply_sets`).
+            if tag.ends_with('#') {
+                return None;
+            }
+
             // CreateDate and DateTimeOriginal are normal writable EXIF tags. Routing an absolute
             // assignment through the date-shift path makes it impossible to
             // create tags 0x9004/0x9003 when absent, because that path only
@@ -1646,5 +1656,20 @@ mod tests {
             CliArgs::parse_date_shift("-ExifIFD:DateTimeOriginal=2024:02:03 04:05:06"),
             None
         );
+    }
+
+    /// `-TAG#=` is a raw write, never a date shift: pinned 13.59 writes
+    /// `-DateTimeOriginal#=2020:01:02 03:04:05` and `-ModifyDate#=...`,
+    /// which the shift path refused as an unknown tag `DateTimeOriginal#`.
+    #[test]
+    fn a_raw_date_assignment_is_a_normal_tag_write() {
+        for arg in [
+            "-DateTimeOriginal#=2020:01:02 03:04:05",
+            "-ModifyDate#=2020:01:02 03:04:05",
+            "-ExifIFD:DateTimeOriginal#=2020:01:02 03:04:05",
+        ] {
+            assert_eq!(CliArgs::parse_date_shift(arg), None, "{arg}");
+        }
+        assert!(CliArgs::parse_date_shift("-ModifyDate=2020:01:02 03:04:05").is_some());
     }
 }

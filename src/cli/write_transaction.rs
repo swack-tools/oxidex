@@ -22,9 +22,12 @@
 //! set is exactly that case.
 
 use crate::cli::args::CliArgs;
-use crate::cli::value_parser::parse_cli_tag_value_os_with_mode;
+use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report};
+use crate::core::operations::{
+    CopyReport, clear_all_metadata, copy_metadata_report, resolve_write_tag,
+};
+use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
     ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
 };
@@ -320,8 +323,26 @@ fn apply_sets(
             changes.push(TagChange::delete(write_tag.to_string()));
             continue;
         }
-        let tag_value = parse_cli_tag_value_os_with_mode(write_tag, value, raw_mode)
-            .map_err(|e| describe_value_parse_failure(write_tag, &e, sets.len()))?;
+        // A bare name the value parser has no declared type for is typed by
+        // the address the transaction will write it at (`ColorSpace` ->
+        // `ExifIFD:ColorSpace`): typed by the bare name, `-ColorSpace#=1`
+        // stayed a string and was refused as a type mismatch. A name that
+        // does not resolve is left to the transaction, which refuses it
+        // with the resolver's reason -- not a value error for an address
+        // that was never going to be written.
+        let resolved = (!write_tag.contains(':') && declared_alias(write_tag).is_none())
+            .then(|| resolve_write_tag(scratch, write_tag));
+        let typed_as = match &resolved {
+            Some(Ok(key)) => key.as_str(),
+            _ => write_tag,
+        };
+        let tag_value = match parse_cli_tag_value_os_with_mode(typed_as, value, raw_mode) {
+            Ok(tag_value) => tag_value,
+            Err(_) if matches!(resolved, Some(Err(_))) => {
+                TagValue::String(value.to_string_lossy().into_owned())
+            }
+            Err(e) => return Err(describe_value_parse_failure(write_tag, &e, sets.len())),
+        };
         changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
     apply_tag_changes_counted(scratch, &changes)

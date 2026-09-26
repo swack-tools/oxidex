@@ -277,6 +277,15 @@ python3 "$HERE/tag_exists_codegen.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --output "$(artifact_path tag-exists)"
 
 echo "=========================================================="
+echo ">> TIER 2h: maker-note root group closures (MakerNotes::Main + CIFF)"
+echo "=========================================================="
+# An ungrouped write also edits a same-named maker-note tag ExifTool finds in
+# the file; the write resolver (src/writers/write_request.rs) refuses one it
+# cannot rule out from the family-1 groups each maker-note root can reach.
+python3 "$HERE/makernote_groups_codegen.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --output "$(artifact_path makernote-groups)"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"

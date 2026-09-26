@@ -2368,6 +2368,26 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
 /// The TIFF magic an EXIF block (JPEG APP1, PNG eXIf) carries.
 pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 
+/// Whether any of the TIFF structures `blocks` carries a maker note ExifTool
+/// would read: an ExifIFD MakerNote (0x927C) entry, or IFD0's
+/// `DNGPrivateData` (0xc634, whose Adobe `MakN` record is a DNG converter's
+/// copy of the original maker note). A block the scan cannot walk counts as carrying one --
+/// absence is what a caller relies on, so it must be proven.
+pub(crate) fn blocks_carry_makernote(blocks: &[&[u8]], magics: &[u16]) -> bool {
+    blocks
+        .iter()
+        .any(|block| match scan_entries_with_magics(block, magics) {
+            Ok(scan) => {
+                scan.makernote_offset.is_some()
+                    || scan.entries.iter().any(|entry| {
+                        (entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE)
+                            || (entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA)
+                    })
+            }
+            Err(_) => true,
+        })
+}
+
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a
 /// TIFF-structured file, the set its writer walks (42, and 85 for RW2).
 pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<ExifScan> {
@@ -4094,10 +4114,34 @@ pub(crate) fn removal_covers(removal: &str, key: &str, baseline: &MetadataMap) -
 /// Whether `key` of `baseline` is a row a maker-note decoder produced: its
 /// family-1 group is a maker-note group ([`MAKERNOTE_GROUPS`]) or its
 /// occurrence's family-0 group is `MakerNotes`.
-fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
+pub(crate) fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
     key.split_once(':')
         .is_some_and(|(group, _)| MAKERNOTE_GROUPS.contains(&group))
         || baseline.group0_of(key) == Some("MakerNotes")
+}
+
+/// The family-1 groups of every maker-note row of `baseline`, winners and
+/// duplicates alike: an occurrence whose family-0 group is `MakerNotes`, or
+/// whose family-1 group (its recorded one, else its key's) is a maker-note
+/// group ([`MAKERNOTE_GROUPS`]). The recorded family-1 group is the one
+/// ExifTool reports (`[Canon] FocalLength` of t/images/ExifTool.jpg's CIFF,
+/// keyed `MakerNotes:FocalLength`).
+pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::BTreeSet<String> {
+    baseline
+        .keyed_occurrences()
+        .filter_map(|(key, occurrence)| {
+            let key_group = key.split_once(':').map(|(group, _)| group)?;
+            let group1 = if occurrence.group1.is_empty() {
+                key_group
+            } else {
+                &occurrence.group1
+            };
+            (&*occurrence.group0 == "MakerNotes"
+                || MAKERNOTE_GROUPS.contains(&group1)
+                || MAKERNOTE_GROUPS.contains(&key_group))
+            .then(|| group1.to_string())
+        })
+        .collect()
 }
 
 /// The maker-note rows of `baseline` a write drops from the map without

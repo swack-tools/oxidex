@@ -158,6 +158,70 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     parse_cli_tag_value_with_mode(tag_name, raw, false)
 }
 
+/// The registry key a bare (ungrouped) tag name is typed by when the
+/// registry cannot resolve the bare name itself, or `None` for a name this
+/// table does not list. A bare name it does not list is typed by the address
+/// the write resolves it to instead (`cli::write_transaction::apply_sets`),
+/// so `-ColorSpace#=1` is an integer, not a string.
+pub(crate) fn declared_alias(tag_name: &str) -> Option<&'static str> {
+    match tag_name {
+        "GPSDestBearing" => Some("GPS:GPSDestBearing"),
+        "DateTimeOriginal" => Some("EXIF:DateTimeOriginal"),
+        "CreateDate" => Some("ExifIFD:CreateDate"),
+        "ExposureTime" => Some("EXIF:ExposureTime"),
+        "BrightnessValue" => Some("EXIF:BrightnessValue"),
+        "LightSource" => Some("EXIF:LightSource"),
+        "DigitalZoomRatio" => Some("EXIF:DigitalZoomRatio"),
+        "Sharpness" => Some("EXIF:Sharpness"),
+        "Contrast" => Some("EXIF:Contrast"),
+        "CustomRendered" => Some("EXIF:CustomRendered"),
+        "GainControl" => Some("EXIF:GainControl"),
+        "FileSource" => Some("EXIF:FileSource"),
+        "ExposureProgram" => Some("EXIF:ExposureProgram"),
+        "WhiteBalance" => Some("EXIF:WhiteBalance"),
+        "SceneCaptureType" => Some("EXIF:SceneCaptureType"),
+        "Saturation" => Some("EXIF:Saturation"),
+        "FlashpixVersion" => Some("EXIF:FlashpixVersion"),
+        "CompressedBitsPerPixel" => Some("EXIF:CompressedBitsPerPixel"),
+        "SubjectDistance" => Some("EXIF:SubjectDistance"),
+        "RelatedSoundFile" => Some("EXIF:RelatedSoundFile"),
+        "SubjectDistanceRange" => Some("EXIF:SubjectDistanceRange"),
+        "ComponentsConfiguration" => Some("EXIF:ComponentsConfiguration"),
+        "SecurityClassification" => Some("EXIF:SecurityClassification"),
+        "MeteringMode" => Some("EXIF:MeteringMode"),
+        "ShutterSpeedValue" => Some("ExifIFD:ShutterSpeedValue"),
+        "ApertureValue" => Some("EXIF:ApertureValue"),
+        "Flash" => Some("ExifIFD:Flash"),
+        "MakerNoteSafety" => Some("EXIF:MakerNoteSafety"),
+        "ProfileEmbedPolicy" => Some("EXIF:ProfileEmbedPolicy"),
+        // Exif.pm 13.59 0x0112/0x0128/0xa402/0x0103/0x0213: plain int16u
+        // tags with a flat enum `PrintConv`. Without a group prefix these
+        // fell through to `_ => tag_name`, a bare name `get_tag_descriptor`
+        // cannot resolve, so the declared type was silently lost and the
+        // value stored as a `String` -- `-Orientation=6` then failed the
+        // writer's own type check ("expected Integer but got String") even
+        // though the value was a plain, valid integer.
+        "Orientation" => Some("EXIF:Orientation"),
+        "ResolutionUnit" => Some("EXIF:ResolutionUnit"),
+        "ExposureMode" => Some("EXIF:ExposureMode"),
+        "Compression" => Some("EXIF:Compression"),
+        "YCbCrPositioning" => Some("EXIF:YCbCrPositioning"),
+        // Same bare-name gap as above, for three more plain enum tags:
+        // `GrayResponseUnit` (0x0122) is `TAG_REGISTRY`-only (no colon-free
+        // lookup); `SceneType` (0xa301) is looked up by leaf name directly
+        // (see the early-return block above) so this alias only matters for
+        // its type when reached bare; `CalibrationIlluminant1/2/3`
+        // (0xc65a/0xc65b/0xcd31) resolve only through `YAML_TAG_ENTRIES`,
+        // which is keyed `"EXIF:<name>"` and never matched by a bare lookup.
+        "GrayResponseUnit" => Some("EXIF:GrayResponseUnit"),
+        "SceneType" => Some("EXIF:SceneType"),
+        "CalibrationIlluminant1" => Some("EXIF:CalibrationIlluminant1"),
+        "CalibrationIlluminant2" => Some("EXIF:CalibrationIlluminant2"),
+        "CalibrationIlluminant3" => Some("EXIF:CalibrationIlluminant3"),
+        _ => None,
+    }
+}
+
 /// [`parse_cli_tag_value`], additionally selecting raw mode (see
 /// [`parse_cli_tag_value_os_with_mode`]). When `raw_mode` is `true`, every
 /// PrintConv label lookup in this function is skipped -- a tag with an enum
@@ -169,62 +233,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     raw: &str,
     raw_mode: bool,
 ) -> Result<TagValue> {
-    let declared_tag_name = match tag_name {
-        "GPSDestBearing" => "GPS:GPSDestBearing",
-        "DateTimeOriginal" => "EXIF:DateTimeOriginal",
-        "CreateDate" => "ExifIFD:CreateDate",
-        "ExposureTime" => "EXIF:ExposureTime",
-        "BrightnessValue" => "EXIF:BrightnessValue",
-        "LightSource" => "EXIF:LightSource",
-        "DigitalZoomRatio" => "EXIF:DigitalZoomRatio",
-        "Sharpness" => "EXIF:Sharpness",
-        "Contrast" => "EXIF:Contrast",
-        "CustomRendered" => "EXIF:CustomRendered",
-        "GainControl" => "EXIF:GainControl",
-        "FileSource" => "EXIF:FileSource",
-        "ExposureProgram" => "EXIF:ExposureProgram",
-        "WhiteBalance" => "EXIF:WhiteBalance",
-        "SceneCaptureType" => "EXIF:SceneCaptureType",
-        "Saturation" => "EXIF:Saturation",
-        "FlashpixVersion" => "EXIF:FlashpixVersion",
-        "CompressedBitsPerPixel" => "EXIF:CompressedBitsPerPixel",
-        "SubjectDistance" => "EXIF:SubjectDistance",
-        "RelatedSoundFile" => "EXIF:RelatedSoundFile",
-        "SubjectDistanceRange" => "EXIF:SubjectDistanceRange",
-        "ComponentsConfiguration" => "EXIF:ComponentsConfiguration",
-        "SecurityClassification" => "EXIF:SecurityClassification",
-        "MeteringMode" => "EXIF:MeteringMode",
-        "ShutterSpeedValue" => "ExifIFD:ShutterSpeedValue",
-        "ApertureValue" => "EXIF:ApertureValue",
-        "Flash" => "ExifIFD:Flash",
-        "MakerNoteSafety" => "EXIF:MakerNoteSafety",
-        "ProfileEmbedPolicy" => "EXIF:ProfileEmbedPolicy",
-        // Exif.pm 13.59 0x0112/0x0128/0xa402/0x0103/0x0213: plain int16u
-        // tags with a flat enum `PrintConv`. Without a group prefix these
-        // fell through to `_ => tag_name`, a bare name `get_tag_descriptor`
-        // cannot resolve, so the declared type was silently lost and the
-        // value stored as a `String` -- `-Orientation=6` then failed the
-        // writer's own type check ("expected Integer but got String") even
-        // though the value was a plain, valid integer.
-        "Orientation" => "EXIF:Orientation",
-        "ResolutionUnit" => "EXIF:ResolutionUnit",
-        "ExposureMode" => "EXIF:ExposureMode",
-        "Compression" => "EXIF:Compression",
-        "YCbCrPositioning" => "EXIF:YCbCrPositioning",
-        // Same bare-name gap as above, for three more plain enum tags:
-        // `GrayResponseUnit` (0x0122) is `TAG_REGISTRY`-only (no colon-free
-        // lookup); `SceneType` (0xa301) is looked up by leaf name directly
-        // (see the early-return block above) so this alias only matters for
-        // its type when reached bare; `CalibrationIlluminant1/2/3`
-        // (0xc65a/0xc65b/0xcd31) resolve only through `YAML_TAG_ENTRIES`,
-        // which is keyed `"EXIF:<name>"` and never matched by a bare lookup.
-        "GrayResponseUnit" => "EXIF:GrayResponseUnit",
-        "SceneType" => "EXIF:SceneType",
-        "CalibrationIlluminant1" => "EXIF:CalibrationIlluminant1",
-        "CalibrationIlluminant2" => "EXIF:CalibrationIlluminant2",
-        "CalibrationIlluminant3" => "EXIF:CalibrationIlluminant3",
-        _ => tag_name,
-    };
+    let declared_tag_name = declared_alias(tag_name).unwrap_or(tag_name);
 
     let leaf = declared_tag_name.rsplit(':').next();
 
