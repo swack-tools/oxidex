@@ -153,5 +153,24 @@ class OxidexWriteOutcomeTests(unittest.TestCase):
         self.check(PNG, "outcome.png")
 
 
+class OxidexIntegerRangeTests(unittest.TestCase):
+    """set_tag_integer passes a C int64_t: ctypes would wrap a Python int
+    outside that range (2**63 -> -2**63, 2**64 -> 0) and report success.
+    Out-of-range values must raise, leaving the handle's tag untouched."""
+
+    def test_out_of_range_integers_are_rejected(self):
+        with Oxidex() as ox:
+            for value in (2**63, 2**64, -(2**63) - 1, 10**30):
+                with self.assertRaises(OxidexError, msg=str(value)):
+                    ox.set_tag_integer("EXIF:ISO", value)
+                self.assertFalse(ox.has_tag("EXIF:ISO"), str(value))
+
+    def test_the_int64_bounds_are_accepted(self):
+        with Oxidex() as ox:
+            for value in (2**63 - 1, -(2**63), 0):
+                ox.set_tag_integer("EXIF:ISO", value)
+                self.assertEqual(ox.get_tag_integer("EXIF:ISO"), value)
+
+
 if __name__ == "__main__":
     unittest.main()
