@@ -386,6 +386,25 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
+**Delete build directories you will not need again.** A separate
+`CARGO_TARGET_DIR` per worktree keeps parallel builds from colliding, but each
+one grows to 20–50 GB, and a single release push once left about 1 TB of them
+behind. Build output can always be regenerated, so delete a target directory
+once you are confident nothing will use it again:
+- its worktree is removed;
+- its branch has merged or been closed;
+- the one-off measurement it served has been recorded, together with the
+  binary's fingerprint and sha256.
+
+Keep it while its binary is still evidence someone may re-check, or while a
+live agent or an open PR still builds there. Delete only directories you
+created, by exact path, never by glob across other agents' directories. The
+same rule applies to scratch clones and bundles on remote hosts. A worktree
+itself is removable only when it has no uncommitted or untracked files and no
+commits missing from `origin` (`git status --porcelain` is empty and
+`git rev-list HEAD --not --remotes=origin` prints nothing). Use
+`git worktree remove`, never `rm -rf`.
+
 ## How work lands
 
 Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
