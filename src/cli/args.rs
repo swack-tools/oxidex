@@ -1087,6 +1087,16 @@ impl CliArgs {
             ) {
                 return None;
             }
+            // So is any date set named by its IFD0 or ExifIFD group: the shift
+            // path patches the entry the name resolves to wherever it is, so
+            // `-ExifIFD:ModifyDate=<date>` was refused ("not supported for
+            // JPEG") and `-IFD0:ModifyDate=<date>` left the ExifIFD copy that
+            // pinned ExifTool 13.59 deletes (`writers::exif_cross_delete`).
+            if tag.split_once(':').is_some_and(|(group, _)| {
+                group.eq_ignore_ascii_case("IFD0") || group.eq_ignore_ascii_case("ExifIFD")
+            }) {
+                return None;
+            }
 
             // Check if this looks like a date shift operation
             // Date shifts should have either:
@@ -1604,6 +1614,30 @@ mod tests {
             CliArgs::parse_date_shift("-ExifIFD:CreateDate=2024:02:03 04:05:06"),
             None
         );
+    }
+
+    /// A date set named by its IFD0 or ExifIFD group is an ordinary write,
+    /// so it can move the tag between the two directories as pinned
+    /// ExifTool 13.59 does (`writers::exif_cross_delete`); a shift is still
+    /// a shift, and an ungrouped or `EXIF:` set keeps its route.
+    #[test]
+    fn ifd0_and_exififd_date_assignments_are_normal_tag_writes() {
+        for arg in [
+            "-IFD0:ModifyDate=2020:01:02 03:04:05",
+            "-ExifIFD:ModifyDate=2020:01:02 03:04:05",
+            "-exififd:modifydate=2020:01:02 03:04:05",
+        ] {
+            assert_eq!(CliArgs::parse_date_shift(arg), None, "{arg}");
+        }
+        assert_eq!(
+            CliArgs::parse_date_shift("-ExifIFD:ModifyDate+=1:0:0"),
+            Some((
+                "ExifIFD:ModifyDate".to_string(),
+                "+=".to_string(),
+                "1:0:0".to_string()
+            ))
+        );
+        assert!(CliArgs::parse_date_shift("-ModifyDate=2020:01:02 03:04:05").is_some());
     }
 
     #[test]

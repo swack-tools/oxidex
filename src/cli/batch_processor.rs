@@ -12,7 +12,7 @@ use crate::cli::output_formatter::{
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
 use crate::cli::value_parser::parse_cli_tag_value_os;
 use crate::core::MetadataMap;
-use crate::core::operations::{modify_tag, read_metadata_with_detector_and_options};
+use crate::core::operations::{modify_tag_among, read_metadata_with_detector_and_options};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -442,12 +442,17 @@ fn apply_modifications(
         fs::copy(path, &backup_path)?;
     }
 
-    // Apply all modifications
+    // Apply all modifications; each keeps an IFD0/ExifIFD copy another of
+    // them sets (`modify_tag_among`).
+    let command_sets: Vec<String> = modifications
+        .iter()
+        .map(|(tag_name, _)| tag_name.clone())
+        .collect();
     for (tag_name, value_str) in modifications {
         // Parse the string into the type the tag declares, not into whatever
         // type the value's own shape suggests.
         let tag_value = parse_cli_tag_value_os(tag_name, value_str)?;
-        modify_tag(path, tag_name, tag_value)?;
+        modify_tag_among(path, tag_name, tag_value, &command_sets)?;
     }
 
     // Restore file times if requested

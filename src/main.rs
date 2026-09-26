@@ -12,8 +12,8 @@ use oxidex::cli::rename;
 use oxidex::cli::value_parser::parse_cli_tag_value_os;
 use oxidex::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use oxidex::core::operations::{
-    clear_all_metadata, copy_metadata, modify_tag, read_metadata_report_with_detector_and_options,
-    remove_tag,
+    clear_all_metadata, copy_metadata, modify_tag_among,
+    read_metadata_report_with_detector_and_options, remove_tag,
 };
 use oxidex::core::read_report::ParseStatus;
 use std::process;
@@ -191,6 +191,15 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
         }
     }
 
+    // Every tag the command sets: a set of one IFD0/ExifIFD copy of a tag
+    // keeps the other copy when the command sets that one too
+    // (`modify_tag_among`).
+    let command_sets: Vec<String> = modifications
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(tag_name, _)| tag_name.clone())
+        .collect();
+
     // Apply each modification
     for (tag_name, value) in &modifications {
         if value.is_empty() {
@@ -212,7 +221,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
             };
 
             // Call modify_tag from core operations
-            if let Err(e) = modify_tag(file, tag_name, tag_value) {
+            if let Err(e) = modify_tag_among(file, tag_name, tag_value, &command_sets) {
                 // Format error message based on error type
                 let error_msg = format!("{}", e);
                 if error_msg.contains("invalid") || error_msg.contains("Invalid") {

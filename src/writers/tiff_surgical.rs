@@ -363,6 +363,10 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     // reader surfaced the entry was dropped in silence.
     let mut rowless: Vec<(&LocatedEntry, Option<TagValue>)> = Vec::new();
 
+    // Surfaced entries the caller's map drops, deleted after every other
+    // edit (`deletable_in_place`, applied by [`delete_entries`]).
+    let mut deletions: Vec<entry_edits::ScopedEntryEdit> = Vec::new();
+
     // --- Pass 1: located entries (modify in place, or refuse a removal) ---
     for entry in &scan.entries {
         let mut keys = entry_keys(entry);
@@ -375,6 +379,23 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             } else {
                 borrowed.push(engine_key);
             }
+        }
+        // A deletion this writer can make: a surfaced entry the map drops, or
+        // one the reader surfaced no row for that is named for deletion.
+        let dropped = match keys.iter().find(|k| original.contains_key(*k)) {
+            Some(key) => !desired.contains_key(key),
+            None => removed
+                .iter()
+                .any(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original)),
+        };
+        if dropped && deletable_in_place(&scan, entry, &deletions) {
+            deletions.push(entry_edits::ScopedEntryEdit {
+                ifd: entry.ifd,
+                tag_id: entry.tag_id,
+                mutation: entry_edits::EntryMutation::Delete,
+            });
+            consumed.extend(keys);
+            continue;
         }
         // The key the reader actually used for this entry. The reader's group
         // assignment is not always the physical IFD -- Panasonic RW2 surfaces
@@ -558,7 +579,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     }
 
     if added_ifd0.is_empty() && added_exif.is_empty() && added_gps.is_empty() {
-        return Ok(out);
+        return delete_entries(out, &deletions);
     }
 
     // --- Pass 3: grow the tables that gained entries ---
@@ -606,7 +627,63 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         put_u32(&mut out[4..8], new_at, bo);
     }
 
-    Ok(out)
+    delete_entries(out, &deletions)
+}
+
+/// Whether this writer deletes `entry`, a surfaced entry the caller's map
+/// drops: an ordinary IFD0, ExifIFD or GPS tag -- the copy pinned ExifTool
+/// 13.59 removes when the same tag is set in the other of IFD0/ExifIFD
+/// (`writers::exif_cross_delete`), or one named for deletion. Only a tag the
+/// pinned table declares `Writable`, not `Protected`, with no `SubDirectory`
+/// and a single definition for its ID: that leaves out every directory and
+/// data pointer of `Exif::Main` (StripOffsets, ThumbnailOffset, SubIFDs,
+/// InteropOffset...) and the image-structure tags (ImageWidth, Compression,
+/// BitsPerSample...). Never the last entry of its directory either, which
+/// `WriteExif` would drop with the directory. Anything else stays refused.
+fn deletable_in_place(
+    scan: &TiffScan,
+    entry: &LocatedEntry,
+    deletions: &[entry_edits::ScopedEntryEdit],
+) -> bool {
+    use crate::exiftool_tables::ifd_tables::{IFD_EXIF_MAIN, IFD_GPS_MAIN};
+    let table = match entry.ifd {
+        IfdKind::Ifd0 | IfdKind::ExifIfd => &IFD_EXIF_MAIN,
+        IfdKind::Gps => &IFD_GPS_MAIN,
+        _ => return false,
+    };
+    let plain = table
+        .tag(entry.tag_id)
+        .is_some_and(|tag| tag.writable.is_some() && !tag.flags.protected && tag.subdir.is_none());
+    if !plain || table.variant_group(entry.tag_id).is_some() {
+        return false;
+    }
+    let left = scan
+        .entries
+        .iter()
+        .filter(|other| other.ifd == entry.ifd)
+        .count()
+        - deletions
+            .iter()
+            .filter(|edit| edit.ifd == entry.ifd)
+            .count();
+    let pointers = match entry.ifd {
+        IfdKind::Ifd0 => {
+            usize::from(scan.exif_pointer_record.is_some())
+                + usize::from(scan.gps_pointer_record.is_some())
+        }
+        _ => 0,
+    };
+    left + pointers > 1
+}
+
+/// `out` with `deletions` applied: each directory holding one is copied to
+/// the end without it (`entry_edits::apply_entry_edits`), every other byte
+/// kept.
+fn delete_entries(out: Vec<u8>, deletions: &[entry_edits::ScopedEntryEdit]) -> Result<Vec<u8>> {
+    if deletions.is_empty() {
+        return Ok(out);
+    }
+    entry_edits::apply_entry_edits(&out, deletions)
 }
 
 fn too_big(_: std::num::TryFromIntError) -> ExifToolError {

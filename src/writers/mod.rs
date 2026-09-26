@@ -4,7 +4,9 @@
 
 #![allow(dead_code)]
 
+// WriteExif's %crossDelete: an IFD0/ExifIFD set deletes the other copy.
 pub mod atomic_writer;
+pub(crate) mod exif_cross_delete;
 pub mod exif_inplace;
 pub mod exif_surgical;
 // Source-selected addresses remain internal until public file parity is proved.
