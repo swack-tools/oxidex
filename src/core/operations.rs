@@ -986,30 +986,66 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// [`ExifToolError::TagsNotWritten`] naming every key that would not be
 /// written, and the file is byte-identical to before the call.
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<WriteOutcome> {
-    write_metadata_and_delete_groups(path, metadata, &[])
+    write_metadata_in_call_order(path, metadata, &[])
 }
 
-/// [`write_metadata`] plus `-GROUP:All=` group deletions (`"EXIF:All"`,
-/// `"GPS:All"`), all in the one transaction. The C ABI's
-/// `exiftool_write_file` uses it for the groups `exiftool_remove_tag`
-/// recorded: a group deletion names no row of the map, so the map alone
-/// cannot carry it.
-pub(crate) fn write_metadata_and_delete_groups(
+/// [`write_metadata`] for a map edited by a sequence of calls, plus the
+/// `-GROUP:All=` group deletions (`"EXIF:All"`, `"GPS:All"`) among them, all
+/// in the one transaction and in call order. The C ABI's
+/// `exiftool_write_file` uses it: `mutations` is its handle's log -- the key
+/// each set or removal named, and each recorded group deletion, which names
+/// no row of the map and so cannot be carried by the map alone.
+///
+/// ExifTool applies a command's assignments in order, and a group deletion
+/// removes the values set before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but not those set after it (13.59:
+/// `-EXIF:All= -IFD0:Artist=x` keeps Artist, `-IFD0:Artist=x -EXIF:All=`
+/// does not). Appending every group deletion after the map's changes made
+/// the deletion win whatever the call order, so a tag set after
+/// `exiftool_remove_tag(h, "EXIF:All")` was deleted by it. Each change of
+/// the map now takes the place of the last call that named its key (a
+/// change no call named -- a read map edited in place -- goes first), and
+/// the write transaction keeps that order (`write_transaction::plan_changes`).
+pub(crate) fn write_metadata_in_call_order(
     path: &Path,
     metadata: &MetadataMap,
-    groups: &[String],
+    mutations: &[String],
 ) -> Result<WriteOutcome> {
+    use crate::core::write_transaction::{TagChange, changes_between};
+    use crate::writers::write_request::group_deletion;
     let baseline = read_metadata(path)?;
-    let mut changes = crate::core::write_transaction::changes_between(
-        &baseline,
-        metadata,
-        metadata.read_from(path),
-    );
-    changes.extend(
-        groups
+    let changes = changes_between(&baseline, metadata, metadata.read_from(path));
+    // Positions are 1-based in the log; 0 is "before every call".
+    let named = |call: &str, key: &str| {
+        call.eq_ignore_ascii_case(key)
+            || field_spellings(key)
+                .iter()
+                .any(|spelling| call.eq_ignore_ascii_case(spelling))
+    };
+    let mut ordered: Vec<(usize, TagChange)> = changes
+        .into_iter()
+        .map(|change| {
+            let at = mutations
+                .iter()
+                .rposition(|call| named(call, change.tag()))
+                .map_or(0, |index| index + 1);
+            (at, change)
+        })
+        .collect();
+    ordered.extend(
+        mutations
             .iter()
-            .map(|group| crate::core::write_transaction::TagChange::delete(group.clone())),
+            .enumerate()
+            .filter(|(index, call)| {
+                group_deletion(call).is_some()
+                    // Back-to-back repeats of one deletion are one deletion.
+                    && (*index == 0 || mutations[index - 1] != **call)
+            })
+            .map(|(index, call)| (index + 1, TagChange::delete(call.clone()))),
     );
+    // Stable: changes at one position keep the map's own order.
+    ordered.sort_by_key(|(at, _)| *at);
+    let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     if changes.is_empty() {
         // the file already holds this map: nothing to write
         return Ok(WriteOutcome::Unchanged);

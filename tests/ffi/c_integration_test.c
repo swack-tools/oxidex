@@ -560,6 +560,52 @@ void test_write_outcome() {
     expect_outcomes(PNG_FIXTURE, "outcome.png");
 }
 
+/* ------------------------------------------------------------------------
+ * Test 10: Call Order (#957, PRRT_kwDOQNbr5M6mOo0u)
+ *
+ * exiftool_write_file applies the handle's changes in call order, as
+ * ExifTool applies a command's assignments. Pinned ExifTool 13.59 on
+ * synthetic_001.jpg: `-EXIF:All= -IFD0:Artist=x` leaves exactly
+ * `[IFD0] Artist: x`; `-IFD0:Artist=x -EXIF:All=` leaves no EXIF. The group
+ * deletion used to be applied after every set, deleting the later Artist.
+ * ------------------------------------------------------------------------ */
+
+static void order_case(int delete_first, const char* name, char* path, size_t path_len) {
+    if (!copy_fixture(JPEG_FIXTURE, name, path, path_len)) {
+        TEST_ASSERT(0, "call order: copy fixture");
+        return;
+    }
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    if (delete_first) {
+        exiftool_remove_tag(handle, "EXIF:All");
+        exiftool_set_tag_string(handle, "IFD0:Artist", "x");
+    } else {
+        exiftool_set_tag_string(handle, "IFD0:Artist", "x");
+        exiftool_remove_tag(handle, "EXIF:All");
+    }
+    int result = exiftool_write_file(handle, path);
+    TEST_ASSERT(result == EXIFTOOL_OK, delete_first ? "EXIF:All then Artist: write succeeds"
+                                                    : "Artist then EXIF:All: write succeeds");
+    exiftool_destroy(handle);
+}
+
+void test_call_order() {
+    printf("\nTest 10: Call Order\n");
+    char path[4096];
+
+    order_case(1, "delete-then-set.jpg", path, sizeof path);
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    const char* artist = exiftool_get_tag_string(handle, "IFD0:Artist");
+    TEST_ASSERT(artist && strcmp(artist, "x") == 0, "a set after EXIF:All is kept");
+    TEST_ASSERT(!exiftool_has_tag(handle, "IFD0:Make"), "EXIF:All still deleted Make");
+    exiftool_destroy(handle);
+
+    order_case(0, "set-then-delete.jpg", path, sizeof path);
+    TEST_ASSERT(!has_exif_rows(path), "a set before EXIF:All is deleted with the group");
+}
+
 /**
  * Main test runner
  */
@@ -585,6 +631,7 @@ int main(int argc, char** argv) {
     test_write_refusals();
     test_group_deletions();
     test_write_outcome();
+    test_call_order();
 
     /* Print summary */
     printf("\n========================================\n");

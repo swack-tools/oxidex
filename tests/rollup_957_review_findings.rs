@@ -6,6 +6,11 @@
 
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_oracle;
+use oxidex::ffi::{
+    EXIFTOOL_OK, exiftool_create, exiftool_destroy, exiftool_read_file, exiftool_remove_tag,
+    exiftool_set_tag_string, exiftool_write_file,
+};
+use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -156,5 +161,109 @@ fn oracle_orders_all_against_sets_and_copies() {
             oracle_value(oracle, &theirs, "EXIF:All").is_empty(),
             "{args:?}: whether any EXIF is left"
         );
+    }
+}
+
+// --- PRRT_kwDOQNbr5M6mOo0u: the C ABI applies changes in call order --------
+
+struct Handle(*mut oxidex::ffi::ExifToolHandle);
+
+impl Handle {
+    fn read(path: &Path) -> Self {
+        let handle = Handle(exiftool_create());
+        let c = CString::new(s(path)).unwrap();
+        assert_eq!(exiftool_read_file(handle.0, c.as_ptr()), EXIFTOOL_OK);
+        handle
+    }
+    fn remove(&self, tag: &str) {
+        let tag = CString::new(tag).unwrap();
+        assert_eq!(exiftool_remove_tag(self.0, tag.as_ptr()), EXIFTOOL_OK);
+    }
+    fn set(&self, tag: &str, value: &str) {
+        let (tag, value) = (CString::new(tag).unwrap(), CString::new(value).unwrap());
+        assert_eq!(
+            exiftool_set_tag_string(self.0, tag.as_ptr(), value.as_ptr()),
+            EXIFTOOL_OK
+        );
+    }
+    fn write(&self, path: &Path) -> i32 {
+        let c = CString::new(s(path)).unwrap();
+        exiftool_write_file(self.0, c.as_ptr())
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        exiftool_destroy(self.0);
+    }
+}
+
+/// `exiftool_remove_tag(h, "EXIF:All")` then `exiftool_set_tag_string(h,
+/// "IFD0:Artist", "x")` is 13.59's `-EXIF:All= -IFD0:Artist=x`: exactly
+/// `[IFD0] Artist: x` on synthetic_001.jpg. The recorded group deletion was
+/// appended after the map's changes and deleted the new Artist.
+#[test]
+fn ffi_group_deletion_then_set_keeps_the_set() {
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, Path::new(JPEG), "delete-then-set.jpg");
+    let handle = Handle::read(&file);
+    handle.remove("EXIF:All");
+    handle.set("IFD0:Artist", "x");
+    assert_eq!(handle.write(&file), EXIFTOOL_OK);
+    assert_eq!(get(&file, "IFD0:Artist").as_deref(), Some("x"));
+    assert_eq!(get(&file, "IFD0:Make"), None, "EXIF:All deleted Make");
+    assert_eq!(exif_groups(&file), ["IFD0"]);
+
+    // The other order: the later deletion removes the earlier set.
+    let file = copy_into(&dir, Path::new(JPEG), "set-then-delete.jpg");
+    let handle = Handle::read(&file);
+    handle.set("IFD0:Artist", "x");
+    handle.remove("EXIF:All");
+    assert_eq!(handle.write(&file), EXIFTOOL_OK);
+    assert_eq!(exif_groups(&file), Vec::<String>::new(), "EXIF left");
+
+    // A deletion between two sets splits them.
+    let file = copy_into(&dir, Path::new(JPEG), "set-delete-set.jpg");
+    let handle = Handle::read(&file);
+    handle.set("IFD0:Artist", "before");
+    handle.remove("EXIF:All");
+    handle.set("IFD0:Model", "after");
+    assert_eq!(handle.write(&file), EXIFTOOL_OK);
+    assert_eq!(get(&file, "IFD0:Artist"), None);
+    assert_eq!(get(&file, "IFD0:Model").as_deref(), Some("after"));
+}
+
+#[test]
+fn oracle_ffi_call_order_matches_the_command_line_order() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    for delete_first in [true, false] {
+        let theirs = copy_into(&dir, Path::new(JPEG), "theirs.jpg");
+        let args = if delete_first {
+            ["-EXIF:All=", "-IFD0:Artist=x"]
+        } else {
+            ["-IFD0:Artist=x", "-EXIF:All="]
+        };
+        oracle_write(oracle, &args, &theirs);
+        let ours = copy_into(&dir, Path::new(JPEG), "ours.jpg");
+        let handle = Handle::read(&ours);
+        if delete_first {
+            handle.remove("EXIF:All");
+            handle.set("IFD0:Artist", "x");
+        } else {
+            handle.set("IFD0:Artist", "x");
+            handle.remove("EXIF:All");
+        }
+        assert_eq!(handle.write(&ours), EXIFTOOL_OK);
+        for key in ["IFD0:Artist", "IFD0:Make", "ExifIFD:ExifVersion"] {
+            assert_eq!(
+                get(&ours, key).unwrap_or_default(),
+                oracle_value(oracle, &theirs, key),
+                "{args:?}: {key}"
+            );
+        }
     }
 }

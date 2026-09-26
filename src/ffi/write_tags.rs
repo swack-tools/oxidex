@@ -74,6 +74,7 @@ pub extern "C" fn exiftool_set_tag_string(
             name_str.to_string(),
             TagValue::new_string(value_str.to_string()),
         );
+        context.mutations.push(name_str.to_string());
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -134,6 +135,7 @@ pub extern "C" fn exiftool_set_tag_integer(
         context
             .metadata
             .insert(name_str.to_string(), TagValue::new_integer(value));
+        context.mutations.push(name_str.to_string());
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -201,6 +203,7 @@ pub extern "C" fn exiftool_set_tag_float(
         context
             .metadata
             .insert(name_str.to_string(), TagValue::new_float(value));
+        context.mutations.push(name_str.to_string());
         // Rebuild tag cache since we modified metadata
         context.rebuild_tag_cache();
 
@@ -226,7 +229,12 @@ pub extern "C" fn exiftool_set_tag_float(
 /// no row of the handle: it is recorded and applied when the handle is next
 /// written to a file (ExifTool's `-GROUP:All=`), which refuses it with
 /// `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when oxidex cannot delete that group from
-/// the file. `exiftool_read_file` discards recorded group deletions.
+/// the file. It takes its place in the call order: it deletes what the group
+/// held and what was set in it before this call, never a tag set by a later
+/// call (`exiftool_remove_tag(h, "EXIF:All")` then
+/// `exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose
+/// only EXIF is that Artist, as ExifTool's `-EXIF:All= -IFD0:Artist=x`
+/// does). `exiftool_read_file` discards recorded group deletions.
 ///
 /// # Returns
 /// - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
@@ -261,16 +269,12 @@ pub extern "C" fn exiftool_remove_tag(
             }
         };
 
+        // Recorded in call order (see `ExifToolContext::mutations`).
+        context.mutations.push(name_str.to_string());
         // `GROUP:All` (`EXIF:All`, `GPS:All`) is a group deletion, which no
-        // row of the map names: record it for the next file write.
+        // row of the map names: the record is all of it, applied by the next
+        // file write at its place in the call order.
         if crate::writers::write_request::group_deletion(name_str).is_some() {
-            if !context
-                .group_deletions
-                .iter()
-                .any(|group| group == name_str)
-            {
-                context.group_deletions.push(name_str.to_string());
-            }
             return EXIFTOOL_OK;
         }
         // Remove the tag (no error if it doesn't exist)
@@ -325,7 +329,9 @@ pub const EXIFTOOL_WRITE_UNCHANGED: c_int = 2;
 /// was read from this same file (`exiftool_read_file`) and the caller removed
 /// it; a handle read from another file, or never read, only sets (derived
 /// `File:`, `Composite:` and file-system rows are never deleted). A recorded
-/// `GROUP:All` removal deletes that group. `EXIFTOOL_OK` means every such
+/// `GROUP:All` removal deletes that group. The changes are applied in the
+/// order of the calls that made them, so a group removal deletes a tag set
+/// before it and keeps one set after it. `EXIFTOOL_OK` means every such
 /// change is in the file, proven by reading it back; on any error nothing
 /// was written and the file is byte-identical. The `_with_outcome` variant
 /// below also reports whether the file changed.
@@ -411,11 +417,11 @@ fn write_file_reporting(
         let path = Path::new(path_str);
 
         // The handle's map, plus any recorded `GROUP:All` deletions, in one
-        // write transaction (see `write_metadata`).
-        match crate::core::operations::write_metadata_and_delete_groups(
+        // write transaction (see `write_metadata`), in call order.
+        match crate::core::operations::write_metadata_in_call_order(
             path,
             &context.metadata,
-            &context.group_deletions,
+            &context.mutations,
         ) {
             Ok(written) => {
                 report(written);
