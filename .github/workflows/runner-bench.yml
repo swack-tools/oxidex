@@ -1,0 +1,149 @@
+name: Runner benchmark
+
+# Throwaway benchmark for deciding whether ci.yml jobs should use the
+# swack-tools self-hosted runner. Runs synthetic CPU, memory and disk tests and
+# ci.yml's heaviest phases, cold, three times on GitHub-hosted ubuntu-latest
+# (4 vCPU / 16 GB for this public repo) and three times on the self-hosted
+# runner (a 3-CPU / 12 GB quota shared with another runner), then compares the
+# medians in the run summary.
+#
+# Lives only on bench/runner-comparison, branched from refactor/tag-machinery;
+# delete the branch when done. Push-triggered on that branch alone, so only
+# people with write access can put jobs on the self-hosted runner.
+on:
+  push:
+    branches: [bench/runner-comparison]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Same as Build & Test.
+  CARGO_PROFILE_TEST_CODEGEN_UNITS: 16
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  bench:
+    name: ${{ matrix.runner.name }} run ${{ matrix.run }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - name: github-hosted
+            labels: '"ubuntu-latest"'
+          - name: self-hosted
+            labels: '["self-hosted", "swack-tools"]'
+        run: [1, 2, 3]
+    runs-on: ${{ fromJSON(matrix.runner.labels) }}
+    # Cold builds on 3 CPUs take a while.
+    timeout-minutes: 120
+    env:
+      RESULTS: results/${{ matrix.runner.name }}-${{ matrix.run }}.json
+      PHASES: phases.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Untimed setup, identical on both runners.
+      - name: Install system packages
+        run: |
+          # GitHub-hosted runs jobs as `runner`, the self-hosted runner as root.
+          SUDO=; [ "$(id -u)" -eq 0 ] || SUDO=sudo
+          $SUDO apt-get update -qq
+          # sysbench and fio for the synthetic tests. libssl-dev (openssl-sys)
+          # and Archive::Zip (ExifTool) are missing from the self-hosted image.
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            sysbench fio libssl-dev pkg-config libarchive-zip-perl >/dev/null
+      - name: Install pinned Rust toolchain
+        run: |
+          # The self-hosted image has no rustup.
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal -c rustfmt -c clippy
+          cargo --version
+      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-nextest
+      - name: Install pinned ExifTool
+        run: |
+          # Same source and location as Build & Test.
+          V=$(tr -d '[:space:]' < .exiftool-version)
+          curl -sSL "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
+            -o /tmp/exiftool.tar.gz
+          rm -rf /tmp/exiftool-src && mkdir -p /tmp/exiftool-src
+          tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          perl -MArchive::Zip -e 1
+          [ "$(/tmp/exiftool-src/exiftool -ver)" = "$V" ]
+          echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
+          echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
+      - name: Download crates
+        run: cargo fetch --locked
+
+      # Synthetic tests first, while the machine is otherwise idle.
+      - name: Synthetic CPU, memory and disk
+        run: bash .github/runner-bench/synthetic.sh "${{ matrix.runner.name }}" "${{ matrix.run }}" "$RESULTS"
+
+      - name: Start memory sampler
+        run: |
+          # Highest memory use of this job's cgroup across the phases, page
+          # cache included. On self-hosted that cgroup is the whole container.
+          cg=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup | head -1)
+          echo 0 > "$RUNNER_TEMP/mem-peak"
+          # $0 and $1 belong to the inner bash, hence the single quotes.
+          # shellcheck disable=SC2016
+          nohup bash -c 'while sleep 1; do
+            c=$(cat "$0/memory.current" 2>/dev/null || echo 0)
+            if [ "$c" -gt "$(cat "$1")" ]; then echo "$c" > "$1"; fi
+          done' "$cg" "$RUNNER_TEMP/mem-peak" >/dev/null 2>&1 &
+
+      # Timed phases: ci.yml's heaviest work, cold (no rust-cache), in CI
+      # order. --no-fail-fast keeps the work identical if a test fails on one
+      # runner; phase.sh records failures for the summary.
+      - name: "Phase: nextest (Build & Test)"
+        run: bash .github/runner-bench/phase.sh nextest cargo nextest run --all-features --no-fail-fast
+      - name: "Phase: cargo test (Build & Test)"
+        run: bash .github/runner-bench/phase.sh cargo_test cargo test --all-features --no-fail-fast
+      - name: "Phase: clippy (Lint & Audit)"
+        run: bash .github/runner-bench/phase.sh clippy cargo clippy --all-features -- -D warnings
+      - name: "Phase: fixloop build (Release Build)"
+        run: bash .github/runner-bench/phase.sh fixloop_build cargo build --profile fixloop --all-features
+
+      - name: Collect results
+        if: always()
+        run: |
+          mkdir -p results
+          [ -f "$RESULTS" ] || echo '{}' > "$RESULTS"
+          [ -f "$PHASES" ] || echo '{}' > "$PHASES"
+          jq --arg runner "${{ matrix.runner.name }}" --argjson run "${{ matrix.run }}" \
+            --slurpfile phases "$PHASES" \
+            --arg peak "$(cat "$RUNNER_TEMP/mem-peak" 2>/dev/null || echo 0)" \
+            '.runner = $runner | .run = $run | .phases = $phases[0]
+             | .phases_peak_mem_gib = (($peak | tonumber? // 0)
+                 | if . > 0 then . / 1073741824 else null end)' \
+            "$RESULTS" > "$RESULTS.tmp"
+          mv "$RESULTS.tmp" "$RESULTS"
+          cat "$RESULTS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-${{ matrix.runner.name }}-${{ matrix.run }}
+          path: results/
+
+  summary:
+    needs: bench
+    # Summarize whatever finished, so one failed run doesn't hide the rest.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bench-*
+          path: results
+          merge-multiple: true
+      - run: python3 .github/runner-bench/summarize.py results | tee -a "$GITHUB_STEP_SUMMARY"
