@@ -655,6 +655,24 @@ fn inverse_date_time_to_pdf(value: &str) -> Option<String> {
     Some(format!("{clock}{zone}"))
 }
 
+/// The Info date body (`YYYYMMDDHHmmSS[Z|+HH'mm']`) this writer stores for
+/// `value` under the `PDF:` key `key` -- `PDF:CreateDate` / `PDF:CreationDate`
+/// / `PDF:ModifyDate` / `PDF:ModDate` -- or `None` for any other key or a
+/// value it does not store as a date. A read-back proof compares this, not
+/// the text: `WritePDFValue` drops sub-seconds, so a requested
+/// `2020:01:02 03:04:05.25+02:00` is stored, and reads back, without them.
+pub(crate) fn stored_pdf_date(key: &str, value: &TagValue) -> Option<String> {
+    let (field, _) = canonicalize_pdf_field(key.strip_prefix("PDF:")?)?;
+    if !matches!(field.as_str(), "CreationDate" | "ModDate") {
+        return None;
+    }
+    match value {
+        TagValue::String(text) => convert_exif_string_to_pdf_date(text),
+        TagValue::DateTime(dt) => Some(format_pdf_datetime(dt)),
+        _ => None,
+    }
+}
+
 /// Formats a fixed-offset DateTime into PDF Info date string body (without leading "D:")
 fn format_fixed_offset_pdf_date(dt: DateTime<FixedOffset>) -> String {
     let offset_seconds = dt.offset().local_minus_utc();

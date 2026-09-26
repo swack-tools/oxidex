@@ -14,6 +14,7 @@ Example:
 
 import ctypes
 import ctypes.util
+import operator
 from enum import IntEnum
 import os
 import sys
@@ -28,7 +29,16 @@ OXIDEX_ERR_TAG_NOT_FOUND = 3
 OXIDEX_ERR_INVALID_TAG_VALUE = 4
 OXIDEX_ERR_UNSUPPORTED_FORMAT = 5
 OXIDEX_ERR_NULL_POINTER = 6
+OXIDEX_ERR_TAG_NOT_WRITTEN = 7
 OXIDEX_ERR_INTERNAL = 99
+
+# The C ABI's integer type is int64_t.
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+
+# exiftool_write_file_with_outcome's outcomes (ExifTool WriteInfo's 1 / 2)
+OXIDEX_WRITE_UPDATED = 1
+OXIDEX_WRITE_UNCHANGED = 2
 
 
 class ValueChannel(IntEnum):
@@ -41,7 +51,22 @@ class ValueChannel(IntEnum):
 
 class OxidexError(Exception):
     """Exception raised by Oxidex operations."""
-    pass
+
+    def __init__(self, message: str, code: Optional[int] = None):
+        super().__init__(message)
+        self.code = code
+
+
+class OxidexTagsNotWrittenError(OxidexError):
+    """A write named tags that would not be written; nothing was written.
+
+    ``tags`` lists ``(tag, reason)`` pairs, each tag spelled as the request
+    spelled it.
+    """
+
+    def __init__(self, message: str, tags):
+        super().__init__(message, OXIDEX_ERR_TAG_NOT_WRITTEN)
+        self.tags = list(tags)
 
 
 def _find_library() -> ctypes.CDLL:
@@ -65,6 +90,12 @@ def _find_library() -> ctypes.CDLL:
         lib_name = "oxidex.dll"
     else:  # Linux and other Unix-like systems
         lib_name = "liboxidex.so"
+
+    # An explicit path wins: tests/python_bindings.rs points it at the
+    # library the running `cargo test` just built.
+    explicit = os.environ.get("OXIDEX_LIBRARY")
+    if explicit:
+        return ctypes.CDLL(explicit)
 
     # Try common build directories relative to this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -156,9 +187,41 @@ _lib.exiftool_get_tag_float.argtypes = [
     ctypes.POINTER(ctypes.c_double)
 ]
 
+# Tag mutation and file writing
+_lib.exiftool_set_tag_string.restype = ctypes.c_int
+_lib.exiftool_set_tag_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+
+_lib.exiftool_set_tag_integer.restype = ctypes.c_int
+_lib.exiftool_set_tag_integer.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int64]
+
+_lib.exiftool_set_tag_float.restype = ctypes.c_int
+_lib.exiftool_set_tag_float.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
+
+_lib.exiftool_remove_tag.restype = ctypes.c_int
+_lib.exiftool_remove_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+_lib.exiftool_write_file.restype = ctypes.c_int
+_lib.exiftool_write_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+_lib.exiftool_write_file_with_outcome.restype = ctypes.c_int
+_lib.exiftool_write_file_with_outcome.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_int),
+]
+
 # Error handling
 _lib.exiftool_get_last_error.restype = ctypes.c_char_p
 _lib.exiftool_get_last_error.argtypes = []
+
+_lib.exiftool_get_last_error_tag_count.restype = ctypes.c_size_t
+_lib.exiftool_get_last_error_tag_count.argtypes = []
+
+_lib.exiftool_get_last_error_tag.restype = ctypes.c_char_p
+_lib.exiftool_get_last_error_tag.argtypes = [ctypes.c_size_t]
+
+_lib.exiftool_get_last_error_tag_reason.restype = ctypes.c_char_p
+_lib.exiftool_get_last_error_tag_reason.argtypes = [ctypes.c_size_t]
 
 
 class Oxidex:
@@ -216,7 +279,19 @@ class Oxidex:
                 msg = error_msg.decode('utf-8', errors='replace')
             else:
                 msg = f"Unknown error (code {result})"
-            raise OxidexError(msg)
+            if result == OXIDEX_ERR_TAG_NOT_WRITTEN:
+                tags = []
+                for index in range(_lib.exiftool_get_last_error_tag_count()):
+                    tag = _lib.exiftool_get_last_error_tag(index) or b""
+                    reason = _lib.exiftool_get_last_error_tag_reason(index) or b""
+                    tags.append(
+                        (
+                            tag.decode('utf-8', errors='replace'),
+                            reason.decode('utf-8', errors='replace'),
+                        )
+                    )
+                raise OxidexTagsNotWrittenError(msg, tags)
+            raise OxidexError(msg, result)
 
     def read_file(self, filepath: str) -> None:
         """
@@ -359,6 +434,80 @@ class Oxidex:
         if result == OXIDEX_OK:
             return value.value
         return None
+
+    def set_tag(self, tag_name: str, value: str) -> None:
+        """Set a tag to a string value in the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(
+            _lib.exiftool_set_tag_string(
+                self._handle, tag_name.encode('utf-8'), value.encode('utf-8')
+            )
+        )
+
+    def set_tag_integer(self, tag_name: str, value: int) -> None:
+        """
+        Set a tag to an integer value in the loaded metadata (not the file).
+
+        Raises:
+            OxidexError: If ``value`` is outside the C ABI's signed 64-bit
+                range. ctypes would otherwise wrap it silently (2**63 becomes
+                -2**63, 2**64 becomes 0) and the setter would report success.
+        """
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        value = operator.index(value)
+        if not INT64_MIN <= value <= INT64_MAX:
+            raise OxidexError(
+                f"Integer {value} for {tag_name} is outside the signed 64-bit range "
+                f"[{INT64_MIN}, {INT64_MAX}]"
+            )
+        self._check_error(
+            _lib.exiftool_set_tag_integer(self._handle, tag_name.encode('utf-8'), value)
+        )
+
+    def set_tag_float(self, tag_name: str, value: float) -> None:
+        """Set a tag to a float value in the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(
+            _lib.exiftool_set_tag_float(self._handle, tag_name.encode('utf-8'), value)
+        )
+
+    def remove_tag(self, tag_name: str) -> None:
+        """Remove a tag from the loaded metadata (not the file)."""
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        self._check_error(_lib.exiftool_remove_tag(self._handle, tag_name.encode('utf-8')))
+
+    def write_file(self, filepath: str) -> int:
+        """
+        Write the loaded metadata to a file.
+
+        A tag that is new or differs from the file is set. A tag removed from
+        a handle read from this same file is deleted; a handle read from
+        another file (or never read) only sets. ``remove_tag("GROUP:All")``
+        deletes the whole group.
+
+        Returns:
+            OXIDEX_WRITE_UPDATED when the file changed, OXIDEX_WRITE_UNCHANGED
+            when every change was already in effect (the file is
+            byte-identical) -- ExifTool WriteInfo's 1 / 2.
+
+        Raises:
+            OxidexTagsNotWrittenError: If a requested change would not be
+                written; ``.tags`` names each tag. Nothing is written then.
+            OxidexError: If the write fails otherwise. Nothing is written then.
+        """
+        if not self._handle:
+            raise OxidexError("Oxidex handle has been destroyed")
+        outcome = ctypes.c_int(0)
+        self._check_error(
+            _lib.exiftool_write_file_with_outcome(
+                self._handle, filepath.encode('utf-8'), ctypes.byref(outcome)
+            )
+        )
+        return outcome.value
 
     def get_all_tags(self) -> dict[str, Optional[str]]:
         """

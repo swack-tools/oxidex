@@ -69,6 +69,14 @@ pub struct MetadataMap {
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
     raw_blocks: Vec<RawMetadataBlock>,
+    /// The file-order position one past the last occurrence a read recorded
+    /// ([`Self::mark_read_complete`]), or `None` for a map no read produced.
+    /// An occurrence at or past it was recorded after the read -- a caller's
+    /// assignment ([`Self::assigned_after_read`]).
+    read_end: Option<u32>,
+    /// The file the read that produced this map read ([`Self::read_from`]),
+    /// canonicalized; `None` for a map no read produced.
+    read_source: Option<std::path::PathBuf>,
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -108,6 +116,8 @@ impl MetadataMap {
         Self {
             sink: TagSink::new(),
             raw_blocks: Vec::new(),
+            read_end: None,
+            read_source: None,
         }
     }
 
@@ -119,7 +129,52 @@ impl MetadataMap {
         Self {
             sink: TagSink::with_capacity(capacity),
             raw_blocks: Vec::new(),
+            read_end: None,
+            read_source: None,
         }
+    }
+
+    /// Marks every occurrence recorded so far as the file's own: the read
+    /// that produced this map is complete. `read_metadata` and its report
+    /// variants call it last, so an occurrence recorded afterwards -- by
+    /// `insert()` in `modify_tag`, the CLI's `-TAG=VALUE`, an FFI setter, a
+    /// library caller -- is an assignment ([`Self::assigned_after_read`]).
+    ///
+    /// (Ported from #949, `staging/beta1/xp-explicit-provenance`, which lands
+    /// first; the two copies are identical.)
+    pub(crate) fn mark_read_complete(&mut self) {
+        self.read_end = Some(self.sink.next_order());
+    }
+
+    /// Whether the winning occurrence for `key` was assigned by a caller
+    /// rather than read from the file: recorded after
+    /// [`Self::mark_read_complete`], or in a map no read produced (every
+    /// value there is the caller's). A writer that must tell an explicit
+    /// assignment from a carried-over value asks this, never whether the
+    /// value happens to equal the file's (the XP strings, whose same text
+    /// can be two different byte strings: `writers::xp_strings`).
+    pub(crate) fn assigned_after_read(&self, key: &str) -> bool {
+        match (self.read_end, self.sink.winner_occurrence(key)) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(end), Some(occurrence)) => occurrence.order >= end,
+        }
+    }
+
+    /// Records the file this map was read from (`read_metadata`).
+    pub(crate) fn set_read_source(&mut self, path: &std::path::Path) {
+        self.read_source = Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+
+    /// Whether this map is a complete read of the file at `path`: the one
+    /// case in which a row the map lacks is a row its caller removed, and so
+    /// a deletion `write_metadata` applies. A map built from scratch, or read
+    /// from another file, names only what it sets.
+    pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
+        self.read_end.is_some()
+            && self.read_source.as_deref().is_some_and(|source| {
+                std::fs::canonicalize(path).map_or(source == path, |path| source == path)
+            })
     }
 
     /// Uninterpreted blocks in parser encounter order, separate from named tags.

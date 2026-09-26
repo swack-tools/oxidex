@@ -247,10 +247,330 @@ void test_invalid_float_values() {
     exiftool_destroy(handle);
 }
 
+
+/* ------------------------------------------------------------------------
+ * Test 7: Writes Are Applied Or Refused By Name
+ *
+ * exiftool_write_file used to hand the handle's map straight to the format
+ * writer, which skips every group it does not write, and return EXIFTOOL_OK:
+ * an XMP:Title in a JPEG, a File:Comment or an IFD1 key the writer drops, and
+ * an ungrouped XPTitle were all "written" without touching the file. A write
+ * either applies every requested change or fails, names each key it would
+ * not write, and leaves the file byte-identical.
+ * ------------------------------------------------------------------------ */
+
+static const char* scratch_dir = NULL;
+
+/* Reads a whole file; returns NULL on failure. */
+static unsigned char* slurp(const char* path, long* len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char* buf = (unsigned char*)malloc((size_t)(*len > 0 ? *len : 1));
+    if (buf && fread(buf, 1, (size_t)*len, f) != (size_t)*len) {
+        free(buf);
+        buf = NULL;
+    }
+    fclose(f);
+    return buf;
+}
+
+/* Copies fixture to scratch_dir/name; writes the destination into out. */
+static int copy_fixture(const char* fixture, const char* name, char* out, size_t out_len) {
+    long len = 0;
+    unsigned char* buf = slurp(fixture, &len);
+    if (!buf) return 0;
+    snprintf(out, out_len, "%s/%s", scratch_dir, name);
+    FILE* f = fopen(out, "wb");
+    if (!f) {
+        free(buf);
+        return 0;
+    }
+    int ok = fwrite(buf, 1, (size_t)len, f) == (size_t)len;
+    fclose(f);
+    free(buf);
+    return ok;
+}
+
+/* Whether path holds exactly the bytes of fixture. */
+static int same_bytes(const char* path, const char* fixture) {
+    long a_len = 0, b_len = 0;
+    unsigned char* a = slurp(path, &a_len);
+    unsigned char* b = slurp(fixture, &b_len);
+    int same = a && b && a_len == b_len && memcmp(a, b, (size_t)a_len) == 0;
+    free(a);
+    free(b);
+    return same;
+}
+
+#define JPEG_FIXTURE "tests/fixtures/jpeg/simple/synthetic_001.jpg"
+#define PNG_FIXTURE "tests/fixtures/png/sample.png"
+
+/* One refused write: set each key, write, and check the result. */
+static void expect_refused(const char* what, const char* fixture, const char* name,
+                           const char* const* keys, size_t key_count,
+                           const char* writable_key) {
+    char path[4096];
+    char label[512];
+    if (!copy_fixture(fixture, name, path, sizeof path)) {
+        snprintf(label, sizeof label, "%s: copy fixture", what);
+        TEST_ASSERT(0, label);
+        return;
+    }
+    ExifToolHandle* handle = exiftool_create();
+    int result = exiftool_read_file(handle, path);
+    snprintf(label, sizeof label, "%s: read succeeds", what);
+    TEST_ASSERT(result == EXIFTOOL_OK, label);
+    if (writable_key) {
+        exiftool_set_tag_string(handle, writable_key, "v");
+    }
+    for (size_t i = 0; i < key_count; i++) {
+        exiftool_set_tag_string(handle, keys[i], "v");
+    }
+    result = exiftool_write_file(handle, path);
+    snprintf(label, sizeof label, "%s: write is refused, not reported (code %d)", what, result);
+    TEST_ASSERT(result != EXIFTOOL_OK, label);
+    snprintf(label, sizeof label, "%s: code is EXIFTOOL_ERR_TAG_NOT_WRITTEN (got %d)", what, result);
+    TEST_ASSERT(result == EXIFTOOL_ERR_TAG_NOT_WRITTEN, label);
+    const char* message = exiftool_get_last_error();
+    for (size_t i = 0; i < key_count; i++) {
+        snprintf(label, sizeof label, "%s: message names %s", what, keys[i]);
+        TEST_ASSERT(message && strstr(message, keys[i]) != NULL, label);
+    }
+    /* The refused keys, one by one, as the request spelled them. */
+    size_t named = exiftool_get_last_error_tag_count();
+    snprintf(label, sizeof label, "%s: %zu tags named (got %zu)", what, key_count, named);
+    TEST_ASSERT(named == key_count, label);
+    for (size_t i = 0; i < key_count; i++) {
+        int found = 0;
+        for (size_t j = 0; j < named; j++) {
+            const char* tag = exiftool_get_last_error_tag(j);
+            const char* reason = exiftool_get_last_error_tag_reason(j);
+            if (tag && strcmp(tag, keys[i]) == 0 && reason && strlen(reason) > 0) {
+                found = 1;
+            }
+        }
+        snprintf(label, sizeof label, "%s: exiftool_get_last_error_tag names %s", what, keys[i]);
+        TEST_ASSERT(found, label);
+    }
+    if (writable_key) {
+        int named_writable = 0;
+        for (size_t j = 0; j < named; j++) {
+            const char* tag = exiftool_get_last_error_tag(j);
+            if (tag && strcmp(tag, writable_key) == 0) {
+                named_writable = 1;
+            }
+        }
+        snprintf(label, sizeof label, "%s: the writable %s is not named", what, writable_key);
+        TEST_ASSERT(!named_writable, label);
+    }
+    snprintf(label, sizeof label, "%s: out-of-range tag index is NULL", what);
+    TEST_ASSERT(exiftool_get_last_error_tag(named) == NULL
+                    && exiftool_get_last_error_tag_reason(named) == NULL,
+                label);
+    snprintf(label, sizeof label, "%s: file is byte-identical", what);
+    TEST_ASSERT(same_bytes(path, fixture), label);
+    exiftool_destroy(handle);
+}
+
+void test_write_refusals() {
+    printf("\nTest 7: Writes Are Applied Or Refused By Name\n");
+    if (!scratch_dir) {
+        TEST_ASSERT(0, "harness passes a scratch directory as argv[1]");
+        return;
+    }
+
+    static const char* const xmp[] = {"XMP:Title"};
+    expect_refused("JPEG XMP:Title", JPEG_FIXTURE, "xmp.jpg", xmp, 1, NULL);
+    static const char* const file_comment[] = {"File:Comment"};
+    expect_refused("JPEG File:Comment", JPEG_FIXTURE, "comment.jpg", file_comment, 1, NULL);
+    static const char* const ifd1[] = {"IFD1:ImageDescription"};
+    expect_refused("JPEG IFD1:ImageDescription", JPEG_FIXTURE, "ifd1.jpg", ifd1, 1, NULL);
+    static const char* const png_xmp[] = {"XMP:Title"};
+    expect_refused("PNG XMP:Title", PNG_FIXTURE, "xmp.png", png_xmp, 1, NULL);
+    /* Multi-key: the writable IFD0:XPTitle is not half-applied. */
+    static const char* const several[] = {"XMP:Title", "File:Comment"};
+    expect_refused("JPEG multi-key", JPEG_FIXTURE, "multi.jpg", several, 2, "IFD0:XPTitle");
+
+    /* Any other error clears the list of named tags. */
+    ExifToolHandle* other = exiftool_create();
+    exiftool_read_file(other, "/nonexistent/path/to/file.jpg");
+    TEST_ASSERT(exiftool_get_last_error_tag_count() == 0,
+                "a non-refusal error names no tags");
+    exiftool_destroy(other);
+
+    /* An ungrouped XPTitle resolves to IFD0, as pinned ExifTool 13.59 writes it. */
+    char path[4096];
+    if (copy_fixture(JPEG_FIXTURE, "ungrouped.jpg", path, sizeof path)) {
+        ExifToolHandle* handle = exiftool_create();
+        exiftool_read_file(handle, path);
+        exiftool_set_tag_string(handle, "XPTitle", "v");
+        int result = exiftool_write_file(handle, path);
+        TEST_ASSERT(result == EXIFTOOL_OK, "ungrouped XPTitle write succeeds");
+        exiftool_destroy(handle);
+        handle = exiftool_create();
+        exiftool_read_file(handle, path);
+        const char* title = exiftool_get_tag_string(handle, "IFD0:XPTitle");
+        TEST_ASSERT(title && strcmp(title, "v") == 0, "ungrouped XPTitle lands in IFD0");
+        exiftool_destroy(handle);
+    } else {
+        TEST_ASSERT(0, "ungrouped XPTitle: copy fixture");
+    }
+}
+
+
+/* ------------------------------------------------------------------------
+ * Test 8: Group Deletions (`GROUP:All`)
+ *
+ * exiftool_remove_tag(h, "EXIF:All") records ExifTool's `-EXIF:All=`, and
+ * exiftool_write_file applies it through the library's write transaction
+ * (#943's group-wide expansion). Pinned ExifTool 13.59: `-EXIF:All=` strips
+ * t/images/Canon.jpg's EXIF; `-GPS:All=` leaves t/images/PNG.png unchanged;
+ * `-XMP:All=` deletes XMP, which oxidex cannot, so it must be refused.
+ * argv[2] / argv[3] are the pinned Canon.jpg / PNG.png ("" when absent).
+ * ------------------------------------------------------------------------ */
+
+static const char* pinned_canon = NULL;
+static const char* pinned_png = NULL;
+
+/* Whether the file at path has any tag in an EXIF directory group. */
+static int has_exif_rows(const char* path) {
+    ExifToolHandle* handle = exiftool_create();
+    int found = 0;
+    if (exiftool_read_file(handle, path) == EXIFTOOL_OK) {
+        size_t count = exiftool_get_tag_count(handle);
+        for (size_t i = 0; i < count; i++) {
+            const char* name = exiftool_get_tag_name_at(handle, i);
+            if (name && (strncmp(name, "IFD0:", 5) == 0 || strncmp(name, "IFD1:", 5) == 0
+                         || strncmp(name, "ExifIFD:", 8) == 0 || strncmp(name, "GPS:", 4) == 0
+                         || strncmp(name, "InteropIFD:", 11) == 0)) {
+                found = 1;
+            }
+        }
+    }
+    exiftool_destroy(handle);
+    return found;
+}
+
+/* Reads path, records a group deletion, writes; returns the write's code. */
+static int delete_group(const char* path, const char* group) {
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    int result = exiftool_remove_tag(handle, group);
+    if (result == EXIFTOOL_OK) {
+        result = exiftool_write_file(handle, path);
+    }
+    exiftool_destroy(handle);
+    return result;
+}
+
+void test_group_deletions() {
+    printf("\nTest 8: Group Deletions\n");
+    char path[4096];
+
+    if (pinned_canon && *pinned_canon && copy_fixture(pinned_canon, "canon.jpg", path, sizeof path)) {
+        TEST_ASSERT(has_exif_rows(path), "Canon.jpg carries EXIF before EXIF:All");
+        int result = delete_group(path, "EXIF:All");
+        TEST_ASSERT(result == EXIFTOOL_OK, "EXIF:All on Canon.jpg succeeds");
+        TEST_ASSERT(!has_exif_rows(path), "EXIF:All really strips Canon.jpg's EXIF");
+        TEST_ASSERT(!same_bytes(path, pinned_canon), "EXIF:All changed Canon.jpg");
+    } else {
+        printf("  [SKIP] pinned t/images/Canon.jpg not available\n");
+    }
+
+    if (pinned_png && *pinned_png && copy_fixture(pinned_png, "png.png", path, sizeof path)) {
+        int result = delete_group(path, "GPS:All");
+        TEST_ASSERT(result == EXIFTOOL_OK, "GPS:All on PNG.png succeeds");
+        TEST_ASSERT(same_bytes(path, pinned_png), "GPS:All leaves PNG.png byte-identical");
+    } else {
+        printf("  [SKIP] pinned t/images/PNG.png not available\n");
+    }
+
+    const char* xmp_fixture = "tests/fixtures/jpeg/sample_with_exif_xmp.jpg";
+    if (copy_fixture(xmp_fixture, "xmp-all.jpg", path, sizeof path)) {
+        int result = delete_group(path, "XMP:All");
+        TEST_ASSERT(result == EXIFTOOL_ERR_TAG_NOT_WRITTEN, "XMP:All is refused");
+        const char* tag = exiftool_get_last_error_tag(0);
+        TEST_ASSERT(exiftool_get_last_error_tag_count() == 1 && tag && strcmp(tag, "XMP:All") == 0,
+                    "the refusal names XMP:All");
+        TEST_ASSERT(same_bytes(path, xmp_fixture), "a refused XMP:All leaves the file untouched");
+    } else {
+        TEST_ASSERT(0, "XMP:All: copy fixture");
+    }
+}
+
+
+/* ------------------------------------------------------------------------
+ * Test 9: Write Outcome (ExifTool WriteInfo 1 / 2)
+ *
+ * exiftool_write_file_with_outcome reports EXIFTOOL_WRITE_UNCHANGED for a
+ * same-value set (the file byte-identical) and EXIFTOOL_WRITE_UPDATED for a
+ * real change, on a JPEG and a PNG.
+ * ------------------------------------------------------------------------ */
+
+static void expect_outcomes(const char* fixture, const char* name) {
+    char path[4096];
+    char label[512];
+    if (!copy_fixture(fixture, name, path, sizeof path)) {
+        snprintf(label, sizeof label, "%s: copy fixture", name);
+        TEST_ASSERT(0, label);
+        return;
+    }
+    ExifToolHandle* handle = exiftool_create();
+    exiftool_read_file(handle, path);
+    const char* stored = exiftool_get_tag_string(handle, "IFD0:Artist");
+    char artist[256] = {0};
+    if (stored) {
+        snprintf(artist, sizeof artist, "%s", stored);
+    }
+    snprintf(label, sizeof label, "%s: fixture has IFD0:Artist", name);
+    TEST_ASSERT(stored != NULL, label);
+
+    int outcome = -1;
+    exiftool_set_tag_string(handle, "IFD0:Artist", artist);
+    int result = exiftool_write_file_with_outcome(handle, path, &outcome);
+    snprintf(label, sizeof label, "%s: same-value write succeeds", name);
+    TEST_ASSERT(result == EXIFTOOL_OK, label);
+    snprintf(label, sizeof label, "%s: same-value write is EXIFTOOL_WRITE_UNCHANGED (got %d)", name,
+             outcome);
+    TEST_ASSERT(outcome == EXIFTOOL_WRITE_UNCHANGED, label);
+    snprintf(label, sizeof label, "%s: unchanged file is byte-identical", name);
+    TEST_ASSERT(same_bytes(path, fixture), label);
+
+    outcome = -1;
+    exiftool_set_tag_string(handle, "IFD0:Artist", "someone else");
+    result = exiftool_write_file_with_outcome(handle, path, &outcome);
+    snprintf(label, sizeof label, "%s: real change is EXIFTOOL_WRITE_UPDATED (got %d)", name,
+             outcome);
+    TEST_ASSERT(result == EXIFTOOL_OK && outcome == EXIFTOOL_WRITE_UPDATED, label);
+    snprintf(label, sizeof label, "%s: updated file changed", name);
+    TEST_ASSERT(!same_bytes(path, fixture), label);
+
+    result = exiftool_write_file_with_outcome(handle, path, NULL);
+    snprintf(label, sizeof label, "%s: NULL outcome pointer is refused", name);
+    TEST_ASSERT(result == EXIFTOOL_ERR_NULL_POINTER, label);
+    exiftool_destroy(handle);
+}
+
+void test_write_outcome() {
+    printf("\nTest 9: Write Outcome\n");
+    expect_outcomes(JPEG_FIXTURE, "outcome.jpg");
+    expect_outcomes(PNG_FIXTURE, "outcome.png");
+}
+
 /**
  * Main test runner
  */
-int main(void) {
+int main(int argc, char** argv) {
+    if (argc > 1) {
+        scratch_dir = argv[1];
+    }
+    if (argc > 3) {
+        pinned_canon = argv[2];
+        pinned_png = argv[3];
+    }
     printf("========================================\n");
     printf("ExifTool-RS C FFI Integration Tests\n");
     printf("========================================\n");
@@ -262,6 +582,9 @@ int main(void) {
     test_type_checking();
     test_null_pointer_safety();
     test_invalid_float_values();
+    test_write_refusals();
+    test_group_deletions();
+    test_write_outcome();
 
     /* Print summary */
     printf("\n========================================\n");

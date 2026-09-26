@@ -2825,12 +2825,12 @@ fn a_map_only_deletion_of_a_decoded_makernote_row_is_refused() {
                 exercised += 1;
                 match write_metadata(&path, &map) {
                     // A maker-note row: never deletable on its own.
-                    Ok(()) if !key.starts_with("IFD1:") && !key.starts_with("InteropIFD:") => {
+                    Ok(_) if !key.starts_with("IFD1:") && !key.starts_with("InteropIFD:") => {
                         panic!("{label}: the dropped row was reported deleted")
                     }
                     // An IFD1 row the generated path deletes (as pinned
                     // ExifTool 13.59 does): really gone, not silently kept.
-                    Ok(()) => assert!(
+                    Ok(_) => assert!(
                         !read_metadata(&path).unwrap().contains_key(key),
                         "{label}: reported deleted but still read back"
                     ),
@@ -3233,9 +3233,9 @@ fn a_panasonic_jpgfromraw_edit_is_refused_by_name() {
     };
     let dir = tempfile::tempdir().unwrap();
     let original = std::fs::read(&sample).unwrap();
-    fn refused<E: std::fmt::Display>(
+    fn refused<T, E: std::fmt::Display>(
         label: &str,
-        result: Result<(), E>,
+        result: Result<T, E>,
         path: &Path,
         original: &[u8],
     ) {

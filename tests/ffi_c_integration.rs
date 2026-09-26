@@ -6,6 +6,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 /// The directory holding the `oxidex` lib artifacts that the cargo invocation
 /// running this test just built, derived from this test binary's own location
 /// instead of from `CARGO_TARGET_DIR` plus a hard-coded profile name.
@@ -109,7 +112,22 @@ fn c_ffi_integration_test_compiles_and_runs() {
         .expect("compile C FFI integration test");
     assert!(compile_status.success(), "C FFI integration compile failed");
 
+    // The write tests copy fixtures here and write the copies; argv[1].
+    let scratch = out_dir.path().join("scratch");
+    std::fs::create_dir(&scratch).expect("create scratch dir for the C write tests");
+
+    // Test 8's pinned t/images fixtures, or "" when this checkout has none
+    // (the C test then reports them skipped).
+    let pinned = |name: &str| {
+        fixtures::pinned_t_images_fixture_path(name)
+            .map(|path| path.into_os_string())
+            .unwrap_or_default()
+    };
+
     let mut run = Command::new(&out);
+    run.arg(&scratch);
+    run.arg(pinned("Canon.jpg"));
+    run.arg(pinned("PNG.png"));
     run.current_dir(&manifest_dir);
     prepend_env_path(&mut run, "DYLD_LIBRARY_PATH", &lib_dir);
     prepend_env_path(&mut run, "LD_LIBRARY_PATH", &lib_dir);

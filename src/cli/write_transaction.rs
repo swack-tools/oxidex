@@ -8,38 +8,35 @@
 //! the file was reported updated with nothing written; and a request that
 //! failed after an earlier one succeeded left the file half-written.
 //!
-//! Here every request is applied to a private copy; the original is replaced
-//! only once all of them succeeded, and only if the copy's bytes differ. Equal
-//! bytes are ExifTool's `image files unchanged` (13.59: `-XPTitle=` on a file
-//! with no XPTitle prints `0 image files updated` / `1 image files unchanged`
-//! and leaves the file alone) -- with one exception, matching ExifTool: a set
-//! whose value the file provably already holds is `updated` (13.59 prints
-//! `1 image files updated` for `-Make=<stored value>`), and only after a
-//! read-back of every requested address proves it (see `already_satisfied`).
+//! Every request is now applied through the library's one write transaction
+//! (`core::write_transaction`, the path `write_metadata`, `modify_tag` and
+//! the C ABI take too): all of a file's `-TAG=` requests are resolved
+//! together, applied to a private copy, proven by a read-back and committed
+//! only if every one of them is in the file. Equal bytes are ExifTool's
+//! `image files unchanged` (13.59: `-XPTitle=` on a file with no XPTitle
+//! prints `0 image files updated` / `1 image files unchanged` and leaves the
+//! file alone) -- with one exception, matching ExifTool: a set whose value
+//! the file already holds is `updated` (13.59 prints `1 image files updated`
+//! for `-Make=<stored value>`). The transaction's read-back proves every set
+//! is in effect before it returns, so an unchanged file after a successful
+//! set is exactly that case.
 
 use crate::cli::args::CliArgs;
 use crate::cli::value_parser::parse_cli_tag_value_os;
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use crate::core::operations::{
-    CopyReport, clear_all_metadata, copy_metadata_report, modify_tag, read_metadata, remove_tag,
-    resolve_write_tag,
+use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report};
+use crate::core::write_transaction::{
+    ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
 };
-use crate::writers::atomic_writer::write_atomic;
-use crate::writers::exif_surgical::stored_entry_matches;
+use crate::error::ExifToolError;
 use crate::writers::write_request::{canonical_request_tag, undefined_tag_warning};
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-/// What happened to one file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteOutcome {
-    /// The file's bytes changed.
-    Updated,
-    /// Every request succeeded and the bytes are identical; the file was not
-    /// touched.
-    Unchanged,
-}
+/// What happened to one file (the library's [`WriteOutcome`]).
+///
+/// [`WriteOutcome`]: crate::core::write_transaction::WriteOutcome
+pub use crate::core::write_transaction::WriteOutcome;
 
 /// Splits `modifications` the way ExifTool's `SetNewValue` does before any
 /// file is opened: requests naming a tag ExifTool does not define become a
@@ -202,6 +199,7 @@ pub fn write_plan_file(
 ) -> Result<PlanOutcome, String> {
     let mut on_commit = Some(on_commit);
     let mut copy = None;
+    let mut proven_sets = 0;
     let outcome = transact(
         path,
         || on_commit.take().map_or(Ok(()), |commit| commit()),
@@ -226,14 +224,17 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            apply_sets(scratch, &plan.sets)
+            proven_sets = apply_sets(scratch, &plan.sets)?;
+            Ok(())
         },
     )?;
-    if outcome == WriteOutcome::Unchanged && plan.sets_only() && already_satisfied(path, &plan.sets)
-    {
-        // Nothing was rewritten, but the request is exactly what the file
-        // holds: report it as ExifTool does. The `--backup` copy still
-        // accompanies an update.
+    if outcome == WriteOutcome::Unchanged && plan.sets_only() && proven_sets > 0 {
+        // Nothing was rewritten, yet the transaction's read-back proved a set
+        // in effect (and every other request in effect or a no-op): the
+        // request is what the file holds, which ExifTool reports as an
+        // update. A request made only of deletions and no-ops stays
+        // `unchanged` (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you`
+        // on a PDF). The `--backup` copy still accompanies an update.
         if let Some(commit) = on_commit.take() {
             commit()?;
         }
@@ -251,8 +252,8 @@ pub fn write_plan_file(
 /// file is then untouched. `on_commit` runs just before an update replaces
 /// the original (the CLI's `--backup` copy), and not at all when unchanged.
 ///
-/// Identical bytes are `Unchanged` -- unless a read-back proves the file
-/// already holds every requested value ([`already_satisfied`]), which
+/// Identical bytes are `Unchanged` -- unless the request sets a value, whose
+/// read-back then proved the file already holds every requested value, which
 /// ExifTool 13.59 reports as `1 image files updated` (`-Make=<stored value>`
 /// rewrites to the same bytes and still counts as an update there).
 pub fn write_file(
@@ -271,85 +272,66 @@ pub fn write_file(
     write_plan_file(path, &plan, on_commit).map(|done| done.outcome)
 }
 
-fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<(), String> {
+/// Applies every `-TAG=VALUE` of one file through the library's write
+/// transaction ([`apply_tag_changes_counted`]): each value is parsed first
+/// (typed as the tag's registry entry declares; wrapping every value as a
+/// String made Integer/Rational/DateTime tags unsettable), then all of them
+/// are resolved, written in one pass, and proven together -- or none is.
+/// Returns how many sets were proven in effect.
+fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<usize, String> {
+    if sets.is_empty() {
+        return Ok(0);
+    }
+    let mut changes = Vec::with_capacity(sets.len());
     for (tag_name, value) in sets {
         if value.is_empty() {
             // Empty value = delete tag (ExifTool -TAG= syntax)
-            remove_tag(scratch, tag_name)
-                .map_err(|e| format!("Failed to remove tag '{}': {}", tag_name, e))?;
+            changes.push(TagChange::delete(tag_name.clone()));
         } else {
-            // Typed as the tag's registry entry declares; wrapping every value
-            // as a String made Integer/Rational/DateTime tags unsettable from
-            // the CLI.
             let tag_value = parse_cli_tag_value_os(tag_name, value)
                 .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
-            modify_tag(scratch, tag_name, tag_value).map_err(|e| {
-                let text = e.to_string();
-                if text.contains("invalid") || text.contains("Invalid") {
-                    format!("Invalid value for {}: {}", tag_name, e)
-                } else {
-                    format!("Failed to modify tag '{}': {}", tag_name, e)
-                }
-            })?;
+            changes.push(TagChange::set(tag_name.clone(), tag_value));
         }
     }
-    Ok(())
+    apply_tag_changes_counted(scratch, &changes)
+        .map(|(_, proven_sets)| proven_sets)
+        .map_err(|e| describe_set_failure(&e, sets))
 }
 
-/// Whether a read-back of `path` proves every request is already in effect:
-/// at least one set, each set's resolved address holding exactly the
-/// requested value, and each deletion's address absent.
-///
-/// This is the only way a byte-identical write is reported as an update, and
-/// it fails closed: a request that cannot be resolved, a value that cannot be
-/// parsed, a stored value that differs in type or spelling, or a
-/// deletion-only request (ExifTool 13.59: `-XPTitle=` with no XPTitle is
-/// `0 image files updated` / `1 image files unchanged`) all leave the answer
-/// `unchanged`. A dropped or refused request never reaches here: refusals are
-/// errors, and the resolved address is the one the writer was handed.
-fn already_satisfied(path: &Path, modifications: &[(String, OsString)]) -> bool {
-    if !modifications.iter().any(|(_, value)| !value.is_empty()) {
-        return false;
-    }
-    let Ok(stored) = read_metadata(path) else {
-        return false;
+/// The CLI's message for a failed `-TAG=` transaction: which request failed,
+/// and why. A refusal names each tag it refused; any other error is
+/// attributed to the one request when there is only one.
+fn describe_set_failure(err: &ExifToolError, sets: &[(String, OsString)]) -> String {
+    let verb = |tag: &str| {
+        let deletion = sets
+            .iter()
+            .any(|(name, value)| name == tag && value.is_empty());
+        if deletion { "remove" } else { "modify" }
     };
-    let file_bytes = fs::read(path).ok();
-    modifications.iter().all(|(tag_name, value)| {
-        let Ok(key) = resolve_write_tag(path, tag_name) else {
-            return false;
-        };
-        // The exact address the writer was handed -- `EXIF:<name>` already
-        // resolved to its own directory -- and no other.
-        if value.is_empty() {
-            return !stored.contains_key(&key);
+    let refused = err.tags_not_written();
+    if !refused.is_empty() {
+        return refused
+            .iter()
+            .map(|tag| format!("Failed to {} tag '{}': {}", verb(&tag.tag), tag.tag, tag))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let text = err.to_string();
+    let invalid = text.contains("invalid") || text.contains("Invalid");
+    match (sets, err) {
+        ([(tag_name, _)], _) if invalid => format!("Invalid value for {}: {}", tag_name, err),
+        ([(tag_name, _)], _) => format!("Failed to {} tag '{}': {}", verb(tag_name), tag_name, err),
+        (_, ExifToolError::InvalidTagValue { tag_name, .. }) => {
+            format!("Invalid value for {}: {}", tag_name, err)
         }
-        let Ok(requested) = parse_cli_tag_value_os(tag_name, value) else {
-            return false;
-        };
-        // An EXIF entry must hold exactly the bytes the writer would emit: the
-        // reader's value is normalized (a stored `"Canon   "` reads as
-        // `"Canon"`), so matching it would prove nothing.
-        if matches!(
-            key.split_once(':'),
-            Some(("IFD0" | "ExifIFD" | "GPS" | "IFD1", _))
-        ) {
-            return file_bytes
-                .as_deref()
-                .is_some_and(|bytes| stored_entry_matches(bytes, &key, &requested) == Some(true));
-        }
-        stored.get(&key).is_some_and(|held| {
-            *held == requested
-                || value
-                    .to_str()
-                    .is_some_and(|text| held.as_string() == Some(text))
-        })
-    })
+        _ => format!("Failed to write tags: {}", err),
+    }
 }
 
 /// Runs `apply` against a private copy of `path`, then commits the copy only
-/// if `apply` succeeded and the bytes differ -- the one place any CLI write
-/// (`-TAG=`, `-all=`, a date shift, `-TagsFromFile`) decides between
+/// if `apply` succeeded and the bytes differ -- the library's transaction
+/// ([`transact_with`]) with the CLI's messages. This is the one place any CLI
+/// write (`-TAG=`, `-all=`, a date shift, `-TagsFromFile`) decides between
 /// `updated` and `unchanged`.
 ///
 /// This is the generic guard against a false update: whatever path `apply`
@@ -362,45 +344,18 @@ pub fn transact(
     on_commit: impl FnOnce() -> Result<(), String>,
     apply: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
-    let original =
-        fs::read(path).map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
-    let dir = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    // Keep the extension: format detection may consult it.
-    let suffix = path
-        .extension()
-        .map(|ext| format!(".{}", ext.to_string_lossy()))
-        .unwrap_or_default();
-    let working_copy_error = |e: std::io::Error| {
-        format!(
+    transact_with(path, apply, on_commit, |step, e| match step {
+        ScratchStep::ReadOriginal => format!("Cannot access file '{}': {}", path.display(), e),
+        ScratchStep::CreateCopy => format!(
             "Cannot create a working copy of '{}': {}",
             path.display(),
             e
-        )
-    };
-    let scratch = tempfile::Builder::new()
-        .prefix(".oxidex-write-")
-        .suffix(&suffix)
-        .tempfile_in(dir)
-        .map_err(working_copy_error)?;
-    fs::write(scratch.path(), &original).map_err(working_copy_error)?;
-
-    apply(scratch.path())?;
-
-    let written = fs::read(scratch.path()).map_err(|e| {
-        format!(
+        ),
+        ScratchStep::ReadCopy => format!(
             "Cannot read the working copy of '{}': {}",
             path.display(),
             e
-        )
-    })?;
-    if written == original {
-        return Ok(WriteOutcome::Unchanged);
-    }
-    on_commit()?;
-    write_atomic(path, &written)
-        .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
-    Ok(WriteOutcome::Updated)
+        ),
+        ScratchStep::Commit => format!("Failed to write '{}': {}", path.display(), e),
+    })
 }

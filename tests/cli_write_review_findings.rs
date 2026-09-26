@@ -433,7 +433,10 @@ fn batch_backup_appends_bak() {
 /// A stored `"Canon   "` reads as `Canon` (ExifTool's RawConv trims it), but
 /// ExifTool 13.59's `-Make=Canon` rewrites it to `Canon` (6 bytes). oxidex
 /// left the padding and reported an update from the normalized read-back.
-/// It must not claim an update it did not make.
+/// It must not claim an update it did not make -- and, since the write
+/// transaction proves every set by reading its field bytes back, it must not
+/// claim success for a set it left undone either: it either rewrites the
+/// entry or refuses by name with the file untouched.
 #[test]
 fn a_normalized_read_back_is_no_proof() {
     let dir = TempDir::new().unwrap();
@@ -441,12 +444,14 @@ fn a_normalized_read_back_is_no_proof() {
     assert_eq!(run(&file, &["-Make=Canon   "]).status.code(), Some(0));
     let before = sha(&file);
     let o = run(&file, &["-Make=Canon"]);
-    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
-    if sha(&file) == before {
-        assert_eq!(
-            out(&o),
-            "    0 image files updated\n    1 image files unchanged\n"
-        );
+    if o.status.code() == Some(0) {
+        assert_ne!(sha(&file), before, "success without the rewrite");
+        assert_eq!(out(&o), "    1 image files updated\n");
+    } else {
+        assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+        assert!(err(&o).contains("'Make'"), "{}", err(&o));
+        assert!(!out(&o).contains("1 image files updated"), "{}", out(&o));
+        assert_eq!(sha(&file), before, "a refused write changed the file");
     }
 }
 

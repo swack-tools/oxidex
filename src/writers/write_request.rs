@@ -10,13 +10,17 @@
 //! grouped key a format's writer does not address (`-XMP:Title=` in a JPEG,
 //! `-IFD1:...`, `-File:Comment=`, a PDF key outside its Info dictionary).
 //!
-//! Two rules, applied by `core::operations::{modify_tag, remove_tag}`:
+//! Two rules, applied to every write request by the library's one write
+//! transaction (`core::write_transaction`), which `write_metadata`,
+//! `modify_tag`, `remove_tag`, `copy_metadata`, the C ABI and the CLI all
+//! go through:
 //!
 //! 1. [`resolve_write_key`] turns an ungrouped name into the address pinned
 //!    ExifTool 13.59 would *create* it at, and only where that is provable
 //!    from source-captured data; otherwise it refuses.
 //! 2. [`ensure_writer_addresses`] refuses a key the target format's writer
-//!    would drop. A refusal is an error, never a success.
+//!    would drop. A refusal is an error ([`ExifToolError::TagsNotWritten`],
+//!    naming the key), never a success.
 //!
 //! # How ExifTool resolves an ungrouped write (Writer.pl, 13.59)
 //!
@@ -369,8 +373,10 @@ fn is_family2_group(group: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(group))
 }
 
+/// A typed refusal of `tag` ([`ExifToolError::TagsNotWritten`]); it displays
+/// as `Cannot write tag '<tag>': <reason>`.
 fn refuse(tag: &str, reason: impl std::fmt::Display) -> ExifToolError {
-    ExifToolError::unsupported_format(format!("Cannot write tag '{tag}': {reason}"))
+    ExifToolError::tag_not_written(tag, reason.to_string())
 }
 
 fn is_exif_main(candidate: &StaticNativeLookupCandidate) -> bool {

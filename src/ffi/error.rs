@@ -28,6 +28,10 @@ pub const EXIFTOOL_ERR_INVALID_TAG_VALUE: c_int = 4;
 pub const EXIFTOOL_ERR_UNSUPPORTED_FORMAT: c_int = 5;
 /// NULL pointer provided
 pub const EXIFTOOL_ERR_NULL_POINTER: c_int = 6;
+/// A write named tags that would not be written, so nothing was written (the
+/// file is byte-identical). `exiftool_get_last_error_tag_count()` and
+/// `exiftool_get_last_error_tag()` name each one.
+pub const EXIFTOOL_ERR_TAG_NOT_WRITTEN: c_int = 7;
 /// Internal error (panic caught)
 pub const EXIFTOOL_ERR_INTERNAL: c_int = 99;
 
@@ -39,13 +43,23 @@ thread_local! {
     /// Thread-local storage for the last error message.
     /// Each thread maintains its own error state for thread-safety.
     pub static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+
+    /// The keys (and reasons) the last `EXIFTOOL_ERR_TAG_NOT_WRITTEN` named,
+    /// as C strings owned here until the thread's next error.
+    static LAST_ERROR_TAGS: RefCell<Vec<(CString, CString)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Sets the last error message for the current thread.
+/// Sets the last error message for the current thread, and forgets the
+/// previous error's tag list.
 pub fn set_last_error(msg: String) {
     LAST_ERROR.with(|e| {
         *e.borrow_mut() = msg;
     });
+    LAST_ERROR_TAGS.with(|tags| tags.borrow_mut().clear());
+}
+
+fn c_string_lossy(text: &str) -> CString {
+    CString::new(text.replace('\0', "\\0")).unwrap_or_default()
 }
 
 /// Converts a Rust ExifToolError to a C error code and sets the error message.
@@ -72,9 +86,91 @@ pub fn error_to_code(err: &ExifToolError) -> c_int {
             EXIFTOOL_ERR_UNSUPPORTED_FORMAT,
             format!("Unsupported format: {}", message),
         ),
+        ExifToolError::TagsNotWritten { tags } => {
+            let msg = err.to_string();
+            set_last_error(msg);
+            LAST_ERROR_TAGS.with(|slot| {
+                *slot.borrow_mut() = tags
+                    .iter()
+                    .map(|tag| (c_string_lossy(&tag.tag), c_string_lossy(&tag.reason)))
+                    .collect();
+            });
+            return EXIFTOOL_ERR_TAG_NOT_WRITTEN;
+        }
     };
     set_last_error(msg);
     code
+}
+
+// ============================================================================
+// Tags Named By The Last Error
+// ============================================================================
+
+/// Number of tags the last error on this thread named as not written.
+///
+/// # Returns
+/// The count for an `EXIFTOOL_ERR_TAG_NOT_WRITTEN` (at least 1); 0 after any
+/// other error, or when no error occurred.
+///
+/// # Thread Safety
+/// Thread-safe. Each thread has its own error state.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_get_last_error_tag_count() -> usize {
+    catch_unwind(|| LAST_ERROR_TAGS.with(|tags| tags.borrow().len())).unwrap_or(0)
+}
+
+/// A tag the last error on this thread named as not written, spelled as the
+/// write request spelled it (`XPTitle`, `XMP:Title`).
+///
+/// # Arguments
+/// - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+///
+/// # Returns
+/// Pointer to a null-terminated tag name, or NULL if `index` is out of range.
+///
+/// # String Lifetime
+/// The returned string is valid until the next API call that sets an error
+/// on the same thread, or thread termination.
+///
+/// # Thread Safety
+/// Thread-safe. Each thread has its own error state.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_get_last_error_tag(index: usize) -> *const c_char {
+    catch_unwind(|| {
+        LAST_ERROR_TAGS.with(|tags| {
+            tags.borrow()
+                .get(index)
+                .map_or(std::ptr::null(), |(tag, _)| tag.as_ptr())
+        })
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+/// Why the tag at `index` of the last error on this thread would not be
+/// written.
+///
+/// # Arguments
+/// - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+///
+/// # Returns
+/// Pointer to a null-terminated reason, or NULL if `index` is out of range.
+///
+/// # String Lifetime
+/// The returned string is valid until the next API call that sets an error
+/// on the same thread, or thread termination.
+///
+/// # Thread Safety
+/// Thread-safe. Each thread has its own error state.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_get_last_error_tag_reason(index: usize) -> *const c_char {
+    catch_unwind(|| {
+        LAST_ERROR_TAGS.with(|tags| {
+            tags.borrow()
+                .get(index)
+                .map_or(std::ptr::null(), |(_, reason)| reason.as_ptr())
+        })
+    })
+    .unwrap_or(std::ptr::null())
 }
 
 // ============================================================================
