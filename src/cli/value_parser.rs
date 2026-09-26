@@ -50,6 +50,7 @@ use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use chrono::{NaiveDate, TimeZone, Timelike, Utc};
+use std::borrow::Cow;
 
 /// The largest numerator/denominator [`Rationalize`] may produce.
 ///
@@ -118,6 +119,33 @@ pub fn parse_cli_tag_value_os(tag_name: &str, raw: &std::ffi::OsStr) -> Result<T
 /// through as a string; the write path validates those with intrinsic checks
 /// only (`core::validation::validate_tag_value_intrinsics`).
 pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    // `-TAG#=VALUE` is ExifTool's raw, PrintConvInv-bypassing write (the
+    // per-tag spelling of `-n`): the value is already the tag's raw stored
+    // form, not a printed one to invert. This module has no general
+    // `raw_mode` parameter yet (that lands with PR #959's
+    // `parse_cli_tag_value_with_mode`); recognise the suffix narrowly, for
+    // exactly the tags this fix adds a unit-stripping PrintConvInv for, so
+    // `-FocalLength#=50 mm` is refused -- raw mode expects the bare stored
+    // number, not a printed value with its unit still attached -- while
+    // `-FocalLength#=50` and every other tag's `#` keep behaving exactly as
+    // before (unaffected; this repo has no other `#` handling to change).
+    let (tag_name, raw_mode) = match tag_name.strip_suffix('#') {
+        Some(stripped)
+            if matches!(
+                stripped.rsplit(':').next(),
+                Some(
+                    "FocalLength"
+                        | "FocalLengthIn35mmFormat"
+                        | "SubjectDistance"
+                        | "AmbientTemperature"
+                )
+            ) =>
+        {
+            (stripped, true)
+        }
+        _ => (tag_name, false),
+    };
+
     let declared_tag_name = match tag_name {
         "GPSDestBearing" => "GPS:GPSDestBearing",
         "DateTimeOriginal" => "EXIF:DateTimeOriginal",
@@ -138,6 +166,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         "FlashpixVersion" => "EXIF:FlashpixVersion",
         "CompressedBitsPerPixel" => "EXIF:CompressedBitsPerPixel",
         "SubjectDistance" => "EXIF:SubjectDistance",
+        "FocalLength" => "EXIF:FocalLength",
+        "FocalLengthIn35mmFormat" => "EXIF:FocalLengthIn35mmFormat",
+        "AmbientTemperature" => "EXIF:AmbientTemperature",
         "RelatedSoundFile" => "EXIF:RelatedSoundFile",
         "SubjectDistanceRange" => "EXIF:SubjectDistanceRange",
         "ComponentsConfiguration" => "EXIF:ComponentsConfiguration",
@@ -554,6 +585,25 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ) => "3",
         _ => raw,
     };
+    // Exif.pm 13.59 0x920a/0xa405/0x9400 append a literal unit to a plain
+    // numeric PrintConv (` mm`, ` mm`, an optional-space `C`) that
+    // PrintConvInv strips again before the value reaches CheckValue -- see
+    // `strip_printconv_unit_suffix` for the exact citations. Raw mode (a
+    // trailing `#` on one of these four tag names, recognised above) skips
+    // this exactly as it skips every other PrintConvInv: the caller already
+    // supplied the bare stored number.
+    let stripped_unit_owned;
+    let raw = if raw_mode {
+        raw
+    } else {
+        match declared_tag_name.rsplit(':').next() {
+            Some(leaf @ ("FocalLength" | "FocalLengthIn35mmFormat" | "AmbientTemperature")) => {
+                stripped_unit_owned = strip_printconv_unit_suffix(leaf, raw);
+                stripped_unit_owned.as_ref()
+            }
+            _ => raw,
+        }
+    };
     let raw = match declared_tag_name.rsplit(':').next() {
         Some("ExposureProgram") => match raw {
             "Not Defined" => "0",
@@ -677,7 +727,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         {
             parse_shutter_speed_value(tag_name, raw)
         }
-        Some(ValueType::Rational) => parse_rational(declared_tag_name, raw),
+        Some(ValueType::Rational) => parse_rational(declared_tag_name, raw, raw_mode),
         Some(ValueType::DateTime) => parse_datetime(tag_name, raw),
         // ExifTool's `undef` format imposes no shape on the value and stores
         // the argument's bytes verbatim (`Writer.pl:6847-6858`).
@@ -689,6 +739,48 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             tag_name,
             "Structured values cannot be set from the command line",
         )),
+    }
+}
+
+/// Reproduces the PrintConvInv these three EXIF tags declare for stripping
+/// the literal unit their PrintConv appends, so a print-converted CLI value
+/// (as `-j` or the default text output would print it) round-trips back
+/// into a write. Byte-for-byte from the pinned Exif.pm (13.59):
+///
+/// | Tag | PrintConv | PrintConvInv | Exif.pm |
+/// |---|---|---|---|
+/// | FocalLength (0x920a) | `sprintf("%.1f mm",$val)` | `$val=~s/\s*mm$//;$val` | :2425-2426 |
+/// | FocalLengthIn35mmFormat (0xa405) | `"$val mm"` | `$val=~s/\s*mm$//;$val` | :2896-2897 |
+/// | AmbientTemperature (0x9400) | `"$val C"` | `$val=~s/ ?C//; $val` | :2590-2591 |
+///
+/// `leaf` must be one of the three names above; the caller (`parse_cli_tag_value`)
+/// only reaches this for those. `SubjectDistance` (0x9206, ` m`) has the same
+/// shape but is handled inline in `parse_rational`, where its stripped value
+/// already needs to reach the ApertureValue/fraction/`inf`/`undef` cases that
+/// follow it.
+fn strip_printconv_unit_suffix<'a>(leaf: &str, raw: &'a str) -> Cow<'a, str> {
+    match leaf {
+        "FocalLength" | "FocalLengthIn35mmFormat" => {
+            Cow::Borrowed(raw.strip_suffix("mm").map(str::trim_end).unwrap_or(raw))
+        }
+        "AmbientTemperature" => match raw.find('C') {
+            // `s/ ?C//` carries neither a `$` anchor nor `/g`: only the
+            // first "C" is removed, together with a single preceding space
+            // if there is one. PrintConv always places the unit last
+            // ("20 C"), so this only diverges from an end-anchored strip
+            // when the caller's own value already contains an unrelated
+            // "C" earlier -- in which case pinned ExifTool strips that
+            // occurrence too, not the trailing unit, and this matches it.
+            Some(index) => {
+                let before = raw[..index].strip_suffix(' ').unwrap_or(&raw[..index]);
+                let mut owned = String::with_capacity(raw.len().saturating_sub(1));
+                owned.push_str(before);
+                owned.push_str(&raw[index + 1..]);
+                Cow::Owned(owned)
+            }
+            None => Cow::Borrowed(raw),
+        },
+        _ => Cow::Borrowed(raw),
     }
 }
 
@@ -1018,7 +1110,7 @@ fn parse_float(tag_name: &str, raw: &str) -> Result<f64> {
 
 /// `CheckValue`'s `rational` branch (`Writer.pl:6888-6903`) followed by
 /// `Rationalize` (`Writer.pl:5200-5228`).
-fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
+fn parse_rational(tag_name: &str, raw: &str, raw_mode: bool) -> Result<TagValue> {
     if tag_name.rsplit(':').next() == Some("CompressedBitsPerPixel") {
         let negative_fraction = as_fraction(raw).is_some_and(|(numerator, _)| numerator < 0);
         let negative_float = as_float_text(raw)
@@ -1030,7 +1122,11 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
     }
     // Exif.pm 13.59 0x9206 PrintConvInv removes the optional whitespace and
     // trailing metres suffix from SubjectDistance before rationalizing it.
-    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance" {
+    // Raw mode (`-SubjectDistance#=`) bypasses this, exactly like the other
+    // three unit-appending tags handled in `parse_cli_tag_value`.
+    let raw = if !raw_mode
+        && tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance"
+    {
         raw.strip_suffix('m').map(str::trim_end).unwrap_or(raw)
     } else {
         raw

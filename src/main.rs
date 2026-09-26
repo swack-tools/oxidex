@@ -211,8 +211,16 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
                 }
             };
 
+            // `-TAG#=VALUE` is ExifTool's raw write syntax (see
+            // `value_parser::parse_cli_tag_value`, which already recognises
+            // the suffix for the tags it narrowly supports raw mode for);
+            // the `#` is never part of an actual tag name, so it must not
+            // reach tag resolution, or this reports "not a known EXIF tag"
+            // even though the value above parsed correctly.
+            let write_tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name.as_str());
+
             // Call modify_tag from core operations
-            if let Err(e) = modify_tag(file, tag_name, tag_value) {
+            if let Err(e) = modify_tag(file, write_tag_name, tag_value) {
                 // Format error message based on error type
                 let error_msg = format!("{}", e);
                 if error_msg.contains("invalid") || error_msg.contains("Invalid") {

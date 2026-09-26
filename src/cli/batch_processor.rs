@@ -447,7 +447,14 @@ fn apply_modifications(
         // Parse the string into the type the tag declares, not into whatever
         // type the value's own shape suggests.
         let tag_value = parse_cli_tag_value_os(tag_name, value_str)?;
-        modify_tag(path, tag_name, tag_value)?;
+        // `-TAG#=VALUE` is ExifTool's raw write syntax (see
+        // `value_parser::parse_cli_tag_value`, which already recognises the
+        // suffix for the tags it narrowly supports raw mode for); the `#`
+        // is never part of an actual tag name, so it must not reach tag
+        // resolution, or `modify_tag` reports "not a known EXIF tag" even
+        // though the value above parsed correctly.
+        let write_tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name.as_str());
+        modify_tag(path, write_tag_name, tag_value)?;
     }
 
     // Restore file times if requested
