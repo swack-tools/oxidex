@@ -2190,7 +2190,19 @@ pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
     // per-tag deletions -- which `write_metadata` would now make of it. Run
     // on a private copy so the outcome is decided by the bytes.
     crate::core::write_transaction::transact(path, |scratch| {
-        write_metadata_with_removals(scratch, &MetadataMap::new(), &[])
+        // JPEG and PNG: ExifTool's delete lists, segment by segment and
+        // chunk by chunk (`jpeg_writer::strip_all_metadata`,
+        // `png_writer::strip_all_metadata`); the carrier writers' EXIF-only
+        // clear left XMP, JFIF, ICC, pHYs and tIME behind.
+        let bytes = std::fs::read(scratch)?;
+        let stripped = match crate::writers::jpeg_writer::strip_all_metadata(&bytes)? {
+            Some(stripped) => Some(stripped),
+            None => crate::writers::png_writer::strip_all_metadata(&bytes)?,
+        };
+        match stripped {
+            Some(stripped) => std::fs::write(scratch, stripped).map_err(ExifToolError::from),
+            None => write_metadata_with_removals(scratch, &MetadataMap::new(), &[]),
+        }
     })
 }
 
