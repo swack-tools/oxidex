@@ -869,7 +869,13 @@ def unproven_children() -> list[dict[str, Any]]:
             if state is None:
                 del owned.children[pid]
             else:
-                survivors.append({"pid": pid, "pgid": pid, "state": state})
+                survivor = {"pid": pid, "pgid": pid, "state": state}
+                primary = getattr(child, "_oxidex_lineage_primary", None)
+                if isinstance(primary, dict):
+                    # The supervised command itself, identified independently
+                    # of its (possibly dead) supervisor.
+                    survivor["lineage_primary"] = dict(primary)
+                survivors.append(survivor)
         if owned.spawns_in_flight:
             survivors.append({"pid": None, "pgid": None,
                               "state": "spawn interrupted before its PID was recorded"})
@@ -934,18 +940,25 @@ def _mark_unproven_lineage(stream: Any, survivors: list[dict[str, Any]]) -> None
         _atomic(marker, {"kind": "oxidex_unproven_owned_lineage", "owner_pid": os.getpid(),
                          "recorded_at": time.time(), "survivors": lineage})
     except (OSError, TypeError, ValueError) as exc:
-        # Never let a marker failure turn retention into a release: report it
-        # as one more unproven survivor instead.
+        # The refusal must still outlive this process. Changing the lock
+        # file's mode needs no free space: every later owner's open of the
+        # lock then fails until an operator restores it.
+        try:
+            os.chmod(stream.name, 0)
+            fallback = "the lock file's permissions were removed instead"
+        except (OSError, TypeError, ValueError) as chmod_error:
+            fallback = f"removing the lock file's permissions also failed: {chmod_error}"
         survivors.append({"pid": None, "pgid": None,
-                          "state": f"unproven lineage marker could not be written: {exc}"})
+                          "state": f"unproven lineage marker could not be written ({exc}); {fallback}"})
 
 
 def _refuse_unproven_lineage(path: Path) -> None:
     marker = _unproven_lineage_marker(path)
     if marker.exists() or marker.is_symlink():
         raise Refused(f"host lock {path} carries an unproven owned-lineage marker ({marker}): a prior "
-                      "run could not prove its command's descendants gone. Verify the processes it "
-                      "lists have exited, then remove the marker before running or recovering")
+                      "run could not prove its command's descendants gone. Verify that each listed "
+                      "lineage_primary command (PID and kernel start time) and every process in its "
+                      "session have exited, then remove the marker before running or recovering")
 
 
 def release_retained_locks() -> list[dict[str, Any]]:
@@ -1632,6 +1645,15 @@ def state(pid):
     except (OSError, IndexError):
         return "?"
 
+def start_time(pid):
+    # The kernel start time (clock ticks) from /proc/<pid>/stat field 22.
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            raw = stat.read()
+        return int(raw[raw.rfind(")") + 2:].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
 def sweep(primary, status):
     # SIGKILL and reap every child until waitpid reports ECHILD.
     escaped = set()
@@ -1699,7 +1721,7 @@ try:
         report(phase="exit", verified=verified, requested=False, escaped=sorted(escaped),
                returncode=os.waitstatus_to_exitcode(raw))
         os._exit(0)
-    report(phase="exec", ok=True)
+    report(phase="exec", ok=True, primary=primary, primary_start=start_time(primary))
 except BaseException as exc:
     report(phase="error", error=repr(exc))
     if primary is None or primary == 0:
@@ -1785,6 +1807,10 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
         reports, failure = [], exc
     exec_report = next((row for row in reports if row.get("phase") == "exec"), None)
     if failure is None and exec_report is not None and exec_report.get("ok") is True:
+        if type(exec_report.get("primary")) is int and type(exec_report.get("primary_start")) is int:
+            setattr(child, "_oxidex_lineage_primary", {
+                "pid": exec_report["primary"], "identity": f"procfs-start:{exec_report['primary_start']}",
+            })
         return
     if failure is not None or exec_report is None:
         try:

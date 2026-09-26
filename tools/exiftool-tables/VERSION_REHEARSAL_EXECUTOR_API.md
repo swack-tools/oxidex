@@ -217,9 +217,12 @@ refused with record state `escaped_descendants`. If the supervisor exits
 without proving its lineage empty (for example it was killed after the
 command left its session and closed every descriptor), the child stays
 unproven and nothing holds the lock's description, so the owner also writes
-`<lock>.unproven-lineage.json` beside the lock: every later lock owner and
-standalone `recover` refuses until an operator has verified the listed
-processes are gone and removed the marker. macOS has no subreaper: there
+`<lock>.unproven-lineage.json` beside the lock, naming the command's own PID
+and kernel start time (`lineage_primary`): every later lock owner and
+standalone `recover` refuses until an operator has verified that command and
+its session are gone and removed the marker. If the marker cannot be written,
+the owner removes the lock file's permissions instead, which needs no free
+space and makes every later open of the lock fail until it is restored. macOS has no subreaper: there
 a descendant that detaches and closes every inherited descriptor (and so no
 longer holds the lock) is not tracked.
 An interruption whose cleanup is incomplete leaves the active stage `running`; `recover`
