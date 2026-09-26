@@ -1011,6 +1011,19 @@ pub(crate) fn write_metadata_in_call_order(
     metadata: &MetadataMap,
     mutations: &[String],
 ) -> Result<WriteOutcome> {
+    write_metadata_counted(path, metadata, mutations).map(|(outcome, _)| outcome)
+}
+
+/// [`write_metadata_in_call_order`], also returning how many sets the
+/// transaction applied and proved -- each resolved destination once (a PDF
+/// date's two spellings are one field), no-ops decided up front excluded
+/// (`write_transaction::apply_tag_changes_counted`). What a copy reports as
+/// [`CopyReport::copied`].
+pub(crate) fn write_metadata_counted(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+) -> Result<(WriteOutcome, usize)> {
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     let baseline = read_metadata(path)?;
@@ -1052,9 +1065,9 @@ pub(crate) fn write_metadata_in_call_order(
     let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     if changes.is_empty() {
         // the file already holds this map: nothing to write
-        return Ok(WriteOutcome::Unchanged);
+        return Ok((WriteOutcome::Unchanged, 0));
     }
-    crate::core::write_transaction::apply_tag_changes(path, &changes)
+    crate::core::write_transaction::apply_tag_changes_counted(path, &changes)
 }
 
 /// The removal calls of a read map's log (`mutations`) that the map's rows
@@ -2297,7 +2310,9 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
 pub struct CopyReport {
     /// Tags actually written to the destination: the sets the write
     /// transaction applied and proved, each resolved destination once (two
-    /// filters redirected to one tag are one copy).
+    /// filters redirected to one tag, or a PDF date's two spellings copied
+    /// from a PDF, are one copy), on the filtered and the copy-all path
+    /// alike.
     pub copied: usize,
     /// Tags the source supplied for the copy -- with a filter, the entries
     /// the source carries -- before they are resolved against the
@@ -2492,14 +2507,16 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
     // Nothing the destination can hold: do not write at all. Serializing the
     // unchanged map still appended a PDF revision (and may re-lay-out a PNG),
     // which was then reported as an update.
+    let mut written = 0;
     while !copied.is_empty() {
         let mut dest_metadata = dest_baseline.clone();
         for (key, value) in &copied {
             dest_metadata.insert(key.clone(), value.clone());
         }
-        match write_metadata(dest, &dest_metadata) {
-            Ok(outcome) => {
+        match write_metadata_counted(dest, &dest_metadata, &[]) {
+            Ok((outcome, proven)) => {
                 report.outcome = outcome;
+                written = proven;
                 break;
             }
             Err(ExifToolError::TagsNotWritten { tags })
@@ -2526,8 +2543,13 @@ fn copy_all(source_metadata: &MetadataMap, dest: &Path) -> Result<CopyReport> {
             Err(other) => return Err(other),
         }
     }
-    report.copied = copied.len();
-    report.requested = report.copied + report.uncopied_tags.len();
+    // `copied` is what the transaction wrote and proved, each resolved
+    // destination once: a PDF source's `CreateDate` and `CreationDate` rows
+    // are one Info field, written once, and were counted twice (#957,
+    // PRRT_kwDOQNbr5M6mR8c8). `requested` stays the raw count of source rows
+    // the copy considered.
+    report.copied = written;
+    report.requested = copied.len() + report.uncopied_tags.len();
     for tag in &report.uncopied_tags {
         let group = tag.tag.split_once(':').map_or("", |(group, _)| group);
         if !report.uncopied_groups.iter().any(|known| known == group) {
