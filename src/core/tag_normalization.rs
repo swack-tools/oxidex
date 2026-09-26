@@ -181,6 +181,11 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
         }
         normalized.set_last_assigned(assigned);
     }
+    // And the map keeps the read's own provenance: a normalized read is still
+    // that complete read (every key a reader emits is already in ExifTool's
+    // spelling, so no row is renamed away), and a row its caller removes is
+    // a deletion `write_metadata` applies -- not a silently skipped one.
+    normalized.inherit_read_source(map);
     normalized
 }
 

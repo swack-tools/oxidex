@@ -223,11 +223,14 @@ impl Rw2 {
     }
 
     fn refused(&self, verb: &str, key: &str, why: String) -> ExifToolError {
-        ExifToolError::unsupported_format(format!(
-            "{verb} '{key}' {} a {} file is not supported: {why}",
-            if verb == "Writing" { "to" } else { "from" },
-            self.file_type
-        ))
+        ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "{verb} '{key}' {} a {} file is not supported: {why}",
+                if verb == "Writing" { "to" } else { "from" },
+                self.file_type
+            ),
+        )
     }
 
     /// The refusal of the set `key` = `value` (`name` in `spelling`), if

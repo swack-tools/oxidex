@@ -70,8 +70,18 @@ pub fn partition_defined(
 /// on the line: `-all= -XPTitle=x` cleared the file and reported an update
 /// with no XPTitle written, and `-DateTimeOriginal+=1 -XPTitle=x` only
 /// shifted the date. A plan carries all of them, applied together in one
-/// transaction in ExifTool's order (clear, then copy, then shifts and sets),
-/// or is refused before any file is touched.
+/// transaction in ExifTool's order, or is refused before any file is
+/// touched.
+///
+/// ExifTool applies a command's requests in argument order, and `-all=`
+/// removes every value assigned before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but none assigned after it. So a `-TAG=VALUE`
+/// before the last `-all=` is superseded and dropped (13.59:
+/// `-IFD0:Artist=x -all=` leaves no EXIF; `-all= -IFD0:Artist=x` leaves
+/// Artist), and a `-TagsFromFile` before it is applied before the clear
+/// (13.59: `-TagsFromFile SRC -all= DST` leaves DST without SRC's tags;
+/// `-all= -TagsFromFile SRC DST` leaves them). Applying the clear first
+/// whatever the order used to keep both.
 #[derive(Debug, Clone, Default)]
 pub struct WritePlan {
     /// `-all=`.
@@ -93,21 +103,81 @@ pub struct WritePlan {
     /// (`apply_sets` checks the tag name's own trailing `#`, independent of
     /// this global setting).
     pub raw_values: bool,
+    /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
+    /// then applied first and cleared with the rest.
+    copy_before_clear: bool,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
 const ALL_DATES: &[&str] = &["DateTimeOriginal", "CreateDate", "ModifyDate"];
 
-fn tag_name(tag: &str) -> &str {
-    tag.rsplit(':').next().unwrap_or(tag)
+/// The field a date request addresses, as far as it is known before any
+/// file is opened: `(group, name)`, lower-cased, with ExifTool's other names
+/// for the EXIF dates folded in (`DateTime` is `ModifyDate`,
+/// `DateTimeDigitized` is `CreateDate`) and the `EXIF` family resolved to
+/// the directory ExifTool writes the date in (`EXIF:CreateDate` is
+/// `ExifIFD:CreateDate`). `group` is `None` for an ungrouped request, which
+/// may land in any group (a shift of `CreateDate` shifts `PDF:CreateDate` in
+/// a PDF), and stays `exif` for a family request naming another tag.
+fn date_address(tag: &str) -> (Option<String>, String) {
+    let (group, name) = match tag.rsplit_once(':') {
+        Some((group, name)) => (Some(group.to_ascii_lowercase()), name),
+        None => (None, tag),
+    };
+    let name = match name.to_ascii_lowercase().as_str() {
+        "datetime" => "modifydate".to_string(),
+        "datetimedigitized" => "createdate".to_string(),
+        other => other.to_string(),
+    };
+    let group = group.map(|group| match (group.as_str(), name.as_str()) {
+        ("exif", "modifydate") => "ifd0".to_string(),
+        ("exif", "datetimeoriginal" | "createdate") => "exififd".to_string(),
+        _ => group,
+    });
+    (group, name)
+}
+
+/// EXIF directories the `EXIF` family spans.
+const EXIF_DIRECTORIES: &[&str] = &["ifd0", "ifd1", "exififd", "gps", "interopifd", "subifd"];
+
+/// Whether two requests may address the same field ([`date_address`]): the
+/// same name, and groups that are equal, or one of them ungrouped or the
+/// `EXIF` family spanning the other's directory. Requests naming two
+/// different directories (`ExifIFD:CreateDate`, `IFD0:CreateDate`) are two
+/// fields, which ExifTool writes independently.
+fn may_address_same_field(a: &str, b: &str) -> bool {
+    let ((group_a, name_a), (group_b, name_b)) = (date_address(a), date_address(b));
+    if name_a != name_b {
+        return false;
+    }
+    match (group_a.as_deref(), group_b.as_deref()) {
+        (None, _) | (_, None) => true,
+        (Some(a), Some(b)) => {
+            a == b
+                || (a == "exif" && EXIF_DIRECTORIES.contains(&b))
+                || (b == "exif" && EXIF_DIRECTORIES.contains(&a))
+        }
+    }
 }
 
 impl WritePlan {
     /// Classifies `args`. `Err` is a refusal to print after `Error: ` (exit 1,
     /// nothing touched): a combination oxidex cannot apply faithfully.
     pub fn from_args(args: &CliArgs) -> Result<Self, String> {
-        let raw_sets = args.plain_tag_modifications();
-        let (warnings, sets) = partition_defined(&raw_sets);
+        let raw_sets = args.plain_tag_modifications_with_positions();
+        let clear_at = args.clear_all_position();
+        // Every name is judged (and an undefined one warned about) wherever
+        // it stands, as ExifTool's `SetNewValue` judges each; only then does
+        // a later `-all=` remove the values assigned before it.
+        let mut warnings = Vec::new();
+        let mut sets = Vec::new();
+        for (at, tag, value) in &raw_sets {
+            let (mut warned, defined) = partition_defined(&[(tag.clone(), value.clone())]);
+            warnings.append(&mut warned);
+            if clear_at.is_none_or(|clear| *at > clear) {
+                sets.extend(defined);
+            }
+        }
         let mut shifts = Vec::new();
         for (tag, op, value) in args.date_shift_operations() {
             let operation = match op.as_str() {
@@ -136,6 +206,11 @@ impl WritePlan {
             warnings,
             requested_sets: !raw_sets.is_empty(),
             raw_values: !args.exiftool_compat(),
+            copy_before_clear: args.tags_from_file.is_some()
+                && matches!(
+                    (args.tags_from_file_position, clear_at),
+                    (Some(copy), Some(clear)) if copy <= clear
+                ),
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -155,16 +230,20 @@ impl WritePlan {
                     .to_string(),
             );
         }
+        // A set and a shift of one field cannot both be applied; requests
+        // naming two different fields can (13.59: an `ExifIFD:CreateDate`
+        // shift beside an `IFD0:CreateDate` set writes both), so the
+        // addresses are compared, not the leaf names.
         for (shift_tag, _, _) in &plan.shifts {
             let shifted: Vec<&str> = if shift_tag.eq_ignore_ascii_case("AllDates") {
                 ALL_DATES.to_vec()
             } else {
-                vec![tag_name(shift_tag)]
+                vec![shift_tag.as_str()]
             };
             if let Some((set_tag, _)) = plan.sets.iter().find(|(set_tag, _)| {
                 shifted
                     .iter()
-                    .any(|name| name.eq_ignore_ascii_case(tag_name(set_tag)))
+                    .any(|shifted| may_address_same_field(shifted, set_tag))
             }) {
                 return Err(format!(
                     "'{set_tag}' is both set and shifted ({shift_tag}); give one request per tag"
@@ -214,10 +293,15 @@ pub fn write_plan_file(
         path,
         || on_commit.take().map_or(Ok(()), |commit| commit()),
         |scratch| {
-            if plan.clear_all {
+            let clear = || {
                 clear_all_metadata(scratch).map_err(|e| {
                     format!("Failed to clear metadata from '{}': {}", path.display(), e)
-                })?;
+                })
+            };
+            // `-all=` where it stood relative to `-TagsFromFile` (the sets
+            // before it were already dropped, see `WritePlan`).
+            if plan.clear_all && !plan.copy_before_clear {
+                clear()?;
             }
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
@@ -229,6 +313,9 @@ pub fn write_plan_file(
                         e
                     )
                 })?);
+            }
+            if plan.clear_all && plan.copy_before_clear {
+                clear()?;
             }
             for (tag_pattern, operation, offset) in &plan.shifts {
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)

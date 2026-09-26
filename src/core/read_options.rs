@@ -190,8 +190,11 @@ impl ReadOptions {
             }
             out.insert(key.clone(), value.clone());
         }
-        // A filtered copy is the same rows: each keeps its provenance.
+        // A filtered copy is the same rows: each keeps its provenance, and
+        // the map keeps the read's -- for the rows it kept only, so a row
+        // the filter dropped is never taken for one its caller removed.
         out.copy_provenance_from(metadata);
+        out.inherit_read_source(metadata);
         out
     }
 }
@@ -230,6 +233,30 @@ fn is_zip_forensic_entry_key(key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::TagValue;
+
+    /// A filtered projection of a read keeps the read's source for the rows
+    /// it kept: removing one of them is a deletion, while a row the filter
+    /// itself dropped (a hex-fallback name) is not one its caller removed
+    /// and is never deleted (#957, PRRT_kwDOQNbr5M6mPnGR's class).
+    #[test]
+    fn a_filtered_read_deletes_only_rows_its_caller_removed() {
+        use crate::core::write_transaction::{TagChange, changes_between};
+        let mut read = MetadataMap::new();
+        read.insert("IFD0:Make", TagValue::new_string("Acme"));
+        read.insert("IFD0:Artist", TagValue::new_string("me"));
+        read.insert("IFD0:0xc6d2", TagValue::new_string("x"));
+        read.mark_read_complete();
+        read.set_read_source(std::path::Path::new("a.jpg"));
+        let mut filtered = ReadOptions::default_full_listing().strip_extended_only(&read);
+        assert!(!filtered.contains_key("IFD0:0xc6d2"));
+        assert!(filtered.read_from(std::path::Path::new("a.jpg")));
+        assert!(changes_between(&read, &filtered, true).is_empty());
+        filtered.remove("IFD0:Artist");
+        assert_eq!(
+            changes_between(&read, &filtered, true),
+            vec![TagChange::delete("IFD0:Artist")]
+        );
+    }
 
     #[test]
     fn default_requests_nothing_and_extended_is_off() {
