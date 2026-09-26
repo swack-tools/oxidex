@@ -1592,48 +1592,9 @@ def state(pid):
     except (OSError, IndexError):
         return "?"
 
-try:
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
-    signal.signal(signal.SIGUSR1, request_sweep)
-    failure_read, failure_write = os.pipe()  # close-on-exec in the command
-    primary = os.fork()
-    if primary == 0:
-        try:
-            os.close(status_fd)
-            os.close(failure_read)
-            signal.signal(signal.SIGUSR1, signal.SIG_DFL)
-            os.execvp(argv[0], argv)
-        except OSError as exc:
-            os.write(failure_write, f"{exc.errno}:{exc.strerror}".encode())
-        os._exit(127)
-    os.close(failure_write)
-    failure = b""
-    while True:
-        chunk = os.read(failure_read, 4096)
-        if not chunk:
-            break
-        failure += chunk
-    os.close(failure_read)
-    if failure:
-        os.waitpid(primary, 0)
-        number, _, message = failure.decode(errors="replace").partition(":")
-        report(phase="exec", errno=int(number), error=message)
-        os._exit(0)
-    report(phase="exec", ok=True)
-    status = None
-    requested = False
-    try:
-        while status is None:
-            pid, raw = os.waitpid(-1, 0)
-            if pid == primary:
-                status = raw
-    except Sweep:
-        requested = True
-    signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+def sweep(primary, status):
+    # SIGKILL and reap every child until waitpid reports ECHILD.
     escaped = set()
-    verified = False
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         for pid in children():
@@ -1651,16 +1612,72 @@ try:
                 if pid == primary and status is None:
                     status = raw
         except ChildProcessError:
-            verified = True
-            break
+            return True, escaped, status
         time.sleep(0.01)
+    return False, escaped, status
+
+primary = None
+try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+    # A sweep request is held pending until the wait loop can act on it, so
+    # it can never unwind the supervisor past its sweep.
+    signal.signal(signal.SIGUSR1, request_sweep)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
+    failure_read, failure_write = os.pipe()  # close-on-exec in the command
+    primary = os.fork()
+    if primary == 0:
+        try:
+            os.close(status_fd)
+            os.close(failure_read)
+            signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
+            os.execvp(argv[0], argv)
+        except BaseException as exc:
+            number = getattr(exc, "errno", None) or 0
+            os.write(failure_write, f"{number}:{exc}".encode())
+        os._exit(127)
+    os.close(failure_write)
+    failure = b""
+    while True:
+        chunk = os.read(failure_read, 4096)
+        if not chunk:
+            break
+        failure += chunk
+    os.close(failure_read)
+    if failure:
+        os.waitpid(primary, 0)
+        number, _, message = failure.decode(errors="replace").partition(":")
+        report(phase="exec", errno=int(number), error=message)
+        os._exit(0)
+    report(phase="exec", ok=True)
+except BaseException as exc:
+    report(phase="error", error=repr(exc))
+    if primary is None or primary == 0:
+        os._exit(0)
+status = None
+requested = False
+try:
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
+        while status is None:
+            pid, raw = os.waitpid(-1, 0)
+            if pid == primary:
+                status = raw
+    except Sweep:
+        requested = True
+    finally:
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+except BaseException as exc:
+    report(phase="error", error=repr(exc))
+# Whatever happened above, the lineage is swept before this process exits.
+try:
+    verified, escaped, status = sweep(primary, status)
     report(phase="exit", verified=verified, requested=requested, escaped=sorted(escaped),
            returncode=None if status is None else os.waitstatus_to_exitcode(status))
 except BaseException as exc:
-    try:
-        report(phase="error", error=repr(exc))
-    except BaseException:
-        pass
+    report(phase="error", error=repr(exc))
 os._exit(0)
 """
 
@@ -1763,11 +1780,11 @@ def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATI
         raise OwnedChildCleanupIncomplete(f"owned command lineage cannot be verified: {exc}") from exc
     finished = next((row for row in reports if row.get("phase") == "exit"), None)
     if (finished is None or finished.get("verified") is not True
+            or type(finished.get("returncode")) is not int
             or not isinstance(finished.get("escaped"), list)
             or any(type(pid) is not int for pid in finished["escaped"])):
         raise OwnedChildCleanupIncomplete(f"owned command lineage was not proven empty: {reports}")
-    if type(finished.get("returncode")) is int:
-        child.returncode = finished["returncode"]
+    child.returncode = finished["returncode"]
     setattr(child, "_oxidex_lineage_finished", finished["escaped"])
     return finished["escaped"]
 
