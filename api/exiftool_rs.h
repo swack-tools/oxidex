@@ -413,6 +413,14 @@ int exiftool_set_tag_float(struct ExifToolHandle *handle, const char *tag_name, 
  only EXIF is that Artist, as ExifTool's `-EXIF:All= -IFD0:Artist=x`
  does). `exiftool_read_file` discards recorded group deletions.
 
+ On a handle read from the file it is written to, removing a tag the
+ handle does not hold under that name (`XMP-dc:Title` where the reader
+ keys it `XMP:Title`, or a tag the file lacks) is ExifTool's `-TAG=`: the
+ write deletes it by name, leaves the file unchanged when the file holds
+ no such tag, or refuses it with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`. A PDF
+ date's two spellings (`PDF:CreateDate`, `PDF:CreationDate`) are one
+ field, which the last call naming either decides.
+
  # Returns
  - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
  - `EXIFTOOL_ERR_NULL_POINTER` if handle or tag_name is NULL

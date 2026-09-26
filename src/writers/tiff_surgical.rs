@@ -359,10 +359,13 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         .iter()
         .find(|key| crate::writers::exif_surgical::group_removal(key).is_some())
     {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Removing '{key}' from a TIFF-structured file is not supported: this \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Removing '{key}' from a TIFF-structured file is not supported: this \
              writer edits entries in place and cannot delete a directory"
-        )));
+            ),
+        ));
     }
 
     if !embedded_exif && !desired.iter().any(|(k, _)| is_exif_family(k)) {
@@ -418,23 +421,29 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                 .iter()
                 .find(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original))
             {
-                return Err(ExifToolError::unsupported_format(format!(
-                    "Removing tag '{}' from a TIFF-structured file is not yet \
+                return Err(ExifToolError::tag_not_written(
+                    key.to_string(),
+                    format!(
+                        "Removing tag '{}' from a TIFF-structured file is not yet \
                      supported: this writer edits entries in place and cannot \
                      shrink an IFD table",
-                    key
-                )));
+                        key
+                    ),
+                ));
             }
             rowless.push((entry, None));
             continue;
         };
         if !desired.contains_key(base_key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing tag '{}' from a TIFF-structured file is not yet \
+            return Err(ExifToolError::tag_not_written(
+                base_key.to_string(),
+                format!(
+                    "Removing tag '{}' from a TIFF-structured file is not yet \
                  supported: this writer edits entries in place and cannot \
                  shrink an IFD table",
-                base_key
-            )));
+                    base_key
+                ),
+            ));
         }
 
         // The edit is whichever spelling the caller staged a *different* value
@@ -493,21 +502,27 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                 continue; // untouched — carried by not touching its bytes
             }
             if !borrowed.iter().any(|k| k == key) {
-                return Err(ExifToolError::unsupported_format(format!(
-                    "Editing tag '{}' is not yet supported for TIFF-structured \
+                return Err(ExifToolError::tag_not_written(
+                    key.to_string(),
+                    format!(
+                        "Editing tag '{}' is not yet supported for TIFF-structured \
                      files: it lives outside IFD0/ExifIFD/GPS (SubIFD, IFD1 or \
                      MakerNote), which this writer carries untouched",
-                    key
-                )));
+                        key
+                    ),
+                ));
             }
             // A borrowed engine name: added below under the name's own id.
         }
 
         if requires_subifd_write(key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
+                    key
+                ),
+            ));
         }
 
         let Some(descriptor) = get_tag_descriptor(key) else {
@@ -542,14 +557,17 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             match patched {
                 Some(previous) if previous == value => continue,
                 Some(_) => {
-                    return Err(ExifToolError::unsupported_format(format!(
-                        "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, \
+                    return Err(ExifToolError::tag_not_written(
+                        key.to_string(),
+                        format!(
+                            "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, \
                          which another name already writes with a different \
                          value; write the tag under a single name.",
-                        key,
-                        entry.ifd.prefix(),
-                        tag_id,
-                    )));
+                            key,
+                            entry.ifd.prefix(),
+                            tag_id,
+                        ),
+                    ));
                 }
                 None => {}
             }

@@ -364,23 +364,25 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 ));
                 continue;
             }
+            // ExifTool's group deletion removes every value set in the group
+            // before it (Writer.pl `SetNewValue` -> `RemoveNewValuesForGroup`),
+            // whatever the file holds: the earlier requests it covers are
+            // cancelled here, with their refusals, before the deletion itself
+            // is planned. 13.59: `-XMP:Title=x -XMP:All=` on a file without
+            // XMP is `unchanged` (#957, PRRT_kwDOQNbr5M6mQbb-); `-IFD1:Make=x
+            // -EXIF:All=` on a JPEG with EXIF clears the EXIF and never asks
+            // for the IFD1 set oxidex cannot make (PRRT_kwDOQNbr5M6mRRX8);
+            // `-XMP-dc:Title=x -XMP:All=` where oxidex cannot delete the XMP
+            // is refused for `XMP:All` alone.
+            pending.retain(|earlier| {
+                !group_covers(group, earlier.request.requested)
+                    && !group_covers(group, &earlier.request.key)
+            });
+            request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
             match plan_group_deletion(path, change.tag(), group) {
                 Ok(Some(key)) => groups.push((at, key)),
-                // Provably nothing of the group in the file -- but ExifTool's
-                // group deletion also removes every value set in the group
-                // before it (Writer.pl `RemoveNewValuesForGroup`): 13.59's
-                // `-XMP:Title=x -XMP:All=` on a file without XMP is
-                // `unchanged`. So the earlier requests it covers go too;
-                // dropping the deletion alone left them to be written (or
-                // refused) as if it had not been asked (#957,
-                // PRRT_kwDOQNbr5M6mQbb-).
-                Ok(None) => {
-                    pending.retain(|earlier| {
-                        !group_covers(group, earlier.request.requested)
-                            && !group_covers(group, &earlier.request.key)
-                    });
-                    request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-                }
+                // Provably nothing of the group in the file.
+                Ok(None) => {}
                 // Kept at its place among the requests' refusals; no later
                 // deletion cancels a deletion's own refusal.
                 Err(ExifToolError::TagsNotWritten { tags }) => {
@@ -493,12 +495,16 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
-/// (the requested spelling, or the address it resolved to): a tag of that
-/// group; for the XMP (XML) family, any `XMP-*` (`XML-*`) group, and an
-/// `XMP:Name` request the namespace of whose tag is the deleted one
-/// (`XMP:Title` is `XMP-dc:Title`, which 13.59's `-XMP-dc:All=` cancels).
-/// An ungrouped name, or a namespace the registry does not tell, is not
-/// covered: its request stays, and is written or refused by name.
+/// (the requested spelling, or the address it resolved to) -- Writer.pl's
+/// `RemoveNewValuesForGroup` with its `%removeGroups`: a tag of that group;
+/// for `EXIF` and `IFD0` (which also removes `EXIF` and `MakerNotes`
+/// values), every EXIF directory and maker-note group; for `ExifIFD` (also
+/// `MakerNotes`, `InteropIFD`), those; for the XMP (XML) family, any `XMP-*`
+/// (`XML-*`) group, and an `XMP:Name` request the namespace of whose tag is
+/// the deleted one (`XMP:Title` is `XMP-dc:Title`, which 13.59's
+/// `-XMP-dc:All=` cancels). An ungrouped name, or a namespace the registry
+/// does not tell, is not covered: its request stays, and is written or
+/// refused by name.
 fn group_covers(group: &str, tag: &str) -> bool {
     let Some((tag_group, _)) = tag.rsplit_once(':') else {
         return false;
@@ -507,6 +513,18 @@ fn group_covers(group: &str, tag: &str) -> bool {
         return true;
     }
     let (group_lower, tag_lower) = (group.to_ascii_lowercase(), tag_group.to_ascii_lowercase());
+    let exif_directory = EXIF_DIRECTORIES
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(tag_group))
+        || tag_lower == "exif";
+    let makernote =
+        tag_lower == "makernotes" || crate::writers::exif_surgical::is_makernote_group(tag_group);
+    match group_lower.as_str() {
+        "exif" | "ifd0" if exif_directory || makernote => return true,
+        "exififd" if tag_lower == "interopifd" || makernote => return true,
+        "makernotes" if makernote => return true,
+        _ => {}
+    }
     match group_lower.split_once('-') {
         None if group_lower == "xmp" || group_lower == "xml" => {
             tag_lower.starts_with(&format!("{group_lower}-"))
@@ -576,21 +594,28 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
         write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
         index = end;
     }
-    // The read-back proves every field request no later group removal can
-    // have overridden; one a later `<group>:All` covers was proven by the
-    // writer's verifier in its own pass, and the group removal decides its
-    // final state (as in ExifTool).
-    let last_group = plan
-        .steps
-        .iter()
-        .rposition(|step| matches!(step, Step::Group(_)));
+    // The read-back proves every field request no later group removal
+    // covers -- which, since planning cancels the requests a later deletion
+    // covers, is every one. Proving only the requests after the last group
+    // removal left an unrelated earlier set unproven and uncounted: 13.59's
+    // `-IFD0:Artist=<its value> -GPS:All=` on a JPEG without GPS is
+    // `1 image files updated` by the same-value-set rule, and oxidex said
+    // `unchanged` (#957, PRRT_kwDOQNbr5M6mRRYE).
     let proven: Vec<&Resolved<'_>> = plan
         .steps
         .iter()
         .enumerate()
-        .filter(|(at, _)| last_group.is_none_or(|group| *at > group))
-        .filter_map(|(_, step)| match step {
-            Step::Field(request) => Some(request),
+        .filter_map(|(at, step)| match step {
+            Step::Field(request) => {
+                let covered = plan.steps[at + 1..].iter().any(|later| {
+                    matches!(later, Step::Group(key)
+                    if group_deletion(key).is_some_and(|group| {
+                        group_covers(group, request.requested)
+                            || group_covers(group, &request.key)
+                    }))
+                });
+                (!covered).then_some(request)
+            }
             Step::Group(_) => None,
         })
         .collect();

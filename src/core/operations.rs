@@ -1014,7 +1014,11 @@ pub(crate) fn write_metadata_in_call_order(
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     let baseline = read_metadata(path)?;
-    let changes = changes_between(&baseline, metadata, metadata.read_from(path));
+    let read = metadata.read_from(path);
+    let mut changes = changes_between(&baseline, metadata, read);
+    if read {
+        removals_in_call_order(metadata, mutations, &mut changes);
+    }
     // Positions are 1-based in the log; 0 is "before every call".
     let named = |call: &str, key: &str| {
         call.eq_ignore_ascii_case(key)
@@ -1051,6 +1055,71 @@ pub(crate) fn write_metadata_in_call_order(
         return Ok(WriteOutcome::Unchanged);
     }
     crate::core::write_transaction::apply_tag_changes(path, &changes)
+}
+
+/// The removal calls of a read map's log (`mutations`) that the map's rows
+/// alone cannot express, made explicit in `changes`:
+///
+/// * A removal whose key the map never held under that spelling -- the
+///   read keys a tag otherwise (`XMP:Title` for a removed `XMP-dc:Title`),
+///   or the file lacks it -- is ExifTool's `-TAG=`, a deletion by name,
+///   which the transaction resolves, proves a no-op, or refuses by name.
+///   It used to change nothing and report success (the `-XMP-dc:Title=`
+///   the C ABI was asked for stayed in the file).
+/// * A PDF Info date the reader surfaces under two spellings is one field,
+///   and the last call naming either spelling decides it (#957,
+///   PRRT_kwDOQNbr5M6mRRXx): `set(PDF:CreateDate)` then
+///   `remove(PDF:CreationDate)` deletes the date, as 13.59's
+///   `-PDF:CreateDate=<new> -PDF:CreateDate=` does -- the map alone, which
+///   holds the assigned `CreateDate`, says to set it. A map written without
+///   a log (`write_metadata`) has no order to go by, and a set of the field
+///   under one spelling replaces a removal of the other.
+fn removals_in_call_order(
+    metadata: &MetadataMap,
+    mutations: &[String],
+    changes: &mut Vec<crate::core::write_transaction::TagChange>,
+) {
+    use crate::core::write_transaction::TagChange;
+    for (index, call) in mutations.iter().enumerate() {
+        let later = &mutations[index + 1..];
+        if crate::writers::write_request::group_deletion(call).is_some()
+            || later.iter().any(|next| next.eq_ignore_ascii_case(call))
+            // The last call on the key left it in the map: a set.
+            || metadata.contains_key(call)
+            // Rows describing the file are never deleted by name.
+            || call.split_once(':').is_some_and(|(group, _)| {
+                ["File", "System", "Composite", "ExifTool"]
+                    .iter()
+                    .any(|descriptive| descriptive.eq_ignore_ascii_case(group))
+            })
+        {
+            continue;
+        }
+        let spellings = field_spellings(call);
+        // A later call on the field's other spelling decides it instead.
+        if spellings.iter().any(|spelling| {
+            !spelling.eq_ignore_ascii_case(call)
+                && later.iter().any(|next| next.eq_ignore_ascii_case(spelling))
+        }) {
+            continue;
+        }
+        let field = spellings.first().copied().unwrap_or(call.as_str());
+        // The removal came after any set of the field under another spelling.
+        changes.retain(|change| {
+            change.value().is_none()
+                || !spellings
+                    .iter()
+                    .any(|spelling| spelling.eq_ignore_ascii_case(change.tag()))
+        });
+        let deleted = changes.iter().any(|change| {
+            change.value().is_none()
+                && (change.tag().eq_ignore_ascii_case(field)
+                    || change.tag().eq_ignore_ascii_case(call))
+        });
+        if !deleted {
+            changes.push(TagChange::delete(field));
+        }
+    }
 }
 
 /// [`write_metadata`], plus the keys the caller asked by name to delete. The
@@ -2121,7 +2190,19 @@ pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
     // per-tag deletions -- which `write_metadata` would now make of it. Run
     // on a private copy so the outcome is decided by the bytes.
     crate::core::write_transaction::transact(path, |scratch| {
-        write_metadata_with_removals(scratch, &MetadataMap::new(), &[])
+        // JPEG and PNG: ExifTool's delete lists, segment by segment and
+        // chunk by chunk (`jpeg_writer::strip_all_metadata`,
+        // `png_writer::strip_all_metadata`); the carrier writers' EXIF-only
+        // clear left XMP, JFIF, ICC, pHYs and tIME behind.
+        let bytes = std::fs::read(scratch)?;
+        let stripped = match crate::writers::jpeg_writer::strip_all_metadata(&bytes)? {
+            Some(stripped) => Some(stripped),
+            None => crate::writers::png_writer::strip_all_metadata(&bytes)?,
+        };
+        match stripped {
+            Some(stripped) => std::fs::write(scratch, stripped).map_err(ExifToolError::from),
+            None => write_metadata_with_removals(scratch, &MetadataMap::new(), &[]),
+        }
     })
 }
 

@@ -1008,6 +1008,71 @@ fn build_new_text_chunk(name: &str, text: &str) -> Option<([u8; 4], Vec<u8>)> {
 /// write_png_metadata(path, &reader, &metadata)?;
 /// # Ok::<(), oxidex::error::ExifToolError>(())
 /// ```
+/// Chunks ExifTool's `-all=` deletes from a PNG (PNG.pm 13.59): every
+/// textual chunk (TextualData), the EXIF (`eXIf`, `zxIf`) and XMP (`tXMP`)
+/// blocks, the ICC profile (`iCCP`), `pHYs` (PNG-pHYs), C2PA (`caBX`,
+/// JUMBF), SEAL (`seAl`), XML (`meTa`), and the writable main-table tags
+/// (`tIME`, `gAMA`, `sRGB`). Pinned 13.59 on a PNG carrying gAMA, sRGB,
+/// cICP, sBIT, oFFs and vpAg keeps exactly cICP, sBIT, oFFs and vpAg.
+const CLEARED_CHUNKS: &[&[u8; 4]] = &[
+    b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tXMP", b"iCCP", b"pHYs", b"tIME", b"gAMA", b"sRGB",
+    b"caBX", b"seAl", b"meTa",
+];
+
+/// ExifTool's `-all=` on a PNG (`clear_all_metadata`): the
+/// [`CLEARED_CHUNKS`] go, and everything after IEND (the `Trailer` group);
+/// every other chunk is kept byte for byte. `None` for bytes that are not a
+/// PNG. The clear this replaces removed the text and eXIf chunks only, and
+/// left pHYs, tIME, iCCP and an XMP iTXt behind a reported update.
+pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Ok(None);
+    }
+    let mut output = PNG_SIGNATURE.to_vec();
+    let mut at = PNG_SIGNATURE.len();
+    loop {
+        let header = bytes
+            .get(at..at + 8)
+            .ok_or_else(|| ExifToolError::parse_error("PNG ends before IEND"))?;
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        let kind: [u8; 4] = [header[4], header[5], header[6], header[7]];
+        let end = at
+            .checked_add(12)
+            .and_then(|start| start.checked_add(length))
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| ExifToolError::parse_error("Truncated PNG chunk"))?;
+        // A bad CRC is refused here as by every other PNG write (13.59's
+        // minor `Bad CRC for ... chunk` error, file untouched).
+        let data = &bytes[at + 8..end - 4];
+        let crc = u32::from_be_bytes([
+            bytes[end - 4],
+            bytes[end - 3],
+            bytes[end - 2],
+            bytes[end - 1],
+        ]);
+        let checked = match &kind {
+            b"IEND" => false,
+            b"IDAT" => length <= PNG_CHUNK_SIZE_LIMIT,
+            _ => true,
+        };
+        if checked && crc != calculate_crc(&kind, data) {
+            return Err(ExifToolError::parse_error(format!(
+                "Bad CRC for {} chunk (a [minor] error that ExifTool also refuses to write \
+                 over without -m); the file was not changed",
+                String::from_utf8_lossy(&kind)
+            )));
+        }
+        let cleared = CLEARED_CHUNKS.contains(&&kind) || kind.eq_ignore_ascii_case(b"zxIf");
+        if !cleared {
+            output.extend_from_slice(&bytes[at..end]);
+        }
+        at = end;
+        if &kind == b"IEND" {
+            return Ok(Some(output));
+        }
+    }
+}
+
 pub fn write_png_metadata(
     path: &Path,
     original_reader: &dyn FileReader,
