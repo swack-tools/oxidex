@@ -238,8 +238,20 @@ pub(crate) fn parse_cli_tag_value_with_mode(
         return Ok(TagValue::Binary(encoded.into_bytes()));
     }
 
+    // `raw_mode` (`#`, `--no-print-conv`) was ignored here (Codex PR #959
+    // round 4): `-ExifIFD:ComponentsConfiguration#="1 2 3 0"` and the
+    // `--no-print-conv` equivalent still ran the label-only parser
+    // (`parse_components_configuration`, which only recognizes `Y`/`Cb`/
+    // `Cr`/`R`/`G`/`B`/`-`), so the canonical four raw byte codes the oracle
+    // accepts under `#`/`-n` were refused as "not in PrintConv". Confirmed
+    // against the oracle, which stores the raw bytes verbatim under
+    // `#`/`-n`.
     if leaf == Some("ComponentsConfiguration") {
-        return parse_components_configuration(tag_name, raw);
+        return if raw_mode {
+            parse_components_configuration_raw(tag_name, raw)
+        } else {
+            parse_components_configuration(tag_name, raw)
+        };
     }
 
     // `raw_mode` (`#`, `--no-print-conv`) bypasses the word lookup for both
@@ -360,7 +372,18 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     // Exif.pm 0x9010 delegates PrintConvInv to InverseOffsetTime. The stored
     // value is always a canonical EXIF offset, even when the caller supplies
     // a full date/time, `Z`, or an offset without a leading zero.
+    //
+    // `raw_mode` (`#`, `--no-print-conv`) was ignored by all three of these
+    // (Codex PR #959 round 4): `-ExifIFD:OffsetTime#=Z` and `--no-print-conv
+    // -ExifIFD:OffsetTime=Z` still ran `inverse_offset_time` and silently
+    // stored `+00:00` instead of the caller's raw string `Z` -- confirmed
+    // against the oracle, which stores `Z` verbatim under `#`/`-n` (this tag
+    // is a plain ASCII string with no further `ValueConvInv` restriction, so
+    // raw mode's job here is simply "skip `PrintConvInv`, take the string").
     if declared_tag_name.rsplit(':').next() == Some("OffsetTime") {
+        if raw_mode {
+            return Ok(TagValue::String(raw.to_string()));
+        }
         let offset = inverse_offset_time(raw).ok_or_else(|| {
             invalid(
                 tag_name,
@@ -371,6 +394,9 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     }
 
     if declared_tag_name.rsplit(':').next() == Some("OffsetTimeOriginal") {
+        if raw_mode {
+            return Ok(TagValue::String(raw.to_string()));
+        }
         let offset = inverse_offset_time(raw).ok_or_else(|| {
             invalid(
                 tag_name,
@@ -381,6 +407,9 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     }
 
     if declared_tag_name.rsplit(':').next() == Some("OffsetTimeDigitized") {
+        if raw_mode {
+            return Ok(TagValue::String(raw.to_string()));
+        }
         let offset = inverse_offset_time(raw).ok_or_else(|| {
             invalid(
                 tag_name,
@@ -427,7 +456,21 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     // single byte `01` ExifTool writes. The table lookup is the same
     // mechanism as every plain enum tag; only the wrapping differs, because
     // `undef` stores the code as raw bytes, not a TIFF SHORT.
-    if declared_tag_name.rsplit(':').next() == Some("SceneType") {
+    //
+    // This dispatched on `leaf` name alone and hardcoded `Exif::Main` for the
+    // non-raw path, same mistake as `Sony:ExposureMode` (Codex PR #959 round
+    // 2/4): the repository's own DICOM dictionary declares a real
+    // `DICOM:SceneType` field (`src/parsers/specialized/dicom_dict.rs`,
+    // `0016,003B`, `US` = unsigned short, nothing like Exif.pm's one-byte
+    // `undef`), so without a table check this arm would take EXIF's
+    // `"Directly photographed"` label -- or even a bare raw integer through
+    // `byte_from_raw_integer`, which assumes the same one-byte `undef` shape
+    // -- and apply it to a DICOM field with a completely different meaning
+    // and width. `exif_or_gps_module_for` gates both branches on the tag
+    // actually resolving to `Exif::Main`.
+    if declared_tag_name.rsplit(':').next() == Some("SceneType")
+        && exif_or_gps_module_for(declared_tag_name) == Some("Exif")
+    {
         if raw_mode {
             return byte_from_raw_integer(tag_name, raw, "SceneType");
         }
@@ -611,6 +654,26 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "Uncalibrated") => "65535",
             ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "ICC Profile") => "65534",
             ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", "Wide Gamut RGB") => "65533",
+            // A catch-all, same reasoning as `GPSDifferential`'s below: without
+            // one, a value matching none of the five labels above (a bare
+            // numeric code included) fell through this match unchanged and
+            // reached the generic integer parser, which stored it --
+            // confirmed on `-ExifIFD:ColorSpace=garbage`: pinned ExifTool
+            // 13.59 refuses it (`Can't convert ExifIFD:ColorSpace (not in
+            // PrintConv)`), but this file wrote the raw text with nothing to
+            // catch it. `ColorSpace` is excluded from the generic
+            // table-driven dispatch below (it is hand-written here instead,
+            // this being its own catch-all), so this is the only place that
+            // can refuse it.
+            ("EXIF:ColorSpace" | "ExifIFD:ColorSpace", _) => {
+                return Err(invalid(
+                    tag_name,
+                    format!(
+                        "Can't convert {} (not in PrintConv)",
+                        display_tag_for_message(tag_name, "ColorSpace")
+                    ),
+                ));
+            }
             // Exif.pm 0xa408 uses ConvertParameter as its PrintConvInv rather
             // than a direct label map. It accepts the documented display labels
             // and any signed float, collapsing them to the three stored codes.
@@ -656,11 +719,57 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             // against the transcribed table rather than this hand-written list.
             ("GPS:GPSStatus", "Measurement Active") => "A",
             ("GPS:GPSStatus", "Measurement Void") => "V",
+            // A catch-all: without one, a value matching neither label above
+            // (including the RAW code itself, e.g. `-GPS:GPSStatus=A`, or
+            // outright garbage) fell through this match unchanged and reached
+            // the plain string parser, which stored it verbatim -- confirmed
+            // on `-GPS:GPSStatus=garbage`: pinned ExifTool 13.59 refuses it
+            // (`Can't convert GPS:GPSStatus (not in PrintConv)`), but this
+            // file wrote it with nothing to catch it. (The exact-code case
+            // `-GPS:GPSStatus=A` diverges from the oracle's own wording --
+            // `A` is a case-insensitive SUBSTRING of both "Measurement
+            // Active" and "Measurement Void", so the oracle's `ReverseLookup`
+            // refuses it too, but as "matches more than one PrintConv" via a
+            // fallback tier -- case-insensitive substring -- this port does
+            // not implement; both refuse, disclosed simplification per the
+            // module doc comment.)
+            ("GPS:GPSStatus", _) => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert GPS:GPSStatus (not in PrintConv)",
+                ));
+            }
             ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
             ("GPS:GPSMeasureMode", "3-Dimensional Measurement") => "3",
+            // Catch-all, same reasoning as `GPSStatus` above.
+            // `-GPS:GPSMeasureMode=2` also diverges from the oracle by the
+            // same disclosed substring-tier gap: "2" is a unique substring of
+            // "2-Dimensional Measurement" there, so the real `ReverseLookup`
+            // accepts it (storing "2", coincidentally the same text as the
+            // input); this port refuses it instead of guessing which
+            // fallback tier to reproduce. Never a wrong WRITTEN value either
+            // way.
+            ("GPS:GPSMeasureMode", _) => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert GPS:GPSMeasureMode (not in PrintConv)",
+                ));
+            }
             ("GPS:GPSDestDistanceRef", "Kilometers") => "K",
             ("GPS:GPSDestDistanceRef", "Miles") => "M",
             ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
+            // Catch-all, same reasoning as `GPSStatus` above.
+            // `-GPS:GPSDestDistanceRef=K` also diverges from the oracle by
+            // the disclosed case-insensitive-PREFIX tier (another fallback
+            // this port does not implement): "K" case-insensitively prefixes
+            // "Kilometers" uniquely, so the oracle accepts it (storing "K",
+            // coincidentally the input text); this port refuses instead.
+            ("GPS:GPSDestDistanceRef", _) => {
+                return Err(invalid(
+                    tag_name,
+                    "Can't convert GPS:GPSDestDistanceRef (not in PrintConv)",
+                ));
+            }
             ("GPS:GPSDifferential", "No Correction") => "0",
             ("GPS:GPSDifferential", "Differential Corrected") => "1",
             // A catch-all for each of these three: without one, a value that
@@ -833,7 +942,8 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     };
     let declared = get_tag_descriptor(declared_tag_name)
         .filter(|_| has_reliable_value_type(declared_tag_name))
-        .map(|descriptor| descriptor.value_type());
+        .map(|descriptor| descriptor.value_type())
+        .or_else(|| declared_value_type_from_transcribed_table(declared_tag_name));
 
     match declared {
         None | Some(ValueType::String) => Ok(TagValue::String(raw.to_string())),
@@ -1093,35 +1203,87 @@ fn invert_int_enum(
 /// ExifTool 13.59 refuses that value entirely, since Sony's tag has no such
 /// label).
 ///
-/// The candidate module is `declared_tag_name`'s own group prefix, same as
-/// every caller already assumed (`"GPS"` for a `GPS:` tag, `"Exif"`
-/// otherwise) -- this function's job is only to VETO that guess when the tag
-/// registry has positive evidence it is wrong. `get_tag_descriptor` is a hand
-/// + generated registry that does not cover every transcribed `Exif::Main`
-/// row (`EXIF:ShadingCorrection`/`EXIF:NoiseReduction`, confirmed absent by a
-/// registry audit, are genuine Exif::Main tags with nobody's descriptor at
-/// all); refusing whenever the registry has NO entry would silently regress
-/// those already-fixed tags back to accepting an unmatched value. So `None`
-/// (no registry entry) trusts the candidate, exactly as before this fix,
-/// while `Some` VERIFIES it -- vetoing only a descriptor that names a
-/// genuinely different table (`FormatFamily::MakerNotes` etc.), which is
-/// exactly the evidence `Sony:ExposureMode` supplies and `ShadingCorrection`
-/// does not. Every caller treats a veto (`None` from this function) the same
-/// way: skip this file's Exif/GPS-table inversion and let `raw` fall through
-/// to the plain declared-type parser, which naturally refuses a label it
-/// cannot parse as an integer -- "refuse" rather than "guess", per this
-/// codebase's rule against approximating a conversion.
+/// The candidate module is derived from `declared_tag_name`'s own group
+/// prefix -- `"GPS"` for a `GPS:` tag, `"Exif"` for a bare name or one of the
+/// EXIF-family IFD spellings this file and its callers use
+/// (`EXIF:`/`ExifIFD:`/`IFD0:`/`IFD1:`/`InteropIFD:`), and NO candidate at
+/// all for any other explicit group. A first draft of this function trusted
+/// `"Exif"` for literally anything that did not start with `"GPS:"`, which
+/// correctly covered `Sony:ExposureMode` (caught by the registry veto below,
+/// since Sony.pm's tag has a `FormatFamily::MakerNotes` descriptor) but not
+/// `DICOM:SceneType` (Codex PR #959 round 4): DICOM tags carry no
+/// `FormatFamily` descriptor at all (`yaml_format_info` does not recognize
+/// the `DICOM` prefix), so with no group check at all, the ABSENT-entry
+/// branch below would have trusted the bare `"Exif"` guess and inverted
+/// `DICOM:SceneType`'s value against `Exif::Main`'s own `SceneType`
+/// (0xa301) -- a real DICOM field with an EXIF label silently misread as an
+/// EXIF tag. Requiring a recognizable EXIF-family group before granting
+/// `"Exif"` by default closes that hole without needing a registry entry for
+/// every DICOM/XMP/IPTC/etc. tag this file has never heard of.
+///
+/// Once a candidate exists, this function's remaining job is only to VETO it
+/// when the tag registry has positive evidence it is wrong. `get_tag_descriptor`
+/// is a hand + generated registry that does not cover every transcribed
+/// `Exif::Main` row (`EXIF:ShadingCorrection`/`EXIF:NoiseReduction`, confirmed
+/// absent by a registry audit, are genuine Exif::Main tags with nobody's
+/// descriptor at all); refusing whenever the registry has NO entry would
+/// silently regress those already-fixed tags back to accepting an unmatched
+/// value. So `None` (no registry entry) trusts the candidate, while `Some`
+/// VERIFIES it -- vetoing only a descriptor that names a genuinely different
+/// table (`FormatFamily::MakerNotes` etc.), which is exactly the evidence
+/// `Sony:ExposureMode` supplies and `ShadingCorrection` does not. Every
+/// caller treats a veto (`None` from this function, whether from the group
+/// check or the registry check) the same way: skip this file's Exif/GPS-table
+/// inversion and let `raw` fall through to the plain declared-type parser,
+/// which naturally refuses a label it cannot parse -- "refuse" rather than
+/// "guess", per this codebase's rule against approximating a conversion.
 fn exif_or_gps_module_for(declared_tag_name: &str) -> Option<&'static str> {
-    let candidate = if declared_tag_name.starts_with("GPS:") {
-        "GPS"
-    } else {
-        "Exif"
-    };
+    let candidate = match declared_tag_name.split_once(':') {
+        None => Some("Exif"),
+        Some(("GPS", _)) => Some("GPS"),
+        Some(("EXIF" | "ExifIFD" | "IFD0" | "IFD1" | "InteropIFD", _)) => Some("Exif"),
+        Some(_) => None,
+    }?;
     match get_tag_descriptor(declared_tag_name).map(|descriptor| descriptor.format()) {
         None => Some(candidate),
         Some(FormatFamily::EXIF) if candidate == "Exif" => Some("Exif"),
         Some(FormatFamily::GPS) if candidate == "GPS" => Some("GPS"),
         Some(_) => None,
+    }
+}
+
+/// The declared type this file should treat `declared_tag_name` as, sourced
+/// directly from the transcribed `Exif::Main`/`GPS::Main` row rather than the
+/// tag registry, for a tag [`exif_or_gps_module_for`] confirms belongs to one
+/// of those tables but the registry has no descriptor for at all (Codex PR
+/// #959 round 4: `EXIF:ShadingCorrection`/`EXIF:NoiseReduction`, confirmed
+/// absent from `get_tag_descriptor` by the round-2 audit, are writable
+/// `int16u` enum rows with no registry entry whatsoever). Without this,
+/// `parse_cli_tag_value("EXIF:ShadingCorrection", "Yes")` took the
+/// `declared == None` branch at the top of the type match below and returned
+/// `TagValue::String("Yes")` -- the generic enum-inversion arm further down
+/// is gated on `Some(ValueType::Integer)` and simply never ran, no matter how
+/// correct its own logic was, because nothing ever produced that `Some`.
+///
+/// Deliberately narrow: only a plain writable [`crate::exiftool_tables::PrintConv::IntEnum`]
+/// row reports `Some(ValueType::Integer)` here, because that is the only
+/// shape the rest of this function knows how to invert generically; any
+/// other transcribed row (a different `PrintConv`, or none) returns `None`
+/// and the caller's `None | Some(ValueType::String)` arm still applies,
+/// exactly as before this fix -- this only ADDS coverage for the specific
+/// gap Codex found, never changes behavior for a tag the registry already
+/// describes.
+fn declared_value_type_from_transcribed_table(declared_tag_name: &str) -> Option<ValueType> {
+    let module = exif_or_gps_module_for(declared_tag_name)?;
+    let leaf = declared_tag_name.rsplit(':').next()?;
+    let table = crate::exiftool_tables::find_ifd_table(module, "Main")?;
+    let tag = table
+        .tags
+        .iter()
+        .find(|tag| tag.name == leaf && tag.writable.is_some())?;
+    match tag.print_conv {
+        crate::exiftool_tables::PrintConv::IntEnum(_) => Some(ValueType::Integer),
+        _ => None,
     }
 }
 
@@ -1325,6 +1487,33 @@ fn parse_components_configuration(tag_name: &str, raw: &str) -> Result<TagValue>
                 ));
             }
         });
+    }
+    bytes.resize(4, 0);
+    Ok(TagValue::Binary(bytes))
+}
+
+/// `raw_mode` counterpart of [`parse_components_configuration`]: the caller
+/// already supplied the four raw byte codes (whitespace/comma separated,
+/// like `"1 2 3 0"`), not labels to look up -- `PrintConvInv` is skipped
+/// entirely, matching the oracle's own `#`/`-n` behavior for this tag.
+fn parse_components_configuration_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
+    let tokens: Vec<&str> = raw
+        .split_whitespace()
+        .map(|token| token.trim_matches(','))
+        .collect();
+    if tokens.len() > 4 {
+        return Err(invalid(tag_name, "Too many values specified (4 required)"));
+    }
+    let mut bytes = Vec::with_capacity(4);
+    for token in tokens {
+        let value = parse_integer(tag_name, token)?;
+        if !(0..=255).contains(&value) {
+            return Err(invalid(
+                tag_name,
+                "ComponentsConfiguration value does not fit a byte",
+            ));
+        }
+        bytes.push(value as u8);
     }
     bytes.resize(4, 0);
     Ok(TagValue::Binary(bytes))
@@ -2153,6 +2342,79 @@ mod tests {
     #[test]
     fn sony_exposure_mode_is_not_inverted_through_exif_main() {
         assert!(parse("Sony:ExposureMode", "Auto").is_err());
+    }
+
+    /// PR #959 review (Codex, round 4, P2): the `SceneType` early return
+    /// dispatched by leaf name alone and hardcoded `Exif::Main`, so a real
+    /// DICOM field sharing that leaf (`DICOM:SceneType`, `US` per
+    /// `src/parsers/specialized/dicom_dict.rs`) would have been inverted
+    /// against Exif.pm's one-byte `undef` `SceneType` (0xa301) instead of
+    /// left alone. `exif_or_gps_module_for` now gates the whole block,
+    /// including its `raw_mode` byte-packing branch (which assumed the same
+    /// wrong one-byte shape).
+    #[test]
+    fn dicom_scene_type_is_not_inverted_through_exif_main() {
+        assert_ne!(
+            parse("DICOM:SceneType", "Directly photographed").ok(),
+            Some(TagValue::Binary(vec![1])),
+            "a DICOM field must never be silently read as Exif.pm's SceneType"
+        );
+        assert_eq!(
+            parse("DICOM:SceneType", "Directly photographed").unwrap(),
+            TagValue::String("Directly photographed".to_string()),
+            "with no known conversion for a DICOM tag, this file passes the text through unchanged"
+        );
+        // The real EXIF tag, with and without an explicit group, still works.
+        for tag in ["SceneType", "EXIF:SceneType", "ExifIFD:SceneType"] {
+            assert_eq!(
+                parse(tag, "Directly photographed").unwrap(),
+                TagValue::Binary(vec![1])
+            );
+        }
+    }
+
+    #[test]
+    fn exif_or_gps_module_for_requires_a_recognizable_exif_group_prefix() {
+        // A bare name and every EXIF-family IFD spelling are trusted by
+        // default (no registry entry needed).
+        for tag in [
+            "SceneType",
+            "EXIF:SceneType",
+            "ExifIFD:SceneType",
+            "IFD0:SceneType",
+            "IFD1:SceneType",
+            "InteropIFD:SceneType",
+        ] {
+            assert_eq!(exif_or_gps_module_for(tag), Some("Exif"), "{tag}");
+        }
+        assert_eq!(exif_or_gps_module_for("GPS:GPSStatus"), Some("GPS"));
+        // An explicit, non-EXIF-family group is never trusted by default,
+        // registry entry or not.
+        for tag in ["DICOM:SceneType", "Sony:ExposureMode", "XMP:SceneType"] {
+            assert_eq!(exif_or_gps_module_for(tag), None, "{tag}");
+        }
+    }
+
+    /// PR #959 review (Codex, round 4, P2): the generic enum-inversion arm is
+    /// gated on `Some(ValueType::Integer)`, which only a registry descriptor
+    /// (or, now, this fallback) can produce -- `EXIF:ShadingCorrection`
+    /// (0xa411) and `EXIF:NoiseReduction` (0xa412) are writable `int16u` enum
+    /// rows in the transcribed table with NO registry descriptor at all, so
+    /// `declared` was unconditionally `None` and the function returned a
+    /// `String` before the enum-inversion arm ever ran.
+    /// `declared_value_type_from_transcribed_table` closes that gap by
+    /// deriving the type from the transcribed row itself when the registry
+    /// has nothing.
+    #[test]
+    fn registry_absent_transcribed_enum_rows_still_invert() {
+        assert_eq!(
+            parse("EXIF:ShadingCorrection", "Yes").unwrap(),
+            TagValue::Integer(1)
+        );
+        assert_eq!(
+            parse("EXIF:NoiseReduction", "No").unwrap(),
+            TagValue::Integer(0)
+        );
     }
 
     // -- shape predicates, against ExifTool.pm:5924-5933 --------------------
