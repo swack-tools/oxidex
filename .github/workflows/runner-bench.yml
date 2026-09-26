@@ -4,8 +4,8 @@ name: Runner benchmark
 # swack-tools self-hosted runner. Runs synthetic CPU, memory and disk tests and
 # ci.yml's heaviest phases, cold, three times on GitHub-hosted ubuntu-latest
 # (4 vCPU / 16 GB for this public repo) and three times on the self-hosted
-# runner (a 3-CPU / 12 GB quota shared with another runner), then compares the
-# medians in the run summary.
+# runner (an i7-8700K: all 12 CPUs and 16 GB, shared with another runner), then
+# compares the medians in the run summary.
 #
 # Lives only on bench/runner-comparison, branched from refactor/tag-machinery;
 # delete the branch when done. Push-triggered on that branch alone, so only
@@ -37,7 +37,7 @@ jobs:
             labels: '["self-hosted", "swack-tools"]'
         run: [1, 2, 3]
     runs-on: ${{ fromJSON(matrix.runner.labels) }}
-    # Cold builds on 3 CPUs take a while.
+    # Cold builds take a while on the self-hosted runner.
     timeout-minutes: 120
     env:
       RESULTS: results/${{ matrix.runner.name }}-${{ matrix.run }}.json

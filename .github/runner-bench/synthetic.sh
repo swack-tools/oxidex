@@ -14,8 +14,8 @@ mkdir -p "$(dirname "$out")"
 t_cpu=15 t_mem=10 t_disk=20 disk_size=2G
 if [ -n "${BENCH_QUICK:-}" ]; then t_cpu=1 t_mem=1 t_disk=2 disk_size=64M; fi
 
-# CPU: sysbench prime sieve, events/s. The thread counts straddle both budgets:
-# 4 vCPUs on GitHub, and a 3-CPU quota on self-hosted, where nproc shows 12.
+# CPU: sysbench prime sieve, events/s. Thread counts run from one up to the
+# self-hosted box's 12; GitHub's runner has 4 vCPUs.
 cpu() {
   sysbench cpu --cpu-max-prime=20000 --threads="$1" --time="$t_cpu" run |
     awk '/events per second/ {print $NF}'
@@ -49,7 +49,8 @@ fio_get() { # <test> <read|write> <bw|iops>
   jq -r ".jobs[0].$2.$3" "$fio_dir/$1.json" 2>/dev/null || true
 }
 
-cpu_1t=$(cpu 1) cpu_2t=$(cpu 2) cpu_3t=$(cpu 3) cpu_4t=$(cpu 4) cpu_8t=$(cpu 8)
+cpu_1t=$(cpu 1) cpu_2t=$(cpu 2) cpu_3t=$(cpu 3) cpu_4t=$(cpu 4)
+cpu_6t=$(cpu 6) cpu_8t=$(cpu 8) cpu_12t=$(cpu 12)
 mem_read_1t=$(mem 1 read) mem_write_1t=$(mem 1 write)
 mem_read_4t=$(mem 4 read) mem_write_4t=$(mem 4 write)
 fio_run seqwrite write 1M 16
@@ -64,7 +65,8 @@ jq -n \
   --arg cpu_model "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -1)" \
   --arg nproc "$(nproc)" \
   --arg cpu_1t "$cpu_1t" --arg cpu_2t "$cpu_2t" --arg cpu_3t "$cpu_3t" \
-  --arg cpu_4t "$cpu_4t" --arg cpu_8t "$cpu_8t" \
+  --arg cpu_4t "$cpu_4t" --arg cpu_6t "$cpu_6t" --arg cpu_8t "$cpu_8t" \
+  --arg cpu_12t "$cpu_12t" \
   --arg mem_read_1t "$mem_read_1t" --arg mem_write_1t "$mem_write_1t" \
   --arg mem_read_4t "$mem_read_4t" --arg mem_write_4t "$mem_write_4t" \
   --arg seq_read_kib "$(fio_get seqread read bw)" \
@@ -76,7 +78,8 @@ jq -n \
    {runner: $runner, run: ($run | n), os: $os, cpu_model: $cpu_model,
     nproc: ($nproc | n), disk_mode: $disk_mode,
     cpu_1t: ($cpu_1t | n), cpu_2t: ($cpu_2t | n), cpu_3t: ($cpu_3t | n),
-    cpu_4t: ($cpu_4t | n), cpu_8t: ($cpu_8t | n),
+    cpu_4t: ($cpu_4t | n), cpu_6t: ($cpu_6t | n), cpu_8t: ($cpu_8t | n),
+    cpu_12t: ($cpu_12t | n),
     mem_read_1t: ($mem_read_1t | n), mem_write_1t: ($mem_write_1t | n),
     mem_read_4t: ($mem_read_4t | n), mem_write_4t: ($mem_write_4t | n),
     disk_seq_read: ($seq_read_kib | mib), disk_seq_write: ($seq_write_kib | mib),
