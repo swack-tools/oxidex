@@ -46,7 +46,7 @@ pub struct RawMetadataBlock {
 ///
 /// This structure is the primary in-memory representation of file metadata
 /// and can be serialized to JSON for output or deserialized from existing data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MetadataMap {
     /// Every occurrence recorded through `insert()`, plus the winner
     /// projection over them. See the module doc comment.
@@ -69,10 +69,35 @@ pub struct MetadataMap {
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
     raw_blocks: Vec<RawMetadataBlock>,
-    /// The file the read that produced this map read ([`Self::read_from`]),
-    /// canonicalized; `None` for a map no read produced. Which rows are the
-    /// caller's is each occurrence's own flag ([`Self::is_assigned`]).
-    read_source: Option<std::path::PathBuf>,
+    /// What the read that produced this map saw ([`Self::read_from`],
+    /// [`Self::read_saw`]); `None` for a map no read produced. Which rows are
+    /// the caller's is each occurrence's own flag ([`Self::is_assigned`]).
+    read_source: Option<ReadSource>,
+}
+
+/// Equality is the metadata's -- every occurrence and raw block -- never its
+/// write provenance: which file a map was read from, like which of its rows
+/// a caller assigned (`TagSink`'s own equality ignores those flags), does
+/// not make two maps with the same metadata different (#957,
+/// PRRT_kwDOQNbr5M6mO8E5).
+impl PartialEq for MetadataMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.sink == other.sink && self.raw_blocks == other.raw_blocks
+    }
+}
+
+/// The snapshot a read took: the file it read, canonicalized, and every key
+/// it produced. A map deletes only rows of this snapshot that its caller
+/// removed -- never a row it never saw, which is what a write made after the
+/// read may add (creating an ExifIFD seeds `ExifVersion`,
+/// `ComponentsConfiguration` and `ColorSpace`): a map written twice compared
+/// the second file against the first read's rows and deleted the seeded
+/// ones as "removals" (#957, PRRT_kwDOQNbr5M6mO8E4). Shared, so the many
+/// clones a read map goes through do not copy the key set.
+#[derive(Debug, Clone)]
+struct ReadSource {
+    path: std::path::PathBuf,
+    keys: std::sync::Arc<std::collections::HashSet<String>>,
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -194,27 +219,62 @@ impl MetadataMap {
         }
     }
 
-    /// Records the file this map was read from (`read_metadata`).
+    /// Records the file this map was read from (`read_metadata`), with the
+    /// keys the read produced: the snapshot [`Self::read_saw`] answers from.
     pub(crate) fn set_read_source(&mut self, path: &std::path::Path) {
-        self.read_source = Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+        self.read_source = Some(ReadSource {
+            path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+            keys: std::sync::Arc::new(self.keys().cloned().collect()),
+        });
     }
 
     /// Gives this map `source`'s read provenance ([`Self::read_from`]): for
-    /// a copy that still holds every row of that read under the same keys
-    /// (`tag_normalization::normalize_metadata_map`), so a row its caller
-    /// then removes is a deletion there as it is in the read itself.
+    /// a projection of that read under the same keys
+    /// (`tag_normalization::normalize_metadata_map`,
+    /// [`Self::without_print_conv`], ...), so a row its caller then removes is
+    /// a deletion there as it is in the read itself. The snapshot keeps only
+    /// the keys this map holds: a row the projection left out (a filter) is
+    /// not one its caller removed, and is never deleted.
     pub(crate) fn inherit_read_source(&mut self, source: &MetadataMap) {
-        self.read_source.clone_from(&source.read_source);
+        self.read_source = source.read_source.as_ref().map(|read| {
+            let keys = if read.keys.iter().all(|key| self.contains_key(key)) {
+                std::sync::Arc::clone(&read.keys)
+            } else {
+                std::sync::Arc::new(
+                    read.keys
+                        .iter()
+                        .filter(|key| self.contains_key(key))
+                        .cloned()
+                        .collect(),
+                )
+            };
+            ReadSource {
+                path: read.path.clone(),
+                keys,
+            }
+        });
     }
 
-    /// Whether this map is a complete read of the file at `path`: the one
-    /// case in which a row the map lacks is a row its caller removed, and so
-    /// a deletion `write_metadata` applies. A map built from scratch, or read
-    /// from another file, names only what it sets.
+    /// Whether this map is a read of the file at `path` (or a projection of
+    /// one): the one case in which a row the map lacks can be a row its
+    /// caller removed, and so a deletion `write_metadata` applies -- for the
+    /// rows the read saw ([`Self::read_saw`]). A map built from scratch, or
+    /// read from another file, names only what it sets.
     pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
-        self.read_source.as_deref().is_some_and(|source| {
-            std::fs::canonicalize(path).map_or(source == path, |path| source == path)
+        self.read_source.as_ref().is_some_and(|read| {
+            std::fs::canonicalize(path).map_or(read.path == path, |path| read.path == path)
         })
+    }
+
+    /// Whether the read this map came from produced `key`. Only such a row,
+    /// once removed, is a deletion: a row a later write added (a seeded
+    /// mandatory entry, a created directory's pointer) was never the
+    /// caller's to remove, so a map written again after a write can never
+    /// delete it.
+    pub(crate) fn read_saw(&self, key: &str) -> bool {
+        self.read_source
+            .as_ref()
+            .is_some_and(|read| read.keys.contains(key))
     }
 
     /// Uninterpreted blocks in parser encounter order, separate from named tags.
@@ -816,6 +876,9 @@ impl MetadataMap {
             out.insert(key.clone(), value);
             out.set_last_assigned(self.is_assigned(key));
         }
+        // The same rows in their ValueConv form: still the read, so a row its
+        // caller removes is a deletion (#957, PRRT_kwDOQNbr5M6mPnGR).
+        out.inherit_read_source(self);
         out
     }
 
@@ -1080,6 +1143,28 @@ mod tests {
         let mut read = base();
         read.mark_read_complete();
         assert_eq!(read, base());
+    }
+
+    /// Codex thread PRRT_kwDOQNbr5M6mO8E5 (#957): which file a map was read
+    /// from is write provenance, not metadata. Two maps with the same rows
+    /// are equal whatever their read sources, as `TagSink`'s equality
+    /// ignores its per-occurrence assignment flags.
+    #[test]
+    fn read_provenance_does_not_affect_equality() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = || {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:Make", TagValue::new_string("Acme"));
+            map.mark_read_complete();
+            map
+        };
+        let (mut a, mut b) = (rows(), rows());
+        a.set_read_source(&dir.path().join("a.jpg"));
+        b.set_read_source(&dir.path().join("b.jpg"));
+        assert_eq!(a, b, "same rows read from two files");
+        assert_eq!(a, rows(), "a read and an unread map with the same rows");
+        b.insert("IFD0:Make", TagValue::new_string("Other"));
+        assert_ne!(a, b, "different rows still differ");
     }
 
     /// A public producer's rows are read (`file_rows`): the map a parser
