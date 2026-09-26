@@ -875,6 +875,13 @@ def unproven_children() -> list[dict[str, Any]]:
                     # The supervised command itself, identified independently
                     # of its (possibly dead) supervisor.
                     survivor["lineage_primary"] = dict(primary)
+                started = getattr(child, "_oxidex_lineage_started_at", None)
+                if type(started) is float:
+                    # Descendants that detached from the command are named by
+                    # nothing once its supervisor is gone; clearance must cover
+                    # every process this user started since the lineage began.
+                    survivor["lineage_started_at"] = started
+                    survivor["uid"] = os.getuid()
                 survivors.append(survivor)
         if owned.spawns_in_flight:
             survivors.append({"pid": None, "pgid": None,
@@ -956,9 +963,11 @@ def _refuse_unproven_lineage(path: Path) -> None:
     marker = _unproven_lineage_marker(path)
     if marker.exists() or marker.is_symlink():
         raise Refused(f"host lock {path} carries an unproven owned-lineage marker ({marker}): a prior "
-                      "run could not prove its command's descendants gone. Verify that each listed "
-                      "lineage_primary command (PID and kernel start time) and every process in its "
-                      "session have exited, then remove the marker before running or recovering")
+                      "run could not prove its command's descendants gone, and a descendant that "
+                      "detached is named by nothing. Verify that no process of the listed uid "
+                      "started at or after each lineage_started_at remains from that run (the listed "
+                      "lineage_primary PID and kernel start time identify the command itself), then "
+                      "remove the marker before running or recovering")
 
 
 def release_retained_locks() -> list[dict[str, Any]]:
@@ -1699,6 +1708,11 @@ try:
             os.close(failure_read)
             signal.signal(signal.SIGCHLD, inherited_sigchld)
             signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+            # As Popen(restore_signals=True) does: the Python supervisor
+            # ignores these, and exec would otherwise keep them ignored.
+            for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+                if hasattr(signal, name):
+                    signal.signal(getattr(signal, name), signal.SIG_DFL)
             signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
             os.execvp(argv[0], argv)
         except BaseException as exc:
@@ -1935,12 +1949,14 @@ def _spawn_with_deferred_sigint(
             os.set_inheritable(status_write_fd, True)
             spawn_argv = [sys.executable, "-I", "-c", _LINUX_LINEAGE_SUPERVISOR,
                           str(status_write_fd), *argv]
+        spawned_at = time.time()
         created = _spawn(spawn_argv, **kwargs)
         setattr(created, "_oxidex_ownership_read_fd", read_fd)
         os.close(write_fd)
         write_fd = -1
         if status_read_fd >= 0:
             setattr(created, "_oxidex_lineage_status_fd", status_read_fd)
+            setattr(created, "_oxidex_lineage_started_at", spawned_at)
             status_read_fd = -1
             os.close(status_write_fd)
             status_write_fd = -1
