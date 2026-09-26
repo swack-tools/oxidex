@@ -79,7 +79,7 @@ bounds its whole lineage. macOS has no subreaper: a stage descendant that
 starts a new session and closes every inherited descriptor is not bounded
 and may keep running after the stage is accepted, but it holds no lease
 descriptor, and every process that does hold one keeps the lease held. See
-[`VERSION_REHEARSAL_EXECUTOR_API.md`](../tools/exiftool-tables/VERSION_REHEARSAL_EXECUTOR_API.md).
+`tools/exiftool-tables/VERSION_REHEARSAL_EXECUTOR_API.md` in the repository.
 
 Historical 11.78/12.64 Rust-test failures still identify release-specific facts
 outside the Task19 tooling lease. Exact current locations and correction
