@@ -727,3 +727,171 @@ fn numeric_input_is_refused_bare_and_accepted_raw_for_every_required_tag() {
         assert_numeric_input_policy_matches_oracle(oracle, &base, tag, code);
     }
 }
+
+/// PR #959 review (Codex, P1): `Exif::Main` carries a SECOND, non-writable
+/// `SensingMethod` row (id 0x9217, `1 => "Monochrome area"`) alongside the
+/// writable one this tag actually is (id 0xa217, `1 => "Not defined"`).
+/// `invert_enum_printconv`'s old name-only `.find()` picked whichever row
+/// sorts first by id -- 0x9217, the WRONG one -- so `-ExifIFD:SensingMethod
+/// ='Not defined'` was rejected while `='Monochrome area'` was silently
+/// accepted as code 1 and read back as `Not defined` (both a wrong
+/// acceptance and a wrong rejection from a single mis-resolved row). Fixed
+/// by resolving through the registry's own numeric id
+/// (`get_tag_descriptor("EXIF:SensingMethod").id()` is `0xa217`) via
+/// `IfdTable::tag`'s id-keyed lookup, which cannot return the wrong
+/// same-named row because ids in `tags` are unique.
+#[test]
+fn sensing_method_resolves_the_writable_row_not_the_first_same_named_one() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    // The writable row's own labels succeed, matching the oracle exactly.
+    for (label, code) in [
+        ("Not defined", 1),
+        ("Two-chip color area", 3),
+        ("Trilinear", 7),
+    ] {
+        assert_label_write_matches_oracle(oracle, &base, "ExifIFD:SensingMethod", label, code);
+    }
+    // "Monochrome area" belongs only to the OTHER (non-writable) row; the
+    // oracle refuses it for the writable tag, and so must oxidex.
+    let dir = tempfile::tempdir().unwrap();
+    let ox_path = copy_into(&dir, &base, "sm_wrong_row.jpg");
+    let before = std::fs::read(&ox_path).unwrap();
+    let out = oxidex(&[
+        "-ExifIFD:SensingMethod=Monochrome area",
+        ox_path.to_str().unwrap(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "\"Monochrome area\" belongs to SensingMethod's non-writable row and must be refused"
+    );
+    assert_eq!(std::fs::read(&ox_path).unwrap(), before);
+
+    let et_path = copy_into(&dir, &base, "sm_wrong_row_et.jpg");
+    let et_before = std::fs::read(&et_path).unwrap();
+    oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-ExifIFD:SensingMethod=Monochrome area",
+            et_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run oracle");
+    assert_eq!(
+        std::fs::read(&et_path).unwrap(),
+        et_before,
+        "the oracle must also refuse it for the writable tag"
+    );
+}
+
+/// PR #959 review (Codex, P1): raw mode must skip every PrintConv inversion
+/// this file has, not only the generic enum-table dispatch added for
+/// Orientation and friends. Before this fix, `-GPS:GPSDifferential#=0` and
+/// `--no-print-conv -GPS:GPSDifferential=0` were refused (the hand-written
+/// tuple match that (re)implements `GPSDifferential`'s catch-all had no
+/// `raw_mode` guard at all), and `-ExifIFD:Contrast#=1` ran through
+/// `invert_exif_contrast_parameter` and silently turned the requested raw
+/// code `1` into `2` (`ConvertParameter` treats a positive number as "High"
+/// -- correct for a PrintConv label, wrong for a caller who already supplied
+/// the raw code and asked to skip PrintConv entirely).
+#[test]
+fn raw_mode_bypasses_every_hand_written_inverse_conversion() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+
+    // `#`
+    for (tag, code) in [("GPS:GPSDifferential", 0), ("ExifIFD:Contrast", 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}#={code}");
+
+        let ox_path = copy_into(&dir, &base, "hash.jpg");
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            oxidex_read_n(&ox_path, tag),
+            code.to_string(),
+            "oxidex {arg} must store the raw code, not run it through PrintConvInv"
+        );
+
+        let et_path = copy_into(&dir, &base, "hash_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), code.to_string());
+    }
+
+    // `--no-print-conv` / `-n`, applied globally instead of per-tag.
+    for (tag, code) in [("GPS:GPSDifferential", 0), ("ExifIFD:Contrast", 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}={code}");
+
+        let ox_path = copy_into(&dir, &base, "np.jpg");
+        let out = oxidex(&["--no-print-conv", &arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex --no-print-conv {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(oxidex_read_n(&ox_path, tag), code.to_string());
+
+        let et_path = copy_into(&dir, &base, "np_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", "-n", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), code.to_string());
+    }
+}
+
+/// PR #959 review (Codex, P2): `CalibrationIlluminant1/2/3` share
+/// `LightSource`'s hand-written table (kept hand-written rather than
+/// generic specifically because of the duplicated "Daylight" label -- see
+/// that match arm's own comment), but the table was matched with a plain
+/// case-sensitive `match`, unlike every other label lookup in this fix.
+/// `-IFD0:CalibrationIlluminant1=d65` now resolves to 21 exactly like `D65`,
+/// via the same `invert_int_enum` (exact, then case-insensitive) the
+/// generic path uses -- safe here because `LIGHT_SOURCE_LABELS` omits the
+/// code-25 "Daylight" duplicate, so no case-insensitive match is ever
+/// ambiguous.
+#[test]
+fn calibration_illuminant_labels_match_case_insensitively() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    for (label, code) in [("d65", 21), ("DAYLIGHT", 1), ("fine weather", 9)] {
+        assert_label_write_matches_oracle(
+            oracle,
+            &base,
+            "IFD0:CalibrationIlluminant1",
+            label,
+            code,
+        );
+    }
+}
