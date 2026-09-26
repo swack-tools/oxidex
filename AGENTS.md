@@ -402,8 +402,10 @@ created, by exact path, never by glob across other agents' directories.
 
 A scratch clone or bundle is not build output: it can hold the only copy of
 a commit graph. Delete one only after proving that every ref it carries is
-reachable from `origin`. For a clone, run
-`git rev-list --all --not --remotes=origin` in the clone. For a bundle, list
+reachable from `origin`. For a clone, first run `git fetch --prune origin` in
+the clone, so its `origin/*` refs match the live remote; a stale tracking ref
+can hide commits that are gone from `origin`. Then run
+`git rev-list --all --not --remotes=origin`. For a bundle, list
 its heads with `git bundle list-heads` and check each one with
 `git merge-base --is-ancestor <sha> origin/<branch>`, or check that
 `git branch -r --contains <sha>` names a remote branch. Anything unreachable
@@ -429,8 +431,10 @@ agent's work-in-progress from a different branch. It has already happened
 here once. Git kept the other stash only because the pop conflicted. Prefer a
 WIP commit on your own branch, or a patch file in your evidence directory,
 over the stash. If you must stash, give it a message naming your branch
-(`git stash push -m "<branch>: <why>"`), and record its object ID at once
-(`git rev-parse stash@{0}` right after the push). To apply it later, use that
+(`git stash push -m "<branch>: <why>"`), and record its object ID at once:
+run `git rev-parse stash@{0}` right after the push, then confirm with
+`git log -1 --format=%s <sha>` that the entry carries your message. Another
+agent may have stashed in between; if so, find yours in `git stash list`. To apply it later, use that
 recorded ID: `git stash apply <sha>`. `stash@{N}` is a reflog position, and
 another agent's push renumbers it between your `git stash list` and your
 `apply`. If you didn't record the ID, find the entry with `git stash list`,
