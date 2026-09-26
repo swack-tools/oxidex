@@ -197,10 +197,13 @@ fn is_file_system_fact(key: &str) -> bool {
 }
 
 /// The requests a whole-map write makes of the file whose current map is
-/// `baseline`: every row of `desired` that is new or differs is a set. When
-/// `deletions` -- `desired` is a complete read of this same file
-/// (`MetadataMap::read_from`) -- every row of `baseline` that `desired` lacks
-/// is a row its caller removed, and a deletion. Otherwise (a map built from
+/// `baseline`. When `deletions` -- `desired` is a read of this same file
+/// (`MetadataMap::read_from`) -- the rows its caller assigned are the sets,
+/// and every row the read saw (`MetadataMap::read_saw`) that `baseline`
+/// still holds and `desired` lacks is a row its caller removed, and a
+/// deletion; a row the file gained since the read (an earlier write from
+/// this map) is neither. Otherwise every row of `desired` that is new or
+/// differs is a set, and (a map built from
 /// scratch, or read from another file) nothing is deleted: ExifTool's
 /// SetNewValue model, where a tag nobody named is never touched (ExifTool.pod,
 /// SetNewValue / WriteInfo; maintainer decision on #951, 2026-09-24).
@@ -232,11 +235,14 @@ pub(crate) fn changes_between(
         // Provenance first (`MetadataMap::is_assigned`): a value the
         // caller assigned is a set whatever it equals -- an explicit
         // same-text XP set can need different bytes. In a read of this file,
-        // a row the caller did not assign is the file's own: a set only if
-        // the file holds that row with another value (an in-place
-        // `get_mut`), never because a read with options (a requested
-        // `File:JPEGQualityEstimate`) produced a row the default read lacks.
-        // Any other map is judged by value.
+        // a row the caller did not assign is the read's own and never a set
+        // (every public mutation, `get_mut` included, assigns): not because
+        // a read with options (a requested `File:JPEGQualityEstimate`)
+        // produced a row the default read lacks, not because a projection
+        // (`without_print_conv`) shows it in another form, and not because an
+        // earlier write from the same map changed it in the file since (a
+        // stale row must not revert the file). Any other map is judged by
+        // value.
         // A descriptive row (`File:`, `Composite:`, ...) is not stored in the
         // file, so it has no bytes an explicit same-value set could change:
         // an assigned one is a request (and refused) only when it is new or
@@ -246,7 +252,7 @@ pub(crate) fn changes_between(
         let assigned =
             desired.is_assigned(key) && !(is_descriptive(key) && baseline.get(key) == Some(value));
         let is_set = if deletions {
-            assigned || baseline.get(key).is_some_and(|held| held != value)
+            assigned
         } else {
             assigned || baseline.get(key) != Some(value)
         };
@@ -258,7 +264,11 @@ pub(crate) fn changes_between(
         return changes;
     }
     for (key, _) in baseline.iter() {
-        if desired.contains_key(key) || is_descriptive(key) {
+        // Only a row the read saw can be one its caller removed: a row the
+        // file gained since (a write from this same map seeding an
+        // ExifIFD's mandatory entries) is not a deletion -- when unsure,
+        // nothing is deleted.
+        if desired.contains_key(key) || is_descriptive(key) || !desired.read_saw(key) {
             continue;
         }
         let spellings = field_spellings(key);
@@ -887,6 +897,7 @@ mod tests {
         // A row an optioned read adds that the default read lacks.
         desired.insert("File:JPEGQualityEstimate", s("92"));
         desired.mark_read_complete();
+        desired.set_read_source(Path::new("a.jpg"));
         desired.insert("IFD0:Model", s("R5"));
         desired.insert("IFD0:Artist", s("me")); // explicit same-value set
         desired.insert("XPTitle", s("v"));
@@ -907,7 +918,42 @@ mod tests {
         // The file's own map, read and untouched, requests nothing.
         let mut read = baseline.clone();
         read.mark_read_complete();
+        read.set_read_source(Path::new("a.jpg"));
         assert!(changes_between(&baseline, &read, true).is_empty());
+    }
+
+    /// Codex thread PRRT_kwDOQNbr5M6mO8E4 (#957): a read map written again
+    /// after a write is compared with a file that has changed since its
+    /// read. A row the file gained (an ExifIFD's seeded entries) is not one
+    /// the caller removed, and a row the read saw that the file now holds
+    /// with another value is not one the caller set: neither is a request.
+    /// What the caller did remove, and did assign, still are.
+    #[test]
+    fn a_stale_read_map_requests_only_what_its_caller_changed() {
+        let read_rows = map(&[("IFD0:Make", s("Acme")), ("IFD0:Model", s("R5"))]);
+        let mut desired = read_rows.clone();
+        desired.mark_read_complete();
+        desired.set_read_source(Path::new("a.jpg"));
+        desired.insert("ExifIFD:LensModel", s("L1"));
+        desired.insert("IFD0:Artist", s("x"));
+        desired.remove("IFD0:Model");
+        // The file after a first write from `desired`, plus a side effect on
+        // Make that the map never saw.
+        let file = map(&[
+            ("IFD0:Make", s("Acme (rewritten)")),
+            ("IFD0:Model", s("R5")),
+            ("ExifIFD:LensModel", s("L1")),
+            ("ExifIFD:ExifVersion", s("0232")),
+            ("ExifIFD:ColorSpace", s("Uncalibrated")),
+        ]);
+        assert_eq!(
+            changes_between(&file, &desired, true),
+            vec![
+                TagChange::set("ExifIFD:LensModel", s("L1")),
+                TagChange::set("IFD0:Artist", s("x")),
+                TagChange::delete("IFD0:Model"),
+            ]
+        );
     }
 
     /// A map built from scratch: every row is the caller's, a set whatever
@@ -938,9 +984,14 @@ mod tests {
     fn a_pdf_info_field_is_one_field_under_two_spellings() {
         let date = || s("2024:01:01 00:00:00");
         let baseline = map(&[("PDF:CreateDate", date()), ("PDF:CreationDate", date())]);
+        // Each read saw both spellings; `rows` is what is left of it.
         let read = |rows: &[(&str, TagValue)]| {
-            let mut read = map(rows);
-            read.mark_read_complete();
+            let mut read = baseline_read(&baseline);
+            for key in ["PDF:CreateDate", "PDF:CreationDate"] {
+                if !rows.iter().any(|(kept, _)| *kept == key) {
+                    read.remove(key);
+                }
+            }
             read
         };
         let deleted = vec![TagChange::delete("PDF:CreateDate")];
@@ -966,6 +1017,7 @@ mod tests {
     fn baseline_read(baseline: &MetadataMap) -> MetadataMap {
         let mut read = baseline.clone();
         read.mark_read_complete();
+        read.set_read_source(Path::new("a.pdf"));
         read
     }
 
