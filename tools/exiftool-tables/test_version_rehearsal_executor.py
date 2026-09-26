@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import subprocess
@@ -810,8 +811,8 @@ class ExecutorTests(unittest.TestCase):
         command left the supervisor's session and closed its inherited
         descriptors, so only the supervisor's sweep can reach it.
         """
-        slowed = executor._LINUX_LINEAGE_SUPERVISOR.replace(
-            'report(phase="exec", ok=True)\n', 'report(phase="exec", ok=True)\n    time.sleep(1.5)\n', 1)
+        slowed = re.sub(r'(\n    report\(phase="exec", ok=True[^\n]*\n)', r'\1    time.sleep(1.5)\n',
+                        executor._LINUX_LINEAGE_SUPERVISOR, count=1)
         self.assertNotEqual(slowed, executor._LINUX_LINEAGE_SUPERVISOR)
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
