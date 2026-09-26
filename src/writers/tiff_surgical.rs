@@ -363,6 +363,12 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     // reader surfaced the entry was dropped in silence.
     let mut rowless: Vec<(&LocatedEntry, Option<TagValue>)> = Vec::new();
 
+    // Surfaced entries the caller's map drops, deleted after every other
+    // edit (`deletable_in_place`), and the entries of an ExifIFD this write
+    // creates; both applied last by [`apply_final_edits`].
+    let mut deletions: Vec<entry_edits::ScopedEntryEdit> = Vec::new();
+    let mut created_exif: Vec<entry_edits::ScopedEntryEdit> = Vec::new();
+
     // --- Pass 1: located entries (modify in place, or refuse a removal) ---
     for entry in &scan.entries {
         let mut keys = entry_keys(entry);
@@ -375,6 +381,23 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             } else {
                 borrowed.push(engine_key);
             }
+        }
+        // A deletion this writer can make: a surfaced entry the map drops, or
+        // one the reader surfaced no row for that is named for deletion.
+        let dropped = match keys.iter().find(|k| original.contains_key(*k)) {
+            Some(key) => !desired.contains_key(key),
+            None => removed
+                .iter()
+                .any(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original)),
+        };
+        if dropped && deletable_in_place(&scan, entry, &deletions) {
+            deletions.push(entry_edits::ScopedEntryEdit {
+                ifd: entry.ifd,
+                tag_id: entry.tag_id,
+                mutation: entry_edits::EntryMutation::Delete,
+            });
+            consumed.extend(keys);
+            continue;
         }
         // The key the reader actually used for this entry. The reader's group
         // assignment is not always the physical IFD -- Panasonic RW2 surfaces
@@ -526,6 +549,24 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
+        // A tag for an ExifIFD the file does not have: the directory is
+        // created with it (`apply_final_edits`), as pinned ExifTool 13.59
+        // creates it (`-ExifIFD:ModifyDate=` on t/images ExifTool.tif).
+        if key.starts_with("ExifIFD:") && scan.exif_ifd_offset.is_none() {
+            if !created_exif.iter().any(|edit| edit.tag_id == tag_id) {
+                created_exif.push(entry_edits::ScopedEntryEdit {
+                    ifd: IfdKind::ExifIfd,
+                    tag_id,
+                    mutation: entry_edits::EntryMutation::Set {
+                        field_type: ft,
+                        count,
+                        bytes,
+                    },
+                });
+            }
+            continue;
+        }
+
         let bucket = if key.starts_with("ExifIFD:") {
             &mut added_exif
         } else if key.starts_with("GPS:") {
@@ -557,8 +598,15 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         });
     }
 
+    if !created_exif.is_empty() {
+        let set: Vec<u16> = created_exif.iter().map(|edit| edit.tag_id).collect();
+        created_exif.extend(crate::writers::exif_ifd_creation::created_exif_ifd_entries(
+            bo, &set,
+        )?);
+        deletions.extend(created_exif);
+    }
     if added_ifd0.is_empty() && added_exif.is_empty() && added_gps.is_empty() {
-        return Ok(out);
+        return apply_final_edits(out, &deletions);
     }
 
     // --- Pass 3: grow the tables that gained entries ---
@@ -606,7 +654,64 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         put_u32(&mut out[4..8], new_at, bo);
     }
 
-    Ok(out)
+    apply_final_edits(out, &deletions)
+}
+
+/// Whether this writer deletes `entry`, a surfaced entry the caller's map
+/// drops: an ordinary IFD0, ExifIFD or GPS tag -- the copy pinned ExifTool
+/// 13.59 removes when the same tag is set in the other of IFD0/ExifIFD
+/// (`writers::exif_cross_delete`), or one named for deletion. Only a tag the
+/// pinned table declares `Writable`, not `Protected`, with no `SubDirectory`
+/// and a single definition for its ID: that leaves out every directory and
+/// data pointer of `Exif::Main` (StripOffsets, ThumbnailOffset, SubIFDs,
+/// InteropOffset...) and the image-structure tags (ImageWidth, Compression,
+/// BitsPerSample...). Never the last entry of its directory either, which
+/// `WriteExif` would drop with the directory. Anything else stays refused.
+fn deletable_in_place(
+    scan: &TiffScan,
+    entry: &LocatedEntry,
+    deletions: &[entry_edits::ScopedEntryEdit],
+) -> bool {
+    use crate::exiftool_tables::ifd_tables::{IFD_EXIF_MAIN, IFD_GPS_MAIN};
+    let table = match entry.ifd {
+        IfdKind::Ifd0 | IfdKind::ExifIfd => &IFD_EXIF_MAIN,
+        IfdKind::Gps => &IFD_GPS_MAIN,
+        _ => return false,
+    };
+    let plain = table
+        .tag(entry.tag_id)
+        .is_some_and(|tag| tag.writable.is_some() && !tag.flags.protected && tag.subdir.is_none());
+    if !plain || table.variant_group(entry.tag_id).is_some() {
+        return false;
+    }
+    let left = scan
+        .entries
+        .iter()
+        .filter(|other| other.ifd == entry.ifd)
+        .count()
+        - deletions
+            .iter()
+            .filter(|edit| edit.ifd == entry.ifd)
+            .count();
+    let pointers = match entry.ifd {
+        IfdKind::Ifd0 => {
+            usize::from(scan.exif_pointer_record.is_some())
+                + usize::from(scan.gps_pointer_record.is_some())
+        }
+        _ => 0,
+    };
+    left + pointers > 1
+}
+
+/// `out` with `edits` applied -- deletions, and the entries of a created
+/// ExifIFD: each directory they touch is copied to the end with them (a new
+/// ExifIFD appended and linked from IFD0), every other byte kept
+/// (`entry_edits::apply_entry_edits`).
+fn apply_final_edits(out: Vec<u8>, edits: &[entry_edits::ScopedEntryEdit]) -> Result<Vec<u8>> {
+    if edits.is_empty() {
+        return Ok(out);
+    }
+    entry_edits::apply_entry_edits(&out, edits)
 }
 
 fn too_big(_: std::num::TryFromIntError) -> ExifToolError {
@@ -861,10 +966,12 @@ mod tests {
     /// 0x9205 MaxApertureValue after D-2; ExposureProgram stands in here) is
     /// still the entry an explicit edit of its name writes: patched in place
     /// exactly as while the reader surfaced it, where its names used to be
-    /// consumed and the edit dropped in silence. A deletion by name is
-    /// refused, as every deletion here is, not carried in silence.
+    /// consumed and the edit dropped in silence. A deletion by name deletes
+    /// it (pinned ExifTool 13.59 deletes `-ExifIFD:ExposureProgram=`), and
+    /// one that would empty the directory is refused, not carried in
+    /// silence.
     #[test]
-    fn a_rowless_entry_is_edited_in_place_and_its_deletion_refused() {
+    fn a_rowless_entry_is_edited_in_place_and_deleted_by_name() {
         let (file, surfaced) = tiff_with_exif_shorts(&[(0x8822, 2), (0xa001, 1)]);
         assert!(surfaced.contains_key("ExifIFD:ExposureProgram"));
         let mut rowless = surfaced.clone();
@@ -889,13 +996,22 @@ mod tests {
         assert!(rewrite_tiff_file(&file, &rowless, &both).is_err());
 
         let removed = ["ExifIFD:ExposureProgram".to_string()];
-        let err = rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("Removing tag 'ExifIFD:ExposureProgram'"),
-            "{err}"
-        );
+        let deleted = rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed).unwrap();
+        assert_eq!(exif_ifd_shorts(&deleted), [(0xa001, 1)]);
+        // ... but never the last entry of its directory.
+        let exposure = |file: &[u8]| {
+            let scan = scan_tiff(file).unwrap();
+            let entry = scan
+                .entries
+                .iter()
+                .find(|entry| entry.tag_id == 0x8822)
+                .unwrap()
+                .clone();
+            deletable_in_place(&scan, &entry, &[])
+        };
+        assert!(exposure(&file));
+        let (alone, _) = tiff_with_exif_shorts(&[(0x8822, 2)]);
+        assert!(!exposure(&alone));
         // Another IFD's name is not this entry's.
         let removed = ["IFD0:ExposureProgram".to_string()];
         assert_eq!(
@@ -1047,18 +1163,37 @@ mod tests {
         }
     }
 
+    /// A located plain tag the map drops is deleted in place, as pinned
+    /// ExifTool 13.59 deletes `-IFD0:Make=` from t/images ExifTool.tif; a
+    /// data pointer (StripOffsets, `Protected` in `Exif::Main`) is refused,
+    /// never deleted or silently kept.
     #[test]
-    fn removing_a_located_tag_is_refused_not_silently_ignored() {
-        let file = build_tiff(ByteOrder::LittleEndian);
-        let original = original_map();
-        let mut desired = original.clone();
-        desired.remove("IFD0:Make");
-        let err = rewrite_tiff_file(&file, &original, &desired).unwrap_err();
-        assert!(
-            err.to_string().contains("Removing tag 'IFD0:Make'"),
-            "got: {}",
-            err
-        );
+    fn removing_a_located_tag_deletes_it_and_a_pointer_is_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let file = build_tiff(bo);
+            let original = original_map();
+            let mut desired = original.clone();
+            desired.remove("IFD0:Make");
+            let out = rewrite_tiff_file(&file, &original, &desired).unwrap();
+            let ids: Vec<u16> = scan_tiff(&out)
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| entry.tag_id)
+                .collect();
+            assert_eq!(ids, [0x0111, 0x0112], "{bo:?}");
+            // The image data the kept StripOffsets locates is untouched.
+            assert_eq!(&out[80..88], &[0xAA; 8], "{bo:?}");
+
+            let mut desired = original.clone();
+            desired.remove("IFD0:StripOffsets");
+            let err = rewrite_tiff_file(&file, &original, &desired).unwrap_err();
+            assert!(
+                err.to_string().contains("Removing tag 'IFD0:StripOffsets'"),
+                "got: {}",
+                err
+            );
+        }
     }
 
     #[test]

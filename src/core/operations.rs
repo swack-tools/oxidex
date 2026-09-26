@@ -965,7 +965,29 @@ pub(crate) fn write_metadata_transaction(
     removed: &[String],
     assigned: &[String],
 ) -> Result<()> {
+    write_metadata_transaction_among(path, metadata, removed, assigned, &[])
+}
+
+/// [`write_metadata_transaction`], one of several a command applies in turn:
+/// `siblings` are the keys the command's other requests set. A set of an
+/// IFD0/ExifIFD tag deletes the copy in the other of the two directories, as
+/// pinned ExifTool 13.59 does, unless a sibling sets that copy too
+/// (`writers::exif_cross_delete`).
+fn write_metadata_transaction_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    assigned: &[String],
+    siblings: &[String],
+) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
+    let crossed = crate::writers::exif_cross_delete::with_cross_deletions(
+        path, &baseline, metadata, removed, assigned, siblings,
+    )?;
+    let (metadata, removed) = match &crossed {
+        Some((map, removed)) => (map, removed.as_slice()),
+        None => (metadata, removed),
+    };
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -1469,18 +1491,66 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
 /// - New value fails validation (InvalidTagValue)
 /// - File cannot be written (IoError)
 pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
+    modify_tag_among(path, tag_name, new_value, &[])
+}
+
+/// [`modify_tag`] for one of a command's several `-TAG=VALUE` requests,
+/// applied in turn: `command_sets` names every tag the command sets. Setting
+/// an IFD0 or ExifIFD tag deletes the copy in the other of the two
+/// directories, as pinned ExifTool 13.59 does (WriteExif.pl 13.59:20-23
+/// `%crossDelete`), unless the command sets that copy as well:
+/// `-IFD0:CreateDate=a -ExifIFD:CreateDate=b` keeps both.
+///
+/// # Errors
+///
+/// As [`modify_tag`].
+pub fn modify_tag_among(
+    path: &Path,
+    tag_name: &str,
+    new_value: TagValue,
+    command_sets: &[String],
+) -> Result<()> {
     // Step 1: Read existing metadata (preserves all other tags)
     let mut metadata = read_metadata(path)?;
-
-    // Step 2: Modify the single tag
-    let key = canonical_write_tag_name(tag_name);
-    metadata.insert(key, new_value);
+    // Step 2: Modify the tag. An ungrouped or `EXIF:` date is written to
+    // its EXIF directory (`AllDates` to all three), or refused when ExifTool
+    // also writes it outside EXIF (`exif_cross_delete::date_set_keys`).
+    let keys = match crate::writers::exif_cross_delete::date_set_keys(&metadata, tag_name)? {
+        Some(keys) => keys,
+        None => vec![canonical_write_tag_name(tag_name)],
+    };
+    for key in &keys {
+        metadata.insert(*key, new_value.clone());
+    }
 
     // Step 3: Write all metadata back to file; the tag is an explicit set,
     // whatever its value.
-    write_metadata_transaction(path, &metadata, &[], &[key.to_string()])?;
+    let siblings: Vec<String> = command_sets
+        .iter()
+        .map(|tag| canonical_write_tag_name(tag).to_string())
+        .collect();
+    let assigned: Vec<String> = keys.iter().map(|key| key.to_string()).collect();
+    write_metadata_transaction_among(path, &metadata, &[], &assigned, &siblings)?;
 
     Ok(())
+}
+
+/// Sets every EXIF key of `keys` to the date `raw` (typed per key as the CLI
+/// types a `-TAG=VALUE`) in one transaction: the route of an absolute
+/// `-ModifyDate=`, `-EXIF:ModifyDate=` or `-AllDates=` in a JPEG, TIFF or PNG
+/// (`exif_cross_delete::date_set_keys`), so each key moves its other
+/// IFD0/ExifIFD copy as pinned ExifTool 13.59 does.
+pub(crate) fn set_exif_dates(path: &Path, keys: &[&str], raw: &str) -> Result<()> {
+    let mut metadata = read_metadata(path)?;
+    let mut assigned = Vec::new();
+    for key in keys {
+        metadata.insert(
+            *key,
+            crate::cli::value_parser::parse_cli_tag_value(key, raw)?,
+        );
+        assigned.push(key.to_string());
+    }
+    write_metadata_transaction_among(path, &metadata, &[], &assigned, &[])
 }
 
 /// Removes a metadata tag from a file.

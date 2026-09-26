@@ -120,10 +120,12 @@ fn scan_ifd(
             ));
             continue;
         }
-        let date_tag = match (which, tag_id) {
-            (Ifd::Ifd0, 0x0132) => ExifDateTag::ModifyDate,
-            (Ifd::ExifIfd, 0x9003) => ExifDateTag::DateTimeOriginal,
-            (Ifd::ExifIfd, 0x9004) => ExifDateTag::CreateDate,
+        // A date may sit in either directory (a copy in the other one is a
+        // copy pinned ExifTool 13.59 shifts too, WriteExif.pl 13.59:1259).
+        let date_tag = match tag_id {
+            0x0132 => ExifDateTag::ModifyDate,
+            0x9003 => ExifDateTag::DateTimeOriginal,
+            0x9004 => ExifDateTag::CreateDate,
             _ => continue,
         };
         // A count-20 ASCII value is larger than 4 bytes, so it is always
@@ -192,30 +194,96 @@ pub fn shift_jpeg_exif_dates(
         )
     };
 
-    let located = locate_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
-
-    let mut modified = 0;
-    for target in targets {
-        let Some(location) = located.iter().find(|l| l.tag == *target) else {
-            continue;
-        };
-        let value_start = tiff_start + location.value_offset;
-        match patch_datetime_value(&mut file_bytes, value_start, *target, spec) {
-            Ok(()) => modified += 1,
-            // Multi-target shifts (AllDates) skip values that cannot be
-            // shifted — matching ExifTool, which warns and continues when
-            // e.g. an unset camera clock wrote "0000:00:00 00:00:00"
-            Err(e) if targets.len() > 1 => {
-                eprintln!("Warning: skipping {}: {}", target.key(), e);
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    let modified = shift_block_dates(&mut file_bytes, tiff_start, tiff_len, targets, spec)?;
 
     if modified > 0 {
         write_atomic(path, &file_bytes)?;
     }
     Ok(modified)
+}
+
+/// Shifts, in `file_bytes`, every IFD0/ExifIFD copy of each of `targets`
+/// in the TIFF block at `tiff_start..tiff_start + tiff_len`; returns how
+/// many values changed.
+fn shift_block_dates(
+    file_bytes: &mut [u8],
+    tiff_start: usize,
+    tiff_len: usize,
+    targets: &[ExifDateTag],
+    spec: &ShiftSpec,
+) -> Result<usize> {
+    let located = locate_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
+    let mut modified = 0;
+    for target in targets {
+        let copies: Vec<&LocatedDateTag> = located.iter().filter(|l| l.tag == *target).collect();
+        for location in &copies {
+            let value_start = tiff_start + location.value_offset;
+            match patch_datetime_value(file_bytes, value_start, *target, spec) {
+                Ok(()) => modified += 1,
+                // Multi-target shifts (AllDates) skip values that cannot be
+                // shifted — matching ExifTool, which warns and continues when
+                // e.g. an unset camera clock wrote "0000:00:00 00:00:00"
+                Err(e) if targets.len() > 1 || copies.len() > 1 => {
+                    eprintln!("Warning: skipping {}: {}", target.key(), e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(modified)
+}
+
+/// [`shift_jpeg_exif_dates`] for a walkable TIFF (its own TIFF structure)
+/// or a PNG (its `eXIf` chunk, whose CRC is recomputed): every IFD0/ExifIFD
+/// copy of each target shifts in place. `None` when the file is neither, or
+/// holds no EXIF to shift in.
+pub fn shift_tiff_png_exif_dates(
+    path: &Path,
+    targets: &[ExifDateTag],
+    spec: &ShiftSpec,
+) -> Result<Option<usize>> {
+    const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let mut file_bytes = std::fs::read(path)?;
+    // Classic TIFF only (magic 42, not RW2's 85 or BigTIFF).
+    let classic_tiff = matches!(file_bytes.get(0..4), Some(b"II\x2a\x00" | b"MM\x00\x2a"));
+    let modified = if classic_tiff {
+        let len = file_bytes.len();
+        shift_block_dates(&mut file_bytes, 0, len, targets, spec)?
+    } else if file_bytes.starts_with(PNG_SIGNATURE) {
+        let mut at = PNG_SIGNATURE.len();
+        let mut chunk = None;
+        while let Some(header) = file_bytes.get(at..at + 8) {
+            let len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+            if at + 12 + len > file_bytes.len() {
+                break;
+            }
+            if &header[4..8] == b"eXIf" {
+                chunk = Some((at, len));
+                break;
+            }
+            at += 12 + len;
+        }
+        let Some((at, len)) = chunk else {
+            return Ok(None);
+        };
+        let data = at + 8;
+        let skip = if file_bytes[data..data + len].starts_with(EXIF_IDENTIFIER) {
+            EXIF_IDENTIFIER.len()
+        } else {
+            0
+        };
+        let modified = shift_block_dates(&mut file_bytes, data + skip, len - skip, targets, spec)?;
+        let crc =
+            crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&file_bytes[at + 4..data + len]);
+        file_bytes[data + len..data + len + 4].copy_from_slice(&crc.to_be_bytes());
+        modified
+    } else {
+        return Ok(None);
+    };
+    if modified > 0 {
+        write_atomic(path, &file_bytes)?;
+    }
+    Ok(Some(modified))
 }
 
 /// Shifts the single 20-byte ASCII datetime value at `value_start`, patching

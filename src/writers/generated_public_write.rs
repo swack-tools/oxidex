@@ -18,6 +18,27 @@ fn refused(reason: &str) -> ExifToolError {
     ExifToolError::unsupported_format(format!("generated public write refused: {reason}"))
 }
 
+/// [`refused`] naming `key`, and for a qualifier the generated route does
+/// not compile, what is missing: this route compiles the `IFD<n>` qualifier
+/// branch of pinned ExifTool 13.59's `SetNewValue` (Writer.pl 13.59:511-512,
+/// IFD0 and IFD1) but not the `%exifDirs` branch (:517-519) that addresses
+/// ExifIFD, GPS or InteropIFD -- so `-ExifIFD:XResolution=300`, which
+/// ExifTool writes into ExifIFD (moving the IFD0 copy), is refused here.
+fn refused_key(key: &str, reason: &str) -> ExifToolError {
+    if reason == "qualifier is outside the source-admitted grammar" {
+        let group = key.split_once(':').map_or("", |(group, _)| group);
+        return ExifToolError::unsupported_format(format!(
+            "Cannot write '{key}': the generated writer for this tag addresses only the \
+             IFD<n> directories (IFD0, IFD1) that it compiles from SetNewValue's IFD \
+             qualifier branch (Writer.pl 13.59:511-512); the %exifDirs branch that selects \
+             '{group}' (:517-519) is not compiled yet. Nothing was written"
+        ));
+    }
+    ExifToolError::unsupported_format(format!(
+        "Cannot write '{key}': generated public write refused: {reason}. Nothing was written"
+    ))
+}
+
 fn raw_id(text: &str) -> Option<u16> {
     match text.strip_prefix("0x") {
         Some(hex) => u16::from_str_radix(hex, 16).ok(),
@@ -174,7 +195,29 @@ pub(crate) fn plan_public_write(
         &removals,
         |key| resolve_public(key, &rules, PUBLIC_SET_NEW_VALUE_MIGRATIONS),
     )
-    .map_err(refused)?;
+    .map_err(|reason| {
+        // Name the key the reason is about: a set or a deletion this
+        // request makes that the generated route refuses for that reason.
+        let key = desired_rows
+            .iter()
+            .filter(|(key, value)| baseline.get(key) != Some(*value))
+            .map(|(key, _)| *key)
+            .chain(removals.iter().copied())
+            .chain(
+                baseline_rows
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .filter(|key| !desired.contains_key(key)),
+            )
+            .find(|key| {
+                matches!(resolve_public(key, &rules, PUBLIC_SET_NEW_VALUE_MIGRATIONS),
+                    Resolution::Unsupported(why) if why == reason)
+            });
+        match key {
+            Some(key) => refused_key(key, reason),
+            None => refused(reason),
+        }
+    })?;
     if !plan.generated.is_empty() {
         validate_capture()?;
     }
