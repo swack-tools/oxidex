@@ -25,11 +25,11 @@ use crate::cli::args::CliArgs;
 use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{
-    CopyReport, clear_all_metadata, copy_metadata_report, resolve_write_tag,
+    CopyReport, clear_all_metadata, copy_metadata_report, resolve_write_tag_in_request,
 };
 use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
-    ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
+    ScratchStep, TagChange, apply_tag_changes_counted, request_deletions, transact_with,
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
@@ -445,6 +445,15 @@ fn apply_sets(
     if sets.is_empty() {
         return Ok(0);
     }
+    // The request's group deletions, so a bare name is typed by the address
+    // the transaction writes it at in their presence
+    // (`-MakerNotes:All= -ColorSpace#=2`: ExifIFD:ColorSpace, an integer).
+    let deletions: Vec<TagChange> = sets
+        .iter()
+        .filter(|(_, value)| value.is_empty())
+        .map(|(tag, _)| TagChange::delete(tag.strip_suffix('#').unwrap_or(tag).to_string()))
+        .collect();
+    let deletions = request_deletions(scratch, &deletions);
     let mut changes = Vec::with_capacity(sets.len());
     for (set_tag, value) in sets {
         let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {
@@ -464,7 +473,7 @@ fn apply_sets(
         // with the resolver's reason -- not a value error for an address
         // that was never going to be written.
         let resolved = (!write_tag.contains(':') && declared_alias(write_tag).is_none())
-            .then(|| resolve_write_tag(scratch, write_tag));
+            .then(|| resolve_write_tag_in_request(scratch, write_tag, deletions));
         let typed_as = match &resolved {
             Some(Ok(key)) => key.as_str(),
             _ => write_tag,

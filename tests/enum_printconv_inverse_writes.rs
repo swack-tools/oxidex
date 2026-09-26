@@ -1030,3 +1030,273 @@ fn sony_exposure_mode_write_matches_oracle() {
         "the oracle also leaves it untouched"
     );
 }
+
+/// PR #959 review (Codex, round 4, P2): `ComponentsConfiguration`'s raw mode
+/// was ignored, so `-ExifIFD:ComponentsConfiguration#="1 2 3 0"` and the
+/// `--no-print-conv` equivalent still ran the label-only parser (which only
+/// recognizes `Y`/`Cb`/`Cr`/`R`/`G`/`B`/`-`) instead of taking the four raw
+/// byte codes directly.
+#[test]
+fn components_configuration_raw_mode_takes_the_raw_bytes() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    let tag = "ExifIFD:ComponentsConfiguration";
+
+    // `#`
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}#=1 2 3 0");
+
+        let ox_path = copy_into(&dir, &base, "cc_hash.jpg");
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(oxidex_read_n(&ox_path, tag), "1 2 3 0");
+
+        let et_path = copy_into(&dir, &base, "cc_hash_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), "1 2 3 0");
+    }
+
+    // `--no-print-conv` / `-n`
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}=1 2 3 0");
+
+        let ox_path = copy_into(&dir, &base, "cc_np.jpg");
+        let out = oxidex(&["--no-print-conv", &arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex --no-print-conv {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(oxidex_read_n(&ox_path, tag), "1 2 3 0");
+
+        let et_path = copy_into(&dir, &base, "cc_np_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", "-n", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert!(et_out.status.success());
+        assert_eq!(oracle_read_n(oracle, &et_path, tag), "1 2 3 0");
+    }
+}
+
+/// PR #959 review (Codex, round 4, P2): `ColorSpace`, `GPS:GPSStatus`,
+/// `GPS:GPSMeasureMode` and `GPS:GPSDestDistanceRef` had no catch-all for an
+/// unmatched (non-raw) value, so garbage input reached the plain
+/// string/integer parser and was written verbatim with zero validation.
+/// Confirmed against the oracle, which refuses all four.
+#[test]
+fn hand_written_enum_arms_reject_unmatched_garbage_like_the_oracle() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+
+    for (tag, bad_value) in [
+        // Codex's exact repro: `-ExifIFD:ColorSpace=1` (a bare numeric code,
+        // coincidentally `sRGB`'s own stored value) was silently ACCEPTED at
+        // 43c8dda8 -- not merely a non-numeric garbage string -- because
+        // `ColorSpace` is excluded from the generic enum-inversion dispatch
+        // and, with no catch-all of its own, fell through to the plain
+        // integer parser, which happily parses "1". The oracle refuses it
+        // outright: `PrintConv` has no `OTHER`, so a raw code without `#`/
+        // `-n` is never accepted, matching this tag's whole `Orientation`-
+        // family. `garbage` is included too, to cover the non-numeric case.
+        ("ExifIFD:ColorSpace", "1"),
+        ("ExifIFD:ColorSpace", "garbage"),
+        ("GPS:GPSStatus", "garbage"),
+        ("GPS:GPSMeasureMode", "garbage"),
+        ("GPS:GPSDestDistanceRef", "garbage"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}={bad_value}");
+
+        let ox_path = copy_into(&dir, &base, "garbage_ox.jpg");
+        let ox_before = std::fs::read(&ox_path).unwrap();
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            !out.status.success(),
+            "oxidex {arg} must be refused, matching the oracle"
+        );
+        assert_eq!(
+            std::fs::read(&ox_path).unwrap(),
+            ox_before,
+            "oxidex {arg} must leave the file untouched"
+        );
+
+        let et_path = copy_into(&dir, &base, "garbage_et.jpg");
+        let et_before = std::fs::read(&et_path).unwrap();
+        oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle");
+        assert_eq!(
+            std::fs::read(&et_path).unwrap(),
+            et_before,
+            "the oracle also refuses {arg}"
+        );
+    }
+}
+
+/// The catch-all added above (previous test) must not regress
+/// `GPSMeasureMode`/`GPSDestDistanceRef`'s own raw codes, which the oracle
+/// accepts via its case-insensitive PREFIX tier (`Writer.pl:3609`) because
+/// each code happens to be a unique prefix of its own label -- confirmed by
+/// a breadth-measurement regression caught before this landed
+/// (`GPSMeasureMode`'s numeric-bare "2" newly refused, pushing mismatched
+/// from 6 to 7). `unique_case_insensitive_prefix_match` reproduces exactly
+/// this one extra tier for these three small, hand-enumerated GPS arms.
+/// These tags are String-typed (the stored code IS the read-back text), so
+/// this asserts directly rather than through
+/// `assert_label_write_matches_oracle` (which compares against an `i64`).
+#[test]
+fn gps_measure_mode_and_dest_distance_ref_accept_their_own_codes_via_prefix_tier() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    for (tag, code) in [
+        ("GPS:GPSMeasureMode", "2"),
+        ("GPS:GPSMeasureMode", "3"),
+        ("GPS:GPSDestDistanceRef", "K"),
+        ("GPS:GPSDestDistanceRef", "M"),
+        ("GPS:GPSDestDistanceRef", "N"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}={code}");
+
+        let ox_path = copy_into(&dir, &base, "prefix_ox.jpg");
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            oxidex_read_n(&ox_path, tag),
+            code,
+            "oxidex read-back for {arg}"
+        );
+
+        let et_path = copy_into(&dir, &base, "prefix_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle write");
+        assert!(et_out.status.success());
+        assert_eq!(
+            oracle_read_n(oracle, &et_path, tag),
+            code,
+            "oracle read-back for {arg}"
+        );
+    }
+}
+
+/// PR #959 review (Codex, round 4, P2): `OffsetTime`/`OffsetTimeOriginal`/
+/// `OffsetTimeDigitized` ignored `raw_mode` entirely, so
+/// `-ExifIFD:OffsetTime#=Z` / `--no-print-conv -ExifIFD:OffsetTime=Z` still
+/// ran `inverse_offset_time` and silently stored `+00:00` instead of the
+/// caller's raw string `Z`.
+#[test]
+fn offset_time_raw_mode_bypasses_inverse_offset_time() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+
+    for tag in [
+        "ExifIFD:OffsetTime",
+        "ExifIFD:OffsetTimeOriginal",
+        "ExifIFD:OffsetTimeDigitized",
+    ] {
+        // `#`
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let arg = format!("-{tag}#=Z");
+
+            let ox_path = copy_into(&dir, &base, "offset_hash.jpg");
+            let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+            assert!(
+                out.status.success(),
+                "oxidex {arg} should succeed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                oxidex_read_n(&ox_path, tag),
+                "Z",
+                "oxidex {arg} must store the raw string, not run it through InverseOffsetTime"
+            );
+
+            let et_path = copy_into(&dir, &base, "offset_hash_et.jpg");
+            let et_out = oracle
+                .command()
+                .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+                .output()
+                .expect("run oracle");
+            assert!(et_out.status.success());
+            assert_eq!(oracle_read_n(oracle, &et_path, tag), "Z");
+        }
+
+        // `--no-print-conv` / `-n`
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let arg = format!("-{tag}=Z");
+
+            let ox_path = copy_into(&dir, &base, "offset_np.jpg");
+            let out = oxidex(&["--no-print-conv", &arg, ox_path.to_str().unwrap()]);
+            assert!(
+                out.status.success(),
+                "oxidex --no-print-conv {arg} should succeed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(oxidex_read_n(&ox_path, tag), "Z");
+
+            let et_path = copy_into(&dir, &base, "offset_np_et.jpg");
+            let et_out = oracle
+                .command()
+                .args(["-overwrite_original", "-n", &arg, et_path.to_str().unwrap()])
+                .output()
+                .expect("run oracle");
+            assert!(et_out.status.success());
+            assert_eq!(oracle_read_n(oracle, &et_path, tag), "Z");
+        }
+
+        // Sanity: without raw mode, `Z` really is converted to `+00:00`.
+        let dir = tempfile::tempdir().unwrap();
+        let ox_path = copy_into(&dir, &base, "offset_label.jpg");
+        let out = oxidex(&[&format!("-{tag}=Z"), ox_path.to_str().unwrap()]);
+        assert!(out.status.success());
+        assert_eq!(oxidex_read_n(&ox_path, tag), "+00:00");
+    }
+}

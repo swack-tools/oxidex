@@ -354,6 +354,28 @@ struct Pending<'a> {
     at: usize,
 }
 
+/// What the group deletions of `changes` remove from the file at `path`,
+/// for judging the bare names the same request sets
+/// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)):
+/// only a deletion [`plan_group_deletion`] plans for real counts -- one it
+/// proves a no-op (a note ExifTool files under EXIF) removes nothing.
+/// Pinned 13.59 applies them in either argument order.
+pub(crate) fn request_deletions(
+    path: &Path,
+    changes: &[TagChange],
+) -> crate::writers::exif_surgical::RequestDeletions {
+    use crate::writers::exif_surgical::RequestDeletions;
+    changes
+        .iter()
+        .filter(|change| change.value().is_none())
+        .filter_map(|change| {
+            let group = group_deletion(change.tag())?;
+            matches!(plan_group_deletion(path, change.tag(), group), Ok(Some(_)))
+                .then(|| RequestDeletions::of(change.tag()))
+        })
+        .fold(RequestDeletions::default(), RequestDeletions::union)
+}
+
 /// Resolves every request against the file at `path`, in request order, and
 /// drops the no-ops: all refusals are collected into one
 /// [`ExifToolError::TagsNotWritten`]. Nothing is written.
@@ -376,24 +398,9 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let mut request_refusals: Vec<(usize, &'a str, TagNotWritten)> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
-    // Whether the request deletes the EXIF maker note: a bare name is then
-    // judged with no maker-note copy to also update, whichever order the
-    // deletion came in (pinned 13.59, `resolve_write_key_in_request`). Only
-    // a deletion `plan_group_deletion` plans for real counts -- one it
-    // proves a no-op (a note ExifTool files under EXIF) leaves the note.
-    let makernote_deleted = changes.iter().any(|change| {
-        change.value().is_none()
-            && group_deletion(change.tag()).is_some()
-            && crate::writers::exif_surgical::removal_deletes_makernote(change.tag())
-            && matches!(
-                plan_group_deletion(
-                    path,
-                    change.tag(),
-                    group_deletion(change.tag()).unwrap_or("")
-                ),
-                Ok(Some(_))
-            )
-    });
+    // What the request's group deletions remove, for the bare names it
+    // also sets (`request_deletions`).
+    let deletions = request_deletions(path, changes);
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -458,7 +465,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_in_request(path, change.tag(), &baseline, makernote_deleted) {
+        match resolve_write_key_in_request(path, change.tag(), &baseline, deletions) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),

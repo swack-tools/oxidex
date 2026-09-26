@@ -196,9 +196,57 @@ unproven, and a reaped child's group gets a bounded grace of a few seconds to
 clear. Otherwise the lock fails closed: no unlock, the descriptor is retained, and the owner exits
 non-zero naming each surviving PID (`LockRetained`; the transition wrapper
 reports it as `LeaseRetained`, exit 5). The lock then frees only when the last
-holder of the description exits. Descendants that leave their process group
-are not tracked.
-An interruption leaves the active stage `running`; `recover`
+holder of the description exits.
+
+Owned children are created with SIGINT deferred until the child is registered
+(a signal that arrives meanwhile is then replayed through the prior SIGINT
+disposition), and each carries an ownership probe: an inherited pipe writer
+that every descendant keeps alongside the lock descriptor. A child also stays
+unproven while its probe has not reached EOF, so a descendant that left the
+process group but still holds inherited descriptors keeps the lock held. On a
+timeout, interruption or post-spawn failure the executor SIGKILLs the child,
+its identity-verified descendants and its group, then verifies the result;
+when it cannot, it raises `OwnedChildCleanupIncomplete`, the journal keeps the
+active child and the transition wrapper refuses durable recovery. On Linux
+every owned command runs under a small child-subreaper supervisor
+(`PR_SET_CHILD_SUBREAPER`): orphaned descendants, including ones in a new
+session that closed every inherited descriptor, are reparented to it, and it
+kills and reaps its children until `waitpid` reports `ECHILD` before
+reporting the command's status. Cleanup asks it to sweep over a private
+control pipe; it ignores catchable signals the command broadcasts to its own
+process group, and the command gets its inherited dispositions back before
+`exec`. A command that left live descendants is
+refused with record state `escaped_descendants`.
+
+**Unproven-lineage marker (manual clearance).** If the supervisor exits
+without proving its lineage empty (for example it was killed after the
+command left its session and closed every descriptor), the child stays
+unproven and nothing holds the lock's description, so the owner writes
+`<lock>.unproven-lineage.json` beside the lock. It names the command's own
+PID and kernel start time (`lineage_primary`), the uid, and the time the
+lineage started (`lineage_started_at`). Every later lock owner, the
+transition wrapper and standalone `recover` refuse while it exists, and the
+refusal prints the exact `rm <lock>.unproven-lineage.json` command. It is
+safe to run only after verifying that no process of that uid started at or
+after `lineage_started_at` remains from that run (a descendant that detached
+from the command is named by nothing else); removing it earlier lets another
+run share the host with surviving work. If the marker itself cannot be
+written, the owner removes the lock file's permissions instead (no free
+space needed), acquisition refuses a mode-000 lock explicitly (so privileged
+owners are refused too), and the refusal prints the exact `chmod 644 <lock>`
+to run under the same condition.
+
+**macOS residual (documented, accepted).** macOS has no subreaper, so a
+descendant that starts a new session and closes every inherited descriptor
+cannot be bounded there: the command is accepted and that descendant keeps
+running. It holds no lock descriptor, so the lock is released normally for
+the next run; every process that does hold an inherited
+descriptor is covered by the ownership probe and keeps the lock held (#919's
+fail-closed rule). Linux runs are bounded by the subreaper supervisor above.
+`test_darwin_residual_detached_descendant_is_unbounded_but_holds_no_lock`
+pins this behaviour on macOS.
+
+An interruption whose cleanup is incomplete leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an
 interrupted action. Pair-level native-delta classification remains explicitly

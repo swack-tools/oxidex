@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import ctypes
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -58,6 +60,14 @@ class LockRetained(Refused):
     def __init__(self, message: str, survivors: list[dict[str, Any]]):
         super().__init__(message)
         self.survivors = survivors
+
+
+class OwnedChildCleanupIncomplete(OSError):
+    """A spawned worker may still own the shared lease; preserve active state."""
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self._oxidex_owned_child_cleanup = "incomplete"
 
 
 def _sha_json(value: Any) -> str:
@@ -556,26 +566,68 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
     return result
 
 
-def _descendants(pid: int) -> list[int]:
-    """Return live descendants; Linux uses procfs and other hosts use PID/PPID."""
+def _procfs_process_row(path: Path) -> tuple[str, int, int, int] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = raw.rfind(")")
+    fields = raw[close + 2:].split() if close >= 0 else []
+    if len(fields) < 20 or len(fields[0]) != 1:
+        return None
+    try:
+        return fields[0], int(fields[1]), int(fields[2]), int(fields[19])
+    except ValueError:
+        return None
+
+
+def _procfs_children(proc_root: Path) -> dict[int, list[int]]:
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError as exc:
+        raise OSError("cannot enumerate procfs descendants") from exc
+    children: dict[int, list[int]] = {}
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        row = _procfs_process_row(entry / "stat")
+        if row is None:
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise OSError("cannot verify procfs descendant enumeration") from exc
+            raise OSError("cannot verify procfs descendant enumeration")
+        children.setdefault(row[1], []).append(int(entry.name))
+    return children
+
+
+def _descendants(pid: int, *, proc_root: Path = Path("/proc")) -> list[int]:
+    """Return descendants or fail when a complete enumeration is unavailable."""
     children: dict[int, list[int]] = {}
     if sys.platform == "linux":
         pending = [pid]
         while pending:
             parent = pending.pop()
             try:
-                raw = Path(f"/proc/{parent}/task/{parent}/children").read_text(encoding="ascii")
+                raw = (proc_root / str(parent) / "task" / str(parent) / "children").read_text(
+                    encoding="ascii",
+                )
             except OSError:
-                continue
+                children = _procfs_children(proc_root)
+                break
             children[parent] = [int(value) for value in raw.split() if value.isdigit() and int(value) > 0]
             pending.extend(children[parent])
     else:
         try:
-            listing = subprocess.run(["ps", "-axo", "pid=,ppid="], text=True, capture_output=True,
-                                     timeout=2, check=False).stdout
-        except (OSError, subprocess.TimeoutExpired):
-            listing = ""
-        for row in listing.splitlines():
+            result = subprocess.run(["ps", "-axo", "pid=,ppid="], text=True, capture_output=True,
+                                    timeout=2, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise OSError("cannot enumerate descendants") from exc
+        if result.returncode != 0 or not result.stdout.strip():
+            raise OSError("cannot verify descendant enumeration")
+        for row in result.stdout.splitlines():
             fields = row.split()
             if len(fields) == 2 and all(value.isdigit() for value in fields):
                 children.setdefault(int(fields[1]), []).append(int(fields[0]))
@@ -748,18 +800,46 @@ def _zombie_only_group(pgid: int) -> bool:
     return second is not None and sorted(second) == sorted(first)
 
 
+def _inherited_ownership_state(child: subprocess.Popen[Any]) -> str | None:
+    """None unless a process may still hold the child's inherited descriptors.
+
+    Children created by ``_spawn_with_deferred_sigint`` carry an ownership
+    probe: an inherited pipe writer that every descendant keeps alongside the
+    host-lock descriptor. Until its reader sees EOF some process, possibly a
+    descendant that left the child's process group, still holds them, and an
+    explicit unlock would release the lock for that process too.
+    """
+    if (not hasattr(child, "_oxidex_ownership_read_fd")
+            and not getattr(child, "_oxidex_ownership_released", False)):
+        return None  # no probe was issued for this child
+    try:
+        if _ownership_probe_live(child):
+            return "exited; a descendant still holds its inherited descriptors"
+    except OSError as exc:
+        return f"exited; inherited descriptor ownership cannot be verified: {exc}"
+    return None
+
+
 def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
     """None only when the child is reaped and its whole process group is gone.
 
     A group that still answers ``killpg(pgid, 0)`` (or refuses it with EPERM,
     as macOS does for a zombie-only group) counts as gone only when every
-    member is verified to be a zombie.
+    member is verified to be a zombie. A child with an ownership probe also
+    stays unproven while any process still holds its inherited descriptors.
     """
     try:
         if child.poll() is None:
             return "running"
     except OSError as exc:
         return f"exit status cannot be observed: {exc}"
+    # Both uncertainties are reported together: the descriptor holder may
+    # exit before a hidden descendant does, so an unverified lineage must
+    # still reach the durable marker while inherited ownership remains.
+    reasons = [reason for reason in (_inherited_ownership_state(child), _lineage_unverified(child))
+               if reason is not None]
+    if reasons:
+        return "; ".join(reasons)
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
@@ -790,7 +870,20 @@ def unproven_children() -> list[dict[str, Any]]:
             if state is None:
                 del owned.children[pid]
             else:
-                survivors.append({"pid": pid, "pgid": pid, "state": state})
+                survivor = {"pid": pid, "pgid": pid, "state": state}
+                primary = getattr(child, "_oxidex_lineage_primary", None)
+                if isinstance(primary, dict):
+                    # The supervised command itself, identified independently
+                    # of its (possibly dead) supervisor.
+                    survivor["lineage_primary"] = dict(primary)
+                started = getattr(child, "_oxidex_lineage_started_at", None)
+                if type(started) is float:
+                    # Descendants that detached from the command are named by
+                    # nothing once its supervisor is gone; clearance must cover
+                    # every process this user started since the lineage began.
+                    survivor["lineage_started_at"] = started
+                    survivor["uid"] = os.getuid()
+                survivors.append(survivor)
         if owned.spawns_in_flight:
             survivors.append({"pid": None, "pgid": None,
                               "state": "spawn interrupted before its PID was recorded"})
@@ -825,9 +918,58 @@ def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[d
         survivors = unproven_children()
     if survivors:
         _RETAINED_LOCKS.append(stream)
+        _mark_unproven_lineage(stream, survivors)
         return survivors
     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     return []
+
+
+_UNPROVEN_LINEAGE_SUFFIX = ".unproven-lineage.json"
+
+
+def _unproven_lineage_marker(lock_path: Path) -> Path:
+    return lock_path.with_name(lock_path.name + _UNPROVEN_LINEAGE_SUFFIX)
+
+
+def _mark_unproven_lineage(stream: Any, survivors: list[dict[str, Any]]) -> None:
+    """Make retention for an unverifiable lineage outlive this process.
+
+    Parking the stream keeps the lock only while this process lives. When
+    the sole evidence of a possibly live command is its supervisor's missing
+    verdict, no surviving process holds the lock's description, so a durable
+    marker beside the lock refuses every later owner (and standalone
+    recovery) until an operator has verified the processes are gone.
+    """
+    lineage = [item for item in survivors if "lineage" in str(item.get("state", ""))]
+    if not lineage:
+        return
+    try:
+        marker = _unproven_lineage_marker(Path(stream.name).absolute())
+        _atomic(marker, {"kind": "oxidex_unproven_owned_lineage", "owner_pid": os.getpid(),
+                         "recorded_at": time.time(), "survivors": lineage})
+    except (OSError, TypeError, ValueError) as exc:
+        # The refusal must still outlive this process. Changing the lock
+        # file's mode needs no free space: every later owner's open of the
+        # lock then fails until an operator restores it.
+        try:
+            os.chmod(stream.name, 0)
+            fallback = "the lock file's permissions were removed instead"
+        except (OSError, TypeError, ValueError) as chmod_error:
+            fallback = f"removing the lock file's permissions also failed: {chmod_error}"
+        survivors.append({"pid": None, "pgid": None,
+                          "state": f"unproven lineage marker could not be written ({exc}); {fallback}"})
+
+
+def _refuse_unproven_lineage(path: Path) -> None:
+    marker = _unproven_lineage_marker(path)
+    if marker.exists() or marker.is_symlink():
+        raise Refused(
+            f"host lock {path} is refused by an unproven owned-lineage marker, {marker}. A prior run's "
+            "supervisor exited without proving its command's descendants gone, and a descendant that "
+            "detached is named by nothing. Remove it (rm " + str(marker) + ") only after verifying that "
+            "no process of the marker's uid started at or after its lineage_started_at remains from that "
+            "run (lineage_primary gives the command's own PID and kernel start time); removing it while "
+            "such a process lives lets another run share the host with it")
 
 
 def release_retained_locks() -> list[dict[str, Any]]:
@@ -854,26 +996,65 @@ def retained_lock_message(path: Path, survivors: list[dict[str, Any]]) -> str:
 def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_output: bool = False,
                  started: Callable[[int, int], None] | None = None,
                  **kwargs: Any) -> subprocess.CompletedProcess[Any]:
-    """subprocess.run for an owned child; interruption leaves it registered."""
+    """subprocess.run for an owned child with interrupt-safe creation and verified cleanup.
+
+    The child stays registered in ``_OWNED`` until it is proven gone. Cleanup
+    that cannot be verified raises ``OwnedChildCleanupIncomplete`` so callers
+    keep the child's journal identity and the lock owner retains the lock.
+    """
     if capture_output:
         kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
-    child = _spawn(argv, **kwargs)
+    owner: list[subprocess.Popen[Any] | None] = [None]
     try:
+        child = _spawn_with_deferred_sigint(owner, argv, **kwargs)
         if started is not None:
             try:
                 started(child.pid, child.pid)
-            except OSError:
-                _bounded_timeout_cleanup(child)
+            except BaseException as persistence:
+                _cleanup_owned_child_after_interrupt(child, persistence)
+                if getattr(persistence, "_oxidex_owned_child_cleanup", None) != "verified":
+                    if isinstance(persistence, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    raise OwnedChildCleanupIncomplete(
+                        "owned child cleanup remains incomplete after child journal failure",
+                    ) from persistence
                 raise
         try:
             stdout, stderr = child.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            stdout, stderr = _bounded_timeout_cleanup(child)
+            try:
+                stdout, stderr = _bounded_timeout_cleanup(child)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as cleanup:
+                stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"owned child timeout cleanup warning: {cleanup}")
             exc.output, exc.stderr = stdout, stderr
             raise
+        except OSError as failure:
+            # Reading the child's output failed after it was spawned: the
+            # child may still run, so it gets the same verified cleanup.
+            _cleanup_owned_child_after_interrupt(child, failure)
+            if getattr(failure, "_oxidex_owned_child_cleanup", None) != "verified":
+                raise OwnedChildCleanupIncomplete(
+                    "owned child cleanup remains incomplete after a post-spawn read failure",
+                ) from failure
+            raise
+        escaped = _finish_lineage(child)
+        _require_ownership_release(child, "successful command completion")
+        if escaped:
+            raise OSError("owned command left descendants running after it exited; the lineage "
+                          "boundary killed them: " + ", ".join(str(pid) for pid in escaped))
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+    except (KeyboardInterrupt, SystemExit) as interruption:
+        if (owner[0] is not None
+                and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
+            _cleanup_owned_child_after_interrupt(owner[0], interruption)
+        raise
     finally:
-        _settle(child)
+        if owner[0] is not None:
+            _settle(owner[0])
 
 
 def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
@@ -889,72 +1070,436 @@ def _text_output(value: str | bytes | None) -> str:
     return value or ""
 
 
-def _group_live(pgid: int) -> bool:
+def _procfs_stat(path: Path) -> tuple[str, int] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = raw.rfind(")")
+    fields = raw[close + 2:].split() if close >= 0 else []
+    if len(fields) < 3 or len(fields[0]) != 1:
+        return None
+    try:
+        return fields[0], int(fields[2])
+    except ValueError:
+        return None
+
+
+_PROCFS_DEAD_STATES = frozenset({"Z", "X", "x"})
+
+
+def _procfs_all_tasks_dead(pid: int, proc_root: Path) -> bool:
+    """True only when every task of a zombie-looking process is itself dead.
+
+    procfs reports the thread-group leader's state; a leader that exited
+    before its other threads reads ``Z`` while a live thread still holds the
+    process's descriptors. Anything unreadable counts as live.
+    """
+    try:
+        tasks = [entry for entry in (proc_root / str(pid) / "task").iterdir() if entry.name.isdigit()]
+    except OSError:
+        return False
+    if not tasks:
+        return False
+    for entry in tasks:
+        row = _procfs_stat(entry / "stat")
+        if row is None:
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue  # that task finished while we looked
+            except OSError:
+                return False
+            return False
+        if row[0] not in _PROCFS_DEAD_STATES:
+            return False
+    return True
+
+
+def _pid_live(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    if sys.platform.startswith("linux"):
+        row = _procfs_stat(proc_root / str(pid) / "stat")
+        if row is None:
+            return True
+        return row[0] not in _PROCFS_DEAD_STATES or not _procfs_all_tasks_dead(pid, proc_root)
+    return True
+
+
+class _DarwinProcBSDInfo(ctypes.Structure):
+    """Darwin's public proc_bsdinfo ABI from <sys/proc_info.h>."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+def _darwin_start_time(pid: int) -> tuple[int, int]:
+    """Read the kernel process start timeval; never substitute coarse `ps` text."""
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidinfo = libproc.proc_pidinfo
+    except (OSError, AttributeError) as exc:
+        raise OSError(f"cannot load precise Darwin process identity for pid {pid}") from exc
+    proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                             ctypes.c_void_p, ctypes.c_int]
+    proc_pidinfo.restype = ctypes.c_int
+    info = _DarwinProcBSDInfo()
+    size = ctypes.sizeof(info)
+    received = proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
+    if received != size or info.pbi_pid != pid:
+        # proc_pidinfo has no BSD info for a zombie, and signal zero to one
+        # reparented to launchd is refused with EPERM. A zombie has exited
+        # (and holds no descriptors); its PID cannot be reused until reaped.
+        if _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PID, pid]) == [(pid, _DARWIN_SZOMB)]:
+            raise ProcessLookupError(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            raise
+        except PermissionError:
+            pass
+        raise OSError(f"cannot obtain precise Darwin process identity for pid {pid}")
+    seconds, microseconds = int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
+    if seconds <= 0 or not 0 <= microseconds < 1_000_000:
+        raise OSError(f"Darwin process identity is malformed for pid {pid}")
+    return seconds, microseconds
+
+
+def _process_identity(pid: int, *, proc_root: Path = Path("/proc")) -> str:
+    """Return a stable identity token, distinguishing exit from unreadability."""
+    if sys.platform.startswith("linux"):
+        row = _procfs_process_row(proc_root / str(pid) / "stat")
+        if row is not None:
+            return f"procfs-start:{row[3]}"
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            raise
+        raise OSError(f"cannot verify process identity for pid {pid}")
+    if sys.platform == "darwin":
+        seconds, microseconds = _darwin_start_time(pid)
+        return f"darwin-start:{seconds}:{microseconds}"
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], text=True,
+            capture_output=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OSError(f"cannot verify process identity for pid {pid}") from exc
+    token = result.stdout.strip()
+    if result.returncode != 0 or not token:
+        if not _pid_live(pid):
+            raise ProcessLookupError(pid)
+        raise OSError(f"cannot verify process identity for pid {pid}")
+    return f"ps-start:{token}"
+
+
+def _procfs_group_states(pgid: int, proc_root: Path) -> list[str] | None:
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return None
+    states = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        row = _procfs_stat(entry / "stat")
+        if row is None:
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            return None
+        state, group = row
+        if group == pgid:
+            if state in _PROCFS_DEAD_STATES and not _procfs_all_tasks_dead(int(entry.name), proc_root):
+                state = "live-thread"
+            states.append(state)
+    return states
+
+
+def _group_live(pgid: int, *, proc_root: Path = Path("/proc")) -> bool:
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
-    return True
+    except PermissionError:
+        # macOS refuses signal-zero to a group whose remaining members are
+        # zombies awaiting reaping; only the kernel member view may say so.
+        # Anything else, including a membership that changed between the two
+        # kernel views while launchd reaped, still counts as live.
+        return not _zombie_only_group(pgid)
+    if sys.platform.startswith("linux"):
+        states = _procfs_group_states(pgid, proc_root)
+        if not states:
+            return True
+        return any(state not in {"Z", "X", "x"} for state in states)
+    return not _zombie_only_group(pgid)
+
+
+def _refresh_owned_descendants(child: subprocess.Popen[str]) -> dict[int, str]:
+    descendants = dict(getattr(child, "_oxidex_owned_descendants", {}))
+    for pid in _descendants(child.pid):
+        if pid not in descendants:
+            descendants[pid] = _process_identity(pid)
+    setattr(child, "_oxidex_owned_descendants", descendants)
+    return descendants
+
+
+def _live_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
+    live = []
+    for pid, identity in dict(getattr(child, "_oxidex_owned_descendants", {})).items():
+        try:
+            current = _process_identity(pid)
+        except ProcessLookupError:
+            continue
+        if current == identity and _pid_live(pid):
+            live.append(pid)
+    return sorted(live)
+
+
+def _mark_catchable_termination_unverifiable(child: subprocess.Popen[str]) -> None:
+    """Remember that an owned handler had a chance to fork beyond our proofs."""
+    setattr(child, "_oxidex_catchable_termination_unverifiable", True)
+
+
+def _catchable_termination_unverifiable(child: subprocess.Popen[str]) -> bool:
+    return getattr(child, "_oxidex_catchable_termination_unverifiable", False) is True
+
+
+def _signal_owned_descendants(child: subprocess.Popen[str], signal_value: signal.Signals) -> None:
+    identities = dict(getattr(child, "_oxidex_owned_descendants", {}))
+    for pid, identity in sorted(identities.items(), reverse=True):
+        try:
+            current = _process_identity(pid)
+        except ProcessLookupError:
+            continue
+        if current == identity:
+            if signal_value == signal.SIGTERM and _pid_live(pid):
+                _mark_catchable_termination_unverifiable(child)
+            _signal_pid(pid, signal_value)
+
+
+def _group_member_pids(pgid: int, *, proc_root: Path = Path("/proc")) -> list[int] | None:
+    """Current members of a process group, or None when they cannot be listed."""
+    if sys.platform.startswith("linux"):
+        try:
+            entries = list(proc_root.iterdir())
+        except OSError:
+            return None
+        members = []
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            row = _procfs_stat(entry / "stat")
+            if row is None:
+                try:
+                    entry.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return None
+                return None
+            if row[1] == pgid:
+                members.append(int(entry.name))
+        return members
+    if sys.platform == "darwin":
+        members = _darwin_group_members(pgid)
+        return None if members is None else [pid for pid, _state in members]
+    return None
+
+
+def _signal_owned_group(child: subprocess.Popen[str], signal_value: signal.Signals) -> None:
+    """Signal the child's process group without ever hitting a reused PGID.
+
+    While the leader is unreaped its PID, and so the PGID, cannot be reused,
+    and ``killpg`` is safe. Once it is reaped the number may name an unrelated
+    group, so only members whose recorded identity still matches are
+    signalled; anything unverifiable is left for the caller's liveness check
+    to report as incomplete.
+    """
+    if signal_value == signal.SIGTERM and _group_live(child.pid):
+        _mark_catchable_termination_unverifiable(child)
+    if child.returncode is not None:
+        owned = dict(getattr(child, "_oxidex_owned_descendants", {}))
+        for pid in _group_member_pids(child.pid) or []:
+            identity = owned.get(pid)
+            if identity is None:
+                continue
+            try:
+                if not _pid_live(pid):
+                    continue  # a zombie awaiting its reaper needs no signal
+                if _process_identity(pid) == identity:
+                    _signal_pid(pid, signal_value)
+            except OSError:
+                pass  # gone or unverifiable: the caller's liveness check decides
+        return
+    try:
+        os.killpg(child.pid, signal_value)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS refuses to signal a group whose members are zombies (they need
+        # no signal). Whatever the reason, the caller's liveness check decides
+        # whether the group is gone; an unsignalled live member fails closed.
+        pass
+
+
+def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    survivors = _live_owned_descendants(child)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.02)
+        survivors = _live_owned_descendants(child)
+    return survivors
+
+
+def _readable(descriptor: int, timeout: float) -> bool:
+    """Whether a descriptor is readable (or at EOF) within ``timeout`` seconds.
+
+    ``select.select`` refuses descriptors at or above ``FD_SETSIZE`` with a
+    ValueError; ``poll`` has no such ceiling, and any failure is an OSError
+    that callers already treat as unverifiable.
+    """
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    try:
+        events = poller.poll(max(0, int(timeout * 1000)))
+    except (OSError, ValueError) as exc:
+        raise OSError(f"cannot poll descriptor {descriptor}: {exc}") from exc
+    if any(mask & select.POLLNVAL for _fd, mask in events):
+        raise OSError(f"descriptor {descriptor} is not open")
+    return bool(events)
+
+
+def _ownership_probe_live(child: subprocess.Popen[str]) -> bool:
+    """Report whether any spawned process still inherits the ownership writer."""
+    descriptor = getattr(child, "_oxidex_ownership_read_fd", None)
+    if type(descriptor) is not int or descriptor < 0:
+        if getattr(child, "_oxidex_ownership_released", False) is True:
+            return False
+        raise OSError("owned process lifetime verification is unavailable")
+    try:
+        if not _readable(descriptor, 0):
+            return True
+        payload = os.read(descriptor, 1)
+    except OSError as exc:
+        raise OSError("owned process lifetime verification failed") from exc
+    if payload:
+        raise OSError("owned process lifetime probe received unexpected data")
+    os.close(descriptor)
+    setattr(child, "_oxidex_ownership_read_fd", -1)
+    setattr(child, "_oxidex_ownership_released", True)
+    return False
+
+
+def _wait_for_ownership_release(child: subprocess.Popen[str]) -> bool:
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    inherited = _ownership_probe_live(child)
+    while inherited and time.monotonic() < deadline:
+        time.sleep(0.02)
+        inherited = _ownership_probe_live(child)
+    return inherited
+
+
+def _require_ownership_release(child: subprocess.Popen[str], operation: str) -> None:
+    try:
+        inherited = _wait_for_ownership_release(child)
+    except OSError as exc:
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime ownership cannot be verified after {operation}",
+        ) from exc
+    if inherited:
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime ownership is still inherited after {operation}",
+        )
+    if _catchable_termination_unverifiable(child):
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime cannot be verified after catchable termination during {operation}",
+        )
+
+
+def _close_ownership_probe(child: subprocess.Popen[str]) -> None:
+    descriptor = getattr(child, "_oxidex_ownership_read_fd", None)
+    if type(descriptor) is int and descriptor >= 0:
+        os.close(descriptor)
+        setattr(child, "_oxidex_ownership_read_fd", -1)
 
 
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
-    """Give an adapter a chance to reap, then bound cleanup by its process group."""
-    descendants = _descendants(child.pid)
-    for pid in reversed(descendants):
-        _signal_pid(pid, signal.SIGTERM)
+    """Non-catchably stop and verify the complete owned process lifetime."""
+    _request_lineage_sweep(child)
+    _refresh_owned_descendants(child)
+    _signal_owned_descendants(child, signal.SIGKILL)
+    _signal_owned_group(child, signal.SIGKILL)
     try:
         stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        # A child can be created after the first snapshot. Refresh before the
-        # process-group fallback, which also covers descendants that close the
-        # inherited stdout/stderr pipes and otherwise evade communicate().
-        descendants = _descendants(child.pid)
-        for pid in reversed(descendants):
-            _signal_pid(pid, signal.SIGTERM)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.output, exc.stderr
+        _signal_owned_group(child, signal.SIGKILL)
         try:
             stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-                except subprocess.TimeoutExpired as exc:
-                    # Never turn timeout cleanup into an unbounded wait.
-                    stdout, stderr = exc.output, exc.stderr
-    # communicate() only proves the direct adapter has exited. Its late child
-    # may have closed inherited pipes and may not have existed in either
-    # snapshot, so always drain the owned group before releasing the lock.
-    try:
-        os.killpg(child.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+        except subprocess.TimeoutExpired as retry:
+            stdout, stderr = retry.output, retry.stderr
+    if child.poll() is None:
+        raise OSError("owned direct child is still live after bounded cleanup")
     deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
     while _group_live(child.pid) and time.monotonic() < deadline:
+        _signal_owned_group(child, signal.SIGKILL)
         time.sleep(0.02)
     if _group_live(child.pid):
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
-        while _group_live(child.pid) and time.monotonic() < deadline:
-            time.sleep(0.02)
+        raise OSError("owned process group is still live after bounded cleanup")
+    _refresh_owned_descendants(child)
+    _signal_owned_descendants(child, signal.SIGKILL)
+    survivors = _wait_owned_descendants(child)
+    if survivors:
+        raise OSError("owned descendant processes are still live after bounded cleanup: "
+                      + ", ".join(str(pid) for pid in survivors))
+    _require_ownership_release(child, "bounded cleanup")
     return _text_output(stdout), _text_output(stderr)
 
 
 def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Kill and reap an owned group after ordinary cleanup itself faults."""
+    enumeration_error = None
     try:
-        os.killpg(child.pid, signal.SIGKILL)
+        _request_lineage_sweep(child)
+    except OSError:
+        pass
+    try:
+        _refresh_owned_descendants(child)
+        _signal_owned_descendants(child, signal.SIGKILL)
+    except BaseException as exc:
+        enumeration_error = exc
+    try:
+        _signal_owned_group(child, signal.SIGKILL)
     except OSError:
         pass
     try:
@@ -963,7 +1508,544 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
         stdout, stderr = exc.output, exc.stderr
     except OSError:
         stdout, stderr = "", ""
+    survivors = _wait_owned_descendants(child)
+    if survivors:
+        raise OSError("owned descendant processes are still live after emergency cleanup: "
+                      + ", ".join(str(pid) for pid in survivors))
+    if enumeration_error is not None:
+        raise OSError("owned descendant enumeration remained unverified during emergency cleanup") from enumeration_error
+    _require_ownership_release(child, "emergency cleanup")
     return _text_output(stdout), _text_output(stderr)
+
+
+def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interruption: BaseException) -> None:
+    """Bound cleanup of the live Popen we own while preserving the original failure."""
+    cleanup_failures = []
+    emergency_needed = False
+    cleanup_incomplete = False
+    try:
+        _bounded_timeout_cleanup(child)
+    except BaseException as cleanup:
+        cleanup_failures.append(f"bounded owned-child cleanup failed: {cleanup}")
+        emergency_needed = True
+    try:
+        _refresh_owned_descendants(child)
+        if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
+                or _ownership_probe_live(child)):
+            cleanup_failures.append("owned child process group is still live after bounded cleanup")
+            emergency_needed = True
+        elif _lineage_unverified(child) is not None:
+            cleanup_failures.append("owned child lineage was not proven empty after bounded cleanup")
+            emergency_needed = True
+        if _catchable_termination_unverifiable(child):
+            cleanup_failures.append(
+                "owned child cleanup cannot be verified after catchable termination",
+            )
+            emergency_needed = True
+    except BaseException as inspection:
+        cleanup_failures.append(f"owned child cleanup could not be verified: {inspection}")
+        emergency_needed = True
+    if emergency_needed:
+        try:
+            _emergency_reap_group(child)
+        except BaseException as emergency:
+            cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
+        try:
+            _refresh_owned_descendants(child)
+            if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
+                    or _ownership_probe_live(child)):
+                cleanup_failures.append("owned child process group is still live after emergency cleanup")
+                cleanup_incomplete = True
+            elif _lineage_unverified(child) is not None:
+                cleanup_failures.append("owned child lineage was not proven empty after emergency cleanup")
+                cleanup_incomplete = True
+            if _catchable_termination_unverifiable(child):
+                cleanup_failures.append(
+                    "owned child cleanup remains unverifiable after catchable termination",
+                )
+                cleanup_incomplete = True
+        except BaseException as inspection:
+            cleanup_failures.append(f"emergency owned-child cleanup could not be verified: {inspection}")
+            cleanup_incomplete = True
+    setattr(
+        interruption,
+        "_oxidex_owned_child_cleanup",
+        "incomplete" if cleanup_incomplete else "verified",
+    )
+    for failure in cleanup_failures:
+        if hasattr(interruption, "add_note"):
+            interruption.add_note(failure)
+
+
+def _emergency_cleanup_after_timeout_failure(
+    child: subprocess.Popen[str], cleanup: BaseException,
+) -> tuple[str, str]:
+    """Emergency-clean a timed-out child or fail without clearing its journal identity."""
+    failures = [f"bounded owned-child cleanup failed: {cleanup}"]
+    try:
+        stdout, stderr = _emergency_reap_group(child)
+    except BaseException as emergency:
+        failures.append(f"emergency owned-child cleanup failed: {emergency}")
+        stdout, stderr = "", ""
+    try:
+        _refresh_owned_descendants(child)
+        incomplete = (child.poll() is None or _group_live(child.pid) or bool(_live_owned_descendants(child))
+                      or _ownership_probe_live(child) or _catchable_termination_unverifiable(child)
+                      or _lineage_unverified(child) is not None)
+    except BaseException as inspection:
+        failures.append(f"owned child cleanup could not be verified: {inspection}")
+        incomplete = True
+    if incomplete:
+        raise OwnedChildCleanupIncomplete(
+            "owned child cleanup remains incomplete after timeout: " + "; ".join(failures),
+        ) from cleanup
+    return stdout, stderr
+
+
+# Linux lineage boundary. An owned command runs under a tiny supervisor that
+# is a child subreaper (PR_SET_CHILD_SUBREAPER): every descendant that the
+# command orphans -- including one that starts a new session and closes all
+# inherited descriptors -- is reparented to the supervisor instead of init, so
+# it cannot leave the command's lineage. When the command exits (or the
+# executor requests cleanup over a private control pipe) the supervisor SIGKILLs and reaps
+# its children until waitpid reports ECHILD, the kernel's atomic proof that no
+# descendant remains, and reports the command's status and any live escaped
+# descendant on a private status pipe. Children of the supervisor cannot be
+# PID-reused until it reaps them, so its signals are identity-safe. Darwin has
+# no subreaper, so there a descendant that detaches and closes every
+# inherited descriptor stays outside the ownership proof (a documented
+# residual); the ownership probe still covers every descriptor holder.
+_LINEAGE_SUPERVISED = sys.platform.startswith("linux")
+_LINUX_LINEAGE_SUPERVISOR = r"""
+import ctypes, json, os, select, signal, sys, time
+status_fd = int(sys.argv[1])
+control_fd = int(sys.argv[2])
+argv = sys.argv[3:]
+# The supervisor shares the command's process group, so signals the command
+# broadcasts to its group reach it too. It ignores the catchable ones (the
+# executor asks for sweeps over the private control pipe, and kills with
+# SIGKILL); the command gets the dispositions it inherited back before exec.
+BROADCAST = [getattr(signal, name) for name in ("SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM", "SIGUSR1", "SIGUSR2")
+             if hasattr(signal, name)]
+inherited = {}
+for number in BROADCAST:
+    inherited[number] = signal.SIG_IGN if signal.getsignal(number) == signal.SIG_IGN else signal.SIG_DFL
+    signal.signal(number, signal.SIG_IGN)
+
+def report(**fields):
+    # A lost reader must never stop the sweep: reporting is best effort, and
+    # the executor treats a missing report as unverified.
+    try:
+        os.write(status_fd, (json.dumps(fields, sort_keys=True) + "\n").encode())
+    except OSError:
+        pass
+
+def children():
+    me = os.getpid()
+    found = set()
+    try:
+        for task in os.listdir(f"/proc/{me}/task"):
+            with open(f"/proc/{me}/task/{task}/children", encoding="ascii") as listing:
+                found.update(int(value) for value in listing.read().split())
+        return found
+    except OSError:
+        pass
+    # Kernels without CONFIG_PROC_CHILDREN: scan every /proc/<pid>/stat for
+    # our PID as parent. An entry that vanishes mid-scan exited; any other
+    # unreadable entry makes the answer unverifiable.
+    found = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", encoding="utf-8") as stat:
+                raw = stat.read()
+        except FileNotFoundError:
+            continue
+        fields = raw[raw.rfind(")") + 2:].split()
+        if len(fields) < 2:
+            raise OSError(f"unparseable /proc/{name}/stat")
+        if int(fields[1]) == me:
+            found.add(int(name))
+    return found
+
+def state(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            raw = stat.read()
+        return raw[raw.rfind(")") + 2:].split()[0]
+    except (OSError, IndexError):
+        return "?"
+
+def start_time(pid):
+    # The kernel start time (clock ticks) from /proc/<pid>/stat field 22.
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            raw = stat.read()
+        return int(raw[raw.rfind(")") + 2:].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+def sweep(primary, status):
+    # SIGKILL and reap every child until waitpid reports ECHILD.
+    escaped = set()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for pid in children():
+            if pid != primary and state(pid) not in ("Z", "X", "x"):
+                escaped.add(pid)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            while True:
+                pid, raw = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+                if pid == primary and status is None:
+                    status = raw
+        except ChildProcessError:
+            return True, escaped, status
+        time.sleep(0.01)
+    return False, escaped, status
+
+primary = None
+try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+    # An inherited SIG_IGN for SIGCHLD would make the kernel reap our children
+    # itself, hiding the command's status and defeating the ECHILD proof.
+    # The command gets the launcher's disposition back before exec.
+    inherited_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    failure_read, failure_write = os.pipe()  # close-on-exec in the command
+    primary = os.fork()
+    if primary == 0:
+        try:
+            os.close(status_fd)
+            os.close(control_fd)
+            os.close(failure_read)
+            signal.signal(signal.SIGCHLD, inherited_sigchld)
+            for number, disposition in inherited.items():
+                signal.signal(number, disposition)
+            # As Popen(restore_signals=True) does: the Python supervisor
+            # ignores these, and exec would otherwise keep them ignored.
+            for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+                if hasattr(signal, name):
+                    signal.signal(getattr(signal, name), signal.SIG_DFL)
+            os.execvp(argv[0], argv)
+        except BaseException as exc:
+            number = getattr(exc, "errno", None) or 0
+            os.write(failure_write, f"{number}:{exc}".encode())
+        os._exit(127)
+    os.close(failure_write)
+    failure = b""
+    while True:
+        chunk = os.read(failure_read, 4096)
+        if not chunk:
+            break
+        failure += chunk
+    os.close(failure_read)
+    if failure:
+        _, raw = os.waitpid(primary, 0)
+        number, _, message = failure.decode(errors="replace").partition(":")
+        report(phase="exec", errno=int(number), error=message)
+        verified, escaped, _ = sweep(primary, raw)
+        report(phase="exit", verified=verified, requested=False, escaped=sorted(escaped),
+               returncode=os.waitstatus_to_exitcode(raw))
+        os._exit(0)
+    report(phase="exec", ok=True, primary=primary, primary_start=start_time(primary))
+except BaseException as exc:
+    report(phase="error", error=repr(exc))
+    if primary is None or primary == 0:
+        os._exit(0)
+status = None
+requested = False
+try:
+    # Wait for the command to exit or for a sweep request on the private
+    # control pipe (a request written early simply waits in the pipe). EOF
+    # there means the executor is gone: keep supervising the command.
+    try:
+        pidfd = os.pidfd_open(primary)
+    except (AttributeError, OSError):
+        pidfd = None
+    poller = select.poll()
+    poller.register(control_fd, select.POLLIN | select.POLLHUP)
+    if pidfd is not None:
+        poller.register(pidfd, select.POLLIN)
+    while status is None and not requested:
+        for descriptor, _mask in poller.poll(None if pidfd is not None else 50):
+            if descriptor == control_fd:
+                if os.read(control_fd, 64):
+                    requested = True
+                else:
+                    poller.unregister(control_fd)
+        pid, raw = os.waitpid(primary, os.WNOHANG)
+        if pid == primary:
+            status = raw
+except BaseException as exc:
+    report(phase="error", error=repr(exc))
+# Whatever happened above, the lineage is swept before this process exits.
+try:
+    verified, escaped, status = sweep(primary, status)
+    report(phase="exit", verified=verified, requested=requested, escaped=sorted(escaped),
+           returncode=None if status is None else os.waitstatus_to_exitcode(status))
+except BaseException as exc:
+    report(phase="error", error=repr(exc))
+os._exit(0)
+"""
+
+
+def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str) -> list[dict[str, Any]]:
+    """Supervisor status lines read so far, waiting (bounded) for ``phase``.
+
+    Stops at the first complete line reporting ``phase``, at EOF, or when
+    ``timeout`` elapses; the caller decides what a missing phase means.
+    """
+    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    buffered: bytes = getattr(child, "_oxidex_lineage_buffer", b"")
+
+    def parsed() -> list[dict[str, Any]]:
+        try:
+            return [json.loads(line) for line in buffered.split(b"\n")[:-1] if line.strip()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OSError("owned command lineage report is malformed") from exc
+
+    deadline = time.monotonic() + timeout
+    while type(descriptor) is int and descriptor >= 0:
+        if any(row.get("phase") == phase for row in parsed()):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if not _readable(descriptor, remaining):
+            break
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            _close_lineage_status(child)
+            break
+        buffered += chunk
+        setattr(child, "_oxidex_lineage_buffer", buffered)
+    return parsed()
+
+
+def _close_lineage_status(child: subprocess.Popen[Any]) -> None:
+    for name in ("_oxidex_lineage_status_fd", "_oxidex_lineage_control_fd"):
+        descriptor = getattr(child, name, -1)
+        if type(descriptor) is int and descriptor >= 0:
+            os.close(descriptor)
+            setattr(child, name, -1)
+
+
+def _send_sweep_request(child: subprocess.Popen[Any]) -> None:
+    """Ask the supervisor over its private control pipe to sweep its lineage."""
+    descriptor = getattr(child, "_oxidex_lineage_control_fd", -1)
+    if type(descriptor) is int and descriptor >= 0:
+        try:
+            os.write(descriptor, b"s")
+        except OSError:
+            pass  # the supervisor is gone; the caller's liveness checks decide
+
+
+def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
+    """Replicate Popen's exec-failure semantics for a supervised command.
+
+    If the exec report cannot be read, the command may already be running
+    while its handle is unpublished: the supervisor is asked to sweep its
+    lineage over the control pipe (a request waits there until its wait loop
+    reads it) and the still-unreaped group is killed as a fallback.
+    """
+    try:
+        reports = _lineage_reports(child, timeout=30, phase="exec")
+        failure: BaseException | None = None
+    except BaseException as exc:
+        reports, failure = [], exc
+    exec_report = next((row for row in reports if row.get("phase") == "exec"), None)
+    if failure is None and exec_report is not None and exec_report.get("ok") is True:
+        if type(exec_report.get("primary")) is int and type(exec_report.get("primary_start")) is int:
+            setattr(child, "_oxidex_lineage_primary", {
+                "pid": exec_report["primary"], "identity": f"procfs-start:{exec_report['primary_start']}",
+            })
+        return
+    if failure is not None or exec_report is None:
+        _send_sweep_request(child)
+    try:
+        child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
+        except subprocess.TimeoutExpired as unreaped:
+            # It stays registered (and so unproven) for the lock owner.
+            raise OwnedChildCleanupIncomplete(
+                f"owned command supervisor {child.pid} could not be reaped after a failed start handshake",
+            ) from unreaped
+    # Read the supervisor's final verdict (or learn it has none) before the
+    # handle is dropped: an unproven lineage keeps the child registered.
+    _lineage_unverified(child)
+    _close_lineage_status(child)
+    for stream in (child.stdin, child.stdout, child.stderr):
+        if stream is not None:
+            stream.close()
+    if failure is not None:
+        raise OSError(f"owned command start could not be confirmed: {failure}") from failure
+    if exec_report is not None and type(exec_report.get("errno")) is int:
+        number = exec_report["errno"]
+        raise OSError(number, exec_report.get("error") or os.strerror(number))
+    raise OSError(f"owned command supervisor did not start the command: {reports}")
+
+
+def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATION_GRACE_SECONDS) -> list[int]:
+    """After a supervised command exits, adopt its status and escaped descendants.
+
+    Returns the live descendants the supervisor found and killed. Raises
+    ``OwnedChildCleanupIncomplete`` when the supervisor could not prove that
+    no descendant remained. An unsupervised child returns an empty list.
+    """
+    if not hasattr(child, "_oxidex_lineage_status_fd"):
+        return []
+    if getattr(child, "_oxidex_lineage_finished", None) is not None:
+        return child._oxidex_lineage_finished
+    try:
+        reports = _lineage_reports(child, timeout=timeout, phase="exit")
+    except OSError as exc:
+        raise OwnedChildCleanupIncomplete(f"owned command lineage cannot be verified: {exc}") from exc
+    finished = next((row for row in reports if row.get("phase") == "exit"), None)
+    if (finished is None or finished.get("verified") is not True
+            or type(finished.get("returncode")) is not int
+            or not isinstance(finished.get("escaped"), list)
+            or any(type(pid) is not int for pid in finished["escaped"])):
+        raise OwnedChildCleanupIncomplete(f"owned command lineage was not proven empty: {reports}")
+    child.returncode = finished["returncode"]
+    setattr(child, "_oxidex_lineage_verified", True)
+    setattr(child, "_oxidex_lineage_finished", finished["escaped"])
+    _close_lineage_status(child)  # the exit report is the supervisor's last line
+    return finished["escaped"]
+
+
+def _lineage_unverified(child: subprocess.Popen[Any]) -> str | None:
+    """None unless an exited supervised child never proved its lineage empty.
+
+    The verdict is sticky: once the supervisor is gone without a verified
+    exit report, nothing else can see a descendant that left the session and
+    closed its descriptors, so the child stays unproven for the lock owner.
+    """
+    if not hasattr(child, "_oxidex_lineage_status_fd"):
+        return None
+    if getattr(child, "_oxidex_lineage_verified", False) is True:
+        return None
+    try:
+        reports = _lineage_reports(child, timeout=_TERMINATION_GRACE_SECONDS, phase="exit")
+    except OSError as exc:
+        return f"exited; its lineage report cannot be read: {exc}"
+    finished = next((row for row in reports if row.get("phase") == "exit"), None)
+    if (finished is not None and finished.get("verified") is True
+            and type(finished.get("returncode")) is int):
+        setattr(child, "_oxidex_lineage_verified", True)
+        _close_lineage_status(child)  # the exit report is the supervisor's last line
+        return None
+    return "exited; its lineage supervisor never proved every descendant gone"
+
+
+def _request_lineage_sweep(child: subprocess.Popen[Any]) -> None:
+    """Ask a live supervisor to kill and reap its whole lineage, then exit."""
+    if not hasattr(child, "_oxidex_lineage_status_fd") or child.poll() is not None:
+        return
+    _send_sweep_request(child)
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS * 3
+    while child.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def _spawn_with_deferred_sigint(
+    owner: list[subprocess.Popen[str] | None], argv: list[str], **kwargs: Any,
+) -> subprocess.Popen[str]:
+    """Publish the child handle before a process-wide SIGINT can interrupt Python."""
+    if threading.current_thread() is not threading.main_thread():
+        raise OSError("owned child creation requires the main thread")
+    pending = False
+    pending_frame = None
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def defer_sigint(_signum: int, frame: Any) -> None:
+        nonlocal pending, pending_frame
+        pending = True
+        pending_frame = frame
+
+    read_fd = write_fd = status_read_fd = status_write_fd = control_read_fd = control_write_fd = -1
+    child: subprocess.Popen[str] | None = None
+    spawn_failure: BaseException | None = None
+    signal.signal(signal.SIGINT, defer_sigint)
+    try:
+        if kwargs.get("close_fds") is not False:
+            raise OSError("owned child creation requires inherited file descriptors")
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        spawn_argv = list(argv)
+        if _LINEAGE_SUPERVISED:
+            status_read_fd, status_write_fd = os.pipe()
+            os.set_inheritable(status_write_fd, True)
+            control_read_fd, control_write_fd = os.pipe()
+            os.set_inheritable(control_read_fd, True)
+            spawn_argv = [sys.executable, "-I", "-c", _LINUX_LINEAGE_SUPERVISOR,
+                          str(status_write_fd), str(control_read_fd), *argv]
+        spawned_at = time.time()
+        created = _spawn(spawn_argv, **kwargs)
+        setattr(created, "_oxidex_ownership_read_fd", read_fd)
+        os.close(write_fd)
+        write_fd = -1
+        if status_read_fd >= 0:
+            setattr(created, "_oxidex_lineage_status_fd", status_read_fd)
+            setattr(created, "_oxidex_lineage_control_fd", control_write_fd)
+            setattr(created, "_oxidex_lineage_started_at", spawned_at)
+            status_read_fd = control_write_fd = -1
+            os.close(status_write_fd)
+            os.close(control_read_fd)
+            status_write_fd = control_read_fd = -1
+            try:
+                _await_supervised_exec(created)
+            except OSError:
+                # Nothing was exec'd: once the supervisor's inherited writer
+                # is gone the child is provably finished; otherwise it stays
+                # registered and every later lock release fails closed.
+                read_fd = -1  # now owned by the probe attribute
+                try:
+                    _wait_for_ownership_release(created)
+                except OSError:
+                    pass
+                _settle(created)
+                raise
+        child = created
+        owner[0] = child
+    except BaseException as failure:
+        spawn_failure = failure
+    finally:
+        for descriptor in (write_fd, status_write_fd, status_read_fd, control_read_fd, control_write_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+        if owner[0] is None and read_fd >= 0:
+            os.close(read_fd)
+        signal.signal(signal.SIGINT, previous_handler)
+    if pending:
+        handler = signal.default_int_handler if previous_handler == signal.SIG_DFL else previous_handler
+        if previous_handler != signal.SIG_IGN and callable(handler):
+            try:
+                handler(signal.SIGINT, pending_frame)
+            except BaseException as outcome:
+                if child is not None:
+                    _cleanup_owned_child_after_interrupt(child, outcome)
+                raise
+        elif previous_handler != signal.SIG_IGN:
+            raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
+    if spawn_failure is not None:
+        raise spawn_failure
+    if child is None:
+        raise OSError("owned child creation did not return a process")
+    return child
 
 
 def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
@@ -977,14 +2059,13 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
     lock owner never explicitly unlocks while it may still be live.
     """
     if run is subprocess.run:
+        owner: list[subprocess.Popen[str] | None] = [None]
         try:
-            child = _spawn(argv, cwd=str(cwd), env=env, text=True, errors="replace",
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           start_new_session=True, close_fds=False)
-        except OSError as exc:
-            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
-                    "state": "spawn_failed", "operation": "spawn"}
-        try:
+            child = _spawn_with_deferred_sigint(
+                owner, argv, cwd=str(cwd), env=env, text=True, errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=True, close_fds=False,
+            )
             if started is not None:
                 started(child.pid, child.pid)
             try:
@@ -998,7 +2079,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                     # The timeout is already an established execution fact.
                     # Preserve its process identity and surface cleanup failure
                     # rather than misclassifying it as a failed spawn.
-                    stdout, stderr = _emergency_reap_group(child)
+                    stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
                     cleanup_error = str(cleanup)
                     if not stdout:
                         stdout = partial_stdout
@@ -1011,15 +2092,34 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 if cleanup_error is not None:
                     record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
                 return record
+            escaped = _finish_lineage(child)
             _settle(child)
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
+            _require_ownership_release(child, "successful command completion")
+            if escaped:
+                # The lineage boundary killed descendants that outlived the
+                # command; its output cannot be accepted as complete work.
+                return {"argv": argv, "exit": child.returncode, "stdout": stdout or "",
+                        "stderr": stderr or "", "state": "escaped_descendants",
+                        "escaped_descendants": escaped, **process_identity}
+        except (KeyboardInterrupt, SystemExit) as interruption:
+            if (owner[0] is not None
+                    and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
+                _cleanup_owned_child_after_interrupt(owner[0], interruption)
+            raise
+        except OwnedChildCleanupIncomplete:
+            raise
         except OSError as exc:
+            if owner[0] is None:
+                return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
+                        "state": "spawn_failed", "operation": "spawn"}
+            child = owner[0]
             try:
                 stdout, stderr = _bounded_timeout_cleanup(child)
                 cleanup_error = None
             except OSError as cleanup:
-                stdout, stderr = _emergency_reap_group(child)
+                stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
                 cleanup_error = str(cleanup)
             _settle(child)
             record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
@@ -1091,6 +2191,8 @@ def _verify_checkout_head(checkout: Path, expected_commit: str,
     try:
         result = runner(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
                         text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+    except OwnedChildCleanupIncomplete:
+        raise  # an unverified owned child is not an ordinary HEAD refusal
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused("cannot verify owned checkout HEAD") from exc
     if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
@@ -1185,6 +2287,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                 raise Refused("write result did not cover the exact immutable selected JPEG fixture scope")
         if stage_guard is not None:
             stage_guard(release, stage, "after")
+    except OwnedChildCleanupIncomplete:
+        _store_journal(run_dir, journal)
+        raise
     except (Refused, OSError) as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["state"] = "failed"
@@ -1220,26 +2325,49 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     _event(journal, "stage_started", release=release, stage="native")
     _store_journal(run_dir, journal)
     capture, catalog, plan, resolution, materialization = docs
+    incomplete_cleanup: list[OwnedChildCleanupIncomplete] = []
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
+        if incomplete_cleanup:
+            # A surviving child owns the journal's active identity: start
+            # nothing else and never overwrite it.
+            raise incomplete_cleanup[0]
         kwargs.pop("capture_output", None)
         def started(pid: int, pgid: int) -> None:
             journal["active"]["child"] = {"pid": pid, "pgid": pgid}
             _store_journal(run_dir, journal)
-        return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=True, close_fds=False, started=started, **kwargs)
+        try:
+            return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True, close_fds=False, started=started, **kwargs)
+        except OwnedChildCleanupIncomplete as incomplete:
+            # The oracle folds runner OSErrors into per-command records, so
+            # remember this one: the stage must keep its active child.
+            incomplete_cleanup.append(incomplete)
+            raise
     try:
         if stage_guard is not None:
             stage_guard(release, "native", "before")
-        report = native_oracle.probe_materialized_native(materialization, plan, catalog, capture, resolution,
-                                                         archive_cache, source_root, release, config["perls"][release],
-                                                         config["native_cases"][release], run=native_run)
+        try:
+            report = native_oracle.probe_materialized_native(
+                materialization, plan, catalog, capture, resolution, archive_cache, source_root, release,
+                config["perls"][release], config["native_cases"][release], run=native_run)
+        except (KeyboardInterrupt, SystemExit):
+            raise  # an interruption carries its own cleanup verdict
+        except BaseException:
+            if incomplete_cleanup:
+                raise incomplete_cleanup[0]
+            raise
+        if incomplete_cleanup:
+            raise incomplete_cleanup[0]
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
         if stage_guard is not None:
             stage_guard(release, "native", "after")
+    except OwnedChildCleanupIncomplete:
+        _store_journal(run_dir, journal)
+        raise
     except (Refused, native_oracle.Refused, catalog_stage.Refused, rehearsal.Refused, OSError,
             subprocess.TimeoutExpired) as exc:
         journal["releases"][release]["stages"]["native"] = "failed"
@@ -1277,12 +2405,23 @@ class _HeldHostLock:
         if (not __import__("stat").S_ISREG(current.st_mode)
                 or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
             raise Refused("host lock stream differs from configured lease")
+        if __import__("stat").S_IMODE(current.st_mode) == 0:
+            # The unproven-lineage fallback removes every permission bit when
+            # its marker cannot be written. Root (or CAP_DAC_OVERRIDE) can
+            # still open such a file, so acquisition checks the mode itself.
+            raise Refused(
+                f"host lock {path} has had its permissions removed as an unproven owned-lineage refusal "
+                f"(its marker {_unproven_lineage_marker(path)} could not be written). Restore it "
+                f"(chmod 644 {path}) only after verifying that no process of your uid started since the "
+                "prior run began remains from that run; restoring it while such a process lives lets "
+                "another run share the host with it")
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             current = os.stat(path, follow_symlinks=False)
             if (path.is_symlink() or not __import__("stat").S_ISREG(current.st_mode)
                     or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
                 raise Refused("host lock changed during acquisition")
+            _refuse_unproven_lineage(path)
         except BaseException:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             raise
@@ -1406,6 +2545,9 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 journal["releases"][release]["state"] = "passed_with_write_gap" if statuses["write"] == "unsupported" else "passed"
                 _event(journal, "release_completed", release=release, state=journal["releases"][release]["state"])
                 _store_journal(run_dir, journal)
+            except OwnedChildCleanupIncomplete:
+                _store_journal(run_dir, journal)
+                raise
             except (Refused, OSError) as exc:
                 if journal.get("active") is not None:
                     active = journal["active"]
@@ -1451,15 +2593,21 @@ def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
             raise Refused("running execution journal has a malformed active stage")
         active = journal["active"]
         child = active.get("child")
-        if isinstance(child, dict) and type(child.get("pid")) is int and child["pid"] > 0:
-            try:
-                os.kill(child["pid"], 0)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                raise Refused("active child process cannot be inspected; refusing interruption recovery")
-            else:
-                raise Refused("active child process is still live; refusing interruption recovery")
+        if isinstance(child, dict):
+            if type(child.get("pid")) is int and child["pid"] > 0:
+                try:
+                    process_live = _pid_live(child["pid"])
+                except PermissionError:
+                    raise Refused("active child process cannot be inspected; refusing interruption recovery")
+                if process_live:
+                    raise Refused("active child process is still live; refusing interruption recovery")
+            if type(child.get("pgid")) is int and child["pgid"] > 0:
+                try:
+                    group_live = _group_live(child["pgid"])
+                except PermissionError:
+                    raise Refused("active child process group cannot be inspected; refusing interruption recovery")
+                if group_live:
+                    raise Refused("active child process group is still live; refusing interruption recovery")
         if active.get("stage") in STAGES:
             journal["releases"][active["release"]]["stages"][active["stage"]] = "interrupted"
         journal["phase"], journal["active"] = "interrupted", None

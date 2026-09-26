@@ -478,3 +478,293 @@ fn review_round_shapes_match_the_oracle_or_are_refused() {
         failures.join("\n")
     );
 }
+
+/// A JPEG's segments: (start, marker, payload range, end).
+fn jpeg_segments(data: &[u8]) -> Vec<(usize, u8, std::ops::Range<usize>, usize)> {
+    let mut out = Vec::new();
+    let mut at = 2;
+    while at + 4 <= data.len() && data[at] == 0xFF && !matches!(data[at + 1], 0xD9 | 0xDA) {
+        let len = usize::from(u16::from_be_bytes([data[at + 2], data[at + 3]]));
+        out.push((at, data[at + 1], at + 4..at + 2 + len, at + 2 + len));
+        at += 2 + len;
+    }
+    out
+}
+
+/// The first EXIF APP1's TIFF (offset of its first byte in `data`, and
+/// whether it is little-endian), and its ExifIFD entries as
+/// (entry offset in the TIFF, tag, type, count, value/offset field).
+/// One ExifIFD entry: (offset in the TIFF, tag, type, count, value field).
+type IfdEntry = (usize, u16, u16, u32, [u8; 4]);
+
+fn exif_ifd_entries(data: &[u8]) -> (usize, bool, Vec<IfdEntry>) {
+    let (_, _, payload, _) = jpeg_segments(data)
+        .into_iter()
+        .find(|(_, marker, payload, _)| {
+            *marker == 0xE1 && data[payload.clone()].starts_with(b"Exif\0\0")
+        })
+        .expect("an EXIF APP1");
+    let base = payload.start + 6;
+    let tiff = &data[base..payload.end];
+    let le = tiff.starts_with(b"II");
+    let u16_at = |at: usize| {
+        let b = [tiff[at], tiff[at + 1]];
+        if le {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        }
+    };
+    let u32_at = |at: usize| {
+        let b = [tiff[at], tiff[at + 1], tiff[at + 2], tiff[at + 3]];
+        if le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }
+    };
+    let entries = |ifd: usize| {
+        (0..usize::from(u16_at(ifd)))
+            .map(|k| {
+                let at = ifd + 2 + 12 * k;
+                let field = [tiff[at + 8], tiff[at + 9], tiff[at + 10], tiff[at + 11]];
+                (at, u16_at(at), u16_at(at + 2), u32_at(at + 4), field)
+            })
+            .collect::<Vec<_>>()
+    };
+    let ifd0 = u32_at(4) as usize;
+    let exif = entries(ifd0)
+        .into_iter()
+        .find(|entry| entry.1 == 0x8769)
+        .map(|entry| u32_at(entry.0 + 8) as usize)
+        .expect("an ExifIFD");
+    (base, le, entries(exif))
+}
+
+/// PR #960's second review round, graded against the pinned oracle
+/// (evidence `multigroup-write/round4/`):
+///
+/// - a bare value is typed at its address after the request's deletions
+///   (`-MakerNotes:All= -ColorSpace#=2` on Canon.jpg: `[ExifIFD]` 2);
+/// - a Minolta note ExifTool reads as `MakerNoteMinolta3` holds no tags
+///   (Minolta.jpg with its note's prefix set to `MLY0`);
+/// - a maker-note entry named directly (`-ExifIFD:MakerNoteCanon=`) is
+///   deleted by 13.59 and refused here -- it used to be reported unchanged;
+/// - `MakerNotes:All` takes a JPEG's CIFF segment, `EXIF:All` does not
+///   (Writer.jpg carrying ExifTool.jpg's CIFF APP0);
+/// - a read-only-looking maker-note candidate is still written by 13.59
+///   (`-Software=x` on Sigma.jpg edits `[Sigma] Software`): refused;
+/// - two maker notes in one ExifIFD are two notes (Apple.jpg with a second
+///   0x927C carrying NikonD70.jpg's self-contained note): refused.
+#[test]
+fn second_review_round_shapes_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let read = |path: std::path::PathBuf| std::fs::read(path).unwrap();
+    let canon = read(fixtures::required_t_images_fixture_path("Canon.jpg"));
+    let writer = read(fixtures::required_t_images_fixture_path("Writer.jpg"));
+    let exiftool = read(fixtures::required_t_images_fixture_path("ExifTool.jpg"));
+    let combined = |name: &str| fixtures::pinned_combined_fixture_path(name).map(read);
+    let (Some(minolta), Some(sigma), Some(apple), Some(d70)) = (
+        combined("Minolta.jpg"),
+        combined("Sigma.jpg"),
+        combined("Apple.jpg"),
+        combined("NikonD70.jpg"),
+    ) else {
+        return;
+    };
+
+    // Writer.jpg with ExifTool.jpg's CIFF APP0 right after SOI.
+    let ciff = jpeg_segments(&exiftool)
+        .into_iter()
+        .find(|(_, marker, payload, _)| {
+            *marker == 0xE0 && exiftool[payload.start..].starts_with(b"II\x1a\0\0\0HEAP")
+        })
+        .map(|(start, _, _, end)| exiftool[start..end].to_vec())
+        .expect("ExifTool.jpg carries CIFF");
+    let writer_ciff = [&writer[..2], &ciff, &writer[2..]].concat();
+
+    // Minolta.jpg whose note starts `MLY0`: MakerNoteMinolta3.
+    let (base, le, entries) = exif_ifd_entries(&minolta);
+    let note = entries
+        .iter()
+        .find(|entry| entry.1 == 0x927C)
+        .expect("a note");
+    let offset = if le {
+        u32::from_le_bytes(note.4)
+    } else {
+        u32::from_be_bytes(note.4)
+    } as usize;
+    let mut minolta3 = minolta.clone();
+    minolta3[base + offset..base + offset + 4].copy_from_slice(b"MLY0");
+
+    // Apple.jpg with the entry after its MakerNote rewritten as a second
+    // 0x927C pointing at NikonD70.jpg's `Nikon\0\2` note, appended to APP1.
+    let (d70_base, d70_le, d70_entries) = exif_ifd_entries(&d70);
+    let d70_note = d70_entries.iter().find(|entry| entry.1 == 0x927C).unwrap();
+    let d70_offset = if d70_le {
+        u32::from_le_bytes(d70_note.4)
+    } else {
+        u32::from_be_bytes(d70_note.4)
+    } as usize;
+    let nikon_note = &d70[d70_base + d70_offset..d70_base + d70_offset + d70_note.3 as usize];
+    assert!(nikon_note.starts_with(b"Nikon\0\x02"));
+    let (apple_base, apple_le, apple_entries) = exif_ifd_entries(&apple);
+    let (start, _, payload, end) = jpeg_segments(&apple)
+        .into_iter()
+        .find(|(_, marker, payload, _)| {
+            *marker == 0xE1 && apple[payload.clone()].starts_with(b"Exif\0\0")
+        })
+        .unwrap();
+    let mut tiff = apple[apple_base..payload.end].to_vec();
+    let at = apple_entries
+        .iter()
+        .position(|entry| entry.1 == 0x927C)
+        .unwrap()
+        + 1;
+    let slot = apple_entries[at].0;
+    let pad = tiff.len() % 2;
+    let new_offset = (tiff.len() + pad) as u32;
+    let (tag, kind, count, offset) = if apple_le {
+        (
+            0x927Cu16.to_le_bytes(),
+            7u16.to_le_bytes(),
+            (nikon_note.len() as u32).to_le_bytes(),
+            new_offset.to_le_bytes(),
+        )
+    } else {
+        (
+            0x927Cu16.to_be_bytes(),
+            7u16.to_be_bytes(),
+            (nikon_note.len() as u32).to_be_bytes(),
+            new_offset.to_be_bytes(),
+        )
+    };
+    tiff[slot..slot + 12].copy_from_slice(&[&tag[..], &kind, &count, &offset].concat());
+    tiff.extend(std::iter::repeat_n(0, pad));
+    tiff.extend_from_slice(nikon_note);
+    let app1 = [&b"Exif\0\0"[..], &tiff].concat();
+    let length = u16::try_from(app1.len() + 2).unwrap().to_be_bytes();
+    let two_notes = [
+        &apple[..start],
+        &[0xFF, 0xE1],
+        &length,
+        &app1,
+        &apple[end..],
+    ]
+    .concat();
+
+    let s = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let cases: Vec<Case<'_>> = vec![
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "ColorSpace",
+            s(&["-MakerNotes:All=", "-ColorSpace#=2"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "ColorSpace",
+            s(&["-ColorSpace#=2", "-MakerNotes:All="]),
+            Expect::Match,
+        ),
+        (
+            "Minolta.jpg (MLY0)",
+            &minolta3,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Minolta.jpg (MLY0)",
+            &minolta3,
+            "jpg",
+            "Contrast",
+            s(&["-Contrast#=2"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-ExifIFD:MakerNoteCanon="]),
+            Expect::Refused,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:MakerNoteCanon="]),
+            Expect::Refused,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-ExifIFD:MakerNoteCanon=", "-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Writer.jpg+CIFF",
+            &writer_ciff,
+            "jpg",
+            "FocalLength",
+            s(&["-MakerNotes:All=", "-FocalLength#=50"]),
+            Expect::Match,
+        ),
+        (
+            "Writer.jpg+CIFF",
+            &writer_ciff,
+            "jpg",
+            "FocalLength",
+            s(&["-EXIF:All=", "-FocalLength#=50"]),
+            Expect::Refused,
+        ),
+        (
+            "Sigma.jpg",
+            &sigma,
+            "jpg",
+            "Software",
+            s(&["-Software=x"]),
+            Expect::Refused,
+        ),
+        (
+            "Apple.jpg+Nikon note",
+            &two_notes,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Apple.jpg+Nikon note",
+            &two_notes,
+            "jpg",
+            "Sharpness",
+            s(&["-Sharpness#=2"]),
+            Expect::Refused,
+        ),
+    ];
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(file, bytes, ext, name, args, expect)| {
+            run_args(oracle, bytes, ext, file, name, args, *expect).err()
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases departed from the pinned outcome:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
