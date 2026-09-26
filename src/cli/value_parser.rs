@@ -104,9 +104,31 @@ fn inverse_offset_time(value: &str) -> Option<String> {
 /// which need not be UTF-8. Text goes through [`parse_cli_tag_value`]; any
 /// other bytes through `cli::non_utf8::tag_value`, which encodes them as
 /// ExifTool does for an XP string and refuses them for every other tag.
+///
+/// This is the library's string-typed setter: `raw` is always matched
+/// against a tag's PrintConv label first (see [`parse_cli_tag_value`]'s
+/// doc). A caller that already has the tag's raw/machine value should use a
+/// typed setter (`TagValue::Integer`, `set_tag_integer`) instead of routing
+/// a stringified number through here -- those are unaffected by this
+/// distinction and keep working exactly as before.
 pub fn parse_cli_tag_value_os(tag_name: &str, raw: &std::ffi::OsStr) -> Result<TagValue> {
+    parse_cli_tag_value_os_with_mode(tag_name, raw, false)
+}
+
+/// [`parse_cli_tag_value_os`], additionally selecting ExifTool's raw
+/// (PrintConv-bypassing) mode: the CLI's own `#` suffix and `--no-print-conv`
+/// (its spelling of ExifTool's `-n`) reach here as `raw_mode: true`; the
+/// public [`parse_cli_tag_value_os`] always passes `false`. Not exported --
+/// the public API's numeric-vs-label policy is decided by
+/// [`parse_cli_tag_value`]'s doc comment, not by a parameter a library
+/// caller could flip.
+pub(crate) fn parse_cli_tag_value_os_with_mode(
+    tag_name: &str,
+    raw: &std::ffi::OsStr,
+    raw_mode: bool,
+) -> Result<TagValue> {
     match raw.to_str() {
-        Some(text) => parse_cli_tag_value(tag_name, text),
+        Some(text) => parse_cli_tag_value_with_mode(tag_name, text, raw_mode),
         None => crate::cli::non_utf8::tag_value(tag_name, crate::cli::non_utf8::os_bytes(raw)),
     }
 }
@@ -117,7 +139,36 @@ pub fn parse_cli_tag_value_os(tag_name: &str, raw: &std::ffi::OsStr) -> Result<T
 /// unreliable — have no declared type to honour, so their value is passed
 /// through as a string; the write path validates those with intrinsic checks
 /// only (`core::validation::validate_tag_value_intrinsics`).
+///
+/// # Numeric input on a tag with an enum PrintConv
+///
+/// `raw` is matched against the tag's PrintConv label first (exact, then
+/// case-insensitive -- [`invert_enum_printconv`]), the same way ExifTool's
+/// own `ConvInv` does by default. A number that is not itself a label is
+/// **refused**, not silently accepted as the tag's raw code: pinned ExifTool
+/// 13.59 refuses `-Orientation=6` the same way (`Can't convert
+/// IFD0:Orientation (not in PrintConv)`) unless the caller asks for the raw
+/// form (`-Orientation#=6` or `-n`). This function is the CLI's own
+/// string-value parser and the library's string-typed setter at once, so
+/// this policy applies to both: a library caller that wants the raw code
+/// should use a typed setter (`TagValue::Integer`, `set_tag_integer`) rather
+/// than this string path, exactly as the CLI's `#`/`-n` distinguishes "a
+/// label" from "the raw value" for the same argument text.
 pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
+    parse_cli_tag_value_with_mode(tag_name, raw, false)
+}
+
+/// [`parse_cli_tag_value`], additionally selecting raw mode (see
+/// [`parse_cli_tag_value_os_with_mode`]). When `raw_mode` is `true`, every
+/// PrintConv label lookup in this function is skipped -- a tag with an enum
+/// PrintConv is parsed purely by its declared type, exactly as a tag with no
+/// PrintConv at all already is. Not exported for the same reason as
+/// [`parse_cli_tag_value_os_with_mode`].
+pub(crate) fn parse_cli_tag_value_with_mode(
+    tag_name: &str,
+    raw: &str,
+    raw_mode: bool,
+) -> Result<TagValue> {
     let declared_tag_name = match tag_name {
         "GPSDestBearing" => "GPS:GPSDestBearing",
         "DateTimeOriginal" => "EXIF:DateTimeOriginal",
@@ -334,7 +385,14 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
 
     // Exif.pm 0xa300 is writable undef. PrintConvInv accepts the three labels,
     // then ValueConvInv converts a decimal byte to its one-byte TIFF payload.
+    // Under raw mode (`-FileSource#=`, `--no-print-conv`) ExifTool's `#`
+    // skips PrintConvInv and takes the byte directly; the label lookup is
+    // skipped the same way every other enum tag's is (see the leaf dispatch
+    // below).
     if declared_tag_name.rsplit(':').next() == Some("FileSource") {
+        if raw_mode {
+            return byte_from_raw_integer(tag_name, raw, "FileSource");
+        }
         let raw = match raw {
             "Film Scanner" => "1",
             "Reflection Print Scanner" => "2",
@@ -342,7 +400,10 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             _ => {
                 return Err(invalid(
                     tag_name,
-                    "Can't convert FileSource value (not in PrintConv)",
+                    format!(
+                        "Can't convert {} (not in PrintConv)",
+                        display_tag_for_message(tag_name, "FileSource")
+                    ),
                 ));
             }
         };
@@ -360,16 +421,25 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // mechanism as every plain enum tag; only the wrapping differs, because
     // `undef` stores the code as raw bytes, not a TIFF SHORT.
     if declared_tag_name.rsplit(':').next() == Some("SceneType") {
+        if raw_mode {
+            return byte_from_raw_integer(tag_name, raw, "SceneType");
+        }
         return match invert_enum_printconv("Exif", "SceneType", raw) {
             Some(Ok(code @ 0..=255)) => Ok(TagValue::Binary(vec![code as u8])),
             Some(Ok(_)) => Err(invalid(tag_name, "SceneType code does not fit a byte")),
             Some(Err(EnumInverseError::Ambiguous)) => Err(invalid(
                 tag_name,
-                "Can't convert SceneType value (matches more than one PrintConv)",
+                format!(
+                    "Can't convert {} (matches more than one PrintConv)",
+                    display_tag_for_message(tag_name, "SceneType")
+                ),
             )),
             Some(Err(EnumInverseError::NoMatch)) | None => Err(invalid(
                 tag_name,
-                "Can't convert SceneType value (not in PrintConv)",
+                format!(
+                    "Can't convert {} (not in PrintConv)",
+                    display_tag_for_message(tag_name, "SceneType")
+                ),
             )),
         };
     }
@@ -556,8 +626,31 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
         ("GPS:GPSDifferential", "No Correction") => "0",
         ("GPS:GPSDifferential", "Differential Corrected") => "1",
+        // A catch-all for each of these three: without one, a value that
+        // matches neither label above (a bare numeric code included) fell
+        // through this match unchanged and reached the generic integer
+        // parser, which happily stored it -- confirmed on
+        // `-GPS:GPSDifferential=0`: pinned ExifTool 13.59 refuses it
+        // (`Can't convert GPS:GPSDifferential (not in PrintConv)`, the same
+        // hash-`PrintConv`-with-no-`OTHER` refusal as `Orientation`'s), but
+        // this file wrote it as the raw code with nothing to catch it.
+        ("GPS:GPSDifferential", _) => {
+            return Err(invalid(
+                tag_name,
+                "Can't convert GPS:GPSDifferential (not in PrintConv)",
+            ));
+        }
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Chunky") => "1",
         ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", "Planar") => "2",
+        ("EXIF:PlanarConfiguration" | "IFD0:PlanarConfiguration", _) => {
+            return Err(invalid(
+                tag_name,
+                format!(
+                    "Can't convert {} (not in PrintConv)",
+                    display_tag_for_message(tag_name, "PlanarConfiguration")
+                ),
+            ));
+        }
         // YCbCrPositioning (Exif.pm 13.59 0x0213) is a plain int16u enum
         // `PrintConv` now inverted generically against the transcribed table
         // -- see the `declared_tag_name` leaf dispatch below.
@@ -571,6 +664,15 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // labels. Apply the inverse before the generic integer parser.
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Unsafe") => "0",
         ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", "Safe") => "1",
+        ("MakerNoteSafety" | "EXIF:MakerNoteSafety" | "IFD0:MakerNoteSafety", _) => {
+            return Err(invalid(
+                tag_name,
+                format!(
+                    "Can't convert {} (not in PrintConv)",
+                    display_tag_for_message(tag_name, "MakerNoteSafety")
+                ),
+            ));
+        }
         (
             "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
             "Allow Copying",
@@ -587,6 +689,15 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy",
             "No Restrictions",
         ) => "3",
+        ("ProfileEmbedPolicy" | "EXIF:ProfileEmbedPolicy" | "IFD0:ProfileEmbedPolicy", _) => {
+            return Err(invalid(
+                tag_name,
+                format!(
+                    "Can't convert {} (not in PrintConv)",
+                    display_tag_for_message(tag_name, "ProfileEmbedPolicy")
+                ),
+            ));
+        }
         _ => raw,
     };
     let raw = match declared_tag_name.rsplit(':').next() {
@@ -597,58 +708,37 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             )
         })?,
         // Orientation (0x0112), ResolutionUnit (0x0128), Compression
-        // (0x0103), YCbCrPositioning (0x0213), ExposureMode (0xa402) and
-        // MeteringMode (0x9207) are plain int16u tags whose `PrintConv` is a
-        // flat enum hash with no duplicate label, no OTHER and no PrintHex.
-        // The first four gained no hand-written inverse at all and so
+        // (0x0103), YCbCrPositioning (0x0213), ExposureMode (0xa402),
+        // MeteringMode (0x9207), ExposureProgram (0x8822), WhiteBalance
+        // (0xa403), SceneCaptureType (0xa406), GainControl (0xa407) and
+        // GrayResponseUnit (0x0122) are plain int16u tags whose `PrintConv`
+        // is a flat enum hash with no duplicate label, no OTHER and no
+        // PrintHex. Several gained no hand-written inverse at all and so
         // rejected every label ExifTool itself writes ("Rotate 90 CW",
-        // "inches", ...); `MeteringMode`'s hand-written table already
-        // covered every entry but matched case-sensitively only. Rather
-        // than transcribing more per-tag match arms (or hand-adding
-        // case-insensitive spellings to the existing one), invert against
-        // the table `tools/exiftool-tables` already transcribed
-        // (`exiftool_tables::find_ifd_table("Exif", "Main")`): exact match
-        // first, then case-insensitive, only when exactly one entry matches
-        // either way -- [`invert_enum_printconv`] ports ExifTool's
-        // `ReverseLookup` (`Writer.pl:3609`). A plain numeric value is left
-        // for the generic integer parser below untouched, matching how this
-        // CLI already treats every other Integer-typed tag (module doc, top
-        // of file) and this file's own existing test coverage
-        // (`EXIF:MeteringMode "255" -> Integer(255)`) rather than
-        // ExifTool's own stricter `-n`-only numeric acceptance for a hash
-        // `PrintConv`.
+        // "inches", ...); the rest had one but matched case-sensitively
+        // only, or (`GrayResponseUnit`) never noticed its own labels are
+        // digit strings. Rather than transcribing more per-tag match arms,
+        // invert against the table `tools/exiftool-tables` already
+        // transcribed (`exiftool_tables::find_ifd_table("Exif", "Main")`):
+        // exact match first, then case-insensitive, only when exactly one
+        // entry matches either way -- [`invert_enum_printconv`] ports
+        // ExifTool's `ReverseLookup` (`Writer.pl:3609`).
+        //
+        // No numeric bypass, for any of them: pinned ExifTool 13.59 refuses
+        // a raw numeric code here too (`-Orientation=6` without `-n` is
+        // `Warning: Can't convert IFD0:Orientation (not in PrintConv)`,
+        // confirmed against the oracle) -- `ReverseLookup` never falls back
+        // to a numeric code for a hash `PrintConv` with no `OTHER`, so
+        // neither does this port. `raw_mode` (the CLI's `#` suffix or
+        // `--no-print-conv`, ExifTool's `-n`) is the only way to write a raw
+        // code, and it skips this whole arm rather than special-casing
+        // numeric shape, matching ExifTool exactly: `-Orientation#=Bogus`
+        // fails as "not an integer", not as "not in PrintConv".
         Some(
             leaf @ ("Orientation" | "ResolutionUnit" | "Compression" | "YCbCrPositioning"
-            | "ExposureMode" | "MeteringMode"),
-        ) if !is_int(raw) && !is_hex(raw) && as_float_text(raw).is_none() => {
-            return invert_table_printconv_label(tag_name, declared_tag_name, leaf, raw);
-        }
-        // ExposureProgram (0x8822), WhiteBalance (0xa403), SceneCaptureType
-        // (0xa406) and GainControl (0xa407) are the same shape of plain
-        // enum hash, but their own pre-existing tests
-        // (`additional_exif_enum_writes_match_pinned_inverse_rules`,
-        // `gain_control_...`) already pin a raw numeric code as REJECTED --
-        // matching the pinned oracle exactly (`ReverseLookup` never falls
-        // back to a numeric code for a hash `PrintConv` with no `OTHER`;
-        // confirmed against 13.59: `-ExposureProgram=2` without `-n` is
-        // `Warning: Can't convert ... (not in PrintConv)`). So there is no
-        // numeric bypass here: every value, numeric or not, goes through
-        // the table.
-        //
-        // GrayResponseUnit (0x0122) belongs in this no-bypass group for a
-        // different reason: its OWN labels ("0.1", "0.001", "0.0001",
-        // "1e-05", "1e-06") are themselves digit strings. A numeric bypass
-        // here would hand every one of them straight to the generic integer
-        // parser instead of the table, whose float branch (`Writer.pl`'s
-        // `IsFloat`) rounds "0.1"/"0.001"/"0.0001" to the nearest integer,
-        // silently storing `0` instead of refusing or looking the label up.
-        // Confirmed identical on be202db3 (unrelated to this fix's
-        // Orientation/ResolutionUnit/etc. gap) and fixed the same way: try
-        // the table first, always.
-        Some(
-            leaf @ ("ExposureProgram" | "WhiteBalance" | "SceneCaptureType" | "GainControl"
-            | "GrayResponseUnit"),
-        ) => {
+            | "ExposureMode" | "MeteringMode" | "ExposureProgram" | "WhiteBalance"
+            | "SceneCaptureType" | "GainControl" | "GrayResponseUnit"),
+        ) if !raw_mode => {
             return invert_table_printconv_label(tag_name, declared_tag_name, leaf, raw);
         }
         // LightSource (0x9208) repeats the "Daylight" label at codes 1 and
@@ -669,13 +759,14 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         // real tag name (confirmed identical on be202db3, so unrelated to
         // this fix's Orientation/ResolutionUnit/etc. gap; fixed the same
         // way: the label reaches this table before it ever reaches a
-        // numeric parser).
+        // numeric parser). `raw_mode` skips this arm too, same as the group
+        // above.
         Some(
             leaf @ ("LightSource"
             | "CalibrationIlluminant1"
             | "CalibrationIlluminant2"
             | "CalibrationIlluminant3"),
-        ) => match raw {
+        ) if !raw_mode => match raw {
             "Unknown" => "0",
             "Daylight" => "1",
             "Fluorescent" => "2",
@@ -710,7 +801,10 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             _ => {
                 return Err(invalid(
                     tag_name,
-                    format!("Can't convert {leaf} value (not in PrintConv)"),
+                    format!(
+                        "Can't convert {} (not in PrintConv)",
+                        display_tag_for_message(tag_name, leaf)
+                    ),
                 ));
             }
         },
@@ -725,10 +819,101 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Sharpness") => {
             parse_sharpness(tag_name, raw)
         }
-        Some(ValueType::Integer) if declared_tag_name.rsplit(':').next() == Some("Flash") => {
+        Some(ValueType::Integer)
+            if !raw_mode && declared_tag_name.rsplit(':').next() == Some("Flash") =>
+        {
             crate::core::formatters::exif_enums::parse_flash_label(raw)
                 .map(TagValue::Integer)
-                .ok_or_else(|| invalid(tag_name, "Can't convert Flash value (not in PrintConv)"))
+                .ok_or_else(|| {
+                    invalid(
+                        tag_name,
+                        format!(
+                            "Can't convert {} (not in PrintConv)",
+                            display_tag_for_message(tag_name, "Flash")
+                        ),
+                    )
+                })
+        }
+        // Generic fallback for every OTHER Integer-typed tag: the leaf
+        // dispatch above only names the tags this fix specifically
+        // examined, but the transcribed `Exif::Main`/`GPS::Main` tables
+        // carry a flat enum `PrintConv` for roughly fifty tags in all, and
+        // a breadth measurement against the pinned oracle over every one of
+        // them (not just the ten this fix set out to cover) found the same
+        // defect on ~28 more -- `ChromaticAberrationCorrection`,
+        // `PhotometricInterpretation`, `Thresholding`, `Sharpness`'s own
+        // sibling tags, and so on -- with no PrintConv gate at all, so a
+        // bare numeric code that matched no label was silently accepted as
+        // the tag's raw value: the same `-Orientation=6` defect this fix
+        // exists to close, just not yet wired up for these. Rather than
+        // writing thirty more per-tag match arms, consult the table
+        // generically: if `leaf` has a plain `IntEnum` PrintConv, `raw` must
+        // match one of its labels (unless `raw_mode`); if the table has no
+        // entry for `leaf`, or its PrintConv is not a plain enum, this falls
+        // through unchanged to the plain integer parser, exactly as before.
+        //
+        // Excluded: leaves a hand-written arm above ALREADY fully resolves
+        // by the time control reaches here (`ColorSpace`, `Contrast`,
+        // `CustomRendered`, `GPSDifferential`, `GPSStatus`,
+        // `GPSMeasureMode`, `GPSDestDistanceRef`, `PlanarConfiguration`,
+        // `MakerNoteSafety`, `ProfileEmbedPolicy`, `Saturation`,
+        // `LightSource`, `CalibrationIlluminant1/2/3`). Each of those
+        // reassigns `raw` to the tag's own numeric code string on success
+        // (e.g. `"Chunky"` -> `"1"`) without an early `return`, so by the
+        // time this arm would run, `raw` is already the STORED code, not a
+        // label -- looking `"1"` up in `PlanarConfiguration`'s own table
+        // (labels `"Chunky"`/`"Planar"`) would find no match and wrongly
+        // refuse an already-correct conversion.
+        Some(ValueType::Integer)
+            if !raw_mode
+                && !matches!(
+                    declared_tag_name.rsplit(':').next(),
+                    Some(
+                        "ColorSpace"
+                            | "Contrast"
+                            | "CustomRendered"
+                            | "GPSDifferential"
+                            | "GPSStatus"
+                            | "GPSMeasureMode"
+                            | "GPSDestDistanceRef"
+                            | "PlanarConfiguration"
+                            | "MakerNoteSafety"
+                            | "ProfileEmbedPolicy"
+                            | "Saturation"
+                            | "LightSource"
+                            | "CalibrationIlluminant1"
+                            | "CalibrationIlluminant2"
+                            | "CalibrationIlluminant3"
+                    )
+                ) =>
+        {
+            let leaf = declared_tag_name
+                .rsplit(':')
+                .next()
+                .unwrap_or(declared_tag_name);
+            let module = if declared_tag_name.starts_with("GPS:") {
+                "GPS"
+            } else {
+                "Exif"
+            };
+            match invert_enum_printconv(module, leaf, raw) {
+                Some(Ok(code)) => Ok(TagValue::Integer(code)),
+                Some(Err(EnumInverseError::Ambiguous)) => Err(invalid(
+                    tag_name,
+                    format!(
+                        "Can't convert {} (matches more than one PrintConv)",
+                        display_tag_for_message(tag_name, leaf)
+                    ),
+                )),
+                Some(Err(EnumInverseError::NoMatch)) => Err(invalid(
+                    tag_name,
+                    format!(
+                        "Can't convert {} (not in PrintConv)",
+                        display_tag_for_message(tag_name, leaf)
+                    ),
+                )),
+                None => Ok(TagValue::Integer(parse_integer(tag_name, raw)?)),
+            }
         }
         Some(ValueType::Integer) => Ok(TagValue::Integer(parse_integer(tag_name, raw)?)),
         Some(ValueType::Float) => Ok(TagValue::Float(parse_float(tag_name, raw)?)),
@@ -853,13 +1038,73 @@ fn invert_table_printconv_label(
         Some(Ok(code)) => Ok(TagValue::Integer(code)),
         Some(Err(EnumInverseError::Ambiguous)) => Err(invalid(
             tag_name,
-            format!("Can't convert {leaf} value (matches more than one PrintConv)"),
+            format!(
+                "Can't convert {} (matches more than one PrintConv)",
+                display_tag_for_message(tag_name, leaf)
+            ),
         )),
         Some(Err(EnumInverseError::NoMatch)) | None => Err(invalid(
             tag_name,
-            format!("Can't convert {leaf} value (not in PrintConv)"),
+            format!(
+                "Can't convert {} (not in PrintConv)",
+                display_tag_for_message(tag_name, leaf)
+            ),
         )),
     }
+}
+
+/// The `Group:Tag` spelling ExifTool's own `Can't convert Group:Tag (...)`
+/// diagnostic uses. `Exif::Main` is one shared table for IFD0 and ExifIFD
+/// (`ifd_schema.rs`: which directory a tag lands in is only known once a
+/// real file is read, never stored statically), so when the caller's own
+/// `tag_name` already carries an explicit group (`-IFD0:Orientation=...`),
+/// that group is trusted outright. For a bare name (`-Orientation=...`) this
+/// falls back to the group each of these tags conventionally occupies in a
+/// JPEG/TIFF -- the same convention `docs/.../breadth_measure.py`'s
+/// `fallback_group` uses to grade this fix's own writes against the oracle.
+fn display_tag_for_message(tag_name: &str, leaf: &str) -> String {
+    match tag_name.rsplit_once(':') {
+        Some((group, _)) if !group.is_empty() => format!("{group}:{leaf}"),
+        _ => format!("{}:{leaf}", conventional_group_for_leaf(leaf)),
+    }
+}
+
+/// See [`display_tag_for_message`]. Only the tags this fix's PrintConv
+/// inversion covers need an entry; everything else defaults to `ExifIFD`,
+/// which is at worst a cosmetically wrong group in a diagnostic string, not
+/// a wrong value written -- `AGENTS.md`'s "never approximate a conversion"
+/// is about the stored bytes, which this never touches.
+fn conventional_group_for_leaf(leaf: &str) -> &'static str {
+    match leaf {
+        "Orientation"
+        | "ResolutionUnit"
+        | "Compression"
+        | "YCbCrPositioning"
+        | "GrayResponseUnit"
+        | "CalibrationIlluminant1"
+        | "CalibrationIlluminant2"
+        | "CalibrationIlluminant3"
+        | "PlanarConfiguration" => "IFD0",
+        "GPSStatus" | "GPSMeasureMode" | "GPSDestDistanceRef" | "GPSDifferential"
+        | "GPSLatitudeRef" | "GPSDestLatitudeRef" => "GPS",
+        _ => "ExifIFD",
+    }
+}
+
+/// `raw` as a plain integer (`IsInt`/`IsHex`, not a label), packed as one
+/// byte -- the raw-mode counterpart of a PrintConv label lookup for an
+/// `undef`-typed one-byte enum tag (`FileSource`, `SceneType`): ExifTool's
+/// `#`/`-n` skip `PrintConvInv` but still apply the tag's own `ValueConvInv`
+/// (the byte-packing), which is what this reproduces.
+fn byte_from_raw_integer(tag_name: &str, raw: &str, leaf: &str) -> Result<TagValue> {
+    let value = parse_integer(tag_name, raw)?;
+    if !(0..=255).contains(&value) {
+        return Err(invalid(
+            tag_name,
+            format!("{leaf} code does not fit a byte"),
+        ));
+    }
+    Ok(TagValue::Binary(vec![value as u8]))
 }
 
 /// ExifTool 13.59 `Image::ExifTool::Exif::ConvertParameter`, as used by
@@ -1694,6 +1939,12 @@ mod tests {
         parse_cli_tag_value(tag, raw)
     }
 
+    /// [`parse`] in raw mode (the CLI's `#` suffix / `--no-print-conv`):
+    /// skips every PrintConv label lookup, parsing purely by declared type.
+    fn parse_raw(tag: &str, raw: &str) -> Result<TagValue> {
+        parse_cli_tag_value_with_mode(tag, raw, true)
+    }
+
     // -- shape predicates, against ExifTool.pm:5924-5933 --------------------
 
     #[test]
@@ -1984,7 +2235,19 @@ mod tests {
             TagValue::Integer(5)
         );
         assert_eq!(
-            parse("EXIF:MeteringMode", "255").unwrap(),
+            parse("EXIF:MeteringMode", "Other").unwrap(),
+            TagValue::Integer(255)
+        );
+        // Pinned ExifTool 13.59 refuses a bare numeric code for a hash
+        // `PrintConv` with no `OTHER` (confirmed against the oracle:
+        // `-MeteringMode=3` without `-n` is `Warning: Can't convert
+        // ExifIFD:MeteringMode (not in PrintConv)`), so "255" is no longer
+        // accepted as a shortcut for its own label ("Other") here either.
+        assert!(parse("EXIF:MeteringMode", "255").is_err());
+        // The raw-mode counterpart (`-MeteringMode#=255`, `-n`) still takes
+        // the code directly.
+        assert_eq!(
+            parse_raw("EXIF:MeteringMode", "255").unwrap(),
             TagValue::Integer(255)
         );
     }

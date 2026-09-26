@@ -37,6 +37,35 @@
 //! (`perl5.38.2 -I.../13.59/exiftool/lib .../13.59/exiftool/exiftool`,
 //! `-ver` 13.59 and the `OOXML.docx` capability probe `DOCX` both asserted)
 //! against `t/images/Canon.jpg`.
+//!
+//! # Correction: numeric input does NOT stay accepted
+//!
+//! This fix's original brief said a plain numeric value should keep being
+//! accepted for these tags. Checked directly against the oracle, that was
+//! wrong: `-Orientation=6` (no `-n`, no `#`) is `Warning: Can't convert
+//! IFD0:Orientation (not in PrintConv)` / `Nothing to do.`, file untouched --
+//! ExifTool's `ReverseLookup` never falls back to a raw code for a hash
+//! `PrintConv` with no `OTHER`. `value_parser::parse_cli_tag_value_with_mode`
+//! now requires a label match for these tags unconditionally (`raw_mode`
+//! aside); a bare numeric string only succeeds when it happens to also
+//! satisfy the exact/case-insensitive label match (not the case for a plain
+//! digit string against any tag in this file's scope). `#` and
+//! `--no-print-conv` (oxidex's spelling of ExifTool's `-n`; oxidex's own
+//! `-n` is dry-run) still take the raw value directly, unconditionally.
+//!
+//! ExifTool's real `ReverseLookup` has two more fallback tiers this port
+//! does not implement (case-insensitive prefix, then case-insensitive
+//! substring) -- ambiguity at either tier still refuses, but a *unique*
+//! substring match does not. `-CalibrationIlluminant1=0` is refused here but
+//! written as `23` (`D50`) by the oracle, because `"0"` is a substring of
+//! `"D50"` and no other label; the same happens for `LightSource` (same
+//! table) and for `-Orientation=1`/`-Compression=1` colliding with `"Rotate
+//! 180"`/`"CCITT 1D"`. This is a disclosed, deliberate simplification
+//! consistent with this fix's stated two-tier algorithm (exact, then
+//! case-insensitive) and `AGENTS.md`'s "never approximate a conversion" --
+//! refusing is safer than guessing which of several possible substring
+//! matches a caller meant. `breadth_measure.py`'s numeric-bare sweep still
+//! reports these as `mismatched` rather than silently dropping them.
 
 #[path = "common/fixtures.rs"]
 mod fixtures;
@@ -155,6 +184,113 @@ fn assert_label_write_matches_oracle(
 /// silent pass -- when the fixture cannot be resolved.
 fn canon_jpg() -> Option<PathBuf> {
     fixtures::pinned_t_images_fixture_path("Canon.jpg")
+}
+
+/// A bare numeric code on an enum-PrintConv tag must be refused, exactly
+/// like an unrecognized label -- the coordinator's correction to this fix's
+/// original brief: pinned ExifTool 13.59 refuses `-Orientation=6` with
+/// `Warning: Can't convert IFD0:Orientation (not in PrintConv)` /
+/// `Nothing to do.`, leaving the file untouched, and only accepts a raw
+/// code through `#` (`-Orientation#=6`) or `--no-print-conv` (oxidex's
+/// spelling of ExifTool's `-n`; oxidex's own `-n` is unrelated dry-run).
+/// This asserts all three: the bare form is refused with the oracle's own
+/// wording and leaves the file byte-identical, and both raw forms are
+/// accepted and agree with the oracle's own `#`/`-n` write.
+fn assert_numeric_input_policy_matches_oracle(
+    oracle: &exiftool_oracle::Oracle,
+    base: &Path,
+    tag: &str,
+    code: i64,
+) {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Bare: refused, file untouched, oracle's own wording.
+    let bare_path = copy_into(&dir, base, "bare.jpg");
+    let before = std::fs::read(&bare_path).unwrap();
+    let arg = format!("-{tag}={code}");
+    let out = oxidex(&[&arg, bare_path.to_str().unwrap()]);
+    assert!(
+        !out.status.success(),
+        "oxidex {arg} (bare numeric) should be refused, not accepted as a raw code"
+    );
+    assert_eq!(
+        std::fs::read(&bare_path).unwrap(),
+        before,
+        "a refused bare-numeric write must leave the file untouched"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("Can't convert {tag} (not in PrintConv)")),
+        "expected the oracle's own wording in stderr, got: {stderr}"
+    );
+
+    let et_bare_path = copy_into(&dir, base, "bare_et.jpg");
+    let et_before = std::fs::read(&et_bare_path).unwrap();
+    let et_out = oracle
+        .command()
+        .args(["-overwrite_original", &arg, et_bare_path.to_str().unwrap()])
+        .output()
+        .expect("run oracle");
+    // The oracle's own exit code/wording for this varies by tag (confirmed:
+    // `Orientation` is `Nothing to do.`, exit 1; a `Priority => 0` tag like
+    // `WhiteBalance` sharing a MakerNote duplicate is `0 image files
+    // updated` / `1 image files unchanged`, exit 0) -- the file being
+    // untouched is the invariant this asserts, not the exact wire format.
+    let _ = et_out;
+    assert_eq!(
+        std::fs::read(&et_bare_path).unwrap(),
+        et_before,
+        "the oracle must also leave the file untouched for a bare numeric code"
+    );
+
+    // `#`: accepted as the raw code, matching the oracle's own `#` write.
+    let hash_path = copy_into(&dir, base, "hash.jpg");
+    let hash_arg = format!("-{tag}#={code}");
+    let out = oxidex(&[&hash_arg, hash_path.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "oxidex {hash_arg} should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(oxidex_read_n(&hash_path, tag), code.to_string());
+
+    let et_hash_path = copy_into(&dir, base, "hash_et.jpg");
+    let et_out = oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            &hash_arg,
+            et_hash_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run oracle");
+    assert!(et_out.status.success());
+    assert_eq!(oracle_read_n(oracle, &et_hash_path, tag), code.to_string());
+
+    // `--no-print-conv` (oxidex) / `-n` (oracle): same raw-code acceptance,
+    // applied globally instead of per-tag.
+    let np_path = copy_into(&dir, base, "np.jpg");
+    let out = oxidex(&["--no-print-conv", &arg, np_path.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "oxidex --no-print-conv {arg} should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(oxidex_read_n(&np_path, tag), code.to_string());
+
+    let et_np_path = copy_into(&dir, base, "np_et.jpg");
+    let et_out = oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-n",
+            &arg,
+            et_np_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run oracle");
+    assert!(et_out.status.success());
+    assert_eq!(oracle_read_n(oracle, &et_np_path, tag), code.to_string());
 }
 
 #[test]
@@ -545,4 +681,49 @@ fn orientation_invalid_label_is_refused_like_the_oracle() {
         et_before,
         "the oracle's refused write must also leave the file untouched"
     );
+}
+
+/// The coordinator's correction: "numeric input stays accepted" in this
+/// fix's original brief was wrong. Pinned ExifTool 13.59 refuses a bare
+/// numeric code on every one of these tags (confirmed against the oracle
+/// directly for each), and only accepts one raw via `#` or `-n`. One
+/// representative code per tag (its `PrintConv`'s first entry) is enough to
+/// pin the bare-vs-raw dispatch; the label tests above already cover every
+/// entry's exact value. `GainControl` and `LightSource` are exercised via
+/// the exhaustive `breadth_measure.py` sweep instead of here (`LightSource`
+/// specifically triggers a disclosed, out-of-scope divergence -- see that
+/// script's module doc on ExifTool's substring-fallback tier of
+/// `ReverseLookup`, which this port deliberately does not implement).
+#[test]
+fn numeric_input_is_refused_bare_and_accepted_raw_for_every_required_tag() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    for (tag, code) in [
+        // 1 is excluded for Orientation: "1" as a search string happens to
+        // substring-match "Rotate 180" (code 3) -- see the module doc on
+        // ExifTool's substring-fallback tier.
+        ("IFD0:Orientation", 3),
+        ("IFD0:ResolutionUnit", 1),
+        ("ExifIFD:MeteringMode", 0),
+        ("ExifIFD:ExposureProgram", 0),
+        ("ExifIFD:WhiteBalance", 0),
+        ("ExifIFD:ExposureMode", 0),
+        ("ExifIFD:SceneCaptureType", 0),
+        ("IFD0:Compression", 2), // 1 is excluded: see the module doc on
+        // ExifTool's substring-fallback tier -- "1" as a search string
+        // happens to match "CCITT 1D" (code 2) as a substring, which this
+        // port's exact/case-insensitive-only algorithm does not replicate.
+        ("IFD0:YCbCrPositioning", 1),
+        ("IFD0:GrayResponseUnit", 1),
+        ("ExifIFD:SceneType", 1),
+        ("ExifIFD:Flash", 1),
+    ] {
+        assert_numeric_input_policy_matches_oracle(oracle, &base, tag, code);
+    }
 }
