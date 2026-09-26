@@ -2428,8 +2428,14 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
     let mut interop = plan.interop.clone();
     let mut ifd1 = plan.ifd1.clone();
     for list in [&mut ifd0, &mut exif_ifd, &mut gps, &mut interop, &mut ifd1] {
+        // stable: duplicates keep their file order
         list.sort_by_key(|e| e.tag_id);
-        list.dedup_by_key(|e| e.tag_id); // defensive: one entry per tag id
+        // defensive: one entry per tag id -- except MakerNote. An IFD may
+        // carry several physical 0x927C entries (Apple_iPhone6.jpg: the
+        // camera's note, then an editing app's), and pinned ExifTool 13.59
+        // keeps every one on an edit; each is kept at its original offset
+        // below, and `makernote_guard` refuses the write if one is lost.
+        list.dedup_by(|a, b| a.tag_id == b.tag_id && a.tag_id != MAKERNOTE);
     }
 
     // Pointer entries the tables will contain (synthesized during emit)
@@ -2449,6 +2455,10 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
         .find(|e| e.tag_id == MAKERNOTE)
         .map(|e| e.value.len())
         .filter(|len| *len > 4);
+    // `(list, index)` of the MakerNote `plan.makernote_pin` places: the
+    // first of ExifIFD's (lists are ifd0, exif_ifd, interop, gps, ifd1)
+    let first_exif_note = exif_ifd.iter().position(|e| e.tag_id == MAKERNOTE);
+    let is_pinned_note = |list: usize, index: usize| list == 1 && Some(index) == first_exif_note;
     let mut pinned = None;
     if let (Some(pin), Some(len)) = (plan.makernote_pin, makernote_len) {
         if pin >= 8 {
@@ -2510,11 +2520,20 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
             }
         }
         for (i, list) in lists.iter().enumerate() {
+            // the n-th of a directory's duplicate MakerNotes is pinned where
+            // the n-th was; every other tag id occurs once
+            let mut notes_seen = 0;
             for (j, e) in list.iter().enumerate() {
-                if e.value.len() <= 4 || (e.tag_id == MAKERNOTE && kinds[i] == IfdKind::ExifIfd) {
+                let nth = if e.tag_id == MAKERNOTE {
+                    notes_seen += 1;
+                    notes_seen - 1
+                } else {
+                    0
+                };
+                if e.value.len() <= 4 || is_pinned_note(i, j) {
                     continue;
                 }
-                if let Some((at, len)) = layout.value(kinds[i], e.tag_id)
+                if let Some((at, len)) = layout.nth_value(kinds[i], e.tag_id, nth)
                     && len == e.value.len()
                     && at >= 8
                     && at % 2 == 0
@@ -2595,8 +2614,8 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
         let mut offsets = Vec::with_capacity(list.len());
         for (j, e) in list.iter().enumerate() {
             if e.value.len() > 4 {
-                if e.tag_id == MAKERNOTE && pinned.is_some() {
-                    offsets.push(pinned.unwrap());
+                if let Some(pin) = pinned.filter(|_| is_pinned_note(i, j)) {
+                    offsets.push(pin);
                 } else if let Some(at) = value_pins[i][j] {
                     offsets.push(at);
                 } else {

@@ -301,6 +301,17 @@ impl OriginalLayout {
             .map(|(_, _, at, len)| (*at, *len))
     }
 
+    /// The original `(offset, length)` of the `n`-th (from 0) out-of-line
+    /// value for `tag` in `ifd`: a directory can hold a tag id more than
+    /// once (duplicate MakerNotes).
+    pub(crate) fn nth_value(&self, ifd: IfdKind, tag: u16, n: usize) -> Option<(usize, usize)> {
+        self.values
+            .iter()
+            .filter(|(i, t, _, _)| *i == ifd && *t == tag)
+            .nth(n)
+            .map(|(_, _, at, len)| (*at, *len))
+    }
+
     /// The original `(offset, rows)` of `ifd`'s table.
     pub(crate) fn table(&self, ifd: IfdKind) -> Option<(usize, usize)> {
         self.tables
@@ -635,9 +646,10 @@ fn physical_makernotes(tiff: &[u8]) -> Vec<(IfdKind, usize, &[u8])> {
 /// original held there, in order, each at its original offset with its
 /// original bytes. An IFD may carry several physical 0x927C entries (Apple
 /// iPhone JPEGs add an editing app's note after the camera's); pinned
-/// ExifTool 13.59 keeps all of them on an edit, while the serializer keeps
-/// one entry per tag id, so a re-laid-out block would silently lose the
-/// later ones. A directory the write leaves with no MakerNote deleted them.
+/// ExifTool 13.59 keeps all of them on an edit. The serializer keeps each at
+/// its original offset when it can (`serialize_exif_keeping`); one it could
+/// not keep in place (an odd offset) would otherwise move or be lost. A
+/// directory the write leaves with no MakerNote deleted them.
 fn verify_every_physical_note(before_tiff: &[u8], after_tiff: &[u8]) -> Result<()> {
     let before = physical_makernotes(before_tiff);
     let after = physical_makernotes(after_tiff);
@@ -661,8 +673,8 @@ fn verify_every_physical_note(before_tiff: &[u8], after_tiff: &[u8]) -> Result<(
             continue;
         }
         return Err(refused(format!(
-            "the {} holds {} MakerNote entries and the write would keep {} of them \
-             in place and unchanged (one entry per tag id is serialized)",
+            "the {} holds {} MakerNote entries and the write would keep only {} of \
+             them in place and unchanged",
             ifd.prefix(),
             was.len(),
             kept.iter().filter(|note| was.contains(note)).count()

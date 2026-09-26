@@ -1263,6 +1263,28 @@ fn exif_makernotes(tiff: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// The TIFF offset of every physical MakerNote value in `tiff`'s ExifIFD.
+fn exif_makernote_offsets(tiff: &[u8]) -> Vec<u32> {
+    let order = if &tiff[..2] == b"II" {
+        Order::Ii
+    } else {
+        Order::Mm
+    };
+    let rows = |at: usize| {
+        let n = order.read_u16(&tiff[at..]) as usize;
+        (0..n).map(move |i| at + 2 + 12 * i)
+    };
+    let ifd0 = order.read_u32(&tiff[4..]) as usize;
+    let exif = rows(ifd0)
+        .find(|e| order.read_u16(&tiff[*e..]) == 0x8769)
+        .map(|e| order.read_u32(&tiff[e + 8..]) as usize)
+        .expect("ExifIFD");
+    rows(exif)
+        .filter(|e| order.read_u16(&tiff[*e..]) == 0x927C)
+        .map(|e| order.read_u32(&tiff[e + 8..]))
+        .collect()
+}
+
 /// An EXIF block whose ExifIFD holds two physical MakerNote entries, as
 /// `Apple_iPhone6.jpg` does (its second, 142-byte note is an editing app's;
 /// pinned ExifTool 13.59 `-v3` lists both, warning "Duplicate tag 0x927c").
@@ -1301,36 +1323,38 @@ fn two_note_block(order: Order) -> (Vec<u8>, [Vec<u8>; 2]) {
 }
 
 /// P1 "preserve every duplicate MakerNote entry": an ExifIFD with two
-/// physical 0x927C entries. The serializer keeps one entry per tag id, so a
+/// physical 0x927C entries. The serializer kept one entry per tag id, so a
 /// re-laying edit dropped the second note while the guard, comparing only
-/// the first, passed it. Every edit either keeps BOTH notes byte-identical
-/// or is refused with the file untouched. Pinned ExifTool 13.59 keeps both
-/// (graded below on the same file). Red at af8e2b86 (the second note was
-/// silently deleted and the write reported success).
+/// the first, passed it. Pinned ExifTool 13.59 performs these edits and
+/// keeps both notes (graded below on the same file); so does oxidex now:
+/// every edit succeeds with BOTH notes byte-identical at their original
+/// offsets. Red at af8e2b86 (second note silently deleted, success
+/// reported) and at 3028e284 (the edit refused).
 #[test]
-fn every_physical_maker_note_is_kept_or_the_edit_refused() {
+fn every_physical_maker_note_is_kept_as_exiftool_keeps_it() {
     let dir = tempfile::tempdir().unwrap();
     for order in [Order::Ii, Order::Mm] {
         let (tiff, notes) = two_note_block(order);
+        let placed = exif_makernote_offsets(&tiff);
         for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
             for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
                 let name = format!("two-notes-{order:?}-{edit:?}.{carrier}");
                 let path = write(dir.path(), &name, &file);
-                match apply(&path, edit) {
-                    Ok(()) => assert_eq!(
-                        exif_makernotes(&tiff_of(&std::fs::read(&path).unwrap())),
-                        notes,
-                        "{name}: a physical MakerNote was dropped or changed"
-                    ),
-                    Err(e) => {
-                        assert!(e.to_string().contains("MakerNote"), "{name}: {e}");
-                        assert_eq!(
-                            std::fs::read(&path).unwrap(),
-                            file,
-                            "{name}: refused but modified"
-                        );
-                    }
+                if let Err(e) = apply(&path, edit) {
+                    panic!("{name}: pinned ExifTool performs this edit; oxidex refused: {e}");
                 }
+                let out = tiff_of(&std::fs::read(&path).unwrap());
+                assert_ne!(out, tiff, "{name}: the edit was not applied");
+                assert_eq!(
+                    exif_makernotes(&out),
+                    notes,
+                    "{name}: a physical MakerNote was dropped or changed"
+                );
+                assert_eq!(
+                    exif_makernote_offsets(&out),
+                    placed,
+                    "{name}: a MakerNote moved"
+                );
             }
         }
     }
@@ -1355,4 +1379,104 @@ fn every_physical_maker_note_is_kept_or_the_edit_refused() {
         notes,
         "pinned ExifTool 13.59 keeps every physical MakerNote"
     );
+}
+
+/// The CLI on the two-note layout: a grouped edit is performed and reported,
+/// with both notes kept in place, as pinned ExifTool 13.59 does (its
+/// `-IFD0:ImageDescription=x` writes and keeps both). Red at 3028e284 (the
+/// edit refused, exit 1). A bare `-ImageDescription=x` is not used: bare
+/// names are routed by the CLI write-transaction work (#945), not here.
+#[test]
+fn cli_edit_of_a_two_note_jpeg_is_written_with_both_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tiff, notes) = two_note_block(Order::Mm);
+    let placed = exif_makernote_offsets(&tiff);
+    let file = jpeg_with(&tiff);
+    let path = write(dir.path(), "cli-two-notes.jpg", &file);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-IFD0:ImageDescription=cli edit"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success(),
+        "exit {:?}; stderr: {stderr}",
+        out.status
+    );
+    assert!(stdout.contains("1 image files updated"), "stdout: {stdout}");
+    let written = tiff_of(&std::fs::read(&path).unwrap());
+    assert_eq!(exif_makernotes(&written), notes, "a MakerNote was lost");
+    assert_eq!(
+        exif_makernote_offsets(&written),
+        placed,
+        "a MakerNote moved"
+    );
+    let map = read_metadata(&path).unwrap();
+    assert_eq!(
+        map.get("IFD0:ImageDescription"),
+        Some(&TagValue::new_string("cli edit")),
+        "the edit was not stored"
+    );
+}
+
+/// A refusal the guard raises reaches the CLI as a failure: an error naming
+/// the edit, no "updated" report, a non-zero exit and the file untouched.
+/// The second note sits at an odd offset, where this writer does not pin a
+/// value (ExifTool warns "Odd offset" for one), so keeping it in place is
+/// not possible and the edit is refused rather than moving or dropping it.
+#[test]
+fn cli_reports_a_maker_note_refusal_as_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let order = Order::Mm;
+    let (mut tiff, [_, second]) = two_note_block(order);
+    // move the second note's value to an odd offset past the block
+    if tiff.len() % 2 == 0 {
+        tiff.push(0);
+    }
+    let odd_at = tiff.len() as u32;
+    tiff.extend(&second);
+    let ifd0 = order.read_u32(&tiff[4..]) as usize;
+    let rows = |t: &[u8], at: usize| {
+        let n = order.read_u16(&t[at..]) as usize;
+        (0..n).map(move |i| at + 2 + 12 * i).collect::<Vec<_>>()
+    };
+    let exif = rows(&tiff, ifd0)
+        .into_iter()
+        .find(|e| order.read_u16(&tiff[*e..]) == 0x8769)
+        .map(|e| order.read_u32(&tiff[e + 8..]) as usize)
+        .unwrap();
+    let second_entry = rows(&tiff, exif)
+        .into_iter()
+        .filter(|e| order.read_u16(&tiff[*e..]) == 0x927C)
+        .nth(1)
+        .unwrap();
+    tiff[second_entry + 8..second_entry + 12].copy_from_slice(&order.u32(odd_at));
+    assert_eq!(exif_makernote_offsets(&tiff)[1] % 2, 1);
+    let file = jpeg_with(&tiff);
+    let path = write(dir.path(), "cli-odd-note.jpg", &file);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-IFD0:ImageDescription=cli edit"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(!out.status.success(), "reported success; stdout: {stdout}");
+    assert!(
+        stderr.contains("Error:")
+            && stderr.contains("IFD0:ImageDescription")
+            && stderr.contains("MakerNote"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("1 image files updated"),
+        "stdout: {stdout}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), file, "refused but modified");
 }
