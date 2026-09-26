@@ -271,11 +271,12 @@ fn census_interop_index_carriers_match_the_pinned_oracle() {
 
 /// An image-carrying InteropIFD: Compression and the OtherImage pair stay
 /// with their residual arms; the engine's X/YResolution and ResolutionUnit
-/// still yield to the IFD0 twins (the yield rule E-3 retires -- pinned
-/// 13.59 `-a` prints them, its default duplicate-suppressed view does not).
+/// are kept beside their IFD0 twins, as pinned 13.59 `-a -G1` prints them,
+/// and lose a bare request to them (`Priority => 0`: the first copy found,
+/// IFD0's, stays the default).
 #[test]
 #[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples"]
-fn image_carrying_interop_keeps_its_residual_and_the_yield() {
+fn image_carrying_interop_keeps_its_residual_and_its_ifd0_twins() {
     for (dir, file, start, length) in [
         ("Samsung", "SamsungSPH-A800.jpg", "528", "5146"),
         ("Canon", "CanonXL_H1.jpg", "1274", "2400"),
@@ -296,10 +297,18 @@ fn image_carrying_interop_keeps_its_residual_and_the_yield() {
                 metadata.get(&format!("IFD0:{name}")).is_some(),
                 "{file}: the IFD0 twin"
             );
-            assert!(
-                metadata.get(&format!("InteropIFD:{name}")).is_none(),
-                "{file}: InteropIFD:{name} yields to IFD0 until E-3"
+            assert_eq!(
+                shown(&metadata, &format!("InteropIFD:{name}")),
+                shown(&metadata, &format!("IFD0:{name}")),
+                "{file}: InteropIFD:{name} is kept (both copies agree here)"
             );
+            let winner = oxidex::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                false,
+            );
+            assert_eq!(winner.len(), 1, "{file} -{name}");
+            assert_eq!(winner[0].lookup_key, format!("IFD0:{name}"), "{file}");
         }
     }
 }
@@ -563,15 +572,36 @@ fn census_exif_ifd_carriers_match_the_pinned_oracle() {
         "CanonEOS40D.jpg",
         &[("ExifIFD:WhiteBalance", "Auto")],
     );
-    // The yield-to-IFD0 rule is kept until E-3: pinned `-a -G1` prints an
-    // `[ExifIFD] Padding` beside the IFD0 one, oxidex only IFD0's.
-    for path in ["Canon/CanonIXY640.jpg", "Canon/CanonPowerShotELPH330HS.jpg"] {
+    // Pinned `-a -G1` prints an `[ExifIFD] Padding` beside the IFD0 one,
+    // and bare `-Padding` answers IFD0's (2060 / 1918 bytes): IFD0's 0xea1c
+    // entry is stored after its 0x8769 ExifOffset, so ExifTool finds it
+    // after the whole ExifIFD. Both rows are kept; the ExifIFD one loses.
+    for (path, ifd0_bytes, exif_bytes) in [
+        ("Canon/CanonIXY640.jpg", 2060, 2060),
+        ("Canon/CanonPowerShotELPH330HS.jpg", 1918, 2072),
+    ] {
         let metadata = file(path);
-        assert!(metadata.get("IFD0:Padding").is_some(), "{path}");
-        assert!(
-            metadata.get("ExifIFD:Padding").is_none(),
-            "{path}: until E-3"
+        // The byte count, whether the row holds the bytes or the
+        // `(Binary data N bytes, ...)` placeholder text.
+        let len = |key: &str| match metadata.get(key)? {
+            oxidex::core::TagValue::Binary(bytes) => Some(bytes.len()),
+            oxidex::core::TagValue::String(text) => text
+                .strip_prefix("(Binary data ")?
+                .split_once(' ')?
+                .0
+                .parse()
+                .ok(),
+            _ => None,
+        };
+        assert_eq!(len("IFD0:Padding"), Some(ifd0_bytes), "{path}");
+        assert_eq!(len("ExifIFD:Padding"), Some(exif_bytes), "{path}");
+        let winner = oxidex::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["Padding".to_string()],
+            false,
         );
+        assert_eq!(winner.len(), 1, "{path}");
+        assert_eq!(winner[0].lookup_key, "IFD0:Padding", "{path}");
     }
 }
 
