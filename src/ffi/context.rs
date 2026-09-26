@@ -24,10 +24,14 @@ pub struct ExifToolContext {
     pub string_cache: Mutex<Vec<CString>>,
     /// Iterator cache: stores tag names for iteration
     pub tag_names_cache: Vec<String>,
-    /// `GROUP:All` deletions `exiftool_remove_tag` recorded (`"EXIF:All"`),
-    /// applied by `exiftool_write_file` with the map's changes; cleared by
-    /// `exiftool_read_file`.
-    pub group_deletions: Vec<String>,
+    /// Every mutation since the last `exiftool_read_file`, in call order:
+    /// the key each `exiftool_set_tag_*` / `exiftool_remove_tag` named, and
+    /// each `GROUP:All` deletion `exiftool_remove_tag` recorded
+    /// (`"EXIF:All"`), which names no row of the map. `exiftool_write_file`
+    /// applies the handle's changes in this order, as ExifTool applies a
+    /// command's assignments: a group deletion removes what was set before
+    /// it, never what was set after it. Cleared by `exiftool_read_file`.
+    pub mutations: Vec<String>,
 }
 
 impl ExifToolContext {
@@ -37,7 +41,7 @@ impl ExifToolContext {
             metadata: MetadataMap::new(),
             string_cache: Mutex::new(Vec::new()),
             tag_names_cache: Vec::new(),
-            group_deletions: Vec::new(),
+            mutations: Vec::new(),
         }
     }
 

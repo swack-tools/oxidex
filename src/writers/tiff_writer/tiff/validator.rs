@@ -48,32 +48,33 @@ pub fn is_tiff_writable_family(tag_name: &str) -> bool {
 pub fn validate_tag_for_tiff(tag_name: &str) -> Result<u16> {
     // Check if family is writable
     if !is_tiff_writable_family(tag_name) {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Tag {} is not writable to TIFF format (unsupported family)",
-            tag_name
-        )));
+        return Err(ExifToolError::tag_not_written(
+            tag_name,
+            "not writable to TIFF format (unsupported family)",
+        ));
     }
 
     // ExifTool 13.59 Exif.pm declares this DNG tag in a SubIFD. The legacy
     // TIFF writer only builds IFD0/ExifIFD/GPS tables, so it must not accept
     // a value it would place in IFD0.
     if tag_name == "EXIF:BlackLevel" {
-        return Err(ExifToolError::unsupported_format(
+        return Err(ExifToolError::tag_not_written(
+            tag_name,
             "BlackLevel requires a SubIFD, which the TIFF writer cannot create",
         ));
     }
 
     // Look up tag in registry
     let tag_descriptor = tag_registry::get_tag_descriptor(tag_name)
-        .ok_or_else(|| ExifToolError::unsupported_format(format!("Unknown tag: {}", tag_name)))?;
+        .ok_or_else(|| ExifToolError::tag_not_written(tag_name, "unknown tag"))?;
 
     // Extract numeric tag ID
     match &tag_descriptor.tag_id {
         TagId::Numeric(id) => Ok(*id),
-        TagId::Named(_) => Err(ExifToolError::unsupported_format(format!(
-            "Tag {} has non-numeric ID (not supported for TIFF serialization)",
-            tag_name
-        ))),
+        TagId::Named(_) => Err(ExifToolError::tag_not_written(
+            tag_name,
+            "non-numeric ID (not supported for TIFF serialization)",
+        )),
     }
 }
 
@@ -97,8 +98,10 @@ pub fn filter_tiff_writable_tags(metadata: &MetadataMap) -> MetadataMap {
             filtered.insert(tag_name.clone(), tag_value.clone());
         }
     }
-    // A filtered copy is the same rows: each keeps its provenance.
+    // A filtered copy is the same rows: each keeps its provenance, and the
+    // map keeps the read's for the rows it kept.
     filtered.copy_provenance_from(metadata);
+    filtered.inherit_read_source(metadata);
 
     filtered
 }

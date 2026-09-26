@@ -73,8 +73,18 @@ pub fn partition_defined(
 /// on the line: `-all= -XPTitle=x` cleared the file and reported an update
 /// with no XPTitle written, and `-DateTimeOriginal+=1 -XPTitle=x` only
 /// shifted the date. A plan carries all of them, applied together in one
-/// transaction in ExifTool's order (clear, then copy, then shifts and sets),
-/// or is refused before any file is touched.
+/// transaction in ExifTool's order, or is refused before any file is
+/// touched.
+///
+/// ExifTool applies a command's requests in argument order, and `-all=`
+/// removes every value assigned before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but none assigned after it. So a `-TAG=VALUE`
+/// before the last `-all=` is superseded and dropped (13.59:
+/// `-IFD0:Artist=x -all=` leaves no EXIF; `-all= -IFD0:Artist=x` leaves
+/// Artist), and a `-TagsFromFile` before it is applied before the clear
+/// (13.59: `-TagsFromFile SRC -all= DST` leaves DST without SRC's tags;
+/// `-all= -TagsFromFile SRC DST` leaves them). Applying the clear first
+/// whatever the order used to keep both.
 #[derive(Debug, Clone, Default)]
 pub struct WritePlan {
     /// `-all=`.
@@ -96,21 +106,110 @@ pub struct WritePlan {
     /// (`apply_sets` checks the tag name's own trailing `#`, independent of
     /// this global setting).
     pub raw_values: bool,
+    /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
+    /// then applied first and cleared with the rest.
+    copy_before_clear: bool,
+    /// How many of `sets` precede `-TagsFromFile` in the argument order:
+    /// they are applied before the copy, the rest after it, as ExifTool
+    /// applies a command's requests in order (13.59: `-TagsFromFile SRC
+    /// -Make -IFD0:Make=` deletes the copied Make).
+    sets_before_copy: usize,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
 const ALL_DATES: &[&str] = &["DateTimeOriginal", "CreateDate", "ModifyDate"];
 
-fn tag_name(tag: &str) -> &str {
-    tag.rsplit(':').next().unwrap_or(tag)
+/// The field a date request addresses, as far as it is known before any
+/// file is opened: `(group, name)`, lower-cased, with ExifTool's other names
+/// for the EXIF dates folded in (`DateTime` is `ModifyDate`,
+/// `DateTimeDigitized` is `CreateDate`) and the `EXIF` family resolved to
+/// the directory ExifTool writes the date in (`EXIF:CreateDate` is
+/// `ExifIFD:CreateDate`). `group` is `None` for an ungrouped request, which
+/// may land in any group (a shift of `CreateDate` shifts `PDF:CreateDate` in
+/// a PDF), and stays `exif` for a family request naming another tag.
+fn date_address(tag: &str) -> (Option<String>, String) {
+    let (group, name) = match tag.rsplit_once(':') {
+        Some((group, name)) => (Some(group.to_ascii_lowercase()), name),
+        None => (None, tag),
+    };
+    let name = match name.to_ascii_lowercase().as_str() {
+        "datetime" => "modifydate".to_string(),
+        "datetimedigitized" => "createdate".to_string(),
+        other => other.to_string(),
+    };
+    let group = group.map(|group| match (group.as_str(), name.as_str()) {
+        ("exif", "modifydate") => "ifd0".to_string(),
+        ("exif", "datetimeoriginal" | "createdate") => "exififd".to_string(),
+        _ => group,
+    });
+    (group, name)
+}
+
+/// EXIF directories the `EXIF` family spans.
+const EXIF_DIRECTORIES: &[&str] = &["ifd0", "ifd1", "exififd", "gps", "interopifd", "subifd"];
+
+/// Whether two requests may address the same field ([`date_address`]): the
+/// same name, and groups that are equal, or one of them ungrouped or the
+/// `EXIF` family spanning the other's directory. Requests naming two
+/// different directories (`ExifIFD:CreateDate`, `IFD0:CreateDate`) are two
+/// fields, which ExifTool writes independently.
+fn may_address_same_field(a: &str, b: &str) -> bool {
+    let ((group_a, name_a), (group_b, name_b)) = (date_address(a), date_address(b));
+    if name_a != name_b {
+        return false;
+    }
+    match (group_a.as_deref(), group_b.as_deref()) {
+        (None, _) | (_, None) => true,
+        (Some(a), Some(b)) => {
+            a == b
+                || (a == "exif" && EXIF_DIRECTORIES.contains(&b))
+                || (b == "exif" && EXIF_DIRECTORIES.contains(&a))
+        }
+    }
 }
 
 impl WritePlan {
     /// Classifies `args`. `Err` is a refusal to print after `Error: ` (exit 1,
     /// nothing touched): a combination oxidex cannot apply faithfully.
     pub fn from_args(args: &CliArgs) -> Result<Self, String> {
-        let raw_sets = args.plain_tag_modifications();
-        let (warnings, sets) = partition_defined(&raw_sets);
+        let raw_sets = args.plain_tag_modifications_with_positions();
+        let clear_at = args.clear_all_position();
+        // Every name is judged (and an undefined one warned about) wherever
+        // it stands, as ExifTool's `SetNewValue` judges each; only then does
+        // a later `-all=` remove the values assigned before it.
+        let mut warnings = Vec::new();
+        let mut sets = Vec::new();
+        let mut sets_before_copy = 0;
+        for (at, tag, value) in &raw_sets {
+            // ExifTool's `AllDates` shortcut (Shortcuts.pm): the three EXIF
+            // dates, in its order, each under the shortcut's group if any.
+            let (group, name) = match tag.rsplit_once(':') {
+                Some((group, name)) => (Some(group), name),
+                None => (None, tag.as_str()),
+            };
+            let expanded: Vec<(String, OsString)> = if name.eq_ignore_ascii_case("AllDates") {
+                ["DateTimeOriginal", "CreateDate", "ModifyDate"]
+                    .iter()
+                    .map(|date| {
+                        let tag = group.map_or_else(|| date.to_string(), |g| format!("{g}:{date}"));
+                        (tag, value.clone())
+                    })
+                    .collect()
+            } else {
+                vec![(tag.clone(), value.clone())]
+            };
+            let (mut warned, defined) = partition_defined(&expanded);
+            warnings.append(&mut warned);
+            if clear_at.is_none_or(|clear| *at > clear) {
+                if args
+                    .tags_from_file_position
+                    .is_some_and(|copy| args.tags_from_file.is_some() && *at < copy)
+                {
+                    sets_before_copy += defined.len();
+                }
+                sets.extend(defined);
+            }
+        }
         let mut shifts = Vec::new();
         for (tag, op, value) in args.date_shift_operations() {
             let operation = match op.as_str() {
@@ -139,6 +238,12 @@ impl WritePlan {
             warnings,
             requested_sets: !raw_sets.is_empty(),
             raw_values: !args.exiftool_compat(),
+            copy_before_clear: args.tags_from_file.is_some()
+                && matches!(
+                    (args.tags_from_file_position, clear_at),
+                    (Some(copy), Some(clear)) if copy <= clear
+                ),
+            sets_before_copy,
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -151,23 +256,30 @@ impl WritePlan {
         // ExifTool's warning (13.59, `-TagsFromFile src -XPTitle -NoSuchTag=x`:
         // `Warning: Tag 'NoSuchTag' is not defined`, then the copy), never a
         // reason to refuse the copy.
-        if plan.copy_from.is_some() && (!plan.shifts.is_empty() || !plan.sets.is_empty()) {
+        // A copy with sets is applied in argument order (`sets_before_copy`);
+        // with a date shift it is refused: the shift runs before every set
+        // and copy, whatever its place.
+        if plan.copy_from.is_some() && !plan.shifts.is_empty() {
             return Err(
-                "Combining -TagsFromFile with -TAG=VALUE or a date shift is not \
-                 supported yet; run them as separate commands"
+                "Combining -TagsFromFile with a date shift is not supported yet; run \
+                 them as separate commands"
                     .to_string(),
             );
         }
+        // A set and a shift of one field cannot both be applied; requests
+        // naming two different fields can (13.59: an `ExifIFD:CreateDate`
+        // shift beside an `IFD0:CreateDate` set writes both), so the
+        // addresses are compared, not the leaf names.
         for (shift_tag, _, _) in &plan.shifts {
             let shifted: Vec<&str> = if shift_tag.eq_ignore_ascii_case("AllDates") {
                 ALL_DATES.to_vec()
             } else {
-                vec![tag_name(shift_tag)]
+                vec![shift_tag.as_str()]
             };
             if let Some((set_tag, _)) = plan.sets.iter().find(|(set_tag, _)| {
                 shifted
                     .iter()
-                    .any(|name| name.eq_ignore_ascii_case(tag_name(set_tag)))
+                    .any(|shifted| may_address_same_field(shifted, set_tag))
             }) {
                 return Err(format!(
                     "'{set_tag}' is both set and shifted ({shift_tag}); give one request per tag"
@@ -217,11 +329,22 @@ pub fn write_plan_file(
         path,
         || on_commit.take().map_or(Ok(()), |commit| commit()),
         |scratch| {
-            if plan.clear_all {
+            let clear = || {
                 clear_all_metadata(scratch).map_err(|e| {
                     format!("Failed to clear metadata from '{}': {}", path.display(), e)
-                })?;
+                })
+            };
+            // `-all=` where it stood relative to `-TagsFromFile` (the sets
+            // before it were already dropped, see `WritePlan`).
+            if plan.clear_all && !plan.copy_before_clear {
+                clear()?;
             }
+            // The sets given before `-TagsFromFile`, then the copy, then the
+            // rest, in argument order.
+            let (before_copy, after_copy) = plan
+                .sets
+                .split_at(plan.sets_before_copy.min(plan.sets.len()));
+            proven_sets += apply_sets(scratch, before_copy, plan.raw_values)?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 copy = Some(copy_metadata_report(src, scratch, filters).map_err(|e| {
@@ -233,21 +356,31 @@ pub fn write_plan_file(
                     )
                 })?);
             }
+            if plan.clear_all && plan.copy_before_clear {
+                clear()?;
+            }
             for (tag_pattern, operation, offset) in &plan.shifts {
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            proven_sets = apply_sets(scratch, &plan.sets, plan.raw_values)?;
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values)?;
             Ok(())
         },
     )?;
-    if outcome == WriteOutcome::Unchanged && plan.sets_only() && proven_sets > 0 {
+    let proven_copies = copy.as_ref().map_or(0, |report| report.copied);
+    if outcome == WriteOutcome::Unchanged
+        && !plan.clear_all
+        && plan.shifts.is_empty()
+        && proven_sets + proven_copies > 0
+    {
         // Nothing was rewritten, yet the transaction's read-back proved a set
         // in effect (and every other request in effect or a no-op): the
         // request is what the file holds, which ExifTool reports as an
-        // update. A request made only of deletions and no-ops stays
-        // `unchanged` (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you`
-        // on a PDF). The `--backup` copy still accompanies an update.
+        // update -- a copied tag is such a set too (13.59: `-TagsFromFile
+        // SRC -Make` onto the same Make is `1 image files updated`). A
+        // request made only of deletions and no-ops stays `unchanged`
+        // (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you` on a PDF).
+        // The `--backup` copy still accompanies an update.
         if let Some(commit) = on_commit.take() {
             commit()?;
         }

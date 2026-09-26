@@ -433,6 +433,22 @@ holds nothing in the group, the file is left byte-identical and the call
 succeeds. A group oxidex cannot delete from that file (`XMP:All` where there
 is XMP) fails with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`.
 
+The handle's changes are written in the order of the calls that made them,
+as ExifTool applies a command line's assignments: a group deletion removes
+what was set in the group before it, never a tag set after it.
+
+On a handle read from the file it writes, removing a tag the handle does not
+hold under that name (`XMP-dc:Title` where the reader keys the title
+`XMP:Title`, or a tag the file lacks) is ExifTool's `-TAG=`: the write deletes
+it by name, leaves the file unchanged when there is no such tag, or refuses it
+with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`. A PDF date's two spellings
+(`PDF:CreateDate`, `PDF:CreationDate`) are one field, decided by the last call
+naming either.
+`exiftool_remove_tag(h, "EXIF:All")` followed by
+`exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose only
+EXIF is that Artist (ExifTool's `-EXIF:All= -IFD0:Artist=x`); the reverse
+order leaves no EXIF.
+
 #### `exiftool_write_file()`
 
 Writes modified metadata to file.

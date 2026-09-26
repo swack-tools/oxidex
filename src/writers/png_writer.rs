@@ -1008,6 +1008,100 @@ fn build_new_text_chunk(name: &str, text: &str) -> Option<([u8; 4], Vec<u8>)> {
 /// write_png_metadata(path, &reader, &metadata)?;
 /// # Ok::<(), oxidex::error::ExifToolError>(())
 /// ```
+/// The 7-byte tIME payload (PNG 1.2 11.3.6.1: year, month, day, hour,
+/// minute, second) for a `PNG:ModifyDate` value: a date, or its
+/// `YYYY:MM:DD HH:MM:SS` text.
+fn time_chunk_data(tag_name: &str, value: &TagValue) -> Result<Vec<u8>> {
+    use chrono::{Datelike, Timelike};
+    let date = match value {
+        TagValue::DateTime(date) => Some(*date),
+        TagValue::String(text) => crate::core::date_shift::parse_absolute_datetime(text).ok(),
+        _ => None,
+    };
+    let date = date
+        .filter(|date| (0..=0xFFFF).contains(&date.year()))
+        .ok_or_else(|| {
+            ExifToolError::tag_not_written(
+                tag_name,
+                "the PNG tIME chunk holds a YYYY:MM:DD HH:MM:SS date",
+            )
+        })?;
+    let mut data = (date.year() as u16).to_be_bytes().to_vec();
+    data.extend([
+        date.month() as u8,
+        date.day() as u8,
+        date.hour() as u8,
+        date.minute() as u8,
+        date.second() as u8,
+    ]);
+    Ok(data)
+}
+
+/// Chunks ExifTool's `-all=` deletes from a PNG (PNG.pm 13.59): every
+/// textual chunk (TextualData), the EXIF (`eXIf`, `zxIf`) and XMP (`tXMP`)
+/// blocks, the ICC profile (`iCCP`), `pHYs` (PNG-pHYs), C2PA (`caBX`,
+/// JUMBF), SEAL (`seAl`), XML (`meTa`), and the writable main-table tags
+/// (`tIME`, `gAMA`, `sRGB`). Pinned 13.59 on a PNG carrying gAMA, sRGB,
+/// cICP, sBIT, oFFs and vpAg keeps exactly cICP, sBIT, oFFs and vpAg.
+const CLEARED_CHUNKS: &[&[u8; 4]] = &[
+    b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tXMP", b"iCCP", b"pHYs", b"tIME", b"gAMA", b"sRGB",
+    b"caBX", b"seAl", b"meTa",
+];
+
+/// ExifTool's `-all=` on a PNG (`clear_all_metadata`): the
+/// [`CLEARED_CHUNKS`] go, and everything after IEND (the `Trailer` group);
+/// every other chunk is kept byte for byte. `None` for bytes that are not a
+/// PNG. The clear this replaces removed the text and eXIf chunks only, and
+/// left pHYs, tIME, iCCP and an XMP iTXt behind a reported update.
+pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Ok(None);
+    }
+    let mut output = PNG_SIGNATURE.to_vec();
+    let mut at = PNG_SIGNATURE.len();
+    loop {
+        let header = bytes
+            .get(at..at + 8)
+            .ok_or_else(|| ExifToolError::parse_error("PNG ends before IEND"))?;
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        let kind: [u8; 4] = [header[4], header[5], header[6], header[7]];
+        let end = at
+            .checked_add(12)
+            .and_then(|start| start.checked_add(length))
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| ExifToolError::parse_error("Truncated PNG chunk"))?;
+        // A bad CRC is refused here as by every other PNG write (13.59's
+        // minor `Bad CRC for ... chunk` error, file untouched).
+        let data = &bytes[at + 8..end - 4];
+        let crc = u32::from_be_bytes([
+            bytes[end - 4],
+            bytes[end - 3],
+            bytes[end - 2],
+            bytes[end - 1],
+        ]);
+        let checked = match &kind {
+            b"IEND" => false,
+            b"IDAT" => length <= PNG_CHUNK_SIZE_LIMIT,
+            _ => true,
+        };
+        if checked && crc != calculate_crc(&kind, data) {
+            return Err(ExifToolError::parse_error(format!(
+                "Bad CRC for {} chunk (a [minor] error that ExifTool also refuses to write \
+                 over without -m); the file was not changed",
+                String::from_utf8_lossy(&kind)
+            )));
+        }
+        let cleared = CLEARED_CHUNKS.contains(&&kind) || kind.eq_ignore_ascii_case(b"zxIf");
+        if !cleared {
+            output.extend_from_slice(&bytes[at..end]);
+        }
+        at = end;
+        if &kind == b"IEND" {
+            return Ok(Some(output));
+        }
+    }
+}
+
 pub fn write_png_metadata(
     path: &Path,
     original_reader: &dyn FileReader,
@@ -1142,10 +1236,24 @@ pub(crate) fn write_png_metadata_with_removals(
     // New text chunks for caller-authored `PNG:<Name>` keys that no original
     // chunk answers (those were rebuilt in place).
     let mut new_chunks: Vec<([u8; 4], Vec<u8>)> = Vec::new();
+    // `PNG:ModifyDate` is the tIME chunk (PNG.pm: `tIME` => ModifyDate), not
+    // a text keyword: 13.59 rewrites that chunk for `-PNG:ModifyDate=` and
+    // for a shift of it (`-AllDates+=`), and adds one where there is none.
+    let mut time_chunk: Option<Vec<u8>> = None;
     for (tag_name, tag_value) in modified_metadata.iter() {
         let Some(name) = tag_name.strip_prefix("PNG:") else {
             continue;
         };
+        if name == "ModifyDate" {
+            if baseline
+                .get(tag_name)
+                .is_some_and(|b| same_value(tag_value, b))
+            {
+                continue;
+            }
+            time_chunk = Some(time_chunk_data(tag_name, tag_value)?);
+            continue;
+        }
         if answered.contains(tag_name.as_str()) {
             continue;
         }
@@ -1162,6 +1270,12 @@ pub(crate) fn write_png_metadata_with_removals(
         {
             new_chunks.push(chunk);
         }
+    }
+    let has_time_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"tIME");
+    if let Some(data) = &time_chunk
+        && !has_time_chunk
+    {
+        new_chunks.push((*b"tIME", data.clone()));
     }
     // A new eXIf chunk follows the new text chunks.
     let has_exif_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"eXIf");
@@ -1182,6 +1296,7 @@ pub(crate) fn write_png_metadata_with_removals(
     // library `write_metadata` / `remove_tag` that changes nothing; a caller
     // writing to another path still gets the (identical) file.
     if matches!(exif_fate, ExifFate::Carry)
+        && time_chunk.is_none()
         && new_chunks.is_empty()
         && text_fates
             .values()
@@ -1226,6 +1341,10 @@ pub(crate) fn write_png_metadata_with_removals(
                         write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
                     }
                 }
+            },
+            b"tIME" => match &time_chunk {
+                Some(data) => write_chunk(&mut output, b"tIME", data),
+                None => write_carried_chunk(&mut output, chunk),
             },
             _ => write_carried_chunk(&mut output, chunk),
         }

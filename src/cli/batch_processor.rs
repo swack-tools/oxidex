@@ -150,6 +150,21 @@ impl BatchStats {
 /// Individual file errors are logged to stderr but do not stop batch processing.
 /// All errors are counted and reported in the final statistics.
 pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
+    batch_process_requests(path, args, &args.plain_tag_modifications())
+}
+
+/// [`batch_process`] with the write requests given rather than reparsed from
+/// `args`: the CLI passes its `WritePlan`'s sets, the one classification of
+/// the command line every write path consumes (undefined names already
+/// warned about and dropped, names in their canonical spelling), so a
+/// directory write can never apply a different request list than the
+/// single-file write of the same command (#957, PRRT_kwDOQNbr5M6mR8dA).
+/// Empty `modifications` is a read.
+pub fn batch_process_requests(
+    path: &Path,
+    args: &CliArgs,
+    modifications: &[(String, OsString)],
+) -> Result<BatchStats> {
     // Validate that the path exists
     if !path.exists() {
         return Err(ExifToolError::from(std::io::Error::new(
@@ -171,7 +186,6 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Determine operation mode
-    let modifications = args.plain_tag_modifications();
     let is_write_mode = !modifications.is_empty();
 
     // Validate readonly flag for write operations
@@ -184,7 +198,7 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
 
     // Process files based on mode
     let mut stats = if is_write_mode {
-        batch_write(files, &modifications, args)?
+        batch_write(files, modifications, args)?
     } else {
         batch_read(files, args)?
     };
@@ -464,12 +478,19 @@ fn apply_modifications(
     modifications: &[(String, OsString)],
     args: &CliArgs,
 ) -> std::result::Result<WriteOutcome, String> {
+    // Every write target is checked as the single-file write checks it
+    // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
+    // over a file list does: a read-only file is refused, never replaced.
+    // The atomic rename below would replace a 0444 file in a writable
+    // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
+    // `-Artist=x ro.jpg` refuses.
+    let target = fs::metadata(path)
+        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    if target.permissions().readonly() {
+        return Err(format!("File is read-only: {}", path.display()));
+    }
     // Preserve original file times if requested
-    let original_metadata = if args.preserve_file_times {
-        Some(fs::metadata(path).map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
+    let original_metadata = args.preserve_file_times.then_some(target);
 
     // Create backup if requested, once the write is known to change the file.
     // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file

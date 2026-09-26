@@ -4533,7 +4533,20 @@ int exiftool_set_tag_float(struct ExifToolHandle *handle, const char *tag_name, 
  no row of the handle: it is recorded and applied when the handle is next
  written to a file (ExifTool's `-GROUP:All=`), which refuses it with
  `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when oxidex cannot delete that group from
- the file. `exiftool_read_file` discards recorded group deletions.
+ the file. It takes its place in the call order: it deletes what the group
+ held and what was set in it before this call, never a tag set by a later
+ call (`exiftool_remove_tag(h, "EXIF:All")` then
+ `exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose
+ only EXIF is that Artist, as ExifTool's `-EXIF:All= -IFD0:Artist=x`
+ does). `exiftool_read_file` discards recorded group deletions.
+
+ On a handle read from the file it is written to, removing a tag the
+ handle does not hold under that name (`XMP-dc:Title` where the reader
+ keys it `XMP:Title`, or a tag the file lacks) is ExifTool's `-TAG=`: the
+ write deletes it by name, leaves the file unchanged when the file holds
+ no such tag, or refuses it with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`. A PDF
+ date's two spellings (`PDF:CreateDate`, `PDF:CreationDate`) are one
+ field, which the last call naming either decides.
 
  # Returns
  - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
@@ -4572,7 +4585,9 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  was read from this same file (`exiftool_read_file`) and the caller removed
  it; a handle read from another file, or never read, only sets (derived
  `File:`, `Composite:` and file-system rows are never deleted). A recorded
- `GROUP:All` removal deletes that group. `EXIFTOOL_OK` means every such
+ `GROUP:All` removal deletes that group. The changes are applied in the
+ order of the calls that made them, so a group removal deletes a tag set
+ before it and keeps one set after it. `EXIFTOOL_OK` means every such
  change is in the file, proven by reading it back; on any error nothing
  was written and the file is byte-identical. The `_with_outcome` variant
  below also reports whether the file changed.

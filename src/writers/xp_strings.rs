@@ -167,12 +167,15 @@ pub(crate) fn has_explicit_xp_set(desired: &MetadataMap) -> bool {
 pub(crate) fn refuse_unknown_provenance(key: &str, value: &TagValue) -> Result<()> {
     match value {
         TagValue::String(text) if text.chars().any(|c| u32::from(c) > 0xFFFF) => {
-            Err(ExifToolError::unsupported_format(format!(
-                "Cannot write {key}: its value was read from a file whose stored bytes \
+            Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Cannot write {key}: its value was read from a file whose stored bytes \
                  were not kept, and it holds a code point above U+FFFF, which ExifTool \
                  writes differently for a copied value (the stored surrogate pair) and a \
                  typed one (the low 16 bits)"
-            )))
+                ),
+            ))
         }
         _ => Ok(()),
     }
