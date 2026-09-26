@@ -1566,7 +1566,7 @@ pub(crate) fn resolve_write_address(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<String> {
-    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline, false)?;
     addressed?;
     Ok(key)
 }
@@ -1575,11 +1575,15 @@ pub(crate) fn resolve_write_address(
 /// resolving it), and whether the format's writer addresses that key. A
 /// removal asks whether it is a no-op between the two (`remove_tag`): a
 /// deletion that names nothing succeeds untouched even where the writer
-/// could not have written the key.
+/// could not have written the key. `removal` says whether the request is a
+/// deletion, which pinned 13.59 applies to fewer copies than a set (see
+/// `write_request::ensure_no_mie_copy`); [`resolve_write_address`] answers
+/// for a set.
 pub(crate) fn resolve_write_key_for(
     path: &Path,
     tag_name: &str,
     baseline: &MetadataMap,
+    removal: bool,
 ) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
@@ -1599,7 +1603,6 @@ pub(crate) fn resolve_write_key_for(
     // apply_sets`), and a library or C ABI caller's typed value is raw
     // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
     let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
-    let ungrouped = !tag_name.contains(':');
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1691,12 +1694,27 @@ pub(crate) fn resolve_write_key_for(
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
-    // An ungrouped EXIF write in a file with MIE is written into MIE's EXIF
-    // too (pinned 13.59), set or deletion alike; refused, never half-done.
-    // (A grouped `-IFD0:Artist=` there is the same in 13.59; oxidex's
-    // EXIF-only write of it predates this resolver and is left as it was.)
-    if ungrouped {
-        crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
+    // An EXIF write in a file with MIE -- grouped (`-IFD0:Artist=x`) or not
+    // -- is written into MIE's own EXIF directory too (pinned 13.59), and a
+    // deletion is applied there where that directory exists; oxidex writes
+    // no MIE, so such a request is refused, never half-done. ExifTool reads
+    // a MIE trailer after a JPEG or a TIFF-structured file (DNG, CR2), not
+    // after a PNG's IEND; oxidex's reader surfaces rows for the JPEG's only.
+    // A `.mie` document itself is no trailer carrier: oxidex writes no MIE
+    // file at all, and its writer's refusal answers for it.
+    let trailer_file = if matches!(format, FileFormat::JPEG) || surgical {
+        Some(reader.read(0, reader.size() as usize)?)
+    } else {
+        None
+    };
+    if !matches!(format, FileFormat::MIE) {
+        crate::writers::write_request::ensure_no_mie_copy(
+            tag_name,
+            &key,
+            baseline,
+            removal,
+            trailer_file,
+        )?;
     }
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
@@ -1944,8 +1962,22 @@ pub(crate) fn plan_group_deletion(
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     if crate::writers::exif_surgical::group_removal(&key).is_some() {
-        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
-            || is_surgical_tiff_target(format, &reader);
+        let surgical = is_surgical_tiff_target(format, &reader);
+        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG) || surgical;
+        // Pinned 13.59 applies an EXIF group deletion to a MIE trailer's own
+        // EXIF directory too, where that holds the group (`-EXIF:All=`
+        // shrinks the 188-byte trailer an `-IFD0:Artist=x` leaves on
+        // t/images/ExifTool.jpg back to 90 bytes), which oxidex does not
+        // write (`write_request::ensure_no_mie_copy`).
+        if matches!(format, FileFormat::JPEG) || surgical {
+            crate::writers::write_request::ensure_no_mie_copy(
+                tag_name,
+                &key,
+                &MetadataMap::new(),
+                true,
+                Some(reader.read(0, reader.size() as usize)?),
+            )?;
+        }
         if expanded {
             return Ok(Some(key));
         }

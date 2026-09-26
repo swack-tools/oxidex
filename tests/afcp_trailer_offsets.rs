@@ -328,16 +328,38 @@ fn afcp_offsets_follow_writes_to_a_synthetic_jpeg() {
 
 /// At e4edc55c pinned ExifTool reads these outputs with "Adjusted AFCP
 /// offsets by" 246 (`LONG_ARTIST`), -850 (`-all=`) and -32
-/// (`-IFD0:Software=`).
+/// (`-IFD0:Software=`) -- on t/images/ExifTool.jpg, whose trailers are
+/// AFCP, two FotoStation records, CanonVRD, PhotoMechanic, MIE, Samsung and
+/// Vivo. That file's MIE trailer makes pinned 13.59 write every EXIF set
+/// into MIE's own EXIF directory too, which oxidex refuses
+/// (`write_request::ensure_no_mie_copy`; tests/bare_multigroup_writes.rs),
+/// so the writes run on the same file with its MIE trailer cut out
+/// (`fixtures::exiftool_jpg_without_mie`), which the oracle must read
+/// without MIE.
 #[test]
 fn afcp_offsets_follow_writes_to_pinned_exiftool_jpg() {
-    let Some(path) = fixtures::pinned_t_images_fixture_path("ExifTool.jpg") else {
+    let Some(source) = fixtures::exiftool_jpg_without_mie() else {
         eprintln!("skipping: pinned fixture ExifTool.jpg is absent");
         return;
     };
+    if let Some(oracle) = exiftool_oracle::graded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ExifTool-noMIE.jpg");
+        std::fs::write(&path, &source).unwrap();
+        let out = oracle.command().args(["-v1"]).arg(&path).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !text.contains("MIE trailer"),
+            "fixture still carries MIE: {text}"
+        );
+        assert!(
+            text.contains("AFCP trailer"),
+            "fixture lost its AFCP trailer: {text}"
+        );
+    }
     check_fixture(
-        &std::fs::read(&path).unwrap(),
-        "ExifTool.jpg",
+        &source,
+        "ExifTool-noMIE.jpg",
         &[
             (&[LONG_ARTIST], Length::Grows),
             (&["-all="], Length::Shrinks),

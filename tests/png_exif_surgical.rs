@@ -2629,7 +2629,8 @@ fn afcp_jpeg(order: Order) -> Vec<u8> {
 /// `jpeg_trailer::rebase_trailer_offsets` (tests/afcp_trailer_offsets.rs
 /// drives the CLI); this pins the library write path and `EXIF:All`, by
 /// `-validate` parity against the oracle's own edit (sweep2 found it on
-/// t/images AFCP.jpg and ExifTool.jpg). The CIFF strip of `MakerNotes:All`
+/// t/images AFCP.jpg and ExifTool.jpg; the latter now with its MIE trailer
+/// cut out, whose EXIF copy oxidex refuses to leave stale). The CIFF strip of `MakerNotes:All`
 /// goes through the same function (`makernotes_removal_drops_a_ciff_segment`).
 #[test]
 fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
@@ -2655,11 +2656,21 @@ fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
             &format!("{order:?} afcp.jpg"),
         );
     }
-    for name in ["AFCP.jpg", "ExifTool.jpg"] {
-        let Some(sample) = fixtures::pinned_t_images_fixture_path(name) else {
+    // t/images/ExifTool.jpg's MIE trailer takes a copy of every EXIF set in
+    // pinned 13.59, which oxidex refuses; the same file with that trailer cut
+    // out keeps its AFCP and every other trailer
+    // (`fixtures::exiftool_jpg_without_mie`).
+    let samples = [
+        (
+            "AFCP.jpg",
+            fixtures::pinned_t_images_fixture_path("AFCP.jpg").map(|p| std::fs::read(p).unwrap()),
+        ),
+        ("ExifTool-noMIE.jpg", fixtures::exiftool_jpg_without_mie()),
+    ];
+    for (name, original) in samples {
+        let Some(original) = original else {
             continue;
         };
-        let original = std::fs::read(&sample).unwrap();
         for (key, args) in [
             ("IFD0:Artist", format!("-IFD0:Artist={long}")),
             ("EXIF:All", "-EXIF:All=".to_string()),

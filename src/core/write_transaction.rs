@@ -363,7 +363,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for(path, change.tag(), &baseline) {
+        match resolve_write_key_for(path, change.tag(), &baseline, change.value().is_none()) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
