@@ -46,7 +46,7 @@ pub struct RawMetadataBlock {
 ///
 /// This structure is the primary in-memory representation of file metadata
 /// and can be serialized to JSON for output or deserialized from existing data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MetadataMap {
     /// Every occurrence recorded through `insert()`, plus the winner
     /// projection over them. See the module doc comment.
@@ -75,6 +75,17 @@ pub struct MetadataMap {
     read_source: Option<ReadSource>,
 }
 
+/// Equality is the metadata's -- every occurrence and raw block -- never its
+/// write provenance: which file a map was read from, like which of its rows
+/// a caller assigned (`TagSink`'s own equality ignores those flags), does
+/// not make two maps with the same metadata different (#957,
+/// PRRT_kwDOQNbr5M6mO8E5).
+impl PartialEq for MetadataMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.sink == other.sink && self.raw_blocks == other.raw_blocks
+    }
+}
+
 /// The snapshot a read took: the file it read, canonicalized, and every key
 /// it produced. A map deletes only rows of this snapshot that its caller
 /// removed -- never a row it never saw, which is what a write made after the
@@ -83,7 +94,7 @@ pub struct MetadataMap {
 /// the second file against the first read's rows and deleted the seeded
 /// ones as "removals" (#957, PRRT_kwDOQNbr5M6mO8E4). Shared, so the many
 /// clones a read map goes through do not copy the key set.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct ReadSource {
     path: std::path::PathBuf,
     keys: std::sync::Arc<std::collections::HashSet<String>>,
@@ -1129,6 +1140,28 @@ mod tests {
         let mut read = base();
         read.mark_read_complete();
         assert_eq!(read, base());
+    }
+
+    /// Codex thread PRRT_kwDOQNbr5M6mO8E5 (#957): which file a map was read
+    /// from is write provenance, not metadata. Two maps with the same rows
+    /// are equal whatever their read sources, as `TagSink`'s equality
+    /// ignores its per-occurrence assignment flags.
+    #[test]
+    fn read_provenance_does_not_affect_equality() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = || {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:Make", TagValue::new_string("Acme"));
+            map.mark_read_complete();
+            map
+        };
+        let (mut a, mut b) = (rows(), rows());
+        a.set_read_source(&dir.path().join("a.jpg"));
+        b.set_read_source(&dir.path().join("b.jpg"));
+        assert_eq!(a, b, "same rows read from two files");
+        assert_eq!(a, rows(), "a read and an unread map with the same rows");
+        b.insert("IFD0:Make", TagValue::new_string("Other"));
+        assert_ne!(a, b, "different rows still differ");
     }
 
     /// A public producer's rows are read (`file_rows`): the map a parser
