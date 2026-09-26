@@ -516,32 +516,123 @@ pub fn shared() -> Result<&'static Oracle, &'static str> {
     }
 }
 
-/// A `Command` for the shared oracle, or `None` when it could not be resolved.
-///
-/// Availability probes should use this: a skewed or degraded ExifTool is not an
-/// oracle, and a parity test that runs against one is worse than a skipped test
-/// because it reports a result.
-pub fn shared_command() -> Option<Command> {
-    shared().ok().map(Oracle::command)
+/// Set to `1` to make a missing or unverified oracle a test *failure* rather
+/// than a loud skip: [`graded`] (and so [`available`], [`shared_command`] and
+/// [`required`]) panics with the reason. CI sets it wherever it installs the
+/// pinned ExifTool, so a runner whose oracle stopped verifying goes red
+/// instead of green-by-skipping.
+pub const REQUIRE_ENV: &str = "OXIDEX_REQUIRE_EXIFTOOL_ORACLE";
+
+/// The `OOXML.docx` sample shipped in the ExifTool source tree `oracle` runs
+/// from (`<tree>/t/images/OOXML.docx`), for the container-capability probe.
+/// `None` when the tree cannot be located (a bare `exiftool` off `PATH` with
+/// no `t/` beside it), which leaves the oracle unverifiable.
+pub fn capability_sample(oracle: &Oracle) -> Option<PathBuf> {
+    let script = oracle.argv.last()?;
+    let script = if Path::new(script).components().count() > 1 {
+        PathBuf::from(script)
+    } else {
+        which(script)?
+    };
+    let sample = script.parent()?.join("t").join("images").join("OOXML.docx");
+    sample.is_file().then_some(sample)
 }
 
-/// True when a usable oracle is available to grade against.
+/// Whether `oracle` may grade output: the version is the repo's pin, no
+/// required module is missing ([`Oracle::is_verified`]), *and* the
+/// end-to-end capability probe passes -- `OOXML.docx` from its own tree reads
+/// back as `DOCX` ([`Oracle::check_container_support`]). `probe` runs that
+/// check; it is a parameter so the decision can be tested without a real
+/// ExifTool.
+pub fn grading_verdict(
+    oracle: &Oracle,
+    probe: impl FnOnce(&Oracle, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    if !oracle.is_verified() {
+        return Err(format!(
+            "{} is not the verified pinned oracle ({} required)",
+            oracle.provenance(),
+            repo_pin()
+        ));
+    }
+    let sample = capability_sample(oracle).ok_or_else(|| {
+        format!(
+            "{}: no t/images/OOXML.docx beside it, so its container capability cannot be \
+             probed (a matching -ver alone is not a working oracle)",
+            oracle.provenance()
+        )
+    })?;
+    probe(oracle, &sample)
+}
+
+static GRADED: OnceLock<Result<&'static Oracle, String>> = OnceLock::new();
+
+/// The process-wide oracle **only when it may grade output**: resolved by
+/// [`shared`], then required to pass [`grading_verdict`] (pinned `-ver` and
+/// the `OOXML.docx` -> `DOCX` capability probe), checked once per process.
+///
+/// Every test helper that compares oxidex's output with ExifTool's goes
+/// through this (or [`available`] / [`shared_command`] / [`required`], which
+/// do): an oracle that resolved with a warning -- `OXIDEX_ALLOW_EXIFTOOL_SKEW`
+/// set, or an interpreter whose modules could not be probed -- used to be
+/// graded against as if it were the pin. Otherwise `None`, with the reason
+/// printed once, or a panic when [`REQUIRE_ENV`] is set.
+pub fn graded() -> Option<&'static Oracle> {
+    let verdict = GRADED.get_or_init(|| {
+        let oracle = shared().map_err(|msg| format!("ExifTool oracle unavailable: {msg}"))?;
+        grading_verdict(oracle, |oracle, sample| {
+            oracle.check_container_support(sample)
+        })
+        .map(|()| oracle)
+    });
+    match verdict {
+        Ok(oracle) => Some(oracle),
+        Err(reason) => {
+            if require_oracle() {
+                panic!("{REQUIRE_ENV} is set, but no oracle may grade output: {reason}");
+            }
+            warn_once(&format!(
+                "⚠️  skipping every ExifTool-graded check in this process: {reason}"
+            ));
+            None
+        }
+    }
+}
+
+/// [`graded`], or a panic naming why there is none: for tests that exist
+/// only to compare with the oracle (the `#[ignore]`d parity suites).
+pub fn required() -> &'static Oracle {
+    match graded() {
+        Some(oracle) => oracle,
+        None => panic!(
+            "No ExifTool oracle may grade output here (pinned {} with a passing \
+             OOXML.docx capability probe required); see the warning above",
+            repo_pin()
+        ),
+    }
+}
+
+fn require_oracle() -> bool {
+    matches!(
+        std::env::var(REQUIRE_ENV).ok().as_deref(),
+        Some("1") | Some("true")
+    )
+}
+
+/// A `Command` for the grading oracle ([`graded`]), or `None`.
+///
+/// A skewed or degraded ExifTool is not an oracle, and a parity test that
+/// runs against one is worse than a skipped test because it reports a result.
+pub fn shared_command() -> Option<Command> {
+    graded().map(Oracle::command)
+}
+
+/// True when an oracle that may grade output is available ([`graded`]).
 ///
 /// Prints the reason on failure, once: a suite that silently skips every parity
 /// test looks identical to one that passes them.
 pub fn available() -> bool {
-    match shared() {
-        Ok(oracle) => {
-            if !oracle.is_verified() {
-                warn_once(&format!("⚠️  {}", oracle.provenance()));
-            }
-            true
-        }
-        Err(msg) => {
-            warn_once(&format!("⚠️  ExifTool oracle unavailable: {msg}"));
-            false
-        }
-    }
+    graded().is_some()
 }
 
 fn warn_once(msg: &str) {
@@ -639,6 +730,45 @@ mod tests {
         let o = oracle("13.59", Some("13.59"), &[]);
         assert!(o.is_verified());
         assert!(o.provenance().contains("pinned"));
+    }
+
+    /// An oracle resolved despite skew (`OXIDEX_ALLOW_EXIFTOOL_SKEW=1`) or with
+    /// a module missing never grades, and the capability probe is not even
+    /// reached for it.
+    #[test]
+    fn grading_requires_a_verified_oracle() {
+        for o in [
+            oracle("13.55", Some("13.59"), &[]),
+            oracle("13.59", None, &[]),
+            oracle("13.59", Some("13.59"), &["Archive::Zip"]),
+        ] {
+            let err = grading_verdict(&o, |_, _| panic!("probe reached")).unwrap_err();
+            assert!(err.contains("not the verified pinned oracle"), "{err}");
+        }
+    }
+
+    /// A verified version is not enough: the `OOXML.docx` probe must run and
+    /// pass, so an oracle with no ExifTool tree beside it cannot grade.
+    #[test]
+    fn grading_requires_the_capability_probe() {
+        let dir = std::env::temp_dir().join(format!("oxidex-grading-{}", std::process::id()));
+        let images = dir.join("t").join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let script = dir.join("exiftool");
+        std::fs::write(&script, "").unwrap();
+        let mut o = oracle("13.59", Some("13.59"), &[]);
+        o.argv = vec![script.to_string_lossy().into_owned()];
+        let err = grading_verdict(&o, |_, _| panic!("probe reached")).unwrap_err();
+        assert!(err.contains("OOXML.docx"), "{err}");
+        std::fs::write(images.join("OOXML.docx"), "").unwrap();
+        let err = grading_verdict(&o, |_, _| Err("FileType \"ZIP\"".into())).unwrap_err();
+        assert!(err.contains("ZIP"), "{err}");
+        grading_verdict(&o, |_, sample| {
+            assert!(sample.ends_with("t/images/OOXML.docx"));
+            Ok(())
+        })
+        .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

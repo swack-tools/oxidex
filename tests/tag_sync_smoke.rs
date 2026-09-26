@@ -17,7 +17,7 @@ fn real_exiftool_listx_parses_and_beats_the_current_type_coverage_baseline() {
         return;
     }
 
-    let oracle = exiftool_oracle::shared().expect("oracle resolved by exiftool_available() above");
+    let oracle = exiftool_oracle::required();
     let output = oracle
         .command()
         .args(["-f", "-listx"])

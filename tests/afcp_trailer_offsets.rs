@@ -241,10 +241,7 @@ fn oxidex_write(source: &[u8], args: &[&str], dir: &Path, name: &str) -> (Vec<u8
 /// binary payloads included as base64) for `path`, or `None` without an
 /// oracle.
 fn oracle_view(path: &Path) -> Option<(String, serde_json::Value)> {
-    if !exiftool_oracle::available() {
-        return None;
-    }
-    let oracle = exiftool_oracle::shared().ok()?;
+    let oracle = exiftool_oracle::graded()?;
     let warnings = oracle
         .command()
         .args(["-a", "-s", "-Warning"])
