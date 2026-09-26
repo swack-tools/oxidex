@@ -68,6 +68,19 @@ the marker), 5 lease intentionally still held because an owned stage child
 could not be proven gone (the named PIDs keep it held until they exit), 130
 interrupted.
 
+If a run ends with an unverifiable command lineage, the lease stays refused
+after the process exits: `transition.host.lock.unproven-lineage.json` appears
+next to the lease (or, if it could not be written, the lease file's
+permissions are removed). The refusal prints the exact `rm` (or
+`chmod 644`) command; run it only after verifying that no process of the
+marker's uid started at or after its `lineage_started_at` remains from that
+run. On Linux every stage command runs under a subreaper supervisor that
+bounds its whole lineage. macOS has no subreaper: a stage descendant that
+starts a new session and closes every inherited descriptor is not bounded
+and may keep running after the stage is accepted, but it holds no lease
+descriptor, and every process that does hold one keeps the lease held. See
+`tools/exiftool-tables/VERSION_REHEARSAL_EXECUTOR_API.md` in the repository.
+
 Historical 11.78/12.64 Rust-test failures still identify release-specific facts
 outside the Task19 tooling lease. Exact current locations and correction
 proposals are recorded in
