@@ -375,6 +375,88 @@ enum ExifFate {
     /// it when empty; with no original chunk, add one before the first IDAT
     /// when non-empty.
     Replace(Vec<u8>),
+    /// A carrier-wide removal with nothing set, on a PNG with more than one
+    /// `eXIf` chunk: every chunk goes, unparsed -- except, when `keep_short`
+    /// (`IFD0:All` without `EXIF:All`), one `II`/`MM`-led and too short for
+    /// a TIFF header, which has no IFD0 to delete ([`MalformedExif::Short`]).
+    Delete { keep_short: bool },
+}
+
+/// The TIFF payload of an `eXIf` chunk: its data less any improper
+/// `Exif\0\0` header (PNG.pm 13.59:1367-1372).
+fn exif_block(chunk: &PngChunk) -> &[u8] {
+    chunk
+        .data
+        .strip_prefix(b"Exif\0\0".as_slice())
+        .unwrap_or(&chunk.data)
+}
+
+/// An `eXIf` payload (after any `Exif\0\0` header) whose TIFF structure this
+/// writer cannot edit, in the three shapes pinned ExifTool 13.59 treats
+/// differently. A write that sets a tag in such a chunk is refused with the
+/// file left byte-identical; each variant says why the oracle's own result is
+/// not one to copy (see [`MalformedExif::refusal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MalformedExif {
+    /// Not led by `II`/`MM` (nor by `\0`, the compressed form):
+    /// `ProcessPNG_eXIf` warns "Invalid eXIf chunk" and returns before
+    /// `DoneDir` (PNG.pm 13.59:1374-1383), so the chunk is kept verbatim and
+    /// `AddChunks($et, $outfile, 'IFD0')` (PNG.pm:1539) adds a second, new
+    /// eXIf chunk for a set.
+    ByteOrder,
+    /// `II`/`MM`, at least 8 bytes, a TIFF magic other than 42. ExifTool
+    /// reads any magic in an eXIf chunk as classic TIFF -- `DoProcessTIFF`
+    /// no longer checks it and warns only for an APP1 (ExifTool.pm
+    /// 13.59:8619-8622) -- and `WriteTIFF` (Writer.pl:7396-7404) rewrites the
+    /// chunk in place (PNG.pm:1399-1401), keeping the header's magic.
+    Magic(u16),
+    /// `II`/`MM` but shorter than a TIFF header: `DoProcessTIFF` returns 0
+    /// (ExifTool.pm 13.59:8625), `WriteTIFF` returns undef, and
+    /// `ProcessPNG_eXIf` still calls `DoneDir` (PNG.pm:1401), so no new chunk
+    /// is added either: "1 image files unchanged".
+    Short,
+}
+
+impl MalformedExif {
+    /// The fault of `block`, or `None` for a header this writer walks (and
+    /// for the `\0`-led compressed form, left to the edit path).
+    fn of(block: &[u8]) -> Option<Self> {
+        let read: fn([u8; 2]) -> u16 = match block.get(..2) {
+            Some(b"II") => u16::from_le_bytes,
+            Some(b"MM") => u16::from_be_bytes,
+            _ if block.first() == Some(&0) => return None,
+            _ => return Some(Self::ByteOrder),
+        };
+        if block.len() < 8 {
+            return Some(Self::Short);
+        }
+        let magic = read([block[2], block[3]]);
+        (!crate::writers::exif_surgical::EXIF_BLOCK_MAGICS.contains(&magic))
+            .then_some(Self::Magic(magic))
+    }
+
+    /// The refusal of a set in a chunk of `len` bytes. Worded without
+    /// "invalid", which the CLI reports as a bad *value*.
+    fn refusal(self, len: usize) -> ExifToolError {
+        ExifToolError::unsupported_format(match self {
+            Self::ByteOrder => "Cannot edit EXIF in this PNG: its eXIf chunk does not start \
+                 with a TIFF byte-order mark (II or MM). ExifTool 13.59 warns about that chunk, \
+                 keeps it and adds a second, new eXIf chunk; this writer does not write a PNG \
+                 with two eXIf chunks, and its new-block output is not ExifTool's"
+                .to_string(),
+            Self::Magic(magic) => format!(
+                "Cannot edit EXIF in this PNG: its eXIf chunk's TIFF header has magic number \
+                 {magic}, not 42. ExifTool 13.59 edits it as classic TIFF and keeps that magic \
+                 number, but this reader does not read such a block, so the edit could not be \
+                 read back"
+            ),
+            Self::Short => format!(
+                "Cannot edit EXIF in this PNG: its eXIf chunk ({len} bytes) is too short for a \
+                 TIFF header. ExifTool 13.59 writes nothing either (\"1 image files \
+                 unchanged\"); the file is left as it was"
+            ),
+        })
+    }
 }
 
 /// Decides the EXIF block's fate. A change is refused, with the file left
@@ -388,7 +470,8 @@ enum ExifFate {
 ///   refused by ExifTool too; a pure deletion there, which ExifTool performs
 ///   by re-encoding the hex profile, is not supported here;
 /// - an `eXIf` payload that is not a TIFF structure (compressed `zxIf`-style
-///   data, garbage): nothing to edit surgically.
+///   data, garbage): nothing to edit surgically -- a set in one of the
+///   [`MalformedExif`] shapes is refused with a message naming the shape.
 fn plan_exif(
     chunks: &[PngChunk],
     metadata: &MetadataMap,
@@ -411,14 +494,15 @@ fn plan_exif(
     // `IFD0:All` deletes an eXIf chunk by way of its IFD0, which a chunk too
     // short for a TIFF header has none of: pinned ExifTool 13.59 keeps such a
     // chunk ("1 image files unchanged") while `EXIF:All` drops it (and a
-    // JPEG APP1 goes either way).
+    // JPEG APP1 goes either way). Not one without a TIFF byte-order mark
+    // (empty, `I`): `ProcessPNG_eXIf` deletes that one on `IFD0:All` too,
+    // before it looks for an IFD0 (PNG.pm 13.59:1365, 1376-1380).
     let too_short = |chunk: &&PngChunk| {
-        chunk
+        let block = chunk
             .data
             .strip_prefix(b"Exif\0\0".as_slice())
-            .unwrap_or(&chunk.data)
-            .len()
-            < 8
+            .unwrap_or(&chunk.data);
+        block.len() < 8 && MalformedExif::of(block) != Some(MalformedExif::ByteOrder)
     };
     let removed: Vec<String> = if !exif_chunks.is_empty() && exif_chunks.iter().all(too_short) {
         removed
@@ -503,6 +587,32 @@ fn plan_exif(
     {
         return Ok(ExifFate::Carry);
     }
+    // A carrier-wide removal that sets nothing deletes every eXIf chunk,
+    // however many, and parses none: several chunks cannot yield a duplicate
+    // IFD0 when nothing is written. Pinned ExifTool 13.59 drops each chunk on
+    // `EXIF:All`, and on `IFD0:All` each but a too-short `II`/`MM` one
+    // (PNG.pm 13.59:1365, 1376-1380 delete a chunk with no byte-order mark
+    // first; 1395-1401 delete the IFD0 of the rest). Measured on two-chunk
+    // PNGs of every malformed shape and a valid block (evidence multi.sh).
+    let sets_something = metadata
+        .iter()
+        .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
+        || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty();
+    if exif_chunks.len() > 1
+        && raw_profiles.is_empty()
+        && !sets_something
+        && crate::writers::exif_surgical::removes_carrier(removed)
+    {
+        let exif_all = removed.iter().any(|key| {
+            crate::writers::exif_surgical::removes_carrier(std::slice::from_ref(key))
+                && key
+                    .split_once(':')
+                    .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
+        });
+        return Ok(ExifFate::Delete {
+            keep_short: !exif_all,
+        });
+    }
     if exif_chunks.len() > 1 {
         return Err(ExifToolError::unsupported_format(
             "Cannot edit EXIF in a PNG with more than one eXIf chunk \
@@ -523,6 +633,20 @@ fn plan_exif(
             .strip_prefix(b"Exif\0\0".as_slice())
             .unwrap_or(&chunk.data)
     });
+    // A carrier the transaction deletes (`IFD0:All` / `EXIF:All`) is never
+    // parsed: the removal drops even a malformed chunk, as the oracle does
+    // (PNG.pm 13.59:1365, 1376-1380), and any set in the same transaction
+    // goes into the fresh block `rewrite_exif_payload` builds. Every other
+    // write that reaches here edits the chunk, which needs its TIFF
+    // structure (see `MalformedExif`). A chunk too short for a TIFF header
+    // lost its `IFD0:All` above, so a set beside that removal is refused
+    // here: the oracle writes nothing then.
+    if let Some(block) = original
+        && !crate::writers::exif_surgical::removes_carrier(removed)
+        && let Some(fault) = MalformedExif::of(block)
+    {
+        return Err(fault.refusal(block.len()));
+    }
     Ok(ExifFate::Replace(rewrite_exif_payload(
         original, metadata, baseline, removed,
     )?))
@@ -945,6 +1069,13 @@ pub(crate) fn write_png_metadata_with_removals(
                 // Nothing left in the EXIF block: the chunk goes.
                 ExifFate::Replace(payload) if payload.is_empty() => {}
                 ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
+                ExifFate::Delete { keep_short } => {
+                    if *keep_short
+                        && MalformedExif::of(exif_block(chunk)) == Some(MalformedExif::Short)
+                    {
+                        write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
+                    }
+                }
             },
             _ => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
         }

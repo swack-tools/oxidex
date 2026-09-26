@@ -157,12 +157,15 @@ fn is_exiftool_available() -> bool {
 
 /// Gets Perl ExifTool version
 fn get_exiftool_version() -> Result<String, String> {
-    Ok(exiftool_oracle::shared()?.version.clone())
+    Ok(exiftool_oracle::graded()
+        .ok_or("no ExifTool oracle may grade output")?
+        .version
+        .clone())
 }
 
 /// Executes Perl ExifTool and captures JSON output
 fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
-    let oracle = exiftool_oracle::shared()?;
+    let oracle = exiftool_oracle::graded().ok_or("no ExifTool oracle may grade output")?;
     let output = oracle
         .command()
         .arg("-json")
