@@ -114,6 +114,19 @@ pub fn is_walkable_tiff(bytes: &[u8]) -> bool {
 /// of a TIFF-structured file scans with exactly this set.
 pub(crate) const WALKABLE_TIFF_MAGICS: &[u16] = &[42, 85];
 
+/// Which of ExifIFD and the GPS IFD the TIFF structure `bytes` lacks, as
+/// `(exif_missing, gps_missing)`: this in-place writer can grow either but
+/// cannot create one (pass 3 below refuses "Adding a GPS tag to a file with
+/// no GPS IFD"), so a caller holding a reconstructing writer routes such an
+/// addition there instead (`jpeg_writer::rewrite_generated_exif_payload`).
+pub(crate) fn missing_sub_ifds(bytes: &[u8]) -> Result<(bool, bool)> {
+    let scan = scan_tiff(bytes)?;
+    Ok((
+        scan.exif_ifd_offset.is_none(),
+        scan.gps_ifd_offset.is_none(),
+    ))
+}
+
 /// Walks IFD0, the ExifIFD and the GPS IFD, recording where each entry
 /// record physically sits.
 ///
@@ -449,7 +462,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
 
         validate_changed(&key, &desired_value)?;
         let (ft, count, native) =
-            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type))?;
+            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
         write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
     }
@@ -541,7 +554,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                 None => {}
             }
             let (ft, count, native) =
-                tag_value_to_field_for_key(key, value, Some(entry.field_type))?;
+                tag_value_to_field_for_key(key, value, Some(entry.field_type), bo)?;
             let bytes = native_to_byte_order(ft, &native, bo);
             write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
             *patched = Some(value.clone());
@@ -550,7 +563,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // As in the EXIF writer: a created tag has no existing entry to take
         // an IEEE 754 width from, so the declared type has to supply it.
         let (ft, count, native) =
-            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
+            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
         let bucket = if key.starts_with("ExifIFD:") {

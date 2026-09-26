@@ -346,7 +346,8 @@ pub(crate) fn rewrite_generated_exif_payload(
     let mut plan = plan;
     let staged;
     let restaged = matches!(original, Some(_) if deletes_carrier
-        || plan.has_legacy_changes && legacy_deletes(baseline, &plan));
+        || plan.has_legacy_changes && legacy_deletes(baseline, &plan)
+        || plan.has_legacy_changes && legacy_adds_sub_ifd(original, baseline, &plan)?);
     let original = match original {
         Some(tiff) if restaged => {
             let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
@@ -510,6 +511,34 @@ pub(crate) fn rewrite_generated_exif_payload(
 /// MakerNotes row dropped from the map must reach the reconstructing
 /// writer, which refuses it, not the in-place payload writer, which never
 /// walks those directories and would report success with the row kept.
+/// Whether the legacy delta adds a tag to ExifIFD or the GPS IFD while the
+/// payload `original` has no such directory. The in-place payload writer
+/// cannot create one; the reconstructing writer the legacy-only path uses
+/// can, so such a plan is restaged like a deleting one. Before, one write
+/// setting `IFD0:Artist` (a generated route) and `GPS:GPSAltitude` on a JPEG
+/// with no GPS IFD failed "Adding a GPS tag to a file with no GPS IFD",
+/// where pinned 13.59 writes both -- and so did tip, which applied the CLI's
+/// requests one at a time (#951 applies them in one pass).
+fn legacy_adds_sub_ifd(
+    original: Option<&[u8]>,
+    baseline: &MetadataMap,
+    plan: &crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<bool> {
+    let Some(tiff) = original else {
+        return Ok(false);
+    };
+    let adds = |prefix: &str| {
+        plan.legacy_metadata
+            .iter()
+            .any(|(key, _)| key.starts_with(prefix) && !baseline.contains_key(key))
+    };
+    if !adds("ExifIFD:") && !adds("GPS:") {
+        return Ok(false);
+    }
+    let (exif_missing, gps_missing) = crate::writers::tiff_surgical::missing_sub_ifds(tiff)?;
+    Ok(exif_missing && adds("ExifIFD:") || gps_missing && adds("GPS:"))
+}
+
 fn legacy_deletes(
     baseline: &MetadataMap,
     plan: &crate::writers::generated_public_write::PublicWritePlan,

@@ -10,7 +10,7 @@
 use crate::core::tag_value::TagValue;
 use crate::core::{TagDescriptor, ValueType};
 use crate::error::ExifToolError;
-use crate::tag_db::tag_registry::descriptor_has_reliable_value_type;
+use crate::tag_db::tag_registry::{descriptor_has_reliable_value_type, is_encode_exif_text_tag};
 
 fn descriptor_allows_datetime(descriptor: &TagDescriptor) -> bool {
     let name = descriptor.name();
@@ -111,6 +111,13 @@ pub fn validate_tag_value_with_name(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
+    // UserComment, GPSProcessingMethod and GPSAreaInformation take text:
+    // ExifTool stores it through `EncodeExifText`, whatever `TagValue` shape
+    // the registry records for the stored bytes (tag metadata,
+    // `tag_db::tag_registry::is_encode_exif_text_tag`).
+    if matches!(value, TagValue::String(_)) && is_encode_exif_text_tag(tag_name) {
+        return Ok(());
+    }
     if !descriptor_has_reliable_value_type(descriptor) {
         return validate_tag_value_intrinsics(tag_name, value);
     }
@@ -225,6 +232,48 @@ mod tests {
     use crate::core::{FormatFamily, TagId};
     use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
+
+    /// Domain validation must not depend on an infrastructure adapter
+    /// (AGENTS.md "Architecture": hexagonal, domain -> infrastructure is the
+    /// wrong way round). Which tags take `EncodeExifText` text is tag
+    /// metadata (`tag_db::tag_registry::is_encode_exif_text_tag`), not EXIF
+    /// writer policy.
+    #[test]
+    fn validation_depends_on_no_writer() {
+        let source = include_str!("validation.rs");
+        let writers = concat!("crate::", "writers");
+        assert!(
+            !source.contains(writers),
+            "core::validation must not reach into {writers}"
+        );
+    }
+
+    /// The three `EncodeExifText` tags accept the caller's text even where
+    /// the registry records the stored bytes as `Binary`.
+    #[test]
+    fn exif_text_tags_accept_text() {
+        for key in [
+            "GPS:GPSProcessingMethod",
+            "GPS:GPSAreaInformation",
+            "ExifIFD:UserComment",
+        ] {
+            let descriptor = create_descriptor(ValueType::Binary);
+            assert!(
+                validate_tag_value_with_name(key, &descriptor, &TagValue::new_string("café"))
+                    .is_ok(),
+                "{key}"
+            );
+        }
+        let descriptor = create_descriptor(ValueType::Binary);
+        assert!(
+            validate_tag_value_with_name(
+                "XMP-exif:GPSProcessingMethod",
+                &descriptor,
+                &TagValue::new_string("x")
+            )
+            .is_err()
+        );
+    }
 
     // Helper function to create a test descriptor
     fn create_descriptor(value_type: ValueType) -> TagDescriptor {

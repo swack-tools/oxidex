@@ -47,6 +47,9 @@ pub mod tiff_writer;
 pub mod write_request;
 // Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
 pub(crate) mod xp_strings;
+// EncodeExifText (UserComment, GPSProcessingMethod, GPSAreaInformation),
+// shared by every EXIF serializer.
+pub(crate) mod exif_text;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {

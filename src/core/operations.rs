@@ -1649,6 +1649,12 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     let file_bytes = reader.read(0, reader.size() as usize)?;
+    // A PNG with a bad chunk CRC is refused before any no-op decision, as the
+    // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned
+    // 13.59 checks every CRC before it learns nothing changed.
+    if matches!(format, FileFormat::PNG) {
+        crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
+    }
     // A single-tag removal acts on every block alike (only a group-wide
     // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
     // JPEG's APP1s, whose empty carrier a rewrite drops.

@@ -1012,16 +1012,29 @@ fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
 /// Applies tag-specific inverse conversions before generic TIFF serialization.
 /// GPS.pm 13.59 defines both coordinates as `rational64u[3]` values converted
 /// by `ToDMS` into degree, minute and second rationals.
+///
+/// `order` is the byte order of the EXIF block being written. The generic
+/// arms return native-endian placeholders that the caller re-encodes
+/// ([`native_to_byte_order`]); a conversion that depends on the block's order
+/// itself -- `EncodeExifText`'s UTF-16 -- is packed in `order` here, as an
+/// `undef` value the re-encoding leaves alone.
 pub(crate) fn tag_value_to_field_for_key(
     key: &str,
     value: &TagValue,
     hint: Option<u16>,
+    order: ByteOrder,
 ) -> Result<(u16, u32, Vec<u8>)> {
     // Exif.pm 13.59 0x9c9b-0x9c9f: the map holds the decoded text, and
     // ExifTool stores `ValueConvInv` of it -- UCS-2LE plus a NUL pair, as
     // `int8u`, or as `undef` over an existing `undef` entry (`hint`).
     if crate::writers::xp_strings::is_xp_tag_key(key) {
         return crate::writers::xp_strings::xp_field(value, hint);
+    }
+    // Exif.pm 0x9286 UserComment, GPS.pm 0x001b/0x001c: `RawConvInv =>
+    // EncodeExifText`, an 8-byte character-code header and the text, as
+    // `undef` whatever the old entry's format (`writers::exif_text`).
+    if crate::writers::exif_text::is_exif_text_key(key) {
+        return crate::writers::exif_text::exif_text_field(value, order);
     }
     if key.rsplit(':').next() == Some("GPSVersionID")
         && !matches!(value, TagValue::Binary(bytes) if bytes.len() == 4)
@@ -1709,8 +1722,12 @@ fn plan_exif_write_inner(
 
         // Changed: strict validation, then true-typed serialization
         validate_changed(&key, desired_value)?;
-        let (ft, count, bytes) =
-            tag_value_to_field_for_key(&key, desired_value, Some(entry.field_type))?;
+        let (ft, count, bytes) = tag_value_to_field_for_key(
+            &key,
+            desired_value,
+            Some(entry.field_type),
+            scan.byte_order,
+        )?;
         bucket(
             &mut plan,
             OutEntry {
@@ -1844,7 +1861,8 @@ fn plan_exif_write_inner(
                 continue; // same value already planned under another spelling
             }
             if let Some((slot, field_type)) = dup.rowless {
-                let (ft, count, bytes) = tag_value_to_field_for_key(&key, value, Some(field_type))?;
+                let (ft, count, bytes) =
+                    tag_value_to_field_for_key(&key, value, Some(field_type), scan.byte_order)?;
                 let replaced = OutEntry {
                     tag_id,
                     field_type: ft,
@@ -1884,8 +1902,12 @@ fn plan_exif_write_inner(
         }
         // A tag being created has no existing entry to take a width from, so
         // the declared type is the only thing that can tell FLOAT from DOUBLE.
-        let (ft, count, bytes) =
-            tag_value_to_field_for_key(&key, value, declared_ieee_field_type(&key))?;
+        let (ft, count, bytes) = tag_value_to_field_for_key(
+            &key,
+            value,
+            declared_ieee_field_type(&key),
+            scan.byte_order,
+        )?;
         let out = OutEntry {
             tag_id,
             field_type: ft,
@@ -2614,7 +2636,7 @@ pub(crate) fn stored_entry_matches(file_bytes: &[u8], key: &str, value: &TagValu
         return None;
     }
     let (field_type, count, mut bytes) =
-        tag_value_to_field_for_key(key, value, Some(entry.field_type)).ok()?;
+        tag_value_to_field_for_key(key, value, Some(entry.field_type), scan.byte_order).ok()?;
     // Multi-byte numeric fields come back native-endian (see
     // `tag_value_to_field`); put them in the file's order before comparing.
     let width = match field_type {
@@ -3843,15 +3865,16 @@ pub(crate) fn verify_exif_write(
         if let Some(previous) = find(&before, written.ifd, written.tag_id)
             && previous == written
         {
-            let expected = tag_value_to_field_for_key(key, value, Some(previous.field_type))
-                .ok()
-                .map(|(field_type, count, bytes)| {
-                    (
-                        field_type,
-                        count,
-                        native_to_byte_order(field_type, &bytes, after.byte_order),
-                    )
-                });
+            let expected =
+                tag_value_to_field_for_key(key, value, Some(previous.field_type), after.byte_order)
+                    .ok()
+                    .map(|(field_type, count, bytes)| {
+                        (
+                            field_type,
+                            count,
+                            native_to_byte_order(field_type, &bytes, after.byte_order),
+                        )
+                    });
             if expected != Some((written.field_type, written.count, written.value.clone())) {
                 return Err(refused(format!(
                     "'{key}' was set but {} tag 0x{:04X} is unchanged",
@@ -5112,7 +5135,8 @@ mod tests {
         // A list must retain both components and the existing SHORT field.
         let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(17)]);
         let (field_type, count, bytes) =
-            tag_value_to_field_for_key("IFD0:PageNumber", &value, Some(3)).unwrap();
+            tag_value_to_field_for_key("IFD0:PageNumber", &value, Some(3), ByteOrder::LittleEndian)
+                .unwrap();
 
         assert_eq!(field_type, 3);
         assert_eq!(count, 2);
@@ -5122,8 +5146,13 @@ mod tests {
     #[test]
     fn composite_image_count_serializes_as_two_unsigned_shorts() {
         let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(2)]);
-        let (field_type, count, bytes) =
-            tag_value_to_field_for_key("ExifIFD:CompositeImageCount", &value, Some(3)).unwrap();
+        let (field_type, count, bytes) = tag_value_to_field_for_key(
+            "ExifIFD:CompositeImageCount",
+            &value,
+            Some(3),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap();
         assert_eq!((field_type, count), (3, 2));
         assert_eq!(bytes, [3_u16.to_ne_bytes(), 2_u16.to_ne_bytes()].concat());
     }
@@ -5137,8 +5166,13 @@ mod tests {
             TagValue::new_integer(17),
             TagValue::new_integer(42),
         ]);
-        let (field_type, count, bytes) =
-            tag_value_to_field_for_key("EXIF:SubjectArea", &value, Some(3)).unwrap();
+        let (field_type, count, bytes) = tag_value_to_field_for_key(
+            "EXIF:SubjectArea",
+            &value,
+            Some(3),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap();
 
         assert_eq!(field_type, 3);
         assert_eq!(count, 3);
@@ -5156,8 +5190,13 @@ mod tests {
     #[test]
     fn subject_location_serializes_as_exactly_two_unsigned_shorts() {
         let value = TagValue::new_array(vec![TagValue::new_integer(3), TagValue::new_integer(4)]);
-        let (field_type, count, bytes) =
-            tag_value_to_field_for_key("EXIF:SubjectLocation", &value, Some(3)).unwrap();
+        let (field_type, count, bytes) = tag_value_to_field_for_key(
+            "EXIF:SubjectLocation",
+            &value,
+            Some(3),
+            ByteOrder::LittleEndian,
+        )
+        .unwrap();
 
         assert_eq!(field_type, 3);
         assert_eq!(count, 2);
@@ -5182,8 +5221,13 @@ mod tests {
             numerator: 3,
             denominator: 2,
         };
-        let (field_type, count, bytes) =
-            tag_value_to_field_for_key("ExifIFD:BrightnessValue", &value, None).unwrap();
+        let (field_type, count, bytes) = tag_value_to_field_for_key(
+            "ExifIFD:BrightnessValue",
+            &value,
+            None,
+            ByteOrder::LittleEndian,
+        )
+        .unwrap();
         assert_eq!(field_type, 10, "BrightnessValue is rational64s");
         assert_eq!(count, 1);
         assert_eq!(bytes.len(), 8);
@@ -5375,7 +5419,8 @@ mod tests {
         let value =
             TagValue::new_array(vec![TagValue::new_integer(100), TagValue::new_integer(200)]);
         let (field_type, count, bytes) =
-            tag_value_to_field_for_key("ExifIFD:ISO", &value, Some(3)).unwrap();
+            tag_value_to_field_for_key("ExifIFD:ISO", &value, Some(3), ByteOrder::LittleEndian)
+                .unwrap();
         assert_eq!((field_type, count), (3, 2));
         assert_eq!(
             bytes,
