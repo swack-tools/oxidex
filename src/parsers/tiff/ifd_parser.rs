@@ -240,6 +240,162 @@ pub fn parse_ifd(
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
     let file_size = reader.size();
+    let ifd_entries = ifd_raw_entries(reader, ifd_offset, byte_order)?;
+
+    // Extract tag values
+    // Pre-allocate capacity to avoid reallocations since entry_count is known upfront
+    let mut result = Vec::with_capacity(ifd_entries.len());
+
+    // ExifTool budgets per-entry warnings and only abandons the directory once
+    // there are more than 10 of them (Exif.pm:6455 `if ($warnCount > 10) { ...
+    // "Too many warnings -- $dir parsing aborted" ... return 0 }`). The tags it
+    // already extracted before that point stay extracted, so the equivalent
+    // here is to stop consuming entries while keeping `result`, not to error.
+    let mut warn_count = 0u32;
+
+    for entry in ifd_entries {
+        if warn_count > 10 {
+            break;
+        }
+        let Some(total_size) = surviving_size(&entry, file_size, &mut warn_count) else {
+            continue;
+        };
+
+        // Extract value bytes using Cow for zero-copy optimization
+        let value_bytes = if total_size <= 4 {
+            // Value is stored inline in the value_offset field
+            // We need to create owned data since it's derived from the field value
+            Cow::Owned(extract_inline_value(
+                entry.value_offset,
+                total_size,
+                byte_order,
+            ))
+        } else {
+            // Read value data from offset
+            // For now, we use Cow::Owned since the FileReader API returns borrowed slices
+            // but we can't guarantee the lifetime matches our 'static constraint.
+            // Future optimization: change FileReader to support arena allocation or
+            // return data with explicit lifetimes that can be borrowed.
+            //
+            // A short/failed read is likewise per-entry in ExifTool
+            // (Exif.pm:6594 "Error reading value for $dir entry $index" ->
+            // `$bad = 1`), so skip the entry instead of failing the directory.
+            let Ok(value_data) = reader.read(entry.value_offset as u64, total_size) else {
+                warn_count += 1;
+                continue;
+            };
+            Cow::Owned(value_data.to_vec())
+        };
+
+        result.push((
+            entry.tag_id,
+            entry.field_type,
+            entry.value_count,
+            value_bytes,
+        ));
+    }
+
+    Ok(result)
+}
+
+/// [`parse_ifd`]'s survivors without their out-of-line values: the same
+/// entries in the same order (the same skip rules, [`surviving_size`], and
+/// warning budget), each with its inline value bytes and nothing read from
+/// an offset. For a caller that needs only which entries a directory keeps
+/// and their small inline values (the EXIF twin ranking,
+/// `tiff_helpers::ifd0_twins`), without a second read and copy of every
+/// large value (XMP, ICC, offset arrays).
+pub(crate) fn parse_ifd_slots(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+) -> Result<Vec<(u16, u16, Vec<u8>)>> {
+    let file_size = reader.size();
+    let mut result = Vec::new();
+    let mut warn_count = 0u32;
+    for entry in ifd_raw_entries(reader, ifd_offset, byte_order)? {
+        if warn_count > 10 {
+            break;
+        }
+        let Some(total_size) = surviving_size(&entry, file_size, &mut warn_count) else {
+            continue;
+        };
+        let inline = if total_size <= 4 {
+            extract_inline_value(entry.value_offset, total_size, byte_order)
+        } else {
+            Vec::new()
+        };
+        result.push((entry.tag_id, entry.field_type, inline));
+    }
+    Ok(result)
+}
+
+/// The value size of an entry [`parse_ifd`] keeps, or `None` (counting a
+/// warning where ExifTool counts one) for one it skips.
+fn surviving_size(entry: &IfdEntry, file_size: u64, warn_count: &mut u32) -> Option<usize> {
+    // Get type information. ExifTool skips entries with an unknown/invalid
+    // format type (e.g. type 0 written by some corrupted camera firmware)
+    // rather than abandoning the directory, so a single bad entry doesn't
+    // cost the entire IFD chain (IFD0 -> ExifIFD -> GPS -> IFD1).
+    // Exif.pm:6470 guards the warning with `if ($format or $validate)`, so
+    // a type of 0 -- an IFD simply padded with zeros, which is common and
+    // harmless -- is skipped *without* spending warning budget. Only a
+    // nonzero-but-unrecognised format counts.
+    //
+    // Deliberate divergence, stated rather than implied: Exif.pm:6475-6477
+    // is stricter on the *first* entry --
+    // `next if $index or $$et{Model} =~ /^ILCE/; return 0;` -- so a bad
+    // format code at index 0 makes ExifTool abandon the whole directory
+    // ("assume corrupted IFD"), Sony ILCE excepted. We skip unconditionally
+    // instead. Nothing has been extracted at index 0, so ExifTool's
+    // `return 0` discards nothing and the two only differ in whether the
+    // remaining entries are attempted; skipping recovers more and still
+    // cannot fabricate a value, since a skipped entry is omitted outright.
+    // Matching ExifTool exactly would also need the Model, which is not
+    // resolved this early in the parse.
+    let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
+        if entry.field_type != 0 {
+            *warn_count += 1;
+        }
+        return None;
+    };
+    let total_size = exif_type.size_in_bytes() * entry.value_count as usize;
+    if total_size > 4 {
+        // Validate offset. A value pointer that runs off the end of the
+        // data is a property of *this entry*, not of the directory, and
+        // ExifTool treats it as such: Exif.pm:6660 warns "Bad offset for
+        // $dir $tagStr", sets `$bad = 1` (which suppresses the tag), and
+        // falls through to the next entry -- it never abandons the IFD.
+        //
+        // Aborting here instead used to discard every tag in the file,
+        // because each caller reaches parse_ifd through an `if let Ok(..)`
+        // (e.g. core/jpeg_helpers.rs, core/tiff_helpers.rs), so one bad
+        // entry took IFD0 + ExifIFD + GPS + IFD1 with it. ExifTool itself
+        // writes such an entry: `-IFD0:GeoTiffDoubleParams=1.5` stores the
+        // ASCII "1.5" in the offset field, and the pinned 13.59 oracle
+        // still reports Make/Model on the result while warning about the
+        // one bad tag.
+        //
+        // Note this skips the entry rather than substituting a value:
+        // ExifTool emits no tag at all for a bad offset, and inventing one
+        // would be worse than omitting it.
+        let end = u64::from(entry.value_offset).saturating_add(total_size as u64);
+        if end > file_size {
+            *warn_count += 1;
+            return None;
+        }
+    }
+    Some(total_size)
+}
+
+/// Validates the directory at `ifd_offset` and decodes its raw 12-byte
+/// entries, in physical order.
+fn ifd_raw_entries(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+) -> Result<Vec<IfdEntry>> {
+    let file_size = reader.size();
 
     // Validate IFD offset
     if ifd_offset >= file_size {
@@ -296,114 +452,7 @@ pub fn parse_ifd(
         }
     };
 
-    // Extract tag values
-    // Pre-allocate capacity to avoid reallocations since entry_count is known upfront
-    let mut result = Vec::with_capacity(entry_count as usize);
-
-    // ExifTool budgets per-entry warnings and only abandons the directory once
-    // there are more than 10 of them (Exif.pm:6455 `if ($warnCount > 10) { ...
-    // "Too many warnings -- $dir parsing aborted" ... return 0 }`). The tags it
-    // already extracted before that point stay extracted, so the equivalent
-    // here is to stop consuming entries while keeping `result`, not to error.
-    let mut warn_count = 0u32;
-
-    for entry in ifd_entries {
-        if warn_count > 10 {
-            break;
-        }
-
-        // Get type information. ExifTool skips entries with an unknown/invalid
-        // format type (e.g. type 0 written by some corrupted camera firmware)
-        // rather than abandoning the directory, so a single bad entry doesn't
-        // cost the entire IFD chain (IFD0 -> ExifIFD -> GPS -> IFD1).
-        // Exif.pm:6470 guards the warning with `if ($format or $validate)`, so
-        // a type of 0 -- an IFD simply padded with zeros, which is common and
-        // harmless -- is skipped *without* spending warning budget. Only a
-        // nonzero-but-unrecognised format counts.
-        //
-        // Deliberate divergence, stated rather than implied: Exif.pm:6475-6477
-        // is stricter on the *first* entry --
-        // `next if $index or $$et{Model} =~ /^ILCE/; return 0;` -- so a bad
-        // format code at index 0 makes ExifTool abandon the whole directory
-        // ("assume corrupted IFD"), Sony ILCE excepted. We skip unconditionally
-        // instead. Nothing has been extracted at index 0, so ExifTool's
-        // `return 0` discards nothing and the two only differ in whether the
-        // remaining entries are attempted; skipping recovers more and still
-        // cannot fabricate a value, since a skipped entry is omitted outright.
-        // Matching ExifTool exactly would also need the Model, which is not
-        // resolved this early in the parse.
-        let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
-            if entry.field_type != 0 {
-                warn_count += 1;
-            }
-            continue;
-        };
-
-        let type_size = exif_type.size_in_bytes();
-        let total_size = type_size * entry.value_count as usize;
-
-        // Extract value bytes using Cow for zero-copy optimization
-        let value_bytes = if total_size <= 4 {
-            // Value is stored inline in the value_offset field
-            // We need to create owned data since it's derived from the field value
-            Cow::Owned(extract_inline_value(
-                entry.value_offset,
-                total_size,
-                byte_order,
-            ))
-        } else {
-            // Value is stored at an offset
-            let value_offset = entry.value_offset as u64;
-
-            // Validate offset. A value pointer that runs off the end of the
-            // data is a property of *this entry*, not of the directory, and
-            // ExifTool treats it as such: Exif.pm:6660 warns "Bad offset for
-            // $dir $tagStr", sets `$bad = 1` (which suppresses the tag), and
-            // falls through to the next entry -- it never abandons the IFD.
-            //
-            // Aborting here instead used to discard every tag in the file,
-            // because each caller reaches parse_ifd through an `if let Ok(..)`
-            // (e.g. core/jpeg_helpers.rs, core/tiff_helpers.rs), so one bad
-            // entry took IFD0 + ExifIFD + GPS + IFD1 with it. ExifTool itself
-            // writes such an entry: `-IFD0:GeoTiffDoubleParams=1.5` stores the
-            // ASCII "1.5" in the offset field, and the pinned 13.59 oracle
-            // still reports Make/Model on the result while warning about the
-            // one bad tag.
-            //
-            // Note this skips the entry rather than substituting a value:
-            // ExifTool emits no tag at all for a bad offset, and inventing one
-            // would be worse than omitting it.
-            let end = value_offset.saturating_add(total_size as u64);
-            if end > file_size {
-                warn_count += 1;
-                continue;
-            }
-
-            // Read value data from offset
-            // For now, we use Cow::Owned since the FileReader API returns borrowed slices
-            // but we can't guarantee the lifetime matches our 'static constraint.
-            // Future optimization: change FileReader to support arena allocation or
-            // return data with explicit lifetimes that can be borrowed.
-            //
-            // A short/failed read is likewise per-entry in ExifTool
-            // (Exif.pm:6594 "Error reading value for $dir entry $index" ->
-            // `$bad = 1`), so skip the entry instead of failing the directory.
-            let Ok(value_data) = reader.read(value_offset, total_size) else {
-                warn_count += 1;
-                continue;
-            };
-            Cow::Owned(value_data.to_vec())
-        };
-
-        result.push((
-            entry.tag_id,
-            entry.field_type,
-            entry.value_count,
-            value_bytes,
-        ));
-    }
-
-    Ok(result)
+    Ok(ifd_entries)
 }
 
 /// Returns the raw 4-byte `value_offset` field of the first entry carrying

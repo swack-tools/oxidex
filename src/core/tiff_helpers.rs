@@ -23,7 +23,7 @@ use crate::exiftool_tables::{Ctx, IfdTable, MemberValue, find_ifd_table};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
-    ByteOrder, find_entry_position_at, ifd_entry_count, parse_ifd,
+    ByteOrder, find_entry_position_at, ifd_entry_count, parse_ifd, parse_ifd_slots,
 };
 use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences;
 use crate::parsers::tiff::makernotes::makernote_context::{
@@ -1294,50 +1294,80 @@ fn ifd0_twins(reader: &dyn FileReader, byte_order: ByteOrder, exif_ifd: u64) -> 
     let Some(ifd0) = tiff_ifd0_offset(reader, byte_order).filter(|&ifd0| ifd0 != exif_ifd) else {
         return Ifd0Twins::default();
     };
-    let Some(count) = reader
-        .read(ifd0, 2)
-        .ok()
-        .filter(|bytes| bytes.len() == 2)
-        .map(|bytes| usize::from(read_u16(bytes, byte_order)))
-    else {
-        return Ifd0Twins::default();
-    };
-    let Ok(entries) = reader.read(ifd0.saturating_add(2), count * 12) else {
+    // Only the entries the IFD parser keeps take part: one whose value lies
+    // outside the block is skipped, as ExifTool skips it ("Bad offset"),
+    // and so is never found at all. `parse_ifd_slots` applies `parse_ifd`'s
+    // rules without reading any out-of-line value a second time.
+    let Ok(entries) = parse_ifd_slots(reader, ifd0, byte_order) else {
         return Ifd0Twins::default();
     };
     let table = find_ifd_table("Exif", "Main");
     let mut priority_dir = false;
     let mut past_pointer = false;
     let mut twins: HashMap<String, Ifd0Twin> = HashMap::new();
-    for entry in entries.chunks_exact(12) {
-        let id = read_u16(&entry[0..2], byte_order);
-        let value = match read_u16(&entry[2..4], byte_order) {
-            3 => Some(u32::from(read_u16(&entry[8..10], byte_order))),
-            4 => Some(read_u32(&entry[8..12], byte_order)),
+    for (id, field_type, bytes) in &entries {
+        let id = *id;
+        let value = match *field_type {
+            3 if bytes.len() >= 2 => Some(u32::from(read_u16(bytes, byte_order))),
+            4 if bytes.len() >= 4 => Some(read_u32(bytes, byte_order)),
             _ => None,
         };
         if matches!((id, value), (0x00fe, Some(0)) | (0x00ff, Some(1))) {
             priority_dir = true;
         }
-        if id == EXIF_IFD_POINTER && u64::from(read_u32(&entry[8..12], byte_order)) == exif_ifd {
+        if id == EXIF_IFD_POINTER && value.map(u64::from) == Some(exif_ifd) {
             past_pointer = true;
             continue;
         }
-        let key = lookup_tag_name(id, "IFD0");
-        let name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
-        let twin = twins.entry(name.to_string()).or_default();
-        if past_pointer {
-            let priority_zero =
-                table.is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, id));
-            twin.after_displaces |= !priority_zero || priority_dir;
-        } else {
-            twin.before = true;
+        let priority_zero =
+            table.is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, id));
+        for name in exif_row_names(id, "IFD0") {
+            let twin = twins.entry(name).or_default();
+            if past_pointer {
+                twin.after_displaces |= !priority_zero || priority_dir;
+            } else {
+                twin.before = true;
+            }
         }
     }
     if past_pointer {
         Ifd0Twins(twins)
     } else {
         Ifd0Twins::default()
+    }
+}
+
+/// Every name a row of entry `id` in directory `dir` may be recorded
+/// under: the generated `Exif::Main`'s reported name (the engine's key,
+/// [`exif_dir_engine::exif_main_reported_name`] -- 0x920e is
+/// `FocalPlaneXResolution` there) and the hand arms' `lookup_tag_name`
+/// spelling (`0x920E`), which differ for the ids `tag_db` never named.
+fn exif_row_names(id: u16, dir: &str) -> Vec<String> {
+    let key = lookup_tag_name(id, dir);
+    let hand = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
+    match exif_dir_engine::exif_main_reported_name(id) {
+        Some(reported) if reported != hand => vec![reported.to_string(), hand.to_string()],
+        _ => vec![hand.to_string()],
+    }
+}
+
+/// The names already recorded in one directory walk (the ExifIFD, the
+/// InteropIFD), in physical order.
+///
+/// A later `Priority => 0` / `Avoid` copy of a name never displaces the copy
+/// found first (`FoundTag`: an old 0 counts as 1), but these walks record
+/// their rows at priority 1 (`DirEngineRows::at_priority`), under which the
+/// later copy would win. Such a copy is recorded at 0 instead. Only rows the
+/// walk actually records count: an entry ExifTool and the engine refuse
+/// (a value overlapping its own directory) is never found.
+#[derive(Debug, Default)]
+struct FirstCopies(HashSet<String>);
+
+impl FirstCopies {
+    /// Whether a row named `name`, of ExifTool priority 0 when
+    /// `priority_zero`, repeats a name already recorded -- and records it.
+    fn repeats(&mut self, name: &str, priority_zero: bool) -> bool {
+        !self.0.insert(name.to_string()) && priority_zero
     }
 }
 
@@ -1406,6 +1436,7 @@ fn parse_exif_directory_with_session(
         // IFD0 entries ExifTool finds after this directory, which it walks
         // inline at IFD0's pointer entry: see `loses_to_ifd0_twin`.
         let twins = ifd0_twins(reader, byte_order, offset);
+        let mut first = FirstCopies::default();
 
         // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
         // offsets from its byte 0); the hand arm reads `reader`. `None` = the
@@ -1523,6 +1554,11 @@ fn parse_exif_directory_with_session(
                 let silence = *tag_id != INTEROPERABILITY_IFD_POINTER;
                 let requested_edge = options
                     .is_some_and(|options| requested_subdir_edge(engine.table(), *tag_id, options));
+                // A priority-0 row repeating a name already recorded here is
+                // recorded at 0 (`FirstCopies`).
+                engine.demote_unrecorded(Some(entry_index), |name, priority_zero| {
+                    first.repeats(name, priority_zero)
+                });
                 match engine.route_entry(
                     entry_index,
                     *tag_id,
@@ -1566,7 +1602,8 @@ fn parse_exif_directory_with_session(
             // priority is the static table's, in force or not.
             let priority_zero = find_ifd_table("Exif", "Main")
                 .is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, *tag_id));
-            if loses_to_ifd0_twin(metadata, &twins, base_name, priority_zero) {
+            let repeats = first.repeats(base_name, priority_zero);
+            if loses_to_ifd0_twin(metadata, &twins, base_name, priority_zero) || repeats {
                 priority = 0;
             }
 
@@ -1625,7 +1662,10 @@ fn parse_exif_directory_with_session(
         // Engine rows whose entry the hand walk never reached (`parse_ifd`
         // drops a malformed entry `read_ifd` may accept), still before the
         // MakerNote pass.
-        if let Some(engine) = engine {
+        if let Some(mut engine) = engine {
+            engine.demote_unrecorded(None, |name, priority_zero| {
+                first.repeats(name, priority_zero)
+            });
             engine.finish(metadata, exif_ifd_key, |_, _| true);
         }
 
@@ -1839,6 +1879,7 @@ fn parse_interop_directory_with_session(
         return;
     };
     let physical_indices = physical_entry_indices(reader, offset, byte_order, &interop_tags);
+    let mut first = FirstCopies::default();
 
     // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
     // offsets from its byte 0); the hand arms read `reader`. `None` = the
@@ -1901,6 +1942,9 @@ fn parse_interop_directory_with_session(
         let bytes = raw_bytes.as_ref();
 
         if let Some(engine) = engine.as_mut() {
+            engine.demote_unrecorded(Some(entry_index), |name, priority_zero| {
+                first.repeats(name, priority_zero)
+            });
             match engine.route_entry(
                 entry_index,
                 *tag_id,
@@ -1928,7 +1972,8 @@ fn parse_interop_directory_with_session(
                     .map_or(tag_name.as_str(), |(_, n)| n);
                 let tag_value =
                     raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
-                if loses_to_ifd0_twin(metadata, twins, base_name, true) {
+                let repeats = first.repeats(base_name, true);
+                if loses_to_ifd0_twin(metadata, twins, base_name, true) || repeats {
                     metadata.insert_occurrence(tag_name, tag_value, 0, "", Instance::default());
                 } else {
                     metadata.insert(tag_name, tag_value);
@@ -1975,7 +2020,10 @@ fn parse_interop_directory_with_session(
     }
 
     // Engine rows whose entry the hand walk never reached.
-    if let Some(engine) = engine {
+    if let Some(mut engine) = engine {
+        engine.demote_unrecorded(None, |name, priority_zero| {
+            first.repeats(name, priority_zero)
+        });
         engine.finish(metadata, interop_key, |_, _| true);
     }
 
@@ -5640,7 +5688,8 @@ mod exif_subifd_tests {
     /// after it: FoundTag keeps the first of two priority-0 copies, and ORA
     /// `-j` prints 0xa403's `Manual` (`-a` shows both, `Custom` second).
     /// The residual row carries its tag's priority 0 and cannot displace the
-    /// engine row; the hand arm alone (engine off) printed `Custom`.
+    /// engine row. The hand arm alone (engine off), which printed `Custom`,
+    /// now records the repeated priority-0 copy at 0 too (`FirstCopies`).
     #[test]
     fn same_name_pairs_keep_exiftools_winner() {
         let at = tail_at(2);
@@ -5672,7 +5721,8 @@ mod exif_subifd_tests {
         assert_eq!(occurrences[0].priority, SHIM_DEFAULT_PRIORITY, "engine");
         assert_eq!(occurrences[1].priority, 0, "residual 0xfe4e: Avoid");
         let hand = walk_exif(&data, None, None, &[]);
-        assert_eq!(hand.get_string("ExifIFD:WhiteBalance"), Some("Custom"));
+        // The hand arm stores 0xa403 unconverted: 1 is `Manual`.
+        assert_eq!(hand.get_integer("ExifIFD:WhiteBalance"), Some(1));
     }
 
     /// An engine row beside an IFD0 twin is kept (pinned `-a -G1` prints

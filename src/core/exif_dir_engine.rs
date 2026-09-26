@@ -85,6 +85,10 @@ struct Row {
     /// [`tag_priority_is_zero`] -- through [`DirEngineRows::at_priority`], so
     /// a 0xfe4e WhiteBalance (`Avoid`) still cannot displace the 0xa403 row.
     keeps_priority: bool,
+    /// Whether the tag's own ExifTool priority is 0 (`priority` as the
+    /// walk first set it, before [`DirEngineRows::at_priority`] or a
+    /// demotion changes it): what `FoundTag` arbitrates the row with.
+    table_priority_zero: bool,
     consumed: bool,
 }
 
@@ -286,8 +290,7 @@ impl DirEngineRows {
 
     /// Records at priority 0 every row for which `loses(name,
     /// table_priority_is_zero)` holds, and keeps it there through
-    /// [`Self::at_priority`]. Call it before `at_priority`, while each row
-    /// still carries its table priority.
+    /// [`Self::at_priority`].
     ///
     /// The row is kept, never dropped: ExifTool's `FoundTag` files a second
     /// copy of a name under its own key (`-a -G1` prints it, and
@@ -295,12 +298,33 @@ impl DirEngineRows {
     /// `-<Name>` to the twin the caller says ExifTool would have preferred.
     pub(crate) fn demote(mut self, loses: impl Fn(&str, bool) -> bool) -> Self {
         for row in &mut self.rows {
-            if loses(row.name, row.priority == 0) {
+            if loses(row.name, row.table_priority_zero) {
                 row.priority = 0;
                 row.keeps_priority = true;
             }
         }
         self
+    }
+
+    /// [`Self::demote`] for the rows not yet recorded, in emission order:
+    /// those of entry `entry_index` (the entry the hand walk is about to
+    /// route), or every one left for [`Self::finish`] when `None`. `loses`
+    /// is called once per row, in order, so it may track what it has seen.
+    pub(crate) fn demote_unrecorded(
+        &mut self,
+        entry_index: Option<usize>,
+        mut loses: impl FnMut(&str, bool) -> bool,
+    ) {
+        for row in self
+            .rows
+            .iter_mut()
+            .filter(|row| !row.consumed && entry_index.is_none_or(|index| row.entry_index == index))
+        {
+            if loses(row.name, row.table_priority_zero) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+        }
     }
 
     /// Records every row with the value its entry stores
@@ -722,6 +746,7 @@ pub(crate) fn walk_with_session(
                 SHIM_DEFAULT_PRIORITY
             },
             keeps_priority: taken_from_hand,
+            table_priority_zero: row.low_priority,
             consumed: false,
         });
     }

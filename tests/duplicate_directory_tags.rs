@@ -365,6 +365,13 @@ enum Entry {
     Value(u16, u16, Vec<u8>),
     ExifPointer,
     InteropPointer,
+    /// `(tag, type, count, value-or-offset)` written verbatim: a malformed
+    /// entry whose value lies past the end of the block.
+    Raw(u16, u16, u32, u32),
+    /// `(tag, type, count)` whose out-of-line value points into its own
+    /// directory's entry array: in bounds, so the IFD parser keeps it, but
+    /// ExifTool refuses it ("Suspicious ... offset").
+    IntoOwnDirectory(u16, u16, u32),
 }
 
 fn ascii(tag: u16, text: &str) -> Entry {
@@ -397,16 +404,31 @@ fn tiff(ifd0: &[Entry], exif: &[Entry], interop: &[Entry]) -> Vec<u8> {
     let mut out = b"II*\0".to_vec();
     out.extend_from_slice(&8u32.to_le_bytes());
     let mut blobs = Vec::new();
-    for entries in [ifd0, exif, interop] {
+    for (entries, at) in [(ifd0, 8), (exif, exif_at), (interop, interop_at)] {
         if entries.is_empty() {
             continue;
         }
         out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
         for entry in entries {
+            if let Entry::Raw(tag, kind, count, value) = entry {
+                out.extend_from_slice(&tag.to_le_bytes());
+                out.extend_from_slice(&kind.to_le_bytes());
+                out.extend_from_slice(&count.to_le_bytes());
+                out.extend_from_slice(&value.to_le_bytes());
+                continue;
+            }
+            if let Entry::IntoOwnDirectory(tag, kind, count) = entry {
+                out.extend_from_slice(&tag.to_le_bytes());
+                out.extend_from_slice(&kind.to_le_bytes());
+                out.extend_from_slice(&count.to_le_bytes());
+                out.extend_from_slice(&((at + 2) as u32).to_le_bytes());
+                continue;
+            }
             let (tag, kind, bytes) = match entry {
                 Entry::Value(tag, kind, bytes) => (*tag, *kind, bytes.clone()),
                 Entry::ExifPointer => (0x8769, LONG, (exif_at as u32).to_le_bytes().to_vec()),
                 Entry::InteropPointer => (0xa005, LONG, (interop_at as u32).to_le_bytes().to_vec()),
+                Entry::Raw(..) | Entry::IntoOwnDirectory(..) => unreachable!(),
             };
             let unit = match kind {
                 SHORT => 2,
@@ -563,6 +585,73 @@ fn crafted_cases() -> Vec<Crafted> {
                 ("IFD0", "Make"),
                 ("ExifIFD", "Make"),
             ],
+        },
+        // Review round 3, finding 1: 0x920e has no `tag_db` name, so the
+        // IFD0 twin must be keyed by the name the generated table reports
+        // (FocalPlaneXResolution); after the pointer, at priority 1, it is
+        // found last and wins.
+        Crafted {
+            label: "engine-named 0x920e twin after the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                rational(0x920e, 100),
+            ],
+            exif: vec![rational(0x920e, 200)],
+            interop: vec![],
+            tags: &["FocalPlaneXResolution"],
+            must_have: &[
+                ("IFD0", "FocalPlaneXResolution"),
+                ("ExifIFD", "FocalPlaneXResolution"),
+            ],
+        },
+        // Finding 2: a malformed IFD0 copy after the pointer (its value
+        // lies past the block) is skipped, as ExifTool skips it, so it
+        // cannot displace the ExifIFD copy; the valid IFD0 copy before the
+        // pointer is displaced by that equal-priority ExifIFD copy.
+        Crafted {
+            label: "malformed IFD0 duplicate after the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                ascii(0xa430, "IFD0Owner"),
+                Entry::ExifPointer,
+                Entry::Raw(0xa430, ASCII, 20, 0x00ff_ff00),
+            ],
+            exif: vec![ascii(0xa430, "ExifOwner")],
+            interop: vec![],
+            tags: &["OwnerName"],
+            must_have: &[("IFD0", "OwnerName"), ("ExifIFD", "OwnerName")],
+        },
+        // Finding 3: two priority-0 ExifIFD copies and a priority-0 IFD0
+        // twin after the pointer: the first ExifIFD copy, found first, is
+        // never displaced.
+        Crafted {
+            label: "two priority 0 ExifIFD copies and a later IFD0 twin",
+            ifd0: vec![ascii(0x010f, "Test"), Entry::ExifPointer, short(0xa403, 0)],
+            exif: vec![short(0xa403, 1), short(0xa403, 2)],
+            interop: vec![],
+            tags: &["WhiteBalance"],
+            must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+        },
+        // Local review of the round-3 fix: an earlier copy that is never
+        // found (its value overlaps its own directory) does not count as
+        // the first copy.
+        Crafted {
+            label: "refused first ExifIFD copy and a later IFD0 twin",
+            ifd0: vec![ascii(0x010f, "Test"), Entry::ExifPointer, short(0xa403, 0)],
+            exif: vec![Entry::IntoOwnDirectory(0xa403, SHORT, 3), short(0xa403, 1)],
+            interop: vec![],
+            tags: &["WhiteBalance"],
+            must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+        },
+        // ... and without any IFD0 twin.
+        Crafted {
+            label: "two priority 0 ExifIFD copies",
+            ifd0: vec![ascii(0x010f, "Test"), Entry::ExifPointer],
+            exif: vec![short(0xa403, 1), short(0xa403, 2)],
+            interop: vec![],
+            tags: &["WhiteBalance"],
+            must_have: &[("ExifIFD", "WhiteBalance")],
         },
     ]
 }
