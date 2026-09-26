@@ -196,9 +196,27 @@ unproven, and a reaped child's group gets a bounded grace of a few seconds to
 clear. Otherwise the lock fails closed: no unlock, the descriptor is retained, and the owner exits
 non-zero naming each surviving PID (`LockRetained`; the transition wrapper
 reports it as `LeaseRetained`, exit 5). The lock then frees only when the last
-holder of the description exits. Descendants that leave their process group
-are not tracked.
-An interruption leaves the active stage `running`; `recover`
+holder of the description exits.
+
+Owned children are created with SIGINT deferred until the child is registered
+(a signal that arrives meanwhile is then replayed through the prior SIGINT
+disposition), and each carries an ownership probe: an inherited pipe writer
+that every descendant keeps alongside the lock descriptor. A child also stays
+unproven while its probe has not reached EOF, so a descendant that left the
+process group but still holds inherited descriptors keeps the lock held. On a
+timeout, interruption or post-spawn failure the executor SIGKILLs the child,
+its identity-verified descendants and its group, then verifies the result;
+when it cannot, it raises `OwnedChildCleanupIncomplete`, the journal keeps the
+active child and the transition wrapper refuses durable recovery. On Linux
+every owned command runs under a small child-subreaper supervisor
+(`PR_SET_CHILD_SUBREAPER`): orphaned descendants, including ones in a new
+session that closed every inherited descriptor, are reparented to it, and it
+kills and reaps its children until `waitpid` reports `ECHILD` before
+reporting the command's status. A command that left live descendants is
+refused with record state `escaped_descendants`. macOS has no subreaper: there
+a descendant that detaches and closes every inherited descriptor (and so no
+longer holds the lock) is not tracked.
+An interruption whose cleanup is incomplete leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an
 interrupted action. Pair-level native-delta classification remains explicitly
