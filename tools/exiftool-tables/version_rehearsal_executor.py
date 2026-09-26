@@ -850,6 +850,8 @@ def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
 
 
 def _settle(child: subprocess.Popen[Any]) -> None:
+    if child.poll() is not None:
+        _close_lineage_status(child)
     owned = _OWNED
     with owned.lock:
         if owned.children.get(child.pid) is child and _unproven_state(child) is None:
@@ -966,7 +968,11 @@ def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_outpu
                     exc.add_note(f"owned child timeout cleanup warning: {cleanup}")
             exc.output, exc.stderr = stdout, stderr
             raise
+        escaped = _finish_lineage(child)
         _require_ownership_release(child, "successful command completion")
+        if escaped:
+            raise OSError("owned command left descendants running after it exited; the lineage "
+                          "boundary killed them: " + ", ".join(str(pid) for pid in escaped))
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     except (KeyboardInterrupt, SystemExit) as interruption:
         if (owner[0] is not None
@@ -1267,6 +1273,7 @@ def _close_ownership_probe(child: subprocess.Popen[str]) -> None:
 
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Non-catchably stop and verify the complete owned process lifetime."""
+    _request_lineage_sweep(child)
     _refresh_owned_descendants(child)
     _signal_owned_descendants(child, signal.SIGKILL)
     _signal_owned_group(child, signal.SIGKILL)
@@ -1300,6 +1307,10 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
 def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Kill and reap an owned group after ordinary cleanup itself faults."""
     enumeration_error = None
+    try:
+        _request_lineage_sweep(child)
+    except OSError:
+        pass
     try:
         _refresh_owned_descendants(child)
         _signal_owned_descendants(child, signal.SIGKILL)
@@ -1402,6 +1413,227 @@ def _emergency_cleanup_after_timeout_failure(
     return stdout, stderr
 
 
+# Linux lineage boundary. An owned command runs under a tiny supervisor that
+# is a child subreaper (PR_SET_CHILD_SUBREAPER): every descendant that the
+# command orphans -- including one that starts a new session and closes all
+# inherited descriptors -- is reparented to the supervisor instead of init, so
+# it cannot leave the command's lineage. When the command exits (or the
+# executor requests cleanup with SIGUSR1) the supervisor SIGKILLs and reaps
+# its children until waitpid reports ECHILD, the kernel's atomic proof that no
+# descendant remains, and reports the command's status and any live escaped
+# descendant on a private status pipe. Children of the supervisor cannot be
+# PID-reused until it reaps them, so its signals are identity-safe. Darwin has
+# no subreaper, so there a descendant that detaches and closes every
+# inherited descriptor stays outside the ownership proof (a documented
+# residual); the ownership probe still covers every descriptor holder.
+_LINEAGE_SUPERVISED = sys.platform.startswith("linux")
+_LINUX_LINEAGE_SUPERVISOR = r"""
+import ctypes, json, os, signal, sys, time
+status_fd = int(sys.argv[1])
+argv = sys.argv[2:]
+
+def report(**fields):
+    os.write(status_fd, (json.dumps(fields, sort_keys=True) + "\n").encode())
+
+class Sweep(Exception):
+    pass
+
+def request_sweep(_signum, _frame):
+    raise Sweep()
+
+def children():
+    me = os.getpid()
+    found = set()
+    for task in os.listdir(f"/proc/{me}/task"):
+        with open(f"/proc/{me}/task/{task}/children", encoding="ascii") as listing:
+            found.update(int(value) for value in listing.read().split())
+    return found
+
+def state(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            raw = stat.read()
+        return raw[raw.rfind(")") + 2:].split()[0]
+    except (OSError, IndexError):
+        return "?"
+
+try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+    signal.signal(signal.SIGUSR1, request_sweep)
+    failure_read, failure_write = os.pipe()  # close-on-exec in the command
+    primary = os.fork()
+    if primary == 0:
+        try:
+            os.close(status_fd)
+            os.close(failure_read)
+            signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+            os.execvp(argv[0], argv)
+        except OSError as exc:
+            os.write(failure_write, f"{exc.errno}:{exc.strerror}".encode())
+        os._exit(127)
+    os.close(failure_write)
+    failure = b""
+    while True:
+        chunk = os.read(failure_read, 4096)
+        if not chunk:
+            break
+        failure += chunk
+    os.close(failure_read)
+    if failure:
+        os.waitpid(primary, 0)
+        number, _, message = failure.decode(errors="replace").partition(":")
+        report(phase="exec", errno=int(number), error=message)
+        os._exit(0)
+    report(phase="exec", ok=True)
+    status = None
+    requested = False
+    try:
+        while status is None:
+            pid, raw = os.waitpid(-1, 0)
+            if pid == primary:
+                status = raw
+    except Sweep:
+        requested = True
+    signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+    escaped = set()
+    verified = False
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for pid in children():
+            if pid != primary and state(pid) not in ("Z", "X", "x"):
+                escaped.add(pid)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            while True:
+                pid, raw = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+                if pid == primary and status is None:
+                    status = raw
+        except ChildProcessError:
+            verified = True
+            break
+        time.sleep(0.01)
+    report(phase="exit", verified=verified, requested=requested, escaped=sorted(escaped),
+           returncode=None if status is None else os.waitstatus_to_exitcode(status))
+except BaseException as exc:
+    try:
+        report(phase="error", error=repr(exc))
+    except BaseException:
+        pass
+os._exit(0)
+"""
+
+
+def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str) -> list[dict[str, Any]]:
+    """Supervisor status lines read so far, waiting (bounded) for ``phase``.
+
+    Stops at the first complete line reporting ``phase``, at EOF, or when
+    ``timeout`` elapses; the caller decides what a missing phase means.
+    """
+    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    buffered: bytes = getattr(child, "_oxidex_lineage_buffer", b"")
+
+    def parsed() -> list[dict[str, Any]]:
+        try:
+            return [json.loads(line) for line in buffered.split(b"\n")[:-1] if line.strip()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OSError("owned command lineage report is malformed") from exc
+
+    deadline = time.monotonic() + timeout
+    while type(descriptor) is int and descriptor >= 0:
+        if any(row.get("phase") == phase for row in parsed()):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        readable, _, _ = select.select([descriptor], [], [], remaining)
+        if not readable:
+            break
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            _close_lineage_status(child)
+            break
+        buffered += chunk
+        setattr(child, "_oxidex_lineage_buffer", buffered)
+    return parsed()
+
+
+def _close_lineage_status(child: subprocess.Popen[Any]) -> None:
+    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    if type(descriptor) is int and descriptor >= 0:
+        os.close(descriptor)
+        setattr(child, "_oxidex_lineage_status_fd", -1)
+
+
+def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
+    """Replicate Popen's exec-failure semantics for a supervised command."""
+    reports = _lineage_reports(child, timeout=30, phase="exec")
+    exec_report = next((row for row in reports if row.get("phase") == "exec"), None)
+    if exec_report is not None and exec_report.get("ok") is True:
+        return
+    try:
+        child.wait(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+    _close_lineage_status(child)
+    for stream in (child.stdin, child.stdout, child.stderr):
+        if stream is not None:
+            stream.close()
+    if exec_report is not None and type(exec_report.get("errno")) is int:
+        number = exec_report["errno"]
+        raise OSError(number, exec_report.get("error") or os.strerror(number))
+    raise OSError(f"owned command supervisor did not start the command: {reports}")
+
+
+def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATION_GRACE_SECONDS) -> list[int]:
+    """After a supervised command exits, adopt its status and escaped descendants.
+
+    Returns the live descendants the supervisor found and killed. Raises
+    ``OwnedChildCleanupIncomplete`` when the supervisor could not prove that
+    no descendant remained. An unsupervised child returns an empty list.
+    """
+    if not hasattr(child, "_oxidex_lineage_status_fd"):
+        return []
+    if getattr(child, "_oxidex_lineage_finished", None) is not None:
+        return child._oxidex_lineage_finished
+    try:
+        reports = _lineage_reports(child, timeout=timeout, phase="exit")
+    except OSError as exc:
+        raise OwnedChildCleanupIncomplete(f"owned command lineage cannot be verified: {exc}") from exc
+    finished = next((row for row in reports if row.get("phase") == "exit"), None)
+    if (finished is None or finished.get("verified") is not True
+            or not isinstance(finished.get("escaped"), list)
+            or any(type(pid) is not int for pid in finished["escaped"])):
+        raise OwnedChildCleanupIncomplete(f"owned command lineage was not proven empty: {reports}")
+    if type(finished.get("returncode")) is int:
+        child.returncode = finished["returncode"]
+    setattr(child, "_oxidex_lineage_finished", finished["escaped"])
+    return finished["escaped"]
+
+
+def _request_lineage_sweep(child: subprocess.Popen[Any]) -> None:
+    """Ask a live supervisor to kill and reap its whole lineage, then exit."""
+    if not hasattr(child, "_oxidex_lineage_status_fd") or child.poll() is not None:
+        return
+    try:
+        os.kill(child.pid, signal.SIGUSR1)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS * 3
+    while child.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
 def _spawn_with_deferred_sigint(
     owner: list[subprocess.Popen[str] | None], argv: list[str], **kwargs: Any,
 ) -> subprocess.Popen[str]:
@@ -1417,7 +1649,7 @@ def _spawn_with_deferred_sigint(
         pending = True
         pending_frame = frame
 
-    read_fd = write_fd = -1
+    read_fd = write_fd = status_read_fd = status_write_fd = -1
     child: subprocess.Popen[str] | None = None
     spawn_failure: BaseException | None = None
     signal.signal(signal.SIGINT, defer_sigint)
@@ -1426,14 +1658,42 @@ def _spawn_with_deferred_sigint(
             raise OSError("owned child creation requires inherited file descriptors")
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
-        child = _spawn(argv, **kwargs)
-        setattr(child, "_oxidex_ownership_read_fd", read_fd)
+        spawn_argv = list(argv)
+        if _LINEAGE_SUPERVISED:
+            status_read_fd, status_write_fd = os.pipe()
+            os.set_inheritable(status_write_fd, True)
+            spawn_argv = [sys.executable, "-I", "-c", _LINUX_LINEAGE_SUPERVISOR,
+                          str(status_write_fd), *argv]
+        created = _spawn(spawn_argv, **kwargs)
+        setattr(created, "_oxidex_ownership_read_fd", read_fd)
+        os.close(write_fd)
+        write_fd = -1
+        if status_read_fd >= 0:
+            setattr(created, "_oxidex_lineage_status_fd", status_read_fd)
+            status_read_fd = -1
+            os.close(status_write_fd)
+            status_write_fd = -1
+            try:
+                _await_supervised_exec(created)
+            except OSError:
+                # Nothing was exec'd: once the supervisor's inherited writer
+                # is gone the child is provably finished; otherwise it stays
+                # registered and every later lock release fails closed.
+                read_fd = -1  # now owned by the probe attribute
+                try:
+                    _wait_for_ownership_release(created)
+                except OSError:
+                    pass
+                _settle(created)
+                raise
+        child = created
         owner[0] = child
     except BaseException as failure:
         spawn_failure = failure
     finally:
-        if write_fd >= 0:
-            os.close(write_fd)
+        for descriptor in (write_fd, status_write_fd, status_read_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
         if owner[0] is None and read_fd >= 0:
             os.close(read_fd)
         signal.signal(signal.SIGINT, previous_handler)
@@ -1499,10 +1759,17 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 if cleanup_error is not None:
                     record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
                 return record
+            escaped = _finish_lineage(child)
             _settle(child)
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
             _require_ownership_release(child, "successful command completion")
+            if escaped:
+                # The lineage boundary killed descendants that outlived the
+                # command; its output cannot be accepted as complete work.
+                return {"argv": argv, "exit": child.returncode, "stdout": stdout or "",
+                        "stderr": stderr or "", "state": "escaped_descendants",
+                        "escaped_descendants": escaped, **process_identity}
         except (KeyboardInterrupt, SystemExit) as interruption:
             if (owner[0] is not None
                     and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):

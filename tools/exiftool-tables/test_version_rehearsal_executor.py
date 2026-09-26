@@ -85,6 +85,17 @@ def _read_reported_line(read_fd: int, *, timeout: float = 30.0) -> bytes:
     return payload
 
 
+def _without_lineage_supervisor(test):
+    """Exercise the ownership-probe fallback directly on every platform.
+
+    On Linux the subreaper supervisor kills a command's escaped descendants
+    before these scenarios can arise; these tests pin the second line of
+    defence that still applies when that boundary is absent (Darwin) or
+    when cleanup itself faults.
+    """
+    return patch.object(executor, "_LINEAGE_SUPERVISED", False)(test)
+
+
 def _isolate_process_ownership(case: unittest.TestCase) -> None:
     """Give each test its own owned-child registry and retained-lock list.
 
@@ -139,6 +150,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(record["cleanup_operation"], "timeout_cleanup")
         self.assertIn("cleanup bridge failed", record["cleanup_error"])
 
+    @_without_lineage_supervisor
     def test_timeout_emergency_failure_refuses_terminal_state_with_escaped_descendant(self):
         """Unverified timeout cleanup cannot escape as a terminal-stage OSError."""
         read_fd, write_fd = os.pipe()
@@ -226,6 +238,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsNotNone(child_pid)
         self.assertFalse(executor._pid_live(child_pid))
 
+    @_without_lineage_supervisor
     def test_postspawn_callback_cleanup_failure_is_owned_child_incomplete(self):
         """An unverified post-spawn cleanup cannot degrade to a plain OSError."""
         read_fd, write_fd = os.pipe()
@@ -474,6 +487,7 @@ class ExecutorTests(unittest.TestCase):
                     pass
                 executor._close_ownership_probe(child)
 
+    @_without_lineage_supervisor
     def test_successful_command_refuses_detached_descendant_retaining_ownership(self):
         """A zero exit cannot become ok while detached owned work retains its proof."""
         read_fd, write_fd = os.pipe()
@@ -525,6 +539,78 @@ class ExecutorTests(unittest.TestCase):
                     pass
             for child in children:
                 executor._close_ownership_probe(child)
+
+    def test_owned_command_exit_status_and_signal_are_the_commands(self):
+        """The supervisor (Linux) must not replace the command's own status."""
+        exited = executor._run_record([sys.executable, "-c", "raise SystemExit(7)"],
+                                      cwd=self.root, env=dict(os.environ), run=subprocess.run)
+        self.assertEqual((exited["state"], exited["exit"]), ("exit_failed", 7))
+        killed = executor._run_record(
+            [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"],
+            cwd=self.root, env=dict(os.environ), run=subprocess.run)
+        self.assertEqual((killed["state"], killed["exit"]), ("exit_failed", -signal.SIGKILL))
+        ok = executor._run_record([sys.executable, "-c", "print('out')"],
+                                  cwd=self.root, env=dict(os.environ), run=subprocess.run)
+        self.assertEqual((ok["state"], ok["exit"], ok["stdout"]), ("ok", 0, "out\n"))
+
+    def test_owned_command_exec_failure_is_a_spawn_failure(self):
+        """A missing program stays spawn_failed even when a supervisor starts it."""
+        missing = self.root / "no-such-owned-program"
+        record = executor._run_record([str(missing)], cwd=self.root, env=dict(os.environ),
+                                      run=subprocess.run)
+        self.assertEqual(record["state"], "spawn_failed", record)
+        self.assertIn("No such file", record["stderr"])
+        self.assertEqual(executor.unproven_children(), [])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage boundary is a Linux child subreaper")
+    def test_timeout_sweep_kills_detached_descendant_that_closed_its_descriptors(self):
+        """Timeout cleanup reaches a new-session close_fds descendant through the lineage."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=True, pass_fds=(int(sys.argv[1]),))\n"
+            "time.sleep(60)\n"
+        )
+
+        def descendant_ready(_pid, _pgid):
+            nonlocal descendant_pid, write_fd
+            os.close(write_fd)
+            write_fd = -1
+            descendant_pid = int(_read_reported_line(read_fd))
+
+        try:
+            with patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 0.05):
+                record = executor._run_record(
+                    [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run, started=descendant_ready,
+                )
+            self.assertEqual(record["state"], "timeout", record)
+            self.assertNotIn("cleanup_error", record)
+            self.assertFalse(executor._pid_live(descendant_pid))
+            self.assertEqual(executor.unproven_children(), [])
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "the lineage boundary is a Linux child subreaper; Darwin has no kernel "
@@ -582,6 +668,7 @@ class ExecutorTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
+    @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
 
@@ -958,6 +1045,7 @@ class ExecutorTests(unittest.TestCase):
         persisted = json.loads((self.run_dir / "execution-status.json").read_text())
         self.assertEqual(persisted["releases"][release]["state"], "failed")
 
+    @_without_lineage_supervisor
     def test_native_success_refuses_detached_descendant_retaining_ownership(self):
         """Native success retains active state when detached owned work keeps the proof."""
         self.initialize(self.config())
