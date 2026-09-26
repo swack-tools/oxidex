@@ -1708,74 +1708,22 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // `t/images/ExifTool.jpg` requires (`-Make` resolves to CIFF's `Canon`,
     // not `IFD0`'s `FUJIFILM`). See `jpeg::ciff_app0` for the citation.
     crate::parsers::jpeg::ciff_app0::process_ciff_app0_segments(&segments, &mut metadata);
-    process_xmp_segments(&segments, &mut metadata, diagnostics);
-
-    // AFCP and FotoStation write their records after the JPEG's EOI, so they
-    // need the whole file rather than the parsed segment list. Both can carry
-    // an IPTC block, and ExifTool ranks the three possible sources like this:
-    //
-    // * `IPTC::ProcessIPTC` (IPTC.pm:1064-1102) checks each IPTC directory's
-    //   metadata path against `%isStandardIPTC` (IPTC.pm:38-54). Only
-    //   `JPEG-APP13-Photoshop-IPTC` is standard in a JPEG; a trailer's path is
-    //   not, so ExifTool sets `LOW_PRIORITY_DIR{IPTC}` for it and files it
-    //   under a numbered family-1 group (`IPTC2`, `IPTC3`, ...).
-    // * `FoundTag` (ExifTool.pm:9535-9543) turns that into priority 0 and
-    //   keeps the existing value unless `$priority >= $oldPriority`, so a
-    //   trailer never displaces the APP13 value -- it is only reachable with
-    //   `exiftool -a`.
-    // * Between two low-priority directories the *first* one processed wins:
-    //   FoundTag promotes an existing 0-priority tag to 1 before comparing
-    //   ("promote existing 0-priority tag so it takes precedence over a new
-    //   0-tag", ExifTool.pm:9518-9527). `ProcessTrailers` works inwards from
-    //   the end of the file, so the outermost trailer is the one processed
-    //   first. In `combined-samples/ExifTool.jpg` that is FotoStation, with
-    //   AFCP innermost.
-    //
-    // Inserting into a map keeps the *last* write, so the order below is the
-    // reverse of ExifTool's processing order: innermost trailer, outermost
-    // trailer, then the standard APP13 resource.
-    //
-    // The numbered family-1 groups follow ExifTool's processing order
-    // instead: every trailer IPTC directory is non-standard, so each takes
-    // the next of `IPTC2`, `IPTC3`, ... (see `NonStandardIptcGroups`), handed
-    // out outermost trailer first. A second APP13 IPTC resource would itself
-    // be non-standard and take `IPTC2` ahead of them; this reader merges all
-    // APP13 IPTC under the one standard group, so for such a file the
-    // trailers keep the unnumbered legacy group rather than a number that
-    // would be off by the directories it cannot see.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
-        // An IFD0 IPTC-NAA block is non-standard too and would be numbered
-        // before the trailers; keep the trailers unnumbered rather than
-        // assign them the number that belongs to it.
-        let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(&segments) <= 1
-            && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(&segments, reader)
-        {
-            iptc_parser::NonStandardIptcGroups::first()
-        } else {
-            iptc_parser::NonStandardIptcGroups::unnumbered()
-        };
-        let (afcp_trailer, fotostation_trailer);
-        if fotostation::fotostation_trailer_position(file) > afcp::afcp_trailer_position(file) {
-            fotostation_trailer =
-                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
-            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
-        } else {
-            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
-            fotostation_trailer =
-                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
-        }
-        metadata.merge_winners_keeping_group1(&afcp_trailer);
-        metadata.merge_winners_keeping_group1(&fotostation_trailer);
+    // ExifTool reads the segments in file order (ProcessJPEG), and an XMP and
+    // an IPTC copy of one tag tie on priority, so the later segment's copy
+    // takes the bare name (ExifTool.pm:9564). XMP usually precedes APP13, but
+    // not always: `t/images/MWG.jpg` writes APP13 first, and its bare
+    // `-City` is XMP-photoshop's `RIGHT-XMP-City`.
+    let xmp_after_app13 = app13_precedes_xmp(&segments);
+    if !xmp_after_app13 {
+        process_xmp_segments(&segments, &mut metadata, diagnostics);
     }
 
     process_iptc_segments(&segments, &mut metadata, diagnostics);
     process_photoshop_segments(&segments, &mut metadata, diagnostics);
+    if xmp_after_app13 {
+        process_xmp_segments(&segments, &mut metadata, diagnostics);
+    }
     process_uniform_resource_name_segments(&segments, &mut metadata);
-    process_icc_segments(&segments, &mut metadata);
-    process_mpf_segments(&segments, &mut metadata);
-    // APP2/APP4 FPXR: FlashPix streams split across application segments.
-    crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
     // SPIFF (APP8) runs before SOF: in a real JPEG byte stream every APPn
     // marker precedes the SOF marker, so ExifTool's own file-order-driven
     // FoundTag arbitration always records SPIFF's ImageWidth/ImageHeight
@@ -1790,53 +1738,20 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // (`Composite:ImageSize` "3000x4500"/"13.5" MP where the pinned oracle
     // reports "8x8"/"6.4e-05" MP), caught only once Step 22 replaced the
     // old hard-coded group-rank table with real priority+order arbitration.
+    // SPIFF (APP8) is, by its specification, the first segment of a file
+    // that has one, so ExifTool finds it before an APP2 ICC profile: both
+    // report `ProfileID`, and `t/images/ExifTool.jpg`'s bare `-ProfileID` is
+    // the ICC header's `0`, found later (ExifTool.pm:9564).
     process_spiff_segments(&segments, &mut metadata);
+    process_icc_segments(&segments, &mut metadata);
+    process_mpf_segments(&segments, &mut metadata);
+    // APP2/APP4 FPXR: FlashPix streams split across application segments.
+    crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
     process_sof_segments_with_options(&segments, &mut metadata, options);
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments_with_options(&segments, &mut metadata, options);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
     process_media_jukebox_segments(&segments, &mut metadata);
-
-    // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
-    // than the parsed segment list, which stops at the EOI marker. It carries
-    // no IPTC, so unlike the AFCP and FotoStation trailers read further up it
-    // does not have to run before `process_iptc_segments`.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Photo Mechanic's trailer is format-agnostic (ExifTool reads it from
-    // ProcessTrailers, not a JPEG-specific proc), so like Canon VRD it needs
-    // the whole file rather than the parsed segment list. It carries no
-    // IPTC either, so it runs here rather than before `process_iptc_segments`.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        for (key, value) in
-            crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
-        {
-            metadata.insert(key.clone(), value.clone());
-        }
-        for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-        // ProcessJPEG identifies and walks trailers only once it reaches SOS
-        // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
-        // before SOS, a format error) has none read. TrailerStart, which
-        // ProcessVivo scans from, is the byte after the EOI that the walk
-        // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
-        if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
-            let trailer_start = usize::try_from(sos.offset)
-                .ok()
-                .and_then(|offset| offset.checked_add(2))
-                .and_then(|after_marker| {
-                    crate::parsers::vivo::jpeg_trailer_start(file, after_marker)
-                });
-            metadata.merge_winners_keeping_group1(
-                &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
-            );
-        }
-    }
 
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
@@ -1871,11 +1786,174 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_app14_segments(&segments, &mut metadata);
     process_app15_segments(&segments, &mut metadata);
 
+    // Trailers last: ProcessJPEG reaches them only after the whole marker
+    // walk (ExifTool.pm:7627-7634).
+    process_jpeg_trailers(reader, &segments, &mut metadata);
+
     // Normalize tag families to match ExifTool conventions (ExifIFD: -> EXIF:)
     use crate::core::tag_normalization::normalize_metadata_map;
     let normalized = normalize_metadata_map(&metadata);
 
     Ok(normalized)
+}
+
+/// Whether the file's first APP13 Photoshop segment (which carries the
+/// standard IPTC resource) comes before its first XMP APP1 segment.
+fn app13_precedes_xmp(segments: &[crate::parsers::jpeg::segment_parser::Segment]) -> bool {
+    const APP13_MARKER: u16 = 0xFFED;
+    let app13 = segments
+        .iter()
+        .find(|segment| {
+            segment.marker == APP13_MARKER && segment.data.starts_with(b"Photoshop 3.0\0")
+        })
+        .map(|segment| segment.offset);
+    let xmp = segments
+        .iter()
+        .find(|segment| crate::parsers::jpeg::xmp_parser::is_xmp_segment(segment))
+        .map(|segment| segment.offset);
+    matches!((app13, xmp), (Some(app13), Some(xmp)) if app13 < xmp)
+}
+
+/// One JPEG trailer [`process_jpeg_trailers`] reads by position.
+#[derive(Clone, Copy)]
+enum JpegTrailer {
+    Afcp,
+    FotoStation,
+    CanonVrd,
+    PhotoMechanic,
+    Mie,
+}
+
+/// The trailers after a JPEG's EOI, in the order `ProcessTrailers`
+/// (ExifTool.pm:7019-7182) processes them: inwards from the end of the file,
+/// the outermost first. FoundTag gives an equal-priority tie to the tag found
+/// later (ExifTool.pm:9564), so the order decides bare names the trailers
+/// share: `t/images/ExifTool.jpg` has, from the end inwards, Vivo, Samsung,
+/// MIE, PhotoMechanic, CanonVRD, two FotoStation records and AFCP, and its
+/// bare `-CropLeft` is FotoStation's `24.557%`, `-Copyright` MIE's.
+///
+/// The Samsung/Vivo chain comes first: `parse_trailer_chain` stops at every
+/// trailer it cannot size, so whatever it reaches lies outside the others
+/// read here save MIE and PhotoMechanic, whose names it never shares.
+fn process_jpeg_trailers(
+    reader: &dyn FileReader,
+    segments: &[crate::parsers::jpeg::segment_parser::Segment],
+    metadata: &mut MetadataMap,
+) {
+    use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
+    let Ok(file) = reader.read(0, reader.size() as usize) else {
+        return;
+    };
+
+    // ProcessJPEG identifies and walks trailers only once it reaches SOS
+    // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
+    // before SOS, a format error) has none read. TrailerStart, which
+    // ProcessVivo scans from, is the byte after the EOI that the walk
+    // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
+    if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
+        let trailer_start = usize::try_from(sos.offset)
+            .ok()
+            .and_then(|offset| offset.checked_add(2))
+            .and_then(|after_marker| crate::parsers::vivo::jpeg_trailer_start(file, after_marker));
+        metadata.merge_winners_keeping_group1(
+            &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
+        );
+    }
+
+    let mut trailers: Vec<(usize, JpegTrailer)> = [
+        (afcp::afcp_trailer_position(file), JpegTrailer::Afcp),
+        (
+            fotostation::fotostation_trailer_position(file),
+            JpegTrailer::FotoStation,
+        ),
+        (
+            crate::parsers::canon_vrd::canon_vrd_trailer_position(file),
+            JpegTrailer::CanonVrd,
+        ),
+        (
+            crate::parsers::photo_mechanic::photo_mechanic_trailer_position(file),
+            JpegTrailer::PhotoMechanic,
+        ),
+        (
+            crate::parsers::mie::mie_trailer_position(file),
+            JpegTrailer::Mie,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(position, trailer)| position.map(|position| (position, trailer)))
+    .collect();
+    trailers.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // The numbered family-1 IPTC groups follow the same processing order:
+    // every trailer IPTC directory is non-standard, so each takes the next
+    // of `IPTC2`, `IPTC3`, ... (see `NonStandardIptcGroups`), handed out
+    // outermost trailer first. A second APP13 IPTC resource would itself be
+    // non-standard and take `IPTC2` ahead of them; this reader merges all
+    // APP13 IPTC under the one standard group, so for such a file the
+    // trailers keep the unnumbered legacy group rather than a number that
+    // would be off by the directories it cannot see. An IFD0 IPTC-NAA block
+    // is non-standard too and would be numbered before the trailers.
+    let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(segments) <= 1
+        && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(segments, reader)
+    {
+        iptc_parser::NonStandardIptcGroups::first()
+    } else {
+        iptc_parser::NonStandardIptcGroups::unnumbered()
+    };
+    for (_, trailer) in trailers {
+        match trailer {
+            JpegTrailer::Afcp => merge_trailer_winners(
+                metadata,
+                &afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups),
+            ),
+            JpegTrailer::FotoStation => merge_trailer_winners(
+                metadata,
+                &fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups),
+            ),
+            JpegTrailer::CanonVrd => {
+                for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter()
+                {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            JpegTrailer::PhotoMechanic => {
+                for (key, value) in
+                    crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
+                {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            JpegTrailer::Mie => {
+                for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Copies an AFCP or FotoStation trailer's winners into `metadata`, each
+/// IPTC row at priority 0: `IPTC::ProcessIPTC` checks the directory's path
+/// against `%isStandardIPTC` (IPTC.pm:38-54, 1064-1102), and a trailer's is
+/// never standard, so it sets `LOW_PRIORITY_DIR{IPTC}` and `FoundTag`
+/// records every such tag at priority 0 (ExifTool.pm:9557-9560). A trailer's
+/// IPTC copy therefore never displaces a tag found before it -- the APP13
+/// IPTC or an XMP copy -- and is reachable only with `-a`.
+fn merge_trailer_winners(metadata: &mut MetadataMap, source: &MetadataMap) {
+    for (key, occurrence) in source.winner_occurrences() {
+        let priority = if key.starts_with("IPTC:") {
+            0
+        } else {
+            occurrence.priority
+        };
+        metadata.insert_copied_occurrence(
+            key.clone(),
+            occurrence,
+            priority,
+            &occurrence.group1,
+            occurrence.instance,
+        );
+    }
 }
 
 // ============================================================================

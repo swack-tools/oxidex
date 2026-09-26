@@ -261,33 +261,78 @@ struct Collector {
     /// The tag-name prefix taken from the innermost `jumd` label, which renames
     /// the `bfdb` / `bidb` / `c2sh` tags of the surrounding superbox.
     label: Option<String>,
+    /// `$$et{jumd_level}` (Jpeg2000.pm:777-796): the sub-document number at
+    /// each nesting level, empty outside every `jumb`.
+    levels: Vec<u32>,
+    /// `$$et{DOC_COUNT}` as far as JUMBF advances it: one per top-level `jumb`.
+    doc_count: u32,
+    /// Every `DOC_NUM` string seen so far, in first-seen order; a row's
+    /// [`Instance`] is its position here plus one.
+    docs: Vec<String>,
+    /// The `DOC_NUM` rows are found under, as an [`Instance`]; `None` (the
+    /// main document) outside a `jumb`, and -- as in `ProcessJUMB`, which
+    /// deletes `DOC_NUM` when a nested `jumb` returns -- between a nested
+    /// superbox's end and the next one's start.
+    doc: Option<Instance>,
 }
 
 impl Collector {
-    /// Records a tag under group `JUMBF`, with the first value seen winning
-    /// the default (non-`-a`) view.
+    /// Records a tag under group `JUMBF`, keeping every occurrence so `-a`
+    /// sees each box's copy (`tools/exiftool-tables/duplicate_loss_scan.py`
+    /// caught `ExifTool.jpg`/`XMP.svg`'s six boxes exposing one
+    /// `JUMDType`/`JUMDLabel`).
     ///
-    /// ExifTool reports one copy of a duplicated tag name unless `-a` is
-    /// given, and that copy is the first one extracted -- so a later box
-    /// repeating a name (every C2PA assertion carries its own `alg` or
-    /// `JUMDType`/`JUMDLabel`, for instance) must not displace the value
-    /// already reported. Previously this used a `contains_key` guard that
-    /// simply skipped `insert()` for every repeat, which kept the right
-    /// winner but never recorded the later occurrences at all -- a file
-    /// with N boxes sharing a tag name had 1 `JUMDType`/`JUMDLabel`
-    /// occurrence instead of N, invisible to `-a` (Stage 4's duplicate-loss
-    /// scan, `tools/exiftool-tables/duplicate_loss_scan.py`, is what caught
-    /// it: `ExifTool.jpg` and `XMP.svg` each carry six JUMBF boxes but
-    /// oxidex exposed only one `JUMDType`/`JUMDLabel`). `insert_occurrence`
-    /// with `Priority => 0` reproduces the same "first wins" default this
-    /// module has always had (`TagSink::record`'s priority-0 promotion,
-    /// `ExifTool.pm:9541-9551` -- the same rule JPEG COM's `Comment` uses,
-    /// `jpeg_helpers::process_com_segments`) while still recording every
-    /// occurrence, so `-a` can see them all.
+    /// Each `jumb` is a sub-document (`Jpeg2000::ProcessJUMB` sets `DOC_NUM`,
+    /// Jpeg2000.pm:777-796), so a row carries its superbox's [`Instance`] at
+    /// the tables' default priority 1 (neither `Jpeg2000::JUMD` nor
+    /// `JSON::Main` sets `PRIORITY`). `FoundTag`'s `DOC_NUM` guard
+    /// (ExifTool.pm:9564) then gives the "first wins" default across boxes,
+    /// and -- what a flat priority 0 got wrong -- a main-document tag found
+    /// before any JUMBF box keeps its name against every JUMBF copy
+    /// (`t/images/ExifTool.jpg`'s `-Copyright` is never the C2PA manifest's), while one found after them still displaces them.
     fn emit(&mut self, name: &str, value: TagValue) {
         let key = format!("JUMBF:{}", name);
+        let instance = self.doc.unwrap_or_default();
         self.metadata
-            .insert_occurrence(key, value, 0, "JUMBF", Instance::default());
+            .insert_occurrence(key, value, 1, "JUMBF", instance);
+    }
+
+    /// `ProcessJUMB`'s entry half (Jpeg2000.pm:779-786): number this
+    /// superbox's sub-document and make it current.
+    fn enter_superbox(&mut self) {
+        match self.levels.last_mut() {
+            Some(level) => *level += 1,
+            None => {
+                self.doc_count += 1;
+                self.levels.push(self.doc_count);
+            }
+        }
+        let doc_num = self
+            .levels
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join("-");
+        let index = match self.docs.iter().position(|seen| *seen == doc_num) {
+            Some(index) => index,
+            None => {
+                self.docs.push(doc_num);
+                self.docs.len() - 1
+            }
+        };
+        self.doc = Some(Instance(u32::try_from(index + 1).unwrap_or(u32::MAX)));
+        self.levels.push(0);
+    }
+
+    /// `ProcessJUMB`'s exit half (Jpeg2000.pm:788-795): `DOC_NUM` is deleted,
+    /// not restored to the parent's, and the level stack is dropped once
+    /// only the top-level number would remain.
+    fn leave_superbox(&mut self) {
+        self.doc = None;
+        self.levels.pop();
+        if self.levels.len() < 2 {
+            self.levels.clear();
+        }
     }
 
     /// Walks a sequence of JUMBF boxes.
@@ -338,7 +383,9 @@ impl Collector {
     fn process_box(&mut self, box_type: &[u8; 4], body: &[u8], depth: usize) {
         match box_type {
             b"jumb" => {
+                self.enter_superbox();
                 self.walk(body, depth + 1);
+                self.leave_superbox();
                 // ExifTool drops the label when a superbox finishes, so a
                 // sibling box cannot inherit a nested box's label.
                 self.label = None;
@@ -962,6 +1009,32 @@ mod tests {
         let payload = make_app11(&make_box(b"jumb", &outer), 1);
         let metadata = parse_jumbf(&[&payload]).expect("parse");
         assert_eq!(metadata.get_string("JUMBF:Alg").as_deref(), Some("sha256"));
+    }
+
+    /// Every `jumb` is its own sub-document (`ProcessJUMB`,
+    /// Jpeg2000.pm:777-796): each row carries a non-main [`Instance`], a
+    /// nested superbox its own, so the `DOC_NUM` guard keeps a JUMBF row from
+    /// displacing a main-document tag found before it.
+    #[test]
+    fn superboxes_are_numbered_sub_documents() {
+        let cbor: &[u8] = b"\xa1\x63alg\x66sha256";
+        let mut inner = jumd(b"cbor", Some("inner"));
+        inner.extend_from_slice(&make_box(b"cbor", cbor));
+        let mut outer = jumd(b"c2pa", Some("c2pa"));
+        outer.extend_from_slice(&make_box(b"jumb", &inner));
+        let payload = make_app11(&make_box(b"jumb", &outer), 1);
+        let metadata = parse_jumbf(&[&payload]).expect("parse");
+        let labels = metadata.occurrences_for("JUMBF:JUMDLabel");
+        assert_eq!(labels.len(), 2);
+        assert!(labels.iter().all(|o| o.instance != Instance::default()));
+        assert_ne!(labels[0].instance, labels[1].instance, "doc 1 vs doc 1-1");
+        let alg = metadata.occurrences_for("JUMBF:Alg");
+        assert_eq!(alg[0].instance, labels[1].instance, "found inside doc 1-1");
+
+        let mut main = MetadataMap::new();
+        main.insert("JUMBF:Alg", TagValue::String("main".into()));
+        main.merge(metadata);
+        assert_eq!(main.get_string("JUMBF:Alg"), Some("main"));
     }
 
     #[test]

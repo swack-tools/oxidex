@@ -15,7 +15,7 @@
 
 #![allow(dead_code)]
 
-use super::tag_occurrence::{TagOccurrence, ValueChannel};
+use super::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use super::tag_sink::TagSink;
 use super::tag_value::TagValue;
 use serde::de::{Deserialize, Deserializer};
@@ -598,6 +598,20 @@ impl MetadataMap {
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         self.raw_blocks.extend(other.raw_blocks);
         for (key, occurrence) in other.sink.into_keyed_occurrences() {
+            self.sink.record_keyed_carrying_over(key, occurrence);
+        }
+    }
+
+    /// [`merge`](Self::merge) for a map read from an embedded document that
+    /// ExifTool processes with `DOC_NUM` set: every occurrence is recorded
+    /// under `instance`, so `FoundTag`'s sub-document guard
+    /// (ExifTool.pm:9564) keeps it from displacing a main-document tag found
+    /// before it, while the embedded document's own tags still arbitrate
+    /// among themselves exactly as they did in `other`.
+    pub(crate) fn merge_as_subdocument(&mut self, other: MetadataMap, instance: Instance) {
+        self.raw_blocks.extend(other.raw_blocks);
+        for (key, mut occurrence) in other.sink.into_keyed_occurrences() {
+            occurrence.instance = instance;
             self.sink.record_keyed_carrying_over(key, occurrence);
         }
     }

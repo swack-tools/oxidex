@@ -167,6 +167,15 @@ pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
     metadata
 }
 
+/// Where the CanonVRD trailer [`parse_canon_vrd_trailer`] reads ends, if
+/// the file has one -- for ordering it against the other trailers ExifTool
+/// processes from the end of the file inwards (`ProcessTrailers`,
+/// ExifTool.pm:7019).
+pub fn canon_vrd_trailer_position(file: &[u8]) -> Option<usize> {
+    let trailer = find_trailer(file)?;
+    Some(trailer.as_ptr() as usize - file.as_ptr() as usize + trailer.len())
+}
+
 /// Reads a `.VRD` file, the standalone form of the same record.
 ///
 /// DPP writes the identical `CANON OPTIONAL DATA\0` block either appended to an

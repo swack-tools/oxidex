@@ -90,10 +90,12 @@ class RuntimeOwnershipTests(unittest.TestCase):
         self.assertEqual(
             inventory["category_totals"],
             {
-                "generated": 563,
+                # Kodak::Main TimeCreated/DateTimeStamp moved from the hand
+                # `kodak.rs::main_occurrences` to the generated table walk.
+                "generated": 565,
                 "not-applicable": 29,
                 "refused": 18,
-                "residual": 64,
+                "residual": 62,
                 "walker-owned": 0,
             },
         )

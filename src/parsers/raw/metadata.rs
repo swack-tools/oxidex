@@ -415,6 +415,49 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
     }
 }
 
+/// Records one generic IFD row of a TIFF-based raw file. `outside_priority_dir`
+/// is true for a directory read after IFD0 that is not ExifTool's
+/// `PRIORITY_DIR`: there an `Exif::Main` tag declared `Priority => 0`
+/// (ImageWidth, RowsPerStrip, XResolution, ...) keeps priority 0
+/// (ExifTool.pm:9549-9563) and never displaces a copy already found --
+/// `PhaseOne.iiq`'s bare `-ImageWidth` is PhaseOne's 7320, not the
+/// reduced-resolution IFD1's 1, and `DNG.dng`'s `-RowsPerStrip` is IFD0's 8,
+/// not a reduced SubIFD's.
+fn record_raw_ifd_row(
+    metadata: &mut MetadataMap,
+    tag_name: String,
+    tag_value: TagValue,
+    tag_id: u16,
+    outside_priority_dir: bool,
+) {
+    if outside_priority_dir
+        && crate::exiftool_tables::find_ifd_table("Exif", "Main")
+            .is_some_and(|table| crate::core::exif_dir_engine::tag_priority_is_zero(table, tag_id))
+    {
+        metadata.insert_occurrence(tag_name, tag_value, 0, "", crate::core::Instance::default());
+    } else {
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
+/// Whether a directory is a full-resolution image: SubfileType (0xfe) 0 or
+/// OldSubfileType (0xff) 1, the values whose `RawConv` calls
+/// `SetPriorityDir` (Exif.pm 13.59:450-472).
+fn is_full_resolution_directory(
+    tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    byte_order: ByteOrder,
+) -> bool {
+    tags.iter()
+        .any(|(tag_id, field_type, value_count, raw_bytes)| {
+            let value = match (*field_type, *value_count) {
+                (3, 1) => read_tiff_u16(raw_bytes.as_ref(), byte_order).map(u32::from),
+                (4, 1) => read_tiff_u32(raw_bytes.as_ref(), byte_order),
+                _ => None,
+            };
+            matches!((*tag_id, value), (0x00fe, Some(0)) | (0x00ff, Some(1)))
+        })
+}
+
 /// Parse TIFF-based raw formats using existing TIFF parser infrastructure
 ///
 /// This function handles the majority of raw formats as they are based on TIFF/EXIF.
@@ -496,6 +539,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         );
     }
 
+    // Whether ExifTool's `PRIORITY_DIR` is already set: the first directory
+    // whose SubfileType is 0 (or OldSubfileType 1) calls `SetPriorityDir`
+    // (Exif.pm 13.59:450-472, ExifTool.pm:9633-9637), in the order ExifTool
+    // reads them -- IFD0, the SubIFDs its 0x14a entry points at, then IFD1
+    // and on. Only that directory promotes its `Priority => 0` tags to 1
+    // (ExifTool.pm:9553-9556); in every other directory after IFD0 they stay
+    // 0 and never displace a copy already found (see `record_raw_ifd_row`).
+    // IFD0 is read first, so its rows win their names either way.
+    let mut priority_dir_set = false;
+
     // Walk the IFD chain (IFD0, IFD1, etc.)
     while ifd_offset != 0 && ifd_index < 10 {
         // Safety limit to prevent infinite loops
@@ -512,6 +565,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         // Parse this IFD
         match parse_ifd(&reader, ifd_offset, byte_order) {
             Ok(tags) => {
+                // Whether this directory is the one `SetPriorityDir` names.
+                let chain_is_priority_dir =
+                    !priority_dir_set && is_full_resolution_directory(&tags, byte_order);
+                priority_dir_set |= chain_is_priority_dir;
                 // Track sub-IFD offsets, MakerNote data, and camera make
                 let mut exif_ifd_offset = None;
                 let mut gps_ifd_offset = None;
@@ -521,6 +578,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut makernote_preview_ifd_base: Option<u64> = None;
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
+                // ExifIFD rows after its (last) 0x927C MakerNote entry, held
+                // until the MakerNote below is recorded: ProcessExif walks
+                // the MakerNote at its own entry (Exif.pm 13.59:7072-7110),
+                // so these are found after the MakerNote's tags and take an
+                // equal-priority bare name from them (ExifTool.pm:9564).
+                let mut exif_rows_after_makernote: Vec<(String, TagValue)> = Vec::new();
 
                 // ImageWidth and ImageHeight occur in multiple CR2 IFDs.
                 // Compute this IFD's complete pair and its TIFF subfile
@@ -627,11 +690,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e)
                                 .map(|(offset, _length)| offset)
                                 .unwrap_or(0);
+                        // `PanasonicRaw::ProcessJpgFromRaw` reads the preview
+                        // with `DOC_NUM = 1` (PanasonicRaw.pm:872-911): its
+                        // tags are sub-document `Doc1` tags, which never
+                        // displace a main-document tag already found
+                        // (ExifTool.pm:9564) -- Panasonic.rw2's bare
+                        // `-WBRedLevel` is the outer IFD0's 570, not the
+                        // preview MakerNote's 2283.
+                        let mut preview = MetadataMap::new();
                         if let Err(error) =
-                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut metadata)
+                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut preview)
                         {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
+                        metadata.merge_as_subdocument(preview, crate::core::Instance(1));
                         // Emit the JpgFromRaw binary itself (ExifTool EXIF:JpgFromRaw)
                         metadata.insert(
                             "EXIF:JpgFromRaw".to_string(),
@@ -959,7 +1031,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
-                    metadata.insert(tag_name, tag_value);
+                    record_raw_ifd_row(
+                        &mut metadata,
+                        tag_name,
+                        tag_value,
+                        *tag_id,
+                        ifd_index > 0 && !chain_is_priority_dir,
+                    );
                 }
 
                 // Parse EXIF Sub-IFD if present
@@ -970,8 +1048,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let mut exif_makernote: Option<Vec<u8>> = None;
                     let mut exif_makernote_location: Option<(usize, usize)> = None;
                     let mut exif_make: Option<String> = None;
+                    let last_makernote_entry =
+                        exif_tags.iter().rposition(|(tag_id, ..)| *tag_id == 0x927C);
 
-                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    for (entry_index, (tag_id, field_type, value_count, raw_bytes)) in
+                        exif_tags.iter().enumerate()
+                    {
                         let bytes = raw_bytes.as_ref();
 
                         // MakerNote in EXIF IFD (more common location)
@@ -1006,7 +1088,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                             )
                         };
-                        metadata.insert(tag_name, tag_value);
+                        if last_makernote_entry.is_some_and(|makernote| entry_index > makernote) {
+                            exif_rows_after_makernote.push((tag_name, tag_value));
+                        } else {
+                            metadata.insert(tag_name, tag_value);
+                        }
                     }
 
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
@@ -1185,6 +1271,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                 }
 
+                for (tag_name, tag_value) in exif_rows_after_makernote {
+                    metadata.insert(tag_name, tag_value);
+                }
+
                 // Recover the MakerNote the Adobe DNG Converter relocated into
                 // DNGPrivateData. The DNG carries no 0x927C of its own, so
                 // this is the only route to those tags.
@@ -1228,62 +1318,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // `SubIFD`, the second `SubIFD1`, the third `SubIFD2`, not
                 // `SubIFD0`/`SubIFD0`/`SubIFD0`.
                 //
-                // Fixing only that naming would not by itself make
-                // `Composite:ImageSize`/`Megapixels` correct on a multi-
-                // SubIFD DNG, though: a DNG's IFD0 is conventionally a
-                // reduced-resolution thumbnail while exactly one SubIFD
-                // (the one whose `SubfileType`/`NewSubfileType` is 0, "Full-
-                // resolution image") is the real image, and ExifTool picks
-                // that one for the bare `ImageWidth`/`ImageHeight` composite
-                // dependency through a *third*, distinct priority mechanism
-                // this crate does not implement anywhere yet:
-                // `ImageWidth`/`ImageHeight`/`BitsPerSample` each declare
-                // `Priority => 0` in `%Exif::Main` (Exif.pm:483-502, "Note:
-                // priority 0 tags automatically have their priority increased
-                // for the priority directory"), and `SubfileType`'s own
-                // `RawConv` calls `$self->SetPriorityDir()` the first time it
-                // sees value 0 (Exif.pm:445-462; `OldSubfileType`'s RawConv
-                // does the equivalent for value 1, Exif.pm:463-475).
-                // `FoundTag` then promotes a `Priority => 0` tag back to 1
-                // only while walking the one directory recorded as
-                // `$$self{PRIORITY_DIR}` (ExifTool.pm:9551-9560,
-                // `SetPriorityDir` at :9633-9636 is "first SubfileType-0
-                // directory wins, sticky for the rest of the file"). Every
-                // other IFD's ImageWidth stays at priority 0, which is why
-                // `SubIFD`'s "3516x2328" -- not IFD0's placeholder "8x8" or
-                // SubIFD1/SubIFD2's own reduced sizes -- wins the tie on
-                // `DNG.dng` (verified against the pinned 13.59 oracle,
-                // `-G1 -a -j -ImageWidth -SubfileType`:
-                // `SubIFD:SubfileType = "Full-resolution image"`,
-                // `SubIFD1:SubfileType`/`SubIFD2:SubfileType` both
-                // "Reduced-resolution image").
-                //
-                // Implementing that correctly is not a DNG-only patch: these
-                // three tag names are declared once in the shared
-                // `%Exif::Main` table and are among the most common tags in
-                // the entire corpus, extracted through this same generic
-                // IFD-walking code for every TIFF-based format (DNG, TIFF,
-                // NEF, CR2, ORF, ARW, RW2, PEF, ...). A `Priority => 0`
-                // default for ImageWidth/ImageHeight/BitsPerSample that is
-                // never promoted (`PRIORITY_DIR` never gets set at all on a
-                // file with no `SubfileType`/`OldSubfileType` tag -- the
-                // ordinary case for a plain photo) would silently make
-                // `IFD0:ImageWidth` lose a bare-name tie to *any* other
-                // same-named occurrence at normal priority, corpus-wide,
-                // which is exactly the class of broad regression this whole
-                // step has been closing rather than a fix for one. It needs
-                // a real "priority directory" concept -- detecting which IFD
-                // (if any) has `SubfileType == 0`/`OldSubfileType == 1`
-                // before any tag from it is inserted, since ExifTool's own
-                // stateful single-pass `SetPriorityDir` cannot be replayed
-                // as-is against this crate's own (differently ordered)
-                // extraction pipeline -- that does not exist anywhere in
-                // `TagOccurrence`/`TagSink` today and needs its own design,
-                // not a two-line change here. Left as a follow-up rather than
-                // rushed: see the Step 22 commit history for the corpus
-                // evidence (DNG.dng: oracle ImageSize "3516x2328"/Megapixels
-                // "8.2", oxidex "3456x2304"/"8.0" -- both wrong sub-IFD, not
-                // a rounding difference).
+                // The priority half of this gap is closed: ExifTool picks
+                // the full-resolution SubIFD's `ImageWidth`/`ImageHeight`/...
+                // for the bare name because those tags declare `Priority =>
+                // 0` in `%Exif::Main` and `SubfileType`'s `RawConv` calls
+                // `SetPriorityDir` for the first directory whose value is 0
+                // (Exif.pm:450-472; `FoundTag` promotes a `Priority => 0` tag
+                // only while walking `$$self{PRIORITY_DIR}`,
+                // ExifTool.pm:9549-9563, 9633-9637). `priority_dir_set` above
+                // tracks that directory across IFD0, these SubIFDs and IFD1+,
+                // and `record_raw_ifd_row` keeps every other directory's
+                // `Priority => 0` rows at 0 -- so `DNG.dng`'s bare
+                // `-ImageWidth` is SubIFD's 3516, not SubIFD2's 3456
+                // (`tools/exiftool-tables/bare_name_breadth.py`). The naming
+                // (`SubIFD0` for every entry) remains.
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
                     // Use SubIFD0, SubIFD1, etc. for tag naming
                     let sub_ifd_name = if sub_index == 0 {
@@ -1295,6 +1343,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        let sub_is_priority_dir = !priority_dir_set
+                            && is_full_resolution_directory(&sub_tags, byte_order);
+                        priority_dir_set |= sub_is_priority_dir;
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
@@ -1497,7 +1548,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 || tag_id != 0x0102
                                 || !metadata.contains_key(&tag_name)
                             {
-                                metadata.insert(tag_name, tag_value);
+                                record_raw_ifd_row(
+                                    &mut metadata,
+                                    tag_name,
+                                    tag_value,
+                                    tag_id,
+                                    !sub_is_priority_dir,
+                                );
                             }
                         }
                     }
@@ -5268,10 +5325,9 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     let is_cr3 = file_type == "CR3";
 
     // CR3 is an ISO Base Media container, so every `ftyp`/`moov`/`trak` box in
-    // it is the same box an MP4 carries. Walk it with the QuickTime box parser
-    // before touching the Canon boxes: this is the whole QuickTime tag group,
-    // and none of it needed new code.
-    let mut metadata =
+    // it is the same box an MP4 carries. Walk it with the QuickTime box parser:
+    // this is the whole QuickTime tag group, and none of it needed new code.
+    let quicktime =
         match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes_with_options(
             data, is_cr3,
         ) {
@@ -5281,24 +5337,20 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
             Err(_) => MetadataMap::new(),
         };
 
+    // The Canon `uuid` box (CNCV, CMT1-CMT4, THMB, CMP1; Canon.pm %Canon::uuid)
+    // is `moov`'s first child, ahead of `mvhd` and every `trak`, and
+    // QuickTime.pm walks `moov` in order, so its tags are found before the
+    // QuickTime ones. FoundTag gives an equal-priority tie to the later tag
+    // (ExifTool.pm:9564): `CanonRaw.cr3`'s bare `-CreateDate` is the
+    // MovieHeader's `2018:02:21 06:08:56-06:00`, found after the ExifIFD's.
+    // So the Canon rows are recorded first and the QuickTime walk's after them.
+    let mut metadata = MetadataMap::new();
     if let Some(version) = &compressor_version {
         metadata.insert(
             "Canon:CompressorVersion".to_string(),
             TagValue::new_string(version.clone()),
         );
     }
-    metadata.insert(
-        "File:FileType".to_string(),
-        TagValue::new_string(file_type.to_string()),
-    );
-    metadata.insert(
-        "File:FileTypeExtension".to_string(),
-        TagValue::new_string(file_type.to_ascii_lowercase()),
-    );
-    metadata.insert(
-        "File:MIMEType".to_string(),
-        TagValue::new_string(cr3_mime_type(file_type).to_string()),
-    );
 
     // Parse CMT1 box (standard TIFF IFD0 with optional EXIF IFD and MakerNote)
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
@@ -5451,6 +5503,20 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // Canon.pm's THMB conversion removes its 16-byte atom header and exposes
     // the remainder as the Canon/MakerNotes thumbnail.
     parse_cr3_thmb(data, &mut metadata);
+
+    metadata.merge(quicktime);
+    metadata.insert(
+        "File:FileType".to_string(),
+        TagValue::new_string(file_type.to_string()),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::new_string(file_type.to_ascii_lowercase()),
+    );
+    metadata.insert(
+        "File:MIMEType".to_string(),
+        TagValue::new_string(cr3_mime_type(file_type).to_string()),
+    );
 
     // Timed metadata is a sample stream, not an ISO box payload. Locate the
     // CTMD track through its own `stsz`/`co64` sample tables, then apply
@@ -5761,7 +5827,22 @@ fn parse_x3f_embedded_jpeg_exif(
                 interop_ifd_offset = Some(u64::from(read_u32(raw_bytes.as_ref(), byte_order)));
             }
         }
-        emit_x3f_exif_tags(&exif_tags, "ExifIFD", byte_order, metadata);
+        // ProcessExif walks the MakerNote sub-directory at its own 0x927C
+        // entry (Exif.pm 13.59:7072-7110), so its tags are found between the
+        // ExifIFD entries before it and the ones after it -- and FoundTag's
+        // equal-priority tie goes to the later one (ExifTool.pm:9564):
+        // SigmaDP2.x3f's bare `-ExposureMode` is ExifIFD 0xa402's `Auto`,
+        // found after Sigma::Main's `Program AE`.
+        let after_makernote = exif_tags
+            .iter()
+            .position(|(tag_id, ..)| *tag_id == 0x927C)
+            .map_or(exif_tags.len(), |index| index + 1);
+        emit_x3f_exif_tags(
+            &exif_tags[..after_makernote],
+            "ExifIFD",
+            byte_order,
+            metadata,
+        );
 
         // The Sigma MakerNote lives in the preview's ExifIFD. `parse_ifd`
         // hands back a MakerNote entry's payload, but the offsets INSIDE it
@@ -5777,6 +5858,12 @@ fn parse_x3f_embedded_jpeg_exif(
                 metadata,
             );
         }
+        emit_x3f_exif_tags(
+            &exif_tags[after_makernote..],
+            "ExifIFD",
+            byte_order,
+            metadata,
+        );
     }
 
     if let Some(offset) = interop_ifd_offset
@@ -6149,7 +6236,19 @@ fn parse_x3f_properties(data: &[u8], metadata: &mut MetadataMap) {
             // Map property names to ExifTool-compatible tag names
             let tag_name = map_x3f_property_name(&name);
             let value = convert_x3f_property_value(&name, &value).unwrap_or(value);
-            metadata.insert(tag_name, TagValue::new_string(value));
+            // `SigmaRaw::Properties` is `PRIORITY => 0` "because these aren't
+            // writable like the EXIF ones" (SigmaRaw.pm:134-137): a property
+            // never displaces a same-named tag found before it
+            // (ExifTool.pm:9469-9473, 9564) -- SigmaDP2.x3f's bare
+            // `-DriveMode` is Sigma::Main's `SINGLE`, `-MeteringMode` the
+            // MakerNote's, `-ExposureProgram` the ExifIFD's.
+            metadata.insert_occurrence(
+                tag_name,
+                TagValue::new_string(value),
+                0,
+                "",
+                crate::core::Instance::default(),
+            );
         }
     }
 }
@@ -7991,6 +8090,36 @@ fn format_x3f_compression(
 /// - Reuses existing JPEG/EXIF parsing infrastructure
 /// - Extracts camera settings, timestamps, and other standard metadata
 /// - Avoids need to reverse-engineer proprietary RAF format details
+/// Records a RAF's Fujifilm MakerNote (the embedded JPEG's ExifIFD 0x927C).
+fn record_raf_makernote(mn_data: &[u8], byte_order: ByteOrder, metadata: &mut MetadataMap) {
+    // Use the MakerNote dispatcher for Fujifilm
+    let mut makernote_tags = std::collections::HashMap::new();
+    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+        "FUJIFILM",
+        mn_data,
+        byte_order,
+        &mut makernote_tags,
+    ) {
+        eprintln!("Warning: Failed to parse Fujifilm MakerNote: {}", e);
+    } else {
+        // Add parsed MakerNote tags to metadata
+        for (tag_name, tag_value) in
+            crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags)
+        {
+            metadata.insert(tag_name, TagValue::new_string(tag_value));
+        }
+    }
+    // Also use RAF-specific MakerNote parser to extract additional camera metadata
+    if let Ok(raf_tags) = raf_parser::parse_raf_makernote(mn_data, byte_order) {
+        for (tag_name, tag_value) in raf_tags {
+            // Only add if not already present from dispatcher
+            if !metadata.contains_key(&tag_name) {
+                metadata.insert(tag_name, TagValue::new_string(tag_value));
+            }
+        }
+    }
+}
+
 fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // Validate RAF signature
     if data.len() < 16 || &data[0..16] != b"FUJIFILMCCD-RAW " {
@@ -8258,17 +8387,23 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     && let Ok(exif_tags) =
                                         parse_ifd(&exif_reader, offset, byte_order)
                                 {
-                                    // Track MakerNote data and Interoperability Sub-IFD pointer
-                                    let mut makernote_data: Option<Vec<u8>> = None;
+                                    // Track the Interoperability Sub-IFD pointer
                                     let mut interop_ifd_offset: Option<u64> = None;
 
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         let bytes = raw_bytes.as_ref();
 
-                                        // Check for MakerNote tag (0x927C)
+                                        // The MakerNote (0x927C) is parsed at its own
+                                        // entry, as ProcessExif walks a sub-directory
+                                        // (Exif.pm 13.59:7072-7110): its tags are found
+                                        // before the ExifIFD entries after it, which win
+                                        // an equal-priority bare name (ExifTool.pm:9564)
+                                        // -- FujiFilm.raf's `-Saturation` is ExifIFD
+                                        // 0xa409's `Normal`, not FujiFilm::Main's
+                                        // `0 (normal)`. The raw MakerNote is not reported.
                                         if *tag_id == 0x927C {
-                                            makernote_data = Some(bytes.to_vec());
-                                            continue; // Don't add raw MakerNote to metadata
+                                            record_raf_makernote(bytes, byte_order, &mut metadata);
+                                            continue;
                                         }
 
                                         // Interoperability Sub-IFD pointer (tag 0xA005)
@@ -8333,48 +8468,6 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                                         byte_order,
                                                     );
                                                     metadata.insert(tag_name, tag_value);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Parse MakerNote if present (Fujifilm camera)
-                                    if let Some(mn_data) = makernote_data.as_ref() {
-                                        // Use the MakerNote dispatcher for Fujifilm
-                                        let mut makernote_tags = std::collections::HashMap::new();
-                                        if let Err(e) =
-                                            crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-                                                "FUJIFILM",
-                                                mn_data,
-                                                byte_order,
-                                                &mut makernote_tags,
-                                            )
-                                        {
-                                            eprintln!(
-                                                "Warning: Failed to parse Fujifilm MakerNote: {}",
-                                                e
-                                            );
-                                        } else {
-                                            // Add parsed MakerNote tags to metadata
-                                            for (tag_name, tag_value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
-                                                metadata.insert(
-                                                    tag_name,
-                                                    TagValue::new_string(tag_value),
-                                                );
-                                            }
-                                        }
-
-                                        // Also use RAF-specific MakerNote parser to extract additional camera metadata
-                                        if let Ok(raf_tags) =
-                                            raf_parser::parse_raf_makernote(mn_data, byte_order)
-                                        {
-                                            for (tag_name, tag_value) in raf_tags {
-                                                // Only add if not already present from dispatcher
-                                                if !metadata.contains_key(&tag_name) {
-                                                    metadata.insert(
-                                                        tag_name,
-                                                        TagValue::new_string(tag_value),
-                                                    );
                                                 }
                                             }
                                         }

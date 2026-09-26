@@ -45,23 +45,26 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
                 if length >= 4 {
                     let value_reader = EndianReader::big_endian(value_data);
                     let quality = value_reader.i32_at(0).unwrap_or(0);
-                    metadata.insert(
-                        "Ducky:Quality".to_string(),
+                    insert_ducky_avoided(
+                        metadata,
+                        "Ducky:Quality",
                         TagValue::Integer(quality as i64),
                     );
                 }
             }
             0x0002 => {
                 // Comment
-                metadata.insert(
-                    "Ducky:Comment".to_string(),
+                insert_ducky_avoided(
+                    metadata,
+                    "Ducky:Comment",
                     TagValue::String(decode_ducky_text(value_data)),
                 );
             }
             0x0003 => {
                 // Copyright
-                metadata.insert(
-                    "Ducky:Copyright".to_string(),
+                insert_ducky_avoided(
+                    metadata,
+                    "Ducky:Copyright",
                     TagValue::String(decode_ducky_text(value_data)),
                 );
             }
@@ -78,6 +81,16 @@ pub fn parse_ducky_segment(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     }
 
     Ok(())
+}
+
+/// Records one of the three named Ducky tags. APP12.pm:102-127 gives each
+/// `Priority => 0, Avoid => 1`, so `FoundTag` (ExifTool.pm:9469-9473, 9564)
+/// never lets a Ducky copy displace a `Copyright`/`Comment`/`Quality` already
+/// found, and a later ordinary tag of the same name displaces it:
+/// `t/images/ExifTool.jpg`'s bare `-Copyright` is the MIE trailer's, not
+/// Ducky's copy of the IFD0 string.
+fn insert_ducky_avoided(metadata: &mut MetadataMap, key: &str, value: TagValue) {
+    metadata.insert_occurrence(key, value, 0, "Ducky", Instance::default());
 }
 
 /// Decodes a Ducky text value: a 4-byte character count followed by UTF-16

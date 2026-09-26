@@ -1341,6 +1341,30 @@ fn ifd0_twins(reader: &dyn FileReader, byte_order: ByteOrder, exif_ifd: u64) -> 
     }
 }
 
+/// The names JFIF records beside `Exif::Main`'s `Priority => 0` copies.
+/// ExifTool ranks the JFIF ones at `Priority => -1` (ExifTool.pm:2209-2235),
+/// below an ExifIFD 0; oxidex records them at 1, so an ExifIFD row with one
+/// of these names keeps the hand arm's 1 (`DirEngineRows::at_priority`).
+const JFIF_TWIN_NAMES: [&str; 3] = ["XResolution", "YResolution", "ResolutionUnit"];
+
+/// Whether an ExifIFD row keeps its `Exif::Main` priority 0 (`Priority => 0`
+/// or `Avoid`, ExifTool.pm:9469-9473). The ExifIFD is never ExifTool's
+/// `PRIORITY_DIR` (ExifTool.pm:9553-9556, 9636), so nothing promotes it, and
+/// that matters now that the MakerNote is found at its 0x927C entry:
+/// `Casio2.jpg`'s Casio::Type2 `WhiteBalance` is found before ExifIFD 0xa403,
+/// whose `Priority => 0` leaves the bare `-WhiteBalance` with the MakerNote.
+///
+/// Two twins keep the hand arm's 1 instead, because oxidex does not record
+/// them where ExifTool finds them: a JFIF copy (`JFIF_TWIN_NAMES`), and an
+/// IFD0 copy, which oxidex records before the whole ExifIFD although ExifTool
+/// may find it after the pointer -- [`loses_to_ifd0_twin`] alone decides that
+/// pair, as ExifTool's order would.
+fn keeps_exif_ifd_priority_zero(metadata: &MetadataMap, name: &str, priority_zero: bool) -> bool {
+    priority_zero
+        && !JFIF_TWIN_NAMES.contains(&name)
+        && metadata.get(&format!("IFD0:{name}")).is_none()
+}
+
 /// Whether a row named `name` of a directory under IFD0's `ExifOffset` edge
 /// (the ExifIFD, its InteropIFD), whose own ExifTool priority is 0 exactly
 /// when `priority_zero` (`Priority => 0` or `Avoid`), loses a bare
@@ -1387,14 +1411,14 @@ fn parse_exif_directory_with_session(
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
         let physical_indices = physical_entry_indices(reader, offset, byte_order, &exif_tags);
-        // Track MakerNote and InteroperabilityIFD pointer in EXIF IFD
-        // An EXIF IFD may declare 0x927C more than once -- an editor that
-        // appends its own private block leaves the camera's in place, and
-        // ExifTool processes each entry in turn. Keeping only the last one
-        // meant `Apple_iPhone6.jpg`, whose second 0x927C is a UTF-16 JSON blob
+        // Track the InteroperabilityIFD pointer in the EXIF IFD. Each 0x927C
+        // MakerNote is parsed at its own entry (below): an EXIF IFD may
+        // declare 0x927C more than once -- an editor that appends its own
+        // private block leaves the camera's in place, and ExifTool processes
+        // each entry in turn. Keeping only the last one meant
+        // `Apple_iPhone6.jpg`, whose second 0x927C is a UTF-16 JSON blob
         // written by an editing app, reached the Apple parser with the wrong
         // 142 bytes and reported nothing at all.
-        let mut exif_makernote_data: Vec<(&[u8], Option<usize>)> = Vec::new();
         let mut interop_ifd_offset: Option<u64> = None;
 
         // ExifTool's MakerNote Condition list reads `$$self{Make}` and
@@ -1441,7 +1465,8 @@ fn parse_exif_directory_with_session(
                     table, tiff, tiff_base, offset, byte_order, "ExifIFD", metadata, session, ctx,
                 )
                 .demote(|name, priority_zero| {
-                    loses_to_ifd0_twin(metadata, &twins, name, priority_zero)
+                    keeps_exif_ifd_priority_zero(metadata, name, priority_zero)
+                        || loses_to_ifd0_twin(metadata, &twins, name, priority_zero)
                 })
                 .at_priority(SHIM_DEFAULT_PRIORITY)
                 .keep_hand(EXIF_IFD_HAND_KEPT)
@@ -1471,15 +1496,34 @@ fn parse_exif_directory_with_session(
             // Convert Cow<[u8]> to &[u8] for processing
             let bytes = raw_bytes.as_ref();
 
-            // Check for MakerNote in EXIF IFD (tag 0x927C)
+            // A MakerNote is a `SubDirectory`, and ProcessExif walks a
+            // sub-directory at its own entry, inside the IFD loop (Exif.pm
+            // 13.59:7072-7110), so its tags are found after the ExifIFD
+            // entries before 0x927C and before the ones after it. FoundTag
+            // gives an equal-priority tie to the later tag (ExifTool.pm:9564),
+            // so that position decides bare-name winners: `Pentax.jpg`'s
+            // `-Contrast` is ExifIFD 0xa408's `Normal`, found after
+            // Pentax::Main's `0 (normal)`, while `Kodak.jpg`'s `-MeteringMode`
+            // is Kodak::Main's, found after ExifIFD 0x9207. Parsing every
+            // MakerNote after the whole directory gave the MakerNote the later
+            // position for both. The decoder is given the enclosing TIFF block
+            // as well as the payload, because a MakerNote's value offsets are
+            // measured from the TIFF header and routinely address bytes past
+            // the payload's declared end.
             if *tag_id == MAKERNOTE {
-                exif_makernote_data.push((
+                let maker_ctx = makernote_context(
+                    reader,
+                    offset,
+                    byte_order,
+                    tiff_base,
+                    tiff_len,
                     bytes,
                     physical_indices
                         .as_ref()
                         .and_then(|indices| indices.get(survivor_index))
                         .copied(),
-                ));
+                );
+                parse_makernote_with_session(&maker_ctx, byte_order, session, ctx, metadata);
             }
 
             // Check for InteroperabilityIFDPointer (tag 0xA005)
@@ -1566,7 +1610,9 @@ fn parse_exif_directory_with_session(
             // priority is the static table's, in force or not.
             let priority_zero = find_ifd_table("Exif", "Main")
                 .is_some_and(|table| exif_dir_engine::tag_priority_is_zero(table, *tag_id));
-            if loses_to_ifd0_twin(metadata, &twins, base_name, priority_zero) {
+            if keeps_exif_ifd_priority_zero(metadata, base_name, priority_zero)
+                || loses_to_ifd0_twin(metadata, &twins, base_name, priority_zero)
+            {
                 priority = 0;
             }
 
@@ -1623,27 +1669,9 @@ fn parse_exif_directory_with_session(
         }
 
         // Engine rows whose entry the hand walk never reached (`parse_ifd`
-        // drops a malformed entry `read_ifd` may accept), still before the
-        // MakerNote pass.
+        // drops a malformed entry `read_ifd` may accept).
         if let Some(engine) = engine {
             engine.finish(metadata, exif_ifd_key, |_, _| true);
-        }
-
-        // Second pass: parse the MakerNote found in the EXIF IFD. The decoder
-        // is given the enclosing TIFF block as well as the payload, because a
-        // MakerNote's value offsets are measured from the TIFF header and
-        // routinely address bytes past the payload's declared end.
-        for (makernote_bytes, entry_index) in exif_makernote_data {
-            let maker_ctx = makernote_context(
-                reader,
-                offset,
-                byte_order,
-                tiff_base,
-                tiff_len,
-                makernote_bytes,
-                entry_index,
-            );
-            parse_makernote_with_session(&maker_ctx, byte_order, session, ctx, metadata);
         }
 
         // Third pass: Parse Interoperability IFD if pointer was found
@@ -4310,10 +4338,18 @@ fn parse_makernote_with_session(
     // group, so decode it with the same code (ported from origin/main
     // 47037a04).
     if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
-        for (tag, value) in
-            crate::parsers::xmp::google_hdrp::decode_hdrp_makernote_bytes(ctx.payload())
-        {
-            metadata.insert(tag, TagValue::String(value));
+        use crate::parsers::xmp::google_hdrp::{
+            HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
+        };
+        for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
+            let priority = hdrp_tag_priority(&tag);
+            metadata.insert_occurrence(
+                tag,
+                TagValue::String(value),
+                priority,
+                HDRP_GROUP1,
+                crate::core::Instance::default(),
+            );
         }
         return;
     }
@@ -5639,8 +5675,10 @@ mod exif_subifd_tests {
     /// (Priority 0) and the withheld 0xfe4e (`Avoid`, so priority 0 too)
     /// after it: FoundTag keeps the first of two priority-0 copies, and ORA
     /// `-j` prints 0xa403's `Manual` (`-a` shows both, `Custom` second).
-    /// The residual row carries its tag's priority 0 and cannot displace the
-    /// engine row; the hand arm alone (engine off) printed `Custom`.
+    /// Both rows carry their tags' priority 0 (the ExifIFD is never
+    /// `PRIORITY_DIR`: `keeps_exif_ifd_priority_zero`), so the residual row
+    /// cannot displace the engine row -- and the hand arm alone (engine off),
+    /// which printed `Custom` while it recorded 0xa403 at 1, now agrees.
     #[test]
     fn same_name_pairs_keep_exiftools_winner() {
         let at = tail_at(2);
@@ -5669,10 +5707,19 @@ mod exif_subifd_tests {
         assert_eq!(metadata.get_string("ExifIFD:WhiteBalance"), Some("Manual"));
         let occurrences = metadata.occurrences_for("ExifIFD:WhiteBalance");
         assert_eq!(occurrences.len(), 2);
-        assert_eq!(occurrences[0].priority, SHIM_DEFAULT_PRIORITY, "engine");
+        assert_eq!(occurrences[0].priority, 0, "engine 0xa403: Priority => 0");
         assert_eq!(occurrences[1].priority, 0, "residual 0xfe4e: Avoid");
         let hand = walk_exif(&data, None, None, &[]);
-        assert_eq!(hand.get_string("ExifIFD:WhiteBalance"), Some("Custom"));
+        let hand_occurrences = hand.occurrences_for("ExifIFD:WhiteBalance");
+        assert_eq!(hand_occurrences.len(), 2);
+        assert!(hand_occurrences.iter().all(|o| o.priority == 0));
+        // The hand arm stores 0xa403 unconverted; the first of the two
+        // priority-0 copies holds the key, never 0xfe4e's `Custom`.
+        assert_eq!(
+            hand.get("ExifIFD:WhiteBalance"),
+            Some(&hand_occurrences[0].raw)
+        );
+        assert_ne!(hand.get_string("ExifIFD:WhiteBalance"), Some("Custom"));
     }
 
     /// An engine row beside an IFD0 twin is kept (pinned `-a -G1` prints

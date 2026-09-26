@@ -4,7 +4,7 @@
 
 use base64::{Engine as _, engine::general_purpose};
 
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
+use crate::core::{FileFormat, FileReader, FormatParser, Instance, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::rdf_parser::{insert_grouped_xmp_tag, insert_xmp_packet};
 
@@ -462,7 +462,8 @@ impl SVGParser {
         );
 
         let mut first_jumd_seen = false;
-        Self::parse_jumbf_boxes(&decoded, metadata, &mut first_jumd_seen, 0);
+        let mut docs = JumbfDocs::default();
+        Self::parse_jumbf_boxes(&decoded, metadata, &mut first_jumd_seen, &mut docs, 0);
     }
 
     /// Recursively walks JUMBF boxes (ISO/IEC 19566-5), extracting the JUMDType/JUMDLabel
@@ -472,6 +473,7 @@ impl SVGParser {
         data: &[u8],
         metadata: &mut MetadataMap,
         first_jumd_seen: &mut bool,
+        docs: &mut JumbfDocs,
         depth: usize,
     ) {
         if depth > 20 {
@@ -493,13 +495,17 @@ impl SVGParser {
             let content = &data[offset + 8..offset + length];
 
             if box_type == b"jumb" {
-                Self::parse_jumbf_boxes(content, metadata, first_jumd_seen, depth + 1);
+                docs.count += 1;
+                docs.doc = Some(Instance(docs.count));
+                Self::parse_jumbf_boxes(content, metadata, first_jumd_seen, docs, depth + 1);
+                docs.doc = None;
             } else if box_type == b"jumd" {
                 if !*first_jumd_seen {
                     *first_jumd_seen = true;
                     if content.len() >= 17 {
                         let uuid = &content[0..16];
-                        metadata.insert(
+                        docs.record(
+                            metadata,
                             "JUMBF:JUMDType".to_string(),
                             TagValue::new_string(Self::format_jumd_type(uuid)),
                         );
@@ -509,7 +515,8 @@ impl SVGParser {
                             && let Ok(label) = std::str::from_utf8(&rest[..nul_rel])
                             && !label.is_empty()
                         {
-                            metadata.insert(
+                            docs.record(
+                                metadata,
                                 "JUMBF:JUMDLabel".to_string(),
                                 TagValue::new_string(label.to_string()),
                             );
@@ -517,7 +524,7 @@ impl SVGParser {
                     }
                 }
             } else if box_type == b"json" {
-                Self::extract_jumbf_json_strings(content, metadata);
+                Self::extract_jumbf_json_strings(content, metadata, docs);
             }
 
             offset += length;
@@ -559,7 +566,7 @@ impl SVGParser {
     /// Extracts string values from a JUMBF "json" content box, inserting tags as
     /// `JUMBF:<CapitalizedKey>`. Only the first value seen for a given key is kept
     /// (matching ExifTool's JSON-based output, which cannot represent duplicate keys).
-    fn extract_jumbf_json_strings(content: &[u8], metadata: &mut MetadataMap) {
+    fn extract_jumbf_json_strings(content: &[u8], metadata: &mut MetadataMap, docs: &JumbfDocs) {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(content) else {
             return;
         };
@@ -570,10 +577,30 @@ impl SVGParser {
             if let Some(s) = val.as_str() {
                 let tag_key = format!("JUMBF:{}", capitalize_first(key));
                 if !metadata.contains_key(&tag_key) {
-                    metadata.insert(tag_key, TagValue::new_string(s.to_string()));
+                    docs.record(metadata, tag_key, TagValue::new_string(s.to_string()));
                 }
             }
         }
+    }
+}
+
+/// The JUMBF sub-document a C2PA manifest row is found in.
+///
+/// `Jpeg2000::ProcessJUMB` numbers every `jumb` superbox as a sub-document
+/// (`DOC_NUM`) and deletes the number when a nested one returns
+/// (Jpeg2000.pm:777-796), so under `FoundTag`'s `DOC_NUM` guard
+/// (ExifTool.pm:9564) a manifest row never displaces a main-document tag
+/// found before it: `t/images/XMP.svg`'s bare `-Title` is `XMP-dc`'s
+/// "MyFoo Financial Report", not the manifest's JSON `Title`.
+#[derive(Default)]
+struct JumbfDocs {
+    count: u32,
+    doc: Option<Instance>,
+}
+
+impl JumbfDocs {
+    fn record(&self, metadata: &mut MetadataMap, key: String, value: TagValue) {
+        metadata.insert_occurrence(key, value, 1, "", self.doc.unwrap_or_default());
     }
 }
 
