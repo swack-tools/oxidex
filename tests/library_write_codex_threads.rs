@@ -115,30 +115,67 @@ fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
     chunk
 }
 
-/// Thread 3 (write_transaction.rs:549). A PNG text chunk whose literal
-/// keyword is `XMP` surfaces as `PNG:XMP`, and the PNG writer edits that
-/// chunk; the proof must read that chunk back, not look for an
-/// `XML:com.adobe.xmp` packet. (13.59 answers `-PNG:XMP=world` on such a file
-/// `Sorry, PNG:XMP doesn't exist or isn't writable`; oxidex edits the chunk
-/// its reader reports -- the point here is that success is not refused.)
+/// Thread 3 (write_transaction.rs:549), superseded by the maintainer's
+/// decision on PR #951 review comment 4098201945: a PNG text chunk whose
+/// literal keyword is `XMP` surfaces as `PNG:XMP`, and pinned ExifTool 13.59
+/// refuses to write that key at all -- `Sorry, PNG:XMP doesn't exist or
+/// isn't writable` / `Nothing to do.`, on both a set and a deletion, file
+/// untouched (measured directly against the pinned oracle: `-PNG:XMP=world`
+/// and `-PNG:XMP=` on a copy of this same chunk both print exactly that
+/// warning, exit 1, and leave the file byte-identical). oxidex used to edit
+/// the literal chunk instead (3010ab4b); it now matches ExifTool and refuses
+/// through the same typed [`ExifToolError::TagsNotWritten`] every other
+/// unwritable-tag request uses, for `modify_tag`, `remove_tag` and
+/// `apply_tag_changes` alike. A real XMP packet (no literal `XMP`-keyword
+/// chunk) is unaffected -- see
+/// `production_wiring_tests::png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks`.
 #[test]
-fn a_literal_xmp_text_chunk_is_verified_as_the_chunk_written() {
+fn a_literal_xmp_text_chunk_is_not_writable() {
     let dir = TempDir::new().unwrap();
     let mut bytes = fs::read(PNG_TEXT).unwrap();
     let iend = bytes.windows(4).rposition(|w| w == b"IEND").unwrap() - 4;
     bytes.splice(iend..iend, png_chunk(b"tEXt", b"XMP\0hello"));
     let file = dir.path().join("xmp.png");
     fs::write(&file, &bytes).unwrap();
+    let before = fs::read(&file).unwrap();
     assert_eq!(
         read_metadata(&file).unwrap().get_string("PNG:XMP"),
         Some("hello")
     );
-    let outcome = modify_tag(&file, "PNG:XMP", TagValue::new_string("world"))
-        .expect("the text chunk is edited and read back");
-    assert_eq!(outcome, WriteOutcome::Updated);
+
+    let set_err = modify_tag(&file, "PNG:XMP", TagValue::new_string("world"))
+        .expect_err("13.59 refuses a set of a literal XMP-keyword chunk");
+    assert!(
+        matches!(&set_err, ExifToolError::TagsNotWritten { .. }),
+        "{set_err:?}"
+    );
+    let set_refused = set_err.tags_not_written();
+    assert_eq!(set_refused.len(), 1);
+    assert_eq!(set_refused[0].tag, "PNG:XMP");
+    assert_eq!(
+        set_refused[0].reason,
+        "Sorry, PNG:XMP doesn't exist or isn't writable"
+    );
+    assert_eq!(fs::read(&file).unwrap(), before, "set must not touch bytes");
+
+    let delete_err =
+        remove_tag(&file, "PNG:XMP").expect_err("13.59 refuses a deletion of the same chunk");
+    let delete_refused = delete_err.tags_not_written();
+    assert_eq!(delete_refused.len(), 1);
+    assert_eq!(delete_refused[0].tag, "PNG:XMP");
+    assert_eq!(
+        delete_refused[0].reason,
+        "Sorry, PNG:XMP doesn't exist or isn't writable"
+    );
+    assert_eq!(
+        fs::read(&file).unwrap(),
+        before,
+        "deletion must not touch bytes"
+    );
     assert_eq!(
         read_metadata(&file).unwrap().get_string("PNG:XMP"),
-        Some("world")
+        Some("hello"),
+        "the chunk is exactly as it was"
     );
 }
 

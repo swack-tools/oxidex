@@ -9,7 +9,9 @@ use oxidex::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
 };
 use oxidex::cli::rename;
-use oxidex::cli::write_transaction::{WriteOutcome, WritePlan, write_plan_file};
+use oxidex::cli::write_transaction::{
+    WriteOutcome, WritePlan, is_exiftool_refusal_message, write_plan_file,
+};
 use oxidex::core::operations::read_metadata_report_with_detector_and_options;
 use oxidex::core::read_report::ParseStatus;
 use std::process;
@@ -378,7 +380,16 @@ fn finish_write(
             println!("    1 image files unchanged");
         }
         Err(message) => {
-            eprintln!("Error: {}", message);
+            // A refusal that is ExifTool's own warning text (`Warning: Sorry,
+            // <tag> doesn't exist or isn't writable` / `Nothing to do.`, the
+            // PNG `XMP` literal-text-chunk case) is printed as ExifTool
+            // itself would print it, not wrapped in oxidex's own `Error:`
+            // diagnosis.
+            if is_exiftool_refusal_message(&message) {
+                eprintln!("{}", message);
+            } else {
+                eprintln!("Error: {}", message);
+            }
             process::exit(1);
         }
     }
