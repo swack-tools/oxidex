@@ -257,9 +257,12 @@ def offset_targets(et: Oracle, path: str) -> list[tuple[str, str, int, int]]:
         name = parts[-1]
         if name not in ISOFFSET or not isinstance(value, int):
             continue
-        stem = re.sub(r"(Start|Offset)$", "", name)
+        # plural pairs too (StripOffsets/StripByteCounts, FreeOffsets,
+        # TileOffsets), stemmed and suffixed as makernote_offset_pairs.pl
+        # pairs them for the generated Rust inventory
+        stem = re.sub(r"(Offsets?|Start)$", "", name)
         prefix = ":".join(parts[:-1])
-        for suffix in ("Length", "Size", "ByteCount"):
+        for suffix in ("Length", "Size", "ByteCount", "ByteCounts"):
             length = rows.get(f"{prefix}:{stem}{suffix}")
             if isinstance(length, int) and length > 0:
                 out.append((name, "isoffset", value, length))

@@ -11,7 +11,10 @@ use strict; use warnings;
 use Image::ExifTool;
 my $lib = $INC{'Image/ExifTool.pm'}; $lib =~ s{/Image/ExifTool\.pm$}{};
 opendir my $d, "$lib/Image/ExifTool" or die; my @mods = sort grep s/\.pm$//, readdir $d;
-for my $m (@mods) { eval "require Image::ExifTool::$m"; }
+# A module that cannot load (a dependency the selected Perl lacks) would drop
+# every pair it declares from the inventory while the walk still succeeds:
+# abort instead, naming the module and Perl's error.
+for my $m (@mods) { eval "require Image::ExifTool::$m; 1" or die "cannot load Image::ExifTool::$m: $@"; }
 no strict 'refs';
 my @pkgs = ('Image::ExifTool', map { "Image::ExifTool::$_" } sort grep { /^\w+$/ } map { my $x = $_; $x =~ s/::$//; $x } grep /::$/, keys %{"Image::ExifTool::"});
 my %out;

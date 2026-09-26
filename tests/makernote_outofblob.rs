@@ -1233,3 +1233,126 @@ fn every_exif_block_of_a_jpeg_is_verified() {
         }
     }
 }
+
+/// Every physical MakerNote (0x927C) entry of `tiff`'s ExifIFD, in table
+/// order, by a structural walk independent of the writer.
+fn exif_makernotes(tiff: &[u8]) -> Vec<Vec<u8>> {
+    let order = if &tiff[..2] == b"II" {
+        Order::Ii
+    } else {
+        Order::Mm
+    };
+    let rows = |at: usize| {
+        let n = order.read_u16(&tiff[at..]) as usize;
+        (0..n).map(move |i| at + 2 + 12 * i)
+    };
+    let ifd0 = order.read_u32(&tiff[4..]) as usize;
+    let Some(exif) = rows(ifd0)
+        .find(|e| order.read_u16(&tiff[*e..]) == 0x8769)
+        .map(|e| order.read_u32(&tiff[e + 8..]) as usize)
+    else {
+        return Vec::new();
+    };
+    rows(exif)
+        .filter(|e| order.read_u16(&tiff[*e..]) == 0x927C)
+        .map(|e| {
+            let count = order.read_u32(&tiff[e + 4..]) as usize;
+            let at = order.read_u32(&tiff[e + 8..]) as usize;
+            tiff[at..at + count].to_vec()
+        })
+        .collect()
+}
+
+/// An EXIF block whose ExifIFD holds two physical MakerNote entries, as
+/// `Apple_iPhone6.jpg` does (its second, 142-byte note is an editing app's;
+/// pinned ExifTool 13.59 `-v3` lists both, warning "Duplicate tag 0x927c").
+fn two_note_block(order: Order) -> (Vec<u8>, [Vec<u8>; 2]) {
+    let make = ascii("Apple");
+    let model = ascii("iPhone 6");
+    let software = ascii(SOFTWARE);
+    let ifd0_entries = |exif_at: u32| {
+        vec![
+            entry(0x010F, 2, make.len() as u32, make.clone()),
+            entry(0x0110, 2, model.len() as u32, model.clone()),
+            entry(0x0131, 2, software.len() as u32, software.clone()),
+            entry(0x0132, 2, 20, ascii("2003:02:28 09:45:00")),
+            entry(0x8769, 4, 1, order.u32(exif_at).to_vec()),
+        ]
+    };
+    let exif_at = 8 + ifd(order, 8, &ifd0_entries(0), &[]).len();
+    let first = b"<first physical maker note, 40 bytes..>".to_vec();
+    let second = b"<second note: an editing app's>".to_vec();
+    let mut tiff = order.mark().to_vec();
+    tiff.extend(order.u16(42));
+    tiff.extend(order.u32(8));
+    tiff.extend(ifd(order, 8, &ifd0_entries(exif_at as u32), &[]));
+    tiff.extend(ifd(
+        order,
+        exif_at,
+        &[
+            entry(0x829A, 5, 1, [order.u32(1), order.u32(60)].concat()),
+            entry(0x927C, 7, first.len() as u32, first.clone()),
+            entry(0x927C, 7, second.len() as u32, second.clone()),
+        ],
+        &[],
+    ));
+    assert_eq!(exif_makernotes(&tiff), [first.clone(), second.clone()]);
+    (tiff, [first, second])
+}
+
+/// P1 "preserve every duplicate MakerNote entry": an ExifIFD with two
+/// physical 0x927C entries. The serializer keeps one entry per tag id, so a
+/// re-laying edit dropped the second note while the guard, comparing only
+/// the first, passed it. Every edit either keeps BOTH notes byte-identical
+/// or is refused with the file untouched. Pinned ExifTool 13.59 keeps both
+/// (graded below on the same file). Red at af8e2b86 (the second note was
+/// silently deleted and the write reported success).
+#[test]
+fn every_physical_maker_note_is_kept_or_the_edit_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let (tiff, notes) = two_note_block(order);
+        for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
+            for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
+                let name = format!("two-notes-{order:?}-{edit:?}.{carrier}");
+                let path = write(dir.path(), &name, &file);
+                match apply(&path, edit) {
+                    Ok(()) => assert_eq!(
+                        exif_makernotes(&tiff_of(&std::fs::read(&path).unwrap())),
+                        notes,
+                        "{name}: a physical MakerNote was dropped or changed"
+                    ),
+                    Err(e) => {
+                        assert!(e.to_string().contains("MakerNote"), "{name}: {e}");
+                        assert_eq!(
+                            std::fs::read(&path).unwrap(),
+                            file,
+                            "{name}: refused but modified"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // The oracle's behaviour on the same layout: both notes survive an edit.
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let (tiff, notes) = two_note_block(Order::Mm);
+    let src = write(dir.path(), "two-notes-oracle.jpg", &jpeg_with(&tiff));
+    let out = dir.path().join("two-notes-oracle-out.jpg");
+    let status = oracle
+        .command()
+        .args(["-q", "-q", "-IFD0:ModifyDate=2001:02:03 04:05:06", "-o"])
+        .arg(&out)
+        .arg(&src)
+        .status()
+        .unwrap();
+    assert!(status.success(), "pinned ExifTool failed the edit");
+    assert_eq!(
+        exif_makernotes(&tiff_of(&std::fs::read(&out).unwrap())),
+        notes,
+        "pinned ExifTool 13.59 keeps every physical MakerNote"
+    );
+}

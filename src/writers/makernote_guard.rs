@@ -615,6 +615,62 @@ fn makernotes(
     notes
 }
 
+/// Every physical MakerNote entry (0x927C, value past its entry) of `tiff`,
+/// duplicates included, in table order: `(directory, value offset, bytes)`.
+/// [`makernotes`] keeps only the first per directory (the one decoded);
+/// this is every entry the block carries.
+fn physical_makernotes(tiff: &[u8]) -> Vec<(IfdKind, usize, &[u8])> {
+    let Some(layout) = OriginalLayout::of(tiff) else {
+        return Vec::new();
+    };
+    layout
+        .values
+        .iter()
+        .filter(|(_, tag, _, _)| *tag == MAKERNOTE)
+        .filter_map(|(ifd, _, at, len)| Some((*ifd, *at, tiff.get(*at..at.checked_add(*len)?)?)))
+        .collect()
+}
+
+/// A directory that keeps any MakerNote after the write keeps every one the
+/// original held there, in order, each at its original offset with its
+/// original bytes. An IFD may carry several physical 0x927C entries (Apple
+/// iPhone JPEGs add an editing app's note after the camera's); pinned
+/// ExifTool 13.59 keeps all of them on an edit, while the serializer keeps
+/// one entry per tag id, so a re-laid-out block would silently lose the
+/// later ones. A directory the write leaves with no MakerNote deleted them.
+fn verify_every_physical_note(before_tiff: &[u8], after_tiff: &[u8]) -> Result<()> {
+    let before = physical_makernotes(before_tiff);
+    let after = physical_makernotes(after_tiff);
+    let mut ifds: Vec<IfdKind> = Vec::new();
+    for (ifd, _, _) in &before {
+        if !ifds.contains(ifd) {
+            ifds.push(*ifd);
+        }
+    }
+    for ifd in ifds {
+        let of = |notes: &[(IfdKind, usize, &[u8])]| {
+            notes
+                .iter()
+                .filter(|(i, _, _)| *i == ifd)
+                .map(|(_, at, bytes)| (*at, bytes.to_vec()))
+                .collect::<Vec<_>>()
+        };
+        let (was, kept) = (of(&before), of(&after));
+        // a lone note is checked (with its readback) by the caller's loop
+        if was.len() < 2 || kept.is_empty() || kept == was {
+            continue;
+        }
+        return Err(refused(format!(
+            "the {} holds {} MakerNote entries and the write would keep {} of them \
+             in place and unchanged (one entry per tag id is serialized)",
+            ifd.prefix(),
+            was.len(),
+            kept.iter().filter(|note| was.contains(note)).count()
+        )));
+    }
+    Ok(())
+}
+
 /// Post-condition of an EXIF write on a block with a MakerNote, checked on
 /// the produced bytes before anything is committed: every maker-note value
 /// reads back unchanged, including the data it locates outside the note.
@@ -641,6 +697,10 @@ fn makernotes(
 ///   end (a JPEG-trailer preview), when the original carrier holds them;
 /// * a Canon `OriginalDecisionDataOffset` (no length tag) locates the same
 ///   OriginalDecisionData block, read with the ODD reader.
+///
+/// A directory that keeps any MakerNote keeps every physical 0x927C entry
+/// the original held there, duplicates included, each in place and
+/// unchanged ([`verify_every_physical_note`]).
 ///
 /// Any mismatch refuses the write. A note the write deletes is not checked.
 pub(crate) fn verify_makernote_preserved(
@@ -674,6 +734,7 @@ pub(crate) fn verify_makernote_preserved(
     }
     let after = scan_entries_with_magics(after_tiff, magics)?;
     let after_notes = makernotes(&after, after_tiff);
+    verify_every_physical_note(before_tiff, after_tiff)?;
 
     let identity = |scan: &crate::writers::exif_surgical::ExifScan| {
         (
