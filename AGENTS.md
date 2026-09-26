@@ -386,21 +386,6 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
-**Keep the exclusive lock for measurements that need it.** Full-corpus
-`conformance.py` runs and sweeps take the exclusive lock and stall every other
-agent's build. Run them only when a change can alter what is read:
-- readers;
-- tag arbitration or winner selection;
-- value conversion on the read path.
-
-A writer-only or CLI-only change is covered by the read-regression gate (CI
-runs it on every PR) plus targeted oracle-graded tests, so it doesn't need a
-corpus conformance run.
-
-A Linux host such as `server` may take heavy runs only while its load average
-is below about half its core count. Check with `uptime` first. Otherwise queue
-on this machine.
-
 **Delete build directories you will not need again.** A separate
 `CARGO_TARGET_DIR` per worktree keeps parallel builds from colliding, but each
 one grows to 20–50 GB, and a single release push once left about 1 TB of them
