@@ -526,10 +526,10 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         }
 
         let Some(descriptor) = get_tag_descriptor(key) else {
-            return Err(ExifToolError::parse_error(format!(
-                "Cannot add tag '{}': not a known EXIF tag",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                "not a known EXIF tag, so it cannot be added",
+            ));
         };
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
