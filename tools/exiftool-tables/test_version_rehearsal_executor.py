@@ -914,6 +914,9 @@ class ExecutorTests(unittest.TestCase):
                     os.kill(command_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+            for stream in list(executor._RETAINED_LOCKS):
+                executor._RETAINED_LOCKS.remove(stream)
+                stream.close()  # the in-process owner exits; closing frees the description
 
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "the lineage supervisor is Linux-only")
