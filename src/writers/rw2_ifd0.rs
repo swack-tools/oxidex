@@ -184,17 +184,22 @@ impl Rw2 {
 
     /// Whether pinned ExifTool 13.59 leaves the embedded EXIF as it is for
     /// `IFD0:<tag>` = `value`: its IFD0 already holds `value`, byte for byte
-    /// as the planner would encode it, and no other of its directories holds
-    /// the tag -- ExifTool moves such a copy into IFD0 (`-v2` of
-    /// `-IFD0:ISO=80` on a JpgFromRaw whose IFD0 and ExifIFD both hold ISO
-    /// 80: "- ExifIFD:ISO = '80'"; evidence `probe-review-956.txt`).
+    /// as the planner would encode it, and its ExifIFD does not hold the tag
+    /// -- ExifTool moves such a copy into IFD0 (`-v2` of `-IFD0:ISO=80` on a
+    /// JpgFromRaw whose IFD0 and ExifIFD both hold ISO 80: "- ExifIFD:ISO =
+    /// '80'"; evidence `probe-review-956.txt`). ExifIFD is the only
+    /// directory it moves one from: WriteExif.pl 13.59:20-23 `%crossDelete =
+    /// (ExifIFD => 'IFD0', IFD0 => 'ExifIFD')`, applied at :1156-1171. A
+    /// same-ID entry in IFD1 (the thumbnail's Make, XResolution) is another
+    /// directory's tag and stays as it is (#956 review, rw2_ifd0.rs:198:
+    /// `-IFD0:Make=Acmesonic` leaves `Doc1:IFD1` Make untouched).
     fn embedded_unchanged(&self, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
         let Some(Some(scan)) = &self.embedded else {
             return false;
         };
         scan.entries
             .iter()
-            .all(|entry| entry.ifd == IfdKind::Ifd0 || entry.tag_id != tag.id)
+            .all(|entry| entry.ifd != IfdKind::ExifIfd || entry.tag_id != tag.id)
             && holds(scan, IfdKind::Ifd0, key, tag, value)
     }
 

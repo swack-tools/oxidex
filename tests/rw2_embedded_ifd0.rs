@@ -633,3 +633,81 @@ fn rw2_bare_names_answer_as_the_oracle_does() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// The records of the IFD1 chained after the IFD0 of a little-endian TIFF
+/// starting at `tiff`, with their tag ids.
+fn ifd1_records(b: &[u8], tiff: usize) -> Vec<(usize, u16)> {
+    let ifd0 = tiff + u32_le(b, tiff + 4) as usize;
+    let next = ifd0 + 2 + 12 * usize::from(u16_le(b, ifd0));
+    let ifd1 = tiff + u32_le(b, next) as usize;
+    (0..usize::from(u16_le(b, ifd1)))
+        .map(|i| ifd1 + 2 + 12 * i)
+        .map(|at| (at, u16_le(b, at)))
+        .collect()
+}
+
+/// [`with_embedded_make`] "Acmesonic", plus a Make in the JpgFromRaw's IFD1:
+/// its Compression record (0x0103, the IFD's first) renumbered 0x010f and
+/// made the inline ASCII "Acm", so the records stay in order.
+fn with_embedded_ifd1_make(original: &[u8]) -> Vec<u8> {
+    let mut b = with_embedded_make(original, b"Acmesonic\0");
+    let tiff = embedded_tiff(&b);
+    let (at, _) = ifd1_records(&b, tiff)
+        .into_iter()
+        .find(|(_, tag)| *tag == 0x0103)
+        .unwrap();
+    b[at..at + 2].copy_from_slice(&0x010fu16.to_le_bytes());
+    b[at + 2..at + 4].copy_from_slice(&2u16.to_le_bytes());
+    b[at + 4..at + 8].copy_from_slice(&4u32.to_le_bytes());
+    b[at + 8..at + 12].copy_from_slice(b"Acm\0");
+    b
+}
+
+/// Review of #956 (rw2_ifd0.rs:198): the only copy of a tag pinned ExifTool
+/// 13.59 moves when it writes `IFD0:<tag>` is an ExifIFD one
+/// (WriteExif.pl 13.59:20-23 `%crossDelete = (ExifIFD => 'IFD0', IFD0 =>
+/// 'ExifIFD')`, applied at :1156-1171). A same-ID entry in the JpgFromRaw's
+/// IFD1 is left alone, so it is no reason to refuse:
+///
+/// - `IFD0:Make=Acmesonic` where the embedded IFD0 already holds Acmesonic
+///   and the embedded IFD1 holds a Make too: ExifTool rewrites the outer
+///   Make and leaves `Doc1:IFD1` Make as it was (`-v2`: no IFD1 change);
+/// - `IFD0:XResolution=180` on t/images Panasonic.rw2, whose JpgFromRaw
+///   holds XResolution 180 in IFD0 and in IFD1, and whose outer IFD0 has
+///   none: ExifTool changes no value.
+///
+/// Both were refused at e4d2d79a ("writes it into the IFD0 of the embedded
+/// JpgFromRaw"). The ExifIFD case stays refused
+/// (`rw2_same_value_ifd0_sets_check_every_outer_destination`).
+#[test]
+fn rw2_ifd0_sets_ignore_embedded_copies_exiftool_does_not_move() {
+    let Some(original) = sample() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let ifd1_make = with_embedded_ifd1_make(&original);
+    let arg = "-IFD0:Make=Acmesonic";
+    let (code, text, after) = cli(dir.path(), &ifd1_make, arg);
+    assert_eq!(code, Some(0), "IFD1 Make {arg}: {text}");
+    assert!(text.contains("1 image files updated"), "{text}");
+    let (start, len) = jpg_from_raw(&ifd1_make);
+    let (start2, len2) = jpg_from_raw(&after);
+    assert_eq!(
+        &after[start2..start2 + len2],
+        &ifd1_make[start..start + len],
+        "IFD1 Make: JpgFromRaw changed"
+    );
+    assert_oracle_parity(&ifd1_make, &after, arg, "IFD1 Make");
+    let path = write(dir.path(), "lib.rw2", &ifd1_make);
+    modify_tag(&path, "IFD0:Make", TagValue::new_string("Acmesonic")).expect("IFD1 Make, library");
+    assert_eq!(
+        read_metadata(&path).unwrap().get_string("IFD0:Make"),
+        Some("Acmesonic")
+    );
+
+    let arg = "-IFD0:XResolution=180";
+    let (code, text, after) = cli(dir.path(), &original, arg);
+    assert_eq!(code, Some(0), "Panasonic.rw2 {arg}: {text}");
+    assert!(after == original, "Panasonic.rw2 {arg}: file changed");
+    assert_oracle_parity(&original, &after, arg, "Panasonic.rw2");
+}
