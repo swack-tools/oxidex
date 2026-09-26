@@ -526,6 +526,62 @@ class ExecutorTests(unittest.TestCase):
             for child in children:
                 executor._close_ownership_probe(child)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage boundary is a Linux child subreaper; Darwin has no kernel "
+                         "equivalent, so a descendant that detaches and closes every inherited "
+                         "descriptor there remains a documented residual")
+    def test_success_cannot_leave_detached_descendant_that_closed_its_descriptors(self):
+        """Ownership-pipe EOF is not proof: a detached close_fds descendant must not outlive success."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "for fd in (int(sys.argv[1]), int(sys.argv[2])):\n"
+            "    os.write(fd, f'{os.getpid()}\\n'.encode())\n"
+            "    os.close(fd)\n"
+            "time.sleep(60)\n"
+        )
+        # The direct child waits until its detached descendant is running,
+        # then exits 0. The descendant keeps only the two report pipes it was
+        # explicitly passed (close_fds=True): no host-lock or ownership probe.
+        child_program = (
+            "import os, subprocess, sys\n"
+            "ready_read, ready_write = os.pipe()\n"
+            "report = int(sys.argv[1])\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], str(report), str(ready_write)], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=True, pass_fds=(report, ready_write))\n"
+            "os.close(ready_write)\n"
+            "os.read(ready_read, 64)\n"
+        )
+        try:
+            record = executor._run_record(
+                [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                cwd=self.root, env=dict(os.environ), run=subprocess.run,
+            )
+            os.close(write_fd)
+            write_fd = -1
+            descendant_pid = int(_read_reported_line(read_fd))
+            self.assertNotEqual(record["state"], "ok", record)
+            self.assertEqual(record["state"], "escaped_descendants", record)
+            self.assertIn(descendant_pid, record["escaped_descendants"])
+            self.assertEqual(record["exit"], 0)
+            self.assertFalse(executor._pid_live(descendant_pid),
+                             "a detached descendant outlived the accepted command")
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
 
