@@ -1145,54 +1145,15 @@ impl CliArgs {
             return Some((tag, "-=".to_string(), value));
         }
 
-        // Check for = operator (but not if it's part of += or -=)
-        // Also need to distinguish from regular tag modifications
-        if let Some(pos) = arg.find('=').and_then(tag_end) {
-            let tag = arg[1..pos].to_string();
-            let value = arg[pos + 1..].to_string();
-
-            // CreateDate and DateTimeOriginal are normal writable EXIF tags. Routing an absolute
-            // assignment through the date-shift path makes it impossible to
-            // create tags 0x9004/0x9003 when absent, because that path only
-            // patches existing date entries. Keep it in the ordinary write
-            // path, which can add a new ExifIFD entry like ExifTool does.
-            if matches!(
-                tag
-                .rsplit_once(':')
-                .map_or(tag.as_str(), |(_, name)| name),
-                name if name.eq_ignore_ascii_case("CreateDate")
-                    || name.eq_ignore_ascii_case("DateTimeOriginal")
-            ) {
-                return None;
-            }
-            // A PDF Info date is an ordinary write too: the shift path only
-            // patches EXIF dates, so `-PDF:ModifyDate=2020:01:02 03:04:05`
-            // failed there ("not a DateTime tag") while pinned 13.59 writes it.
-            if tag
-                .split_once(':')
-                .is_some_and(|(group, _)| group.eq_ignore_ascii_case("PDF"))
-            {
-                return None;
-            }
-
-            // Check if this looks like a date shift operation
-            // Date shifts should have either:
-            // - "AllDates" as the tag pattern (case-insensitive)
-            // - A tag containing a date-related keyword (DateTime, Date, CreateDate, etc.)
-            // - A value in date format (contains colons and spaces like "Y:M:D H:M:S" or "YYYY:MM:DD HH:MM:SS")
-
-            let tag_lower = tag.to_lowercase();
-            let is_date_tag =
-                tag_lower == "alldates" || tag_lower.contains("date") || tag_lower.contains("time");
-
-            let is_date_value = value.contains(':') && value.contains(' ');
-
-            // Only treat as date shift if both tag and value look date-related
-            if is_date_tag && is_date_value {
-                return Some((tag, "=".to_string(), value));
-            }
-        }
-
+        // An absolute `-TAG=VALUE` is never a shift, whatever the tag: it is
+        // an ordinary set (ExifTool's `SetNewValue`), which the write
+        // transaction orders with every other request -- a group deletion
+        // before or after it included -- and counts by the same-value-set
+        // rule. Routing `-ModifyDate=...` or `-AllDates=...` here ran it
+        // before every set and deletion whatever the argument order
+        // (13.59: `-EXIF:All= -ModifyDate=<d>` keeps the new date) and
+        // reported a same-value assignment `unchanged` (#957,
+        // PRRT_kwDOQNbr5M6mSLMA, PRRT_kwDOQNbr5M6mSLMB).
         None
     }
 }
@@ -1671,13 +1632,11 @@ mod tests {
                 "0:1:0 0:0:0".to_string()
             ))
         );
+        // An absolute assignment is an ordinary set, never a shift (#957
+        // round 7): it is ordered with the other requests.
         assert_eq!(
             CliArgs::parse_date_shift("-EXIF:DateTime=2025:01:15 10:30:00"),
-            Some((
-                "EXIF:DateTime".to_string(),
-                "=".to_string(),
-                "2025:01:15 10:30:00".to_string()
-            ))
+            None
         );
     }
 

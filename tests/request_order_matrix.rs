@@ -31,6 +31,9 @@
 //!
 //! `OXIDEX_ORDER_MATRIX_REPORT=<path>` writes every case's verdict as JSON.
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::exiftool_oracle::{self, Oracle};
 use oxidex::ffi::{
     EXIFTOOL_ERR_TAG_NOT_WRITTEN, EXIFTOOL_OK, EXIFTOOL_WRITE_UPDATED, exiftool_create,
@@ -1030,4 +1033,474 @@ fn single_file_list_and_directory_writes_agree() {
         "{} cases differ by write path",
         mismatches.len()
     );
+}
+
+/// The tag a CLI argument names (`-EXIF:All=` -> `EXIF:All`, `-AllDates+=1`
+/// -> `AllDates`), and whether it deletes a group.
+fn arg_tag(arg: &str) -> Option<(&str, bool)> {
+    let body = arg.strip_prefix('-')?;
+    let end = body.find(['=', '<', '>']).unwrap_or(body.len());
+    let tag = body[..end].trim_end_matches(['+', '-']);
+    let group = tag
+        .rsplit_once(':')
+        .is_some_and(|(_, name)| name.eq_ignore_ascii_case("all"))
+        || tag.eq_ignore_ascii_case("all") && body[end..].starts_with('=');
+    Some((tag, group && body[end..].starts_with('=')))
+}
+
+/// Whether a later argument of `args` deletes a group that cancels the
+/// request of argument `at` (see [`cancels`]).
+fn cancelled_arg(args: &[String], at: usize) -> bool {
+    let Some((tag, false)) = arg_tag(&args[at]) else {
+        return false;
+    };
+    let group = tag.rsplit_once(':').map_or("", |(group, _)| group);
+    args[at + 1..].iter().any(|later| match arg_tag(later) {
+        Some((deleted, true)) => {
+            let deleted = deleted.rsplit_once(':').map_or("all", |(group, _)| group);
+            // An ungrouped date lands in EXIF where the file has it.
+            cancels(deleted, if group.is_empty() { "exififd" } else { group })
+        }
+        _ => false,
+    })
+}
+
+/// The tags or selectors a CLI refusal names: `tag '<T>'`, `copy '<S>'`,
+/// `dates for '<T>'`.
+fn cli_refusal_names(stderr: &str) -> Vec<String> {
+    ["tag '", "copy '", "for '"]
+        .iter()
+        .flat_map(|marker| {
+            stderr
+                .split(marker)
+                .skip(1)
+                .filter_map(|rest| rest.split_once('\'').map(|(name, _)| name.to_string()))
+        })
+        .collect()
+}
+
+/// Refusals of a whole command line that name what they refuse (no tag to
+/// quote): the combinations the CLI does not apply.
+const PLAN_REFUSALS: &[&str] = &["Error: Combining ", "is both set and shifted"];
+
+/// Date and `-TagsFromFile` cases: (label, fixture, CLI arguments).
+fn date_and_copy_cases() -> Vec<(String, PathBuf, Vec<String>)> {
+    let mut cases = Vec::new();
+    let date = "2025:01:02 03:04:05";
+    let canon = fixtures::pinned_t_images_fixture_path("Canon.jpg");
+    let owned = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    // Dates: each operation alone, then beside a group deletion or a field
+    // request, in both orders.
+    let mut date_fixtures: Vec<(PathBuf, Vec<String>)> = vec![
+        (
+            PathBuf::from(JPEG_NO_GPS),
+            vec![
+                format!("-DateTimeOriginal={date}"),
+                format!("-ModifyDate={date}"),
+                format!("-AllDates={date}"),
+                "-DateTimeOriginal=2024:01:01 12:00:00".into(),
+                "-DateTimeOriginal+=1:0:0 0:0:0".into(),
+                "-AllDates+=1:0:0 0:0:0".into(),
+                "-AllDates-=0:1:0 0:0:0".into(),
+                "-ModifyDate+=0:0:1 0:0:0".into(),
+            ],
+        ),
+        (
+            PathBuf::from(PNG),
+            vec![
+                format!("-DateTimeOriginal={date}"),
+                "-DateTimeOriginal=2024:03:01 10:00:00".into(),
+                "-DateTimeOriginal+=1:0:0 0:0:0".into(),
+                "-AllDates+=1:0:0 0:0:0".into(),
+            ],
+        ),
+        (
+            PathBuf::from(PDF),
+            vec![
+                format!("-PDF:CreateDate={date}"),
+                "-PDF:CreateDate=2024:01:15 14:30:00+00:00".into(),
+                "-DateTimeOriginal+=1:0:0 0:0:0".into(),
+            ],
+        ),
+    ];
+    if let Some(canon) = &canon {
+        date_fixtures.push((
+            canon.clone(),
+            vec![
+                format!("-DateTimeOriginal={date}"),
+                format!("-ModifyDate={date}"),
+                format!("-AllDates={date}"),
+                "-AllDates=2003:12:04 06:46:52".into(),
+                "-ModifyDate=2003:12:04 06:46:52".into(),
+                "-AllDates+=1:0:0 0:0:0".into(),
+                "-ExifIFD:CreateDate-=0:0:1 0:0:0".into(),
+                "-ModifyDate+=0:0:1 0:0:0".into(),
+            ],
+        ));
+    }
+    let partners = [
+        "-EXIF:All=",
+        "-IFD0:All=",
+        "-ExifIFD:All=",
+        "-GPS:All=",
+        "-IFD0:Artist=x",
+        "-IFD0:Artist=",
+    ];
+    for (fixture, dates) in &date_fixtures {
+        let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
+        for op in dates {
+            cases.push((format!("date {name}"), fixture.clone(), vec![op.clone()]));
+            for partner in partners {
+                for args in [
+                    vec![op.clone(), partner.to_string()],
+                    vec![partner.to_string(), op.clone()],
+                ] {
+                    cases.push((format!("date {name}"), fixture.clone(), args));
+                }
+            }
+        }
+    }
+    // -TagsFromFile selectors, alone and with a set or deletion before or
+    // after the copy.
+    let selectors: Vec<Vec<&str>> = vec![
+        vec!["-all"],
+        vec!["-all", "-Make"],
+        vec!["-all", "--Make"],
+        vec!["--Make"],
+        vec!["-Make"],
+        vec!["-IFD0:all"],
+        vec!["-EXIF:all"],
+        vec!["-XMP:all"],
+        vec!["-XMP-dc:Title"],
+        vec!["-XMP-dc:Title>IFD0:Artist"],
+        vec!["-Make>Artist"],
+        vec!["-IFD0:Model>IFD0:Artist", "-Make"],
+        vec!["-*Model"],
+        vec!["-IFD0:*"],
+        vec!["-all", "--IFD0:Model"],
+        vec!["-IFD0:all", "--Make"],
+    ];
+    // Selector semantics, from a JPEG with EXIF and XMP into JPEGs without
+    // XMP, where a copy maps EXIF to EXIF and oxidex names the XMP it skips.
+    // Which other groups 13.59's by-name, preferred-group copy also writes
+    // (a JPEG's File:ImageWidth into XMP-tiff, a PDF's Info into XMP, EXIF
+    // into a PNG's text chunks) and a camera file's maker notes are the
+    // copy's destination mapping, not its selectors -- a separate class.
+    let pairs: Vec<(String, PathBuf)> = vec![
+        (JPEG_EXIF_XMP.into(), PathBuf::from(JPEG_NO_GPS)),
+        (
+            JPEG_EXIF_XMP.into(),
+            PathBuf::from("tests/fixtures/jpeg/sample_with_exif.jpg"),
+        ),
+    ];
+    for (index, (source, destination)) in pairs.iter().enumerate() {
+        let name = destination
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for selector in &selectors {
+            let mut copy = owned(&["-TagsFromFile", source]);
+            copy.extend(owned(selector));
+            cases.push((format!("copy {name}"), destination.clone(), copy.clone()));
+            if index != 0 {
+                continue;
+            }
+            for request in ["-IFD0:Artist=z", "-IFD0:Make=", "-EXIF:All="] {
+                let mut after = copy.clone();
+                after.push(request.to_string());
+                cases.push((format!("copy {name}"), destination.clone(), after));
+                let mut before = vec![request.to_string()];
+                before.extend(copy.clone());
+                cases.push((format!("copy {name}"), destination.clone(), before));
+            }
+        }
+    }
+    cases
+}
+
+/// Date operations (absolute sets, `+=`/`-=` shifts, `AllDates`, same-value
+/// sets) beside group deletions and field requests in both orders, and
+/// `-TagsFromFile` selector combinations (`all`, `all` with a tag, a
+/// hyphenated group, `GROUP:all`, `--TAG` exclusions, redirection,
+/// wildcards) alone and with a set or deletion before or after the copy
+/// (#957 round 7). Graded like the ordering matrix, against pinned 13.59
+/// running the same command: the oracle's read of both outputs, the
+/// updated/unchanged count, and whether the command is refused -- a
+/// refusal counts only when it names what it refuses (a tag, a selector,
+/// or a listed combination), leaves the file untouched, names no request a
+/// later deletion cancels, and carries a listed reason.
+#[test]
+fn dates_and_copies_match_pinned_exiftool() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let cases = date_and_copy_cases();
+    let root = tempfile::tempdir().unwrap();
+    type Run = (Outcome, PathBuf, Outcome, PathBuf, Vec<u8>, String);
+    let runs: Vec<Mutex<Option<Run>>> = cases.iter().map(|_| Mutex::new(None)).collect();
+    let next = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(6));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((_, fixture, args)) = cases.get(index) else {
+                        break;
+                    };
+                    let dir = root.path().join(index.to_string());
+                    fs::create_dir(&dir).unwrap();
+                    let ext = fixture.extension().unwrap().to_str().unwrap();
+                    let theirs = dir.join(format!("theirs.{ext}"));
+                    let ours = dir.join(format!("ours.{ext}"));
+                    fs::copy(fixture, &theirs).unwrap();
+                    fs::copy(fixture, &ours).unwrap();
+                    let o = oracle
+                        .command()
+                        .arg("-overwrite_original")
+                        .args(args)
+                        .arg(&theirs)
+                        .output()
+                        .unwrap();
+                    let their_outcome = cli_outcome(
+                        o.status.code(),
+                        &String::from_utf8_lossy(&o.stdout),
+                        &String::from_utf8_lossy(&o.stderr),
+                    );
+                    let before = fs::read(&ours).unwrap();
+                    let o = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                        .args(args)
+                        .arg(&ours)
+                        .output()
+                        .unwrap();
+                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                    let our_outcome = cli_outcome(
+                        o.status.code(),
+                        &String::from_utf8_lossy(&o.stdout),
+                        &stderr,
+                    );
+                    *runs[index].lock().unwrap() =
+                        Some((their_outcome, theirs, our_outcome, ours, before, stderr));
+                }
+            });
+        }
+    });
+    let runs: Vec<Run> = runs
+        .into_iter()
+        .map(|slot| slot.into_inner().unwrap().unwrap())
+        .collect();
+    let files: Vec<PathBuf> = runs
+        .iter()
+        .flat_map(|run| [run.1.clone(), run.3.clone()])
+        .collect();
+    let rows = oracle_rows(oracle, &files);
+    let mut verdicts: Vec<(String, Verdict, String)> = Vec::new();
+    for ((kind, _, args), (theirs_outcome, theirs, ours_outcome, ours, before, stderr)) in
+        cases.iter().zip(&runs)
+    {
+        let label = format!("{kind} {args:?}");
+        let untouched = fs::read(ours).unwrap() == *before;
+        let (verdict, detail) = match (ours_outcome, theirs_outcome) {
+            (Outcome::Refused(why), Outcome::Refused(_)) => {
+                if untouched {
+                    (Verdict::Match, format!("both refused: {why}"))
+                } else {
+                    (
+                        Verdict::Mismatch,
+                        format!("refused but changed the file: {why}"),
+                    )
+                }
+            }
+            (Outcome::Refused(why), _) => {
+                let names = cli_refusal_names(stderr);
+                let planned = PLAN_REFUSALS.iter().any(|needle| stderr.contains(needle));
+                let cancelled = names.iter().any(|name| {
+                    args.iter().enumerate().any(|(at, arg)| {
+                        arg_tag(arg).is_some_and(|(tag, _)| tag.eq_ignore_ascii_case(name))
+                            && cancelled_arg(args, at)
+                    })
+                });
+                let named = NAMED_REFUSALS
+                    .iter()
+                    .find(|(needle, _)| why.contains(needle));
+                if names.is_empty() && !planned {
+                    (Verdict::Mismatch, format!("untyped refusal: {why}"))
+                } else if !untouched {
+                    (
+                        Verdict::Mismatch,
+                        format!("refused but changed the file: {why}"),
+                    )
+                } else if cancelled {
+                    (
+                        Verdict::Mismatch,
+                        format!("refused a request a later deletion cancels: {why}"),
+                    )
+                } else if let Some((_, reason)) = named {
+                    (Verdict::NamedRefusal, format!("{reason}: {why}"))
+                } else {
+                    (Verdict::Mismatch, format!("unlisted refusal: {why}"))
+                }
+            }
+            (_, Outcome::Refused(why)) => (
+                Verdict::Mismatch,
+                format!("13.59 refuses ({why}) but oxidex wrote"),
+            ),
+            (outcome, expected) => {
+                let (ours_rows, their_rows) = (&rows[ours], &rows[theirs]);
+                let skipped_all = skipped_groups(stderr);
+                let only_skipped = |ours: &BTreeSet<String>, theirs: &BTreeSet<String>| {
+                    ours.difference(theirs).next().is_none()
+                        && !skipped_all.is_empty()
+                        && theirs
+                            .difference(ours)
+                            .all(|row| row_in_groups(row, &skipped_all))
+                };
+                if outcome != expected
+                    && *outcome == Outcome::Unchanged
+                    && only_skipped(ours_rows, their_rows)
+                {
+                    // Everything 13.59 wrote was in groups oxidex skips by
+                    // name, so oxidex wrote nothing.
+                    (
+                        Verdict::NamedRefusal,
+                        format!(
+                            "a best-effort copy skips the groups oxidex cannot write, and \
+                             names them: {skipped_all:?}"
+                        ),
+                    )
+                } else if outcome != expected {
+                    (
+                        Verdict::Mismatch,
+                        format!("outcome {outcome:?}, 13.59 {expected:?}"),
+                    )
+                } else if ours_rows != their_rows {
+                    let only_ours: Vec<_> = ours_rows.difference(their_rows).collect();
+                    let only_theirs: Vec<_> = their_rows.difference(ours_rows).collect();
+                    // A best-effort copy (`all`, `GROUP:all`, a wildcard)
+                    // skips the groups oxidex cannot write -- and names them
+                    // (`Warning: Not copied from SRC: oxidex cannot write the
+                    // XMP group(s) here`): what 13.59 alone wrote must be
+                    // exactly those groups.
+                    let skipped: Vec<&str> = stderr
+                        .lines()
+                        .filter_map(|line| line.split_once("oxidex cannot write the "))
+                        .filter_map(|(_, rest)| rest.split_once(" group(s)"))
+                        .flat_map(|(groups, _)| groups.split(", "))
+                        .collect();
+                    let in_skipped = |row: &&String| {
+                        let group = row
+                            .strip_prefix('[')
+                            .and_then(|rest| rest.split_once(']'))
+                            .map_or("", |(group, _)| group);
+                        let family = group.split('-').next().unwrap_or(group);
+                        skipped
+                            .iter()
+                            .any(|skipped| family.eq_ignore_ascii_case(skipped))
+                    };
+                    if only_ours.is_empty()
+                        && !skipped.is_empty()
+                        && only_theirs.iter().all(in_skipped)
+                    {
+                        (
+                            Verdict::NamedRefusal,
+                            format!(
+                                "a best-effort copy skips the groups oxidex cannot write, and \
+                                 names them: {skipped:?}"
+                            ),
+                        )
+                    } else {
+                        (
+                            Verdict::Mismatch,
+                            format!(
+                                "tags differ: oxidex only {only_ours:?}; 13.59 only \
+                                 {only_theirs:?}"
+                            ),
+                        )
+                    }
+                } else {
+                    (Verdict::Match, String::new())
+                }
+            }
+        };
+        verdicts.push((label, verdict, detail));
+    }
+    let count = |v: Verdict| {
+        verdicts
+            .iter()
+            .filter(|(_, verdict, _)| *verdict == v)
+            .count()
+    };
+    let (matched, refused, mismatched) = (
+        count(Verdict::Match),
+        count(Verdict::NamedRefusal),
+        count(Verdict::Mismatch),
+    );
+    eprintln!(
+        "date and copy matrix: {} cases: {matched} match, {refused} named refusal, {mismatched} mismatch",
+        verdicts.len()
+    );
+    let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, verdict, detail) in &verdicts {
+        if *verdict == Verdict::NamedRefusal {
+            *reasons
+                .entry(detail.split(": ").next().unwrap())
+                .or_default() += 1;
+        }
+    }
+    for (reason, n) in &reasons {
+        eprintln!("  named refusal x{n}: {reason}");
+    }
+    for (label, verdict, detail) in &verdicts {
+        if *verdict == Verdict::Mismatch {
+            eprintln!("  MISMATCH {label}: {detail}");
+        }
+    }
+    if let Some(report) = std::env::var_os("OXIDEX_DATE_COPY_MATRIX_REPORT") {
+        let json: Vec<serde_json::Value> = verdicts
+            .iter()
+            .map(|(label, verdict, detail)| {
+                serde_json::json!({"case": label, "verdict": format!("{verdict:?}"), "detail": detail})
+            })
+            .collect();
+        fs::write(
+            report,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cases": verdicts.len(), "match": matched, "named_refusal": refused,
+                "mismatch": mismatched, "verdicts": json,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    assert!(verdicts.len() >= 150, "only {} cases", verdicts.len());
+    assert_eq!(
+        mismatched, 0,
+        "{mismatched} date/copy cases differ from pinned 13.59 (listed above)"
+    );
+}
+
+/// The groups a best-effort copy said it skipped (`Warning: Not copied from
+/// SRC: oxidex cannot write the XMP group(s) here`).
+fn skipped_groups(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|line| line.split_once("oxidex cannot write the "))
+        .filter_map(|(_, rest)| rest.split_once(" group(s)"))
+        .flat_map(|(groups, _)| groups.split(", ").map(str::to_string))
+        .collect()
+}
+
+/// Whether an `-a -G1 -s` row belongs to one of `groups` (an `XMP-*`
+/// family-1 group to `XMP`).
+fn row_in_groups(row: &str, groups: &[String]) -> bool {
+    let group = row
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .map_or("", |(group, _)| group);
+    let family = group.split('-').next().unwrap_or(group);
+    groups
+        .iter()
+        .any(|skipped| family.eq_ignore_ascii_case(skipped))
 }
