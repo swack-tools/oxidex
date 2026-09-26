@@ -2035,19 +2035,32 @@ fn group_is_empty(group: &str, metadata: &MetadataMap) -> bool {
 /// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
 /// otherwise.
 pub(crate) fn field_spellings(key: &str) -> &[&str] {
-    match key {
-        "PDF:CreateDate" | "PDF:CreationDate" => &["PDF:CreateDate", "PDF:CreationDate"],
-        "PDF:ModifyDate" | "PDF:ModDate" => &["PDF:ModifyDate", "PDF:ModDate"],
-        _ => &[],
-    }
+    // Group and tag names compare without regard to case, as request
+    // resolution compares them (`pdf:creationdate` is `PDF:CreationDate`).
+    const FIELDS: &[&[&str]] = &[
+        &["PDF:CreateDate", "PDF:CreationDate"],
+        &["PDF:ModifyDate", "PDF:ModDate"],
+    ];
+    FIELDS
+        .iter()
+        .find(|spellings| {
+            spellings
+                .iter()
+                .any(|spelling| spelling.eq_ignore_ascii_case(key))
+        })
+        .copied()
+        .unwrap_or(&[])
 }
 
 /// Whether `metadata` holds `key` under any of its [`field_spellings`].
 pub(crate) fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
-    metadata.contains_key(key)
-        || field_spellings(key)
-            .iter()
-            .any(|alias| metadata.contains_key(alias))
+    let holds = |spelling: &str| {
+        metadata.contains_key(spelling)
+            || metadata
+                .keys()
+                .any(|row| row.eq_ignore_ascii_case(spelling))
+    };
+    holds(key) || field_spellings(key).iter().any(|alias| holds(alias))
 }
 
 /// Removes `key` and every other spelling of the same field. Removing only
