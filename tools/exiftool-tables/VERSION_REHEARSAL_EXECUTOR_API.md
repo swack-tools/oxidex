@@ -212,7 +212,10 @@ every owned command runs under a small child-subreaper supervisor
 (`PR_SET_CHILD_SUBREAPER`): orphaned descendants, including ones in a new
 session that closed every inherited descriptor, are reparented to it, and it
 kills and reaps its children until `waitpid` reports `ECHILD` before
-reporting the command's status. A command that left live descendants is
+reporting the command's status. Cleanup asks it to sweep over a private
+control pipe; it ignores catchable signals the command broadcasts to its own
+process group, and the command gets its inherited dispositions back before
+`exec`. A command that left live descendants is
 refused with record state `escaped_descendants`. If the supervisor exits
 without proving its lineage empty (for example it was killed after the
 command left its session and closed every descriptor), the child stays

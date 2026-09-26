@@ -804,7 +804,7 @@ class ExecutorTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "the lineage supervisor is Linux-only")
     def test_sweep_request_before_supervisor_wait_still_sweeps(self):
-        """A SIGUSR1 sweep request between the exec report and the wait loop must sweep.
+        """A sweep request between the exec report and the wait loop must sweep.
 
         The supervisor is slowed right after it reports a successful exec, so
         the 0.2 s command timeout's sweep request lands in that interval. The

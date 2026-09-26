@@ -1606,7 +1606,7 @@ def _emergency_cleanup_after_timeout_failure(
 # command orphans -- including one that starts a new session and closes all
 # inherited descriptors -- is reparented to the supervisor instead of init, so
 # it cannot leave the command's lineage. When the command exits (or the
-# executor requests cleanup with SIGUSR1) the supervisor SIGKILLs and reaps
+# executor requests cleanup over a private control pipe) the supervisor SIGKILLs and reaps
 # its children until waitpid reports ECHILD, the kernel's atomic proof that no
 # descendant remains, and reports the command's status and any live escaped
 # descendant on a private status pipe. Children of the supervisor cannot be
@@ -1616,9 +1616,20 @@ def _emergency_cleanup_after_timeout_failure(
 # residual); the ownership probe still covers every descriptor holder.
 _LINEAGE_SUPERVISED = sys.platform.startswith("linux")
 _LINUX_LINEAGE_SUPERVISOR = r"""
-import ctypes, json, os, signal, sys, time
+import ctypes, json, os, select, signal, sys, time
 status_fd = int(sys.argv[1])
-argv = sys.argv[2:]
+control_fd = int(sys.argv[2])
+argv = sys.argv[3:]
+# The supervisor shares the command's process group, so signals the command
+# broadcasts to its group reach it too. It ignores the catchable ones (the
+# executor asks for sweeps over the private control pipe, and kills with
+# SIGKILL); the command gets the dispositions it inherited back before exec.
+BROADCAST = [getattr(signal, name) for name in ("SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM", "SIGUSR1", "SIGUSR2")
+             if hasattr(signal, name)]
+inherited = {}
+for number in BROADCAST:
+    inherited[number] = signal.SIG_IGN if signal.getsignal(number) == signal.SIG_IGN else signal.SIG_DFL
+    signal.signal(number, signal.SIG_IGN)
 
 def report(**fields):
     # A lost reader must never stop the sweep: reporting is best effort, and
@@ -1627,12 +1638,6 @@ def report(**fields):
         os.write(status_fd, (json.dumps(fields, sort_keys=True) + "\n").encode())
     except OSError:
         pass
-
-class Sweep(Exception):
-    pass
-
-def request_sweep(_signum, _frame):
-    raise Sweep()
 
 def children():
     me = os.getpid()
@@ -1709,10 +1714,6 @@ try:
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
-    # A sweep request is held pending until the wait loop can act on it, so
-    # it can never unwind the supervisor past its sweep.
-    signal.signal(signal.SIGUSR1, request_sweep)
-    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
     # An inherited SIG_IGN for SIGCHLD would make the kernel reap our children
     # itself, hiding the command's status and defeating the ECHILD proof.
     # The command gets the launcher's disposition back before exec.
@@ -1722,15 +1723,16 @@ try:
     if primary == 0:
         try:
             os.close(status_fd)
+            os.close(control_fd)
             os.close(failure_read)
             signal.signal(signal.SIGCHLD, inherited_sigchld)
-            signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+            for number, disposition in inherited.items():
+                signal.signal(number, disposition)
             # As Popen(restore_signals=True) does: the Python supervisor
             # ignores these, and exec would otherwise keep them ignored.
             for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
                 if hasattr(signal, name):
                     signal.signal(getattr(signal, name), signal.SIG_DFL)
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
             os.execvp(argv[0], argv)
         except BaseException as exc:
             number = getattr(exc, "errno", None) or 0
@@ -1760,16 +1762,27 @@ except BaseException as exc:
 status = None
 requested = False
 try:
+    # Wait for the command to exit or for a sweep request on the private
+    # control pipe (a request written early simply waits in the pipe). EOF
+    # there means the executor is gone: keep supervising the command.
     try:
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
-        while status is None:
-            pid, raw = os.waitpid(-1, 0)
-            if pid == primary:
-                status = raw
-    except Sweep:
-        requested = True
-    finally:
-        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        pidfd = os.pidfd_open(primary)
+    except (AttributeError, OSError):
+        pidfd = None
+    poller = select.poll()
+    poller.register(control_fd, select.POLLIN | select.POLLHUP)
+    if pidfd is not None:
+        poller.register(pidfd, select.POLLIN)
+    while status is None and not requested:
+        for descriptor, _mask in poller.poll(None if pidfd is not None else 50):
+            if descriptor == control_fd:
+                if os.read(control_fd, 64):
+                    requested = True
+                else:
+                    poller.unregister(control_fd)
+        pid, raw = os.waitpid(primary, os.WNOHANG)
+        if pid == primary:
+            status = raw
 except BaseException as exc:
     report(phase="error", error=repr(exc))
 # Whatever happened above, the lineage is swept before this process exits.
@@ -1817,19 +1830,30 @@ def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str
 
 
 def _close_lineage_status(child: subprocess.Popen[Any]) -> None:
-    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    for name in ("_oxidex_lineage_status_fd", "_oxidex_lineage_control_fd"):
+        descriptor = getattr(child, name, -1)
+        if type(descriptor) is int and descriptor >= 0:
+            os.close(descriptor)
+            setattr(child, name, -1)
+
+
+def _send_sweep_request(child: subprocess.Popen[Any]) -> None:
+    """Ask the supervisor over its private control pipe to sweep its lineage."""
+    descriptor = getattr(child, "_oxidex_lineage_control_fd", -1)
     if type(descriptor) is int and descriptor >= 0:
-        os.close(descriptor)
-        setattr(child, "_oxidex_lineage_status_fd", -1)
+        try:
+            os.write(descriptor, b"s")
+        except OSError:
+            pass  # the supervisor is gone; the caller's liveness checks decide
 
 
 def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
     """Replicate Popen's exec-failure semantics for a supervised command.
 
     If the exec report cannot be read, the command may already be running
-    while its handle is unpublished: the supervisor is told to sweep its
-    lineage (SIGUSR1; before its handler exists that simply kills it before
-    it forks) and the still-unreaped group is killed as a fallback.
+    while its handle is unpublished: the supervisor is asked to sweep its
+    lineage over the control pipe (a request waits there until its wait loop
+    reads it) and the still-unreaped group is killed as a fallback.
     """
     try:
         reports = _lineage_reports(child, timeout=30, phase="exec")
@@ -1844,10 +1868,7 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
             })
         return
     if failure is not None or exec_report is None:
-        try:
-            os.kill(child.pid, signal.SIGUSR1)
-        except ProcessLookupError:
-            pass
+        _send_sweep_request(child)
     try:
         child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
     except subprocess.TimeoutExpired:
@@ -1933,10 +1954,7 @@ def _request_lineage_sweep(child: subprocess.Popen[Any]) -> None:
     """Ask a live supervisor to kill and reap its whole lineage, then exit."""
     if not hasattr(child, "_oxidex_lineage_status_fd") or child.poll() is not None:
         return
-    try:
-        os.kill(child.pid, signal.SIGUSR1)
-    except ProcessLookupError:
-        return
+    _send_sweep_request(child)
     deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS * 3
     while child.poll() is None and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -1957,7 +1975,7 @@ def _spawn_with_deferred_sigint(
         pending = True
         pending_frame = frame
 
-    read_fd = write_fd = status_read_fd = status_write_fd = -1
+    read_fd = write_fd = status_read_fd = status_write_fd = control_read_fd = control_write_fd = -1
     child: subprocess.Popen[str] | None = None
     spawn_failure: BaseException | None = None
     signal.signal(signal.SIGINT, defer_sigint)
@@ -1970,8 +1988,10 @@ def _spawn_with_deferred_sigint(
         if _LINEAGE_SUPERVISED:
             status_read_fd, status_write_fd = os.pipe()
             os.set_inheritable(status_write_fd, True)
+            control_read_fd, control_write_fd = os.pipe()
+            os.set_inheritable(control_read_fd, True)
             spawn_argv = [sys.executable, "-I", "-c", _LINUX_LINEAGE_SUPERVISOR,
-                          str(status_write_fd), *argv]
+                          str(status_write_fd), str(control_read_fd), *argv]
         spawned_at = time.time()
         created = _spawn(spawn_argv, **kwargs)
         setattr(created, "_oxidex_ownership_read_fd", read_fd)
@@ -1979,10 +1999,12 @@ def _spawn_with_deferred_sigint(
         write_fd = -1
         if status_read_fd >= 0:
             setattr(created, "_oxidex_lineage_status_fd", status_read_fd)
+            setattr(created, "_oxidex_lineage_control_fd", control_write_fd)
             setattr(created, "_oxidex_lineage_started_at", spawned_at)
-            status_read_fd = -1
+            status_read_fd = control_write_fd = -1
             os.close(status_write_fd)
-            status_write_fd = -1
+            os.close(control_read_fd)
+            status_write_fd = control_read_fd = -1
             try:
                 _await_supervised_exec(created)
             except OSError:
@@ -2001,7 +2023,7 @@ def _spawn_with_deferred_sigint(
     except BaseException as failure:
         spawn_failure = failure
     finally:
-        for descriptor in (write_fd, status_write_fd, status_read_fd):
+        for descriptor in (write_fd, status_write_fd, status_read_fd, control_read_fd, control_write_fd):
             if descriptor >= 0:
                 os.close(descriptor)
         if owner[0] is None and read_fd >= 0:
