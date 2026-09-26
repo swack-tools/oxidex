@@ -163,6 +163,16 @@ class ExecutorTests(unittest.TestCase):
             child.communicate(timeout=5)
             raise OSError("bounded descendant enumeration unverified")
 
+        def descendant_ready(_pid, _pgid):
+            # Synchronize before the command timeout starts: communicate()
+            # (and so the 50 ms timeout) begins only after this returns, so a
+            # loaded host cannot kill the parent before it launches the
+            # descendant. The read is bounded either way.
+            nonlocal descendant_pid, write_fd
+            os.close(write_fd)
+            write_fd = -1
+            descendant_pid = int(_read_reported_line(read_fd))
+
         failure = None
         try:
             with patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 0.05), \
@@ -173,15 +183,20 @@ class ExecutorTests(unittest.TestCase):
                     executor._run_record(
                         [sys.executable, "-c", child_program, str(write_fd), descendant_program],
                         cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                        started=descendant_ready,
                     )
                 except BaseException as exc:
                     failure = exc
-            descendant_pid = int(os.read(read_fd, 64))
+            if isinstance(failure, AssertionError):
+                raise failure
+            self.assertIsNotNone(descendant_pid)
             self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
             self.assertIn("cleanup remains incomplete", str(failure))
             self.assertTrue(executor._pid_live(descendant_pid))
         finally:
             for descriptor in (write_fd, read_fd):
+                if descriptor < 0:
+                    continue
                 try:
                     os.close(descriptor)
                 except OSError:
@@ -232,7 +247,7 @@ class ExecutorTests(unittest.TestCase):
 
         def fail_after_descendant_started(_pid, _pgid):
             nonlocal descendant_pid
-            descendant_pid = int(os.read(read_fd, 64))
+            descendant_pid = int(_read_reported_line(read_fd))
             raise OSError("journal persistence failed")
 
         def reap_direct_only(child):
@@ -323,7 +338,7 @@ class ExecutorTests(unittest.TestCase):
         def exit_after_child_started(pid, pgid):
             nonlocal child_identity
             child_identity = {"pid": pid, "pgid": pgid}
-            self.assertEqual(os.read(read_fd, 64), b"ready\n")
+            self.assertEqual(_read_reported_line(read_fd), b"ready\n")
             raise outcome
 
         def capture_child(*args, **kwargs):
@@ -408,7 +423,7 @@ class ExecutorTests(unittest.TestCase):
             nonlocal raised
             if (not raised and isinstance(current.get("active"), dict)
                     and isinstance(current["active"].get("child"), dict)):
-                self.assertEqual(os.read(read_fd, 64), b"ready\n")
+                self.assertEqual(_read_reported_line(read_fd), b"ready\n")
                 original_store(run_dir, current)
                 raised = True
                 raise outcome
@@ -494,7 +509,7 @@ class ExecutorTests(unittest.TestCase):
                     )
                 except BaseException as exc:
                     failure = exc
-            descendant_pid = int(os.read(read_fd, 64))
+            descendant_pid = int(_read_reported_line(read_fd))
             self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
             self.assertTrue(executor._pid_live(descendant_pid))
         finally:
@@ -935,7 +950,7 @@ class ExecutorTests(unittest.TestCase):
                     )
                 except BaseException as exc:
                     failure = exc
-            descendant_pid = int(os.read(read_fd, 64))
+            descendant_pid = int(_read_reported_line(read_fd))
             self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
             self.assertTrue(executor._pid_live(descendant_pid))
             persisted = json.loads((self.run_dir / "execution-status.json").read_text())
