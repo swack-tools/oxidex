@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import io
 import os
@@ -75,7 +77,10 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
     Only preflight inputs are substituted. The body spawns a real stage child
     through the executor's production ``Popen(close_fds=False)`` branch while
     borrowing the lease, then waits on it until the test interrupts this
-    process with SIGINT.
+    process with SIGINT. Interrupt cleanup reaps a killable child, so both
+    cleanup passes are made to fail without signalling it: the child survives
+    exactly as one whose exit cannot be proven would, which is the case the
+    fail-closed lease must hold for.
     """
     root = Path(root_text)
     temporary, capture, catalog, plan, resolution, materialization, cache, sources, release = (
@@ -167,7 +172,11 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
              patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=identity), \
              patch.object(qualification, "run_qualification",
-                          partial(qualification.run_qualification, execute=execute)):
+                          partial(qualification.run_qualification, execute=execute)), \
+             patch.object(qualification.executor, "_bounded_timeout_cleanup",
+                          side_effect=OSError("cleanup cannot prove the child gone")), \
+             patch.object(qualification.executor, "_emergency_reap_group",
+                          side_effect=OSError("emergency cleanup cannot prove the child gone")):
             return qualification.main(arguments)
     finally:
         temporary.cleanup()
@@ -973,6 +982,13 @@ class LeaseTests(unittest.TestCase):
 
 class WrapperCallTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Owned-child and retained-lock state is process-wide by design; a
+        # child one test leaves unproven must not fail an unrelated release.
+        for name, value in (("_OWNED", qualification.executor._OwnedChildren()),
+                            ("_RETAINED_LOCKS", [])):
+            patcher = patch.object(qualification.executor, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.temporary = TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -1477,11 +1493,109 @@ class WrapperCallTests(unittest.TestCase):
             }))
             raise KeyboardInterrupt()
         with patch.object(qualification.executor, "recover") as recover:
-            with self.assertRaises(KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt) as caught:
                 self.invoke(interrupted)
         recover.assert_called_once()
         self.assertIsInstance(recover.call_args.kwargs["host_lock_fd"], qualification.executor._HeldHostLock)
+        self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery"), "recovered")
         self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
+
+    def test_real_child_interrupt_is_reaped_before_verified_durable_recovery(self) -> None:
+        """Non-catchable cleanup proves exit before publishing durable recovery."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        ready_error: list[BaseException] = []
+
+        child_program = (
+            "import json, os, subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'])\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': descendant.pid}) + '\\n').encode())\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupt_when_child_group_is_ready() -> None:
+            try:
+                payload = b""
+                while not payload.endswith(b"\n"):
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        raise AssertionError("owned child closed readiness pipe before reporting its descendant")
+                    payload += chunk
+                process_ids.update(json.loads(payload))
+                os.kill(os.getpid(), signal.SIGINT)
+            except BaseException as exc:
+                ready_error.append(exc)
+
+        interrupter = threading.Thread(target=interrupt_when_child_group_is_ready, daemon=True)
+
+        def execute(run_dir, _repository, archive_cache, source_root, **kwargs):
+            def started(pid: int, pgid: int) -> None:
+                process_ids.update(direct=pid, pgid=pgid)
+                (run_dir / "execution-status.json").write_text(json.dumps({
+                    "phase": "running",
+                    "active": {
+                        "release": "13.59", "stage": "generate",
+                        "child": {"pid": pid, "pgid": pgid},
+                    },
+                }))
+                os.close(write_fd)
+
+            interrupter.start()
+            qualification.executor._run_record(
+                [sys.executable, "-c", child_program, str(write_fd)],
+                cwd=self.root, env=dict(os.environ), run=subprocess.run, started=started,
+            )
+            self.fail("real child command unexpectedly returned after supervisor interruption")
+
+        def recover(run_dir, _archive_cache, _source_root, **kwargs):
+            self.assertIsInstance(kwargs["host_lock_fd"], qualification.executor._HeldHostLock)
+            for name in ("direct", "descendant"):
+                if qualification.executor._pid_live(process_ids[name]):
+                    raise qualification.executor.Refused(f"owned {name} is still live")
+            journal_path = run_dir / "execution-status.json"
+            recovered = json.loads(journal_path.read_text())
+            recovered["phase"], recovered["active"] = "interrupted", None
+            journal_path.write_text(json.dumps(recovered))
+            return recovered
+
+        try:
+            with patch.object(qualification.executor, "recover", side_effect=recover) as recovery:
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    self.invoke(execute)
+            recovery.assert_called_once()
+            self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery", None), "recovered")
+            interrupter.join(timeout=5)
+            self.assertFalse(interrupter.is_alive(), "readiness thread did not observe the real child")
+            if ready_error:
+                raise ready_error[0]
+            journal = json.loads((self.row_output / "before" / "execution-status.json").read_text())
+            self.assertEqual(journal["phase"], "interrupted")
+            self.assertIsNone(journal["active"])
+            for name in ("direct", "descendant"):
+                with self.subTest(process=name):
+                    self.assertFalse(qualification.executor._pid_live(process_ids[name]))
+            with qualification.executor._HostLock(self.lease):
+                pass
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
 
     def test_recovery_refusal_does_not_mask_original_interruption(self) -> None:
         def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
@@ -1495,6 +1609,81 @@ class WrapperCallTests(unittest.TestCase):
                 self.invoke(interrupted)
         self.assertTrue(any("durable interruption recovery failed" in note
                             for note in getattr(caught.exception, "__notes__", [])))
+
+    def test_incomplete_owned_cleanup_prevents_durable_recovery_publication(self) -> None:
+        def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            (run_dir / "execution-status.json").write_text(json.dumps({
+                "phase": "running", "active": {"release": "13.59", "stage": "generate"},
+            }))
+            failure = KeyboardInterrupt("original interruption")
+            setattr(failure, "_oxidex_owned_child_cleanup", "incomplete")
+            raise failure
+
+        with patch.object(qualification.executor, "recover") as recover:
+            with self.assertRaisesRegex(KeyboardInterrupt, "original interruption") as caught:
+                self.invoke(interrupted)
+        recover.assert_not_called()
+        self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery"), "incomplete")
+        self.assertTrue(any("owned child cleanup is incomplete" in note
+                            for note in getattr(caught.exception, "__notes__", [])))
+
+    def test_cli_reports_unverified_recovery_truthfully_and_retains_exit_130(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        interrupted.add_note("durable interruption recovery failed: active child is still live")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        rendered = stderr.getvalue()
+        self.assertIn("durable recovery incomplete or unverified", rendered)
+        self.assertIn("active child is still live", rendered)
+        self.assertNotIn("interrupted after durable recovery", rendered)
+
+    def test_cli_claims_durable_recovery_only_when_wrapper_established_it(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        setattr(interrupted, "_oxidex_durable_recovery", "recovered")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        self.assertEqual(
+            stderr.getvalue(),
+            "version transition qualification interrupted after durable recovery\n",
+        )
+
+    def test_cli_reports_recovered_with_secondary_cleanup_warning(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        setattr(interrupted, "_oxidex_durable_recovery", "recovered")
+        interrupted.add_note("bounded owned-child cleanup failed: diagnostic fault")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        rendered = stderr.getvalue()
+        self.assertIn("interrupted after durable recovery", rendered)
+        self.assertIn("recovery detail: bounded owned-child cleanup failed", rendered)
+        self.assertNotIn("incomplete or unverified", rendered)
 
     def test_native_cases_are_frozen_before_first_side_and_rechecked(self) -> None:
         calls = 0
