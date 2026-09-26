@@ -1012,6 +1012,37 @@ def _procfs_stat(path: Path) -> tuple[str, int] | None:
         return None
 
 
+_PROCFS_DEAD_STATES = frozenset({"Z", "X", "x"})
+
+
+def _procfs_all_tasks_dead(pid: int, proc_root: Path) -> bool:
+    """True only when every task of a zombie-looking process is itself dead.
+
+    procfs reports the thread-group leader's state; a leader that exited
+    before its other threads reads ``Z`` while a live thread still holds the
+    process's descriptors. Anything unreadable counts as live.
+    """
+    try:
+        tasks = [entry for entry in (proc_root / str(pid) / "task").iterdir() if entry.name.isdigit()]
+    except OSError:
+        return False
+    if not tasks:
+        return False
+    for entry in tasks:
+        row = _procfs_stat(entry / "stat")
+        if row is None:
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue  # that task finished while we looked
+            except OSError:
+                return False
+            return False
+        if row[0] not in _PROCFS_DEAD_STATES:
+            return False
+    return True
+
+
 def _pid_live(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
     try:
         os.kill(pid, 0)
@@ -1021,7 +1052,7 @@ def _pid_live(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
         row = _procfs_stat(proc_root / str(pid) / "stat")
         if row is None:
             return True
-        return row[0] not in {"Z", "X", "x"}
+        return row[0] not in _PROCFS_DEAD_STATES or not _procfs_all_tasks_dead(pid, proc_root)
     return True
 
 
@@ -1128,6 +1159,8 @@ def _procfs_group_states(pgid: int, proc_root: Path) -> list[str] | None:
             return None
         state, group = row
         if group == pgid:
+            if state in _PROCFS_DEAD_STATES and not _procfs_all_tasks_dead(int(entry.name), proc_root):
+                state = "live-thread"
             states.append(state)
     return states
 

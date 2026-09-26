@@ -2241,10 +2241,9 @@ class ExecutorTests(unittest.TestCase):
 
         def stat(pid: int, state: str, group: int = pgid) -> None:
             directory = proc_root / str(pid)
-            directory.mkdir(exist_ok=True)
-            (directory / "stat").write_text(
-                f"{pid} (worker name) {state} 1 {group} {group} 0 0 0 0 0\n",
-            )
+            (directory / "task" / str(pid)).mkdir(parents=True, exist_ok=True)
+            for target in (directory / "stat", directory / "task" / str(pid) / "stat"):
+                target.write_text(f"{pid} (worker name) {state} 1 {group} {group} 0 0 0 0 0\n")
 
         stat(pgid, "Z")
         stat(pgid + 1, "Z")
@@ -2256,6 +2255,35 @@ class ExecutorTests(unittest.TestCase):
             self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
             (proc_root / str(pgid + 1) / "stat").write_text("malformed\n")
             self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
+
+    def test_procfs_zombie_leader_with_a_live_thread_is_live(self):
+        """A `Z` main thread does not prove the process gone (#919's Linux caveat).
+
+        When a thread-group leader exits before its other threads, procfs
+        shows the leader as a zombie while a live thread still holds every
+        inherited descriptor. Liveness must consult each task.
+        """
+        proc_root = self.root / "proc"
+        pgid = 4200
+
+        def task(pid: int, tid: int, state: str) -> None:
+            directory = proc_root / str(pid) / "task" / str(tid)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "stat").write_text(f"{tid} (worker) {state} 1 {pgid} {pgid} 0 0 0 0 0\n")
+
+        (proc_root / str(pgid)).mkdir(parents=True)
+        (proc_root / str(pgid) / "stat").write_text(f"{pgid} (worker) Z 1 {pgid} {pgid} 0 0 0 0 0\n")
+        task(pgid, pgid, "Z")
+        task(pgid, pgid + 1, "S")
+        with patch.object(executor.sys, "platform", "linux"), \
+             patch.object(executor.os, "killpg"), patch.object(executor.os, "kill"):
+            self.assertTrue(executor._pid_live(pgid, proc_root=proc_root))
+            self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
+            task(pgid, pgid + 1, "Z")
+            self.assertFalse(executor._pid_live(pgid, proc_root=proc_root))
+            self.assertFalse(executor._group_live(pgid, proc_root=proc_root))
+            (proc_root / str(pgid) / "task" / str(pgid + 1) / "stat").write_text("malformed\n")
+            self.assertTrue(executor._pid_live(pgid, proc_root=proc_root))
 
     def test_descendants_fall_back_to_procfs_scan_and_refuse_untrusted_enumeration(self):
         proc_root = self.root / "proc"
