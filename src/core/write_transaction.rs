@@ -313,6 +313,9 @@ struct Pending<'a> {
 /// written by a deletion the baseline alone calls a no-op.
 fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let baseline = read_metadata(path)?;
+    // The file's bytes, for the Panasonic RAW no-op decisions below (#956's
+    // `rw2_ifd0`, which answer `false` for any other file).
+    let file_bytes = fs::read(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
@@ -336,6 +339,15 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
                 Err(other) => return Err(other),
             }
+            continue;
+        }
+        // #956: a bare name on a Panasonic RAW that no writable table of
+        // any module names (`SensorWidth`) is pinned 13.59's "1 image files
+        // unchanged", a set or a deletion alike.
+        if matches!(
+            crate::writers::rw2_ifd0::route_rw2_name(&file_bytes, change.tag()),
+            crate::writers::rw2_ifd0::Rw2Name::NoOp
+        ) {
             continue;
         }
         // #945: an EXIF-group request in a PDF is ExifTool's "unchanged"
@@ -388,6 +400,19 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // address guard (ExifTool 13.59: `1 image files unchanged`).
         if candidate.request.value.is_none()
             && removal_is_no_op(path, &candidate.request.key, &baseline)?
+        {
+            continue;
+        }
+        // #956: a set pinned 13.59 makes nowhere in a Panasonic RAW (no outer
+        // PanasonicRaw entry it writes, and the embedded JpgFromRaw absent or
+        // already holding the value) leaves the file unchanged there.
+        if let Some(value) = candidate.request.value
+            && crate::writers::rw2_ifd0::rw2_set_is_no_op(
+                &file_bytes,
+                &baseline,
+                &candidate.request.key,
+                value,
+            )
         {
             continue;
         }

@@ -1055,6 +1055,7 @@ pub(crate) fn write_metadata_transaction(
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
+    crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -1161,6 +1162,16 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // An IFD0-group edit of a Panasonic RAW/RW2/RWL that pinned
+        // ExifTool 13.59 makes in the embedded JpgFromRaw's IFD0, or in an
+        // outer `PanasonicRaw::Main` entry this writer cannot edit, is
+        // refused by name, before the no-op check can take it for one
+        // (`rw2_ifd0::refuse_rw2_ifd0_edits`).
+        if !whole_clear {
+            crate::writers::rw2_ifd0::refuse_rw2_ifd0_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
         // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
         // JpgFromRaw's own EXIF is refused by name, before the no-op check
         // (which reads only the outer directories) can take a tag held only
@@ -1243,6 +1254,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 )?;
             }
         }
+        crate::writers::rw2_ifd0::verify_jpg_from_raw_kept(file_bytes, &out)?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -1603,6 +1615,35 @@ pub(crate) fn resolve_write_key_for(
             let header = reader.read(0, reader.size().min(4) as usize).unwrap_or(&[]);
             matches!(header, [b'I', b'I', 42, 0] | [b'M', b'M', 0, 42])
         });
+    // A Panasonic RAW/RW2/RWL (IFD0 read with PanasonicRaw::Main): a bare
+    // name and `EXIF:<name>` act as `IFD0:<name>` there, and a
+    // PanasonicRaw tag no writable table names is ExifTool's "Sorry, ...
+    // doesn't exist or isn't writable" (#956's `rw2_ifd0::route_rw2_name`,
+    // measured against pinned 13.59: roll-up evidence
+    // `rw2-bare-names-oracle.txt`). Any other file, or a name neither table
+    // declares, keeps the resolution below (#945's refusal of an ungrouped
+    // name where IFD0 is not Exif::Main included).
+    let rw2_key;
+    let tag_name = if surgical && !exif_ifd0_target {
+        let file_bytes = reader.read(0, reader.size() as usize)?;
+        match crate::writers::rw2_ifd0::route_rw2_name(file_bytes, tag_name) {
+            crate::writers::rw2_ifd0::Rw2Name::Ifd0(key) => {
+                rw2_key = key;
+                rw2_key.as_str()
+            }
+            crate::writers::rw2_ifd0::Rw2Name::NotWritable => {
+                return Err(ExifToolError::tag_not_written(
+                    tag_name,
+                    crate::writers::write_request::sorry_not_writable(tag_name),
+                ));
+            }
+            crate::writers::rw2_ifd0::Rw2Name::NoOp | crate::writers::rw2_ifd0::Rw2Name::Other => {
+                tag_name
+            }
+        }
+    } else {
+        tag_name
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1713,6 +1754,10 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
         crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
             file_bytes, metadata, metadata, &removed,
         )?;
+        // Likewise an IFD0-group removal pinned 13.59 makes in a Panasonic
+        // RAW's embedded JpgFromRaw IFD0 (#956, `rw2_ifd0::refuse_rw2_ifd0_edits`,
+        // which the writer runs before its own no-op check).
+        crate::writers::rw2_ifd0::refuse_rw2_ifd0_edits(file_bytes, metadata, metadata, &removed)?;
         no_op(
             &[file_bytes],
             crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
