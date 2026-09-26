@@ -1028,6 +1028,99 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual((record["state"], record["exit"]), ("exit_failed", -signal.SIGPIPE), record)
         self.assertNotIn("survived", record["stdout"])
 
+    def test_tracked_run_cleans_up_after_a_post_spawn_communication_failure(self):
+        """An OSError from communicate() after spawn must not leave the child running."""
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        original_communicate = original_popen.communicate
+        failed = []
+
+        def track(argv, *args, **kwargs):
+            child = original_popen(argv, *args, **kwargs)
+            if any("time.sleep(60)" in str(part) for part in argv):
+                created.append(child)
+            return child
+
+        def communicate_once_fails(popen, *args, **kwargs):
+            if popen in created and not failed:
+                failed.append(True)
+                raise OSError(5, "Input/output error")
+            return original_communicate(popen, *args, **kwargs)
+
+        try:
+            with patch.object(executor.subprocess, "Popen", side_effect=track), \
+                 patch.object(original_popen, "communicate", communicate_once_fails):
+                with self.assertRaises(OSError):
+                    executor._tracked_run([sys.executable, "-c", "import time; time.sleep(60)"],
+                                          capture_output=True, text=True, timeout=30,
+                                          start_new_session=True, close_fds=False)
+            self.assertEqual(len(created), 1)
+            self.assertFalse(executor._pid_live(created[0].pid), "the command survived its failed read")
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                executor._close_ownership_probe(child)
+
+    def test_interrupt_cleanup_counts_an_unverified_lineage_as_incomplete(self):
+        """Cleanup may not certify 'verified' while the lineage verdict is missing."""
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        setattr(child, "_oxidex_ownership_released", True)
+        interruption = KeyboardInterrupt()
+        verdict = "exited; its lineage supervisor never proved every descendant gone"
+        with patch.object(executor, "_lineage_unverified", return_value=verdict), \
+             patch.object(executor, "_descendants", return_value=[]):
+            executor._cleanup_owned_child_after_interrupt(child, interruption)
+        self.assertEqual(getattr(interruption, "_oxidex_owned_child_cleanup", None), "incomplete")
+
+    def test_lineage_marker_is_written_even_while_inherited_ownership_remains(self):
+        """Both uncertainties must survive: the probe holder may exit before a hidden descendant."""
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        read_fd, write_fd = os.pipe()  # our write end stands in for a descriptor-holding descendant
+        self.addCleanup(os.close, write_fd)
+        setattr(child, "_oxidex_ownership_read_fd", read_fd)
+        verdict = "exited; its lineage supervisor never proved every descendant gone"
+        with patch.object(executor, "_lineage_unverified", return_value=verdict):
+            with self.assertRaises(executor.LockRetained):
+                with executor._HostLock(self.lock):
+                    pass
+        for stream in list(executor._RETAINED_LOCKS):
+            executor._RETAINED_LOCKS.remove(stream)
+            stream.close()
+        self.assertTrue(executor._unproven_lineage_marker(self.lock.absolute()).exists())
+
+    def test_failed_supervisor_handshake_never_waits_unbounded(self):
+        """A supervisor that cannot be reaped is surfaced as incomplete, not waited on forever."""
+        class Unreapable:
+            pid = 999999
+            stdin = stdout = stderr = None
+            returncode = None
+            _oxidex_lineage_status_fd = -1
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                if timeout is None:
+                    raise AssertionError("unbounded wait on an unreapable supervisor")
+                raise subprocess.TimeoutExpired("supervisor", timeout)
+
+        with patch.object(executor, "_lineage_reports", side_effect=OSError("handshake lost")), \
+             patch.object(executor.os, "kill"), patch.object(executor.os, "killpg"), \
+             patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.01):
+            with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                executor._await_supervised_exec(Unreapable())
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
