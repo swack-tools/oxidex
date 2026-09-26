@@ -236,46 +236,50 @@ impl BPGParser {
 
 impl FormatParser for BPGParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid BPG signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("BPG".to_string()));
-
-        let file_size = reader.size();
-        let header_len = (file_size as usize).min(BPG_MAX_HEADER_LEN);
-        let header_data = reader.read(0, header_len)?;
-
-        // The header is decoded from its own small buffer; the extension
-        // block is then read separately at its real offset. Reading a
-        // fixed prefix and hoping the extensions fit inside it silently
-        // drops every embedded EXIF/ICC/XMP block larger than the guess.
-        let ext_len_offset = match Self::parse_header(header_data, &mut metadata) {
-            Ok(offset) => offset,
-            Err(_) => return Ok(metadata),
-        };
-
-        if let Some(ext_len_offset) = ext_len_offset {
-            // ue7 is at most 5 bytes, and may sit right at EOF.
-            let avail = file_size.saturating_sub(ext_len_offset).min(5) as usize;
-            if avail == 0 {
-                return Ok(metadata);
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid BPG signature"));
             }
-            let len_bytes = reader.read(ext_len_offset, avail)?;
-            if let Some(ext_len) = read_ue7(len_bytes, 0) {
-                let data_offset = ext_len_offset + ext_len.len as u64;
-                if ext_len.value > 0
-                    && ext_len.value <= BPG_MAX_EXTENSION_LEN
-                    && data_offset.saturating_add(ext_len.value) <= file_size
-                    && let Ok(ext_data) = reader.read(data_offset, ext_len.value as usize)
-                {
-                    Self::parse_extensions(ext_data, &mut metadata);
+
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("BPG".to_string()));
+
+            let file_size = reader.size();
+            let header_len = (file_size as usize).min(BPG_MAX_HEADER_LEN);
+            let header_data = reader.read(0, header_len)?;
+
+            // The header is decoded from its own small buffer; the extension
+            // block is then read separately at its real offset. Reading a
+            // fixed prefix and hoping the extensions fit inside it silently
+            // drops every embedded EXIF/ICC/XMP block larger than the guess.
+            let ext_len_offset = match Self::parse_header(header_data, &mut metadata) {
+                Ok(offset) => offset,
+                Err(_) => return Ok(metadata),
+            };
+
+            if let Some(ext_len_offset) = ext_len_offset {
+                // ue7 is at most 5 bytes, and may sit right at EOF.
+                let avail = file_size.saturating_sub(ext_len_offset).min(5) as usize;
+                if avail == 0 {
+                    return Ok(metadata);
+                }
+                let len_bytes = reader.read(ext_len_offset, avail)?;
+                if let Some(ext_len) = read_ue7(len_bytes, 0) {
+                    let data_offset = ext_len_offset + ext_len.len as u64;
+                    if ext_len.value > 0
+                        && ext_len.value <= BPG_MAX_EXTENSION_LEN
+                        && data_offset.saturating_add(ext_len.value) <= file_size
+                        && let Ok(ext_data) = reader.read(data_offset, ext_len.value as usize)
+                    {
+                        Self::parse_extensions(ext_data, &mut metadata);
+                    }
                 }
             }
-        }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

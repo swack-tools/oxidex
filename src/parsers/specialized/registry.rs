@@ -238,125 +238,130 @@ impl FormatParser for RegistryParser {
     /// * `Ok(MetadataMap)` - Extracted metadata including forensic indicators
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify this is a valid registry hive file
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error(
-                "Invalid registry hive signature",
-            ));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify this is a valid registry hive file
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error(
+                    "Invalid registry hive signature",
+                ));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Basic file information
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String("Registry Hive".to_string()),
-        );
-        metadata.insert(
-            "Registry:Signature".to_string(),
-            TagValue::String("regf".to_string()),
-        );
-
-        // Version information
-        let major_version = Self::read_major_version(reader)?;
-        let minor_version = Self::read_minor_version(reader)?;
-        metadata.insert(
-            "Registry:Version".to_string(),
-            TagValue::String(format!("{}.{}", major_version, minor_version)),
-        );
-        metadata.insert(
-            "Registry:MajorVersion".to_string(),
-            TagValue::String(major_version.to_string()),
-        );
-        metadata.insert(
-            "Registry:MinorVersion".to_string(),
-            TagValue::String(minor_version.to_string()),
-        );
-
-        // Timestamps and sequence numbers
-        let last_written = Self::read_last_written(reader)?;
-        let last_written_iso = Self::convert_filetime(last_written);
-        metadata.insert(
-            "Registry:LastWritten".to_string(),
-            TagValue::String(last_written_iso),
-        );
-        metadata.insert(
-            "Registry:LastWrittenRaw".to_string(),
-            TagValue::String(format!("{}", last_written)),
-        );
-
-        let primary_seq = Self::read_primary_sequence(reader)?;
-        let secondary_seq = Self::read_secondary_sequence(reader)?;
-        metadata.insert(
-            "Registry:PrimarySequence".to_string(),
-            TagValue::String(primary_seq.to_string()),
-        );
-        metadata.insert(
-            "Registry:SecondarySequence".to_string(),
-            TagValue::String(secondary_seq.to_string()),
-        );
-
-        // Sequence validation
-        let is_clean = Self::is_clean_shutdown(primary_seq, secondary_seq);
-        metadata.insert(
-            "Registry:SequenceValid".to_string(),
-            TagValue::String(if is_clean { "Yes" } else { "No" }.to_string()),
-        );
-
-        if !is_clean {
+            // Basic file information
             metadata.insert(
-                "ForensicNote".to_string(),
-                TagValue::String(
-                    "Sequence numbers mismatch - possible dirty shutdown or corruption".to_string(),
-                ),
+                "FileType".to_string(),
+                TagValue::String("Registry Hive".to_string()),
             );
-        }
-
-        // Hive type
-        let hive_type = Self::read_hive_type(reader)?;
-        metadata.insert(
-            "Registry:HiveType".to_string(),
-            TagValue::String(Self::decode_hive_type(hive_type).to_string()),
-        );
-        metadata.insert(
-            "Registry:HiveTypeRaw".to_string(),
-            TagValue::String(hive_type.to_string()),
-        );
-
-        // Hive structure
-        let root_cell_offset = Self::read_root_cell_offset(reader)?;
-        metadata.insert(
-            "Registry:RootCellOffset".to_string(),
-            TagValue::String(format!("0x{:08X}", root_cell_offset)),
-        );
-
-        let data_size = Self::read_data_size(reader)?;
-        metadata.insert(
-            "Registry:DataSize".to_string(),
-            TagValue::String(format!("{} bytes", data_size)),
-        );
-        metadata.insert(
-            "Registry:DataSizeRaw".to_string(),
-            TagValue::String(data_size.to_string()),
-        );
-
-        // Hive name and purpose
-        let hive_name = Self::read_hive_name(reader)?;
-        if !hive_name.is_empty() {
             metadata.insert(
-                "Registry:HiveName".to_string(),
-                TagValue::String(hive_name.clone()),
+                "Registry:Signature".to_string(),
+                TagValue::String("regf".to_string()),
             );
 
-            if let Some(purpose) = Self::infer_hive_purpose(&hive_name) {
+            // Version information
+            let major_version = Self::read_major_version(reader)?;
+            let minor_version = Self::read_minor_version(reader)?;
+            metadata.insert(
+                "Registry:Version".to_string(),
+                TagValue::String(format!("{}.{}", major_version, minor_version)),
+            );
+            metadata.insert(
+                "Registry:MajorVersion".to_string(),
+                TagValue::String(major_version.to_string()),
+            );
+            metadata.insert(
+                "Registry:MinorVersion".to_string(),
+                TagValue::String(minor_version.to_string()),
+            );
+
+            // Timestamps and sequence numbers
+            let last_written = Self::read_last_written(reader)?;
+            let last_written_iso = Self::convert_filetime(last_written);
+            metadata.insert(
+                "Registry:LastWritten".to_string(),
+                TagValue::String(last_written_iso),
+            );
+            metadata.insert(
+                "Registry:LastWrittenRaw".to_string(),
+                TagValue::String(format!("{}", last_written)),
+            );
+
+            let primary_seq = Self::read_primary_sequence(reader)?;
+            let secondary_seq = Self::read_secondary_sequence(reader)?;
+            metadata.insert(
+                "Registry:PrimarySequence".to_string(),
+                TagValue::String(primary_seq.to_string()),
+            );
+            metadata.insert(
+                "Registry:SecondarySequence".to_string(),
+                TagValue::String(secondary_seq.to_string()),
+            );
+
+            // Sequence validation
+            let is_clean = Self::is_clean_shutdown(primary_seq, secondary_seq);
+            metadata.insert(
+                "Registry:SequenceValid".to_string(),
+                TagValue::String(if is_clean { "Yes" } else { "No" }.to_string()),
+            );
+
+            if !is_clean {
                 metadata.insert(
-                    "Registry:HivePurpose".to_string(),
-                    TagValue::String(purpose.to_string()),
+                    "ForensicNote".to_string(),
+                    TagValue::String(
+                        "Sequence numbers mismatch - possible dirty shutdown or corruption"
+                            .to_string(),
+                    ),
                 );
             }
-        }
 
-        Ok(metadata)
+            // Hive type
+            let hive_type = Self::read_hive_type(reader)?;
+            metadata.insert(
+                "Registry:HiveType".to_string(),
+                TagValue::String(Self::decode_hive_type(hive_type).to_string()),
+            );
+            metadata.insert(
+                "Registry:HiveTypeRaw".to_string(),
+                TagValue::String(hive_type.to_string()),
+            );
+
+            // Hive structure
+            let root_cell_offset = Self::read_root_cell_offset(reader)?;
+            metadata.insert(
+                "Registry:RootCellOffset".to_string(),
+                TagValue::String(format!("0x{:08X}", root_cell_offset)),
+            );
+
+            let data_size = Self::read_data_size(reader)?;
+            metadata.insert(
+                "Registry:DataSize".to_string(),
+                TagValue::String(format!("{} bytes", data_size)),
+            );
+            metadata.insert(
+                "Registry:DataSizeRaw".to_string(),
+                TagValue::String(data_size.to_string()),
+            );
+
+            // Hive name and purpose
+            let hive_name = Self::read_hive_name(reader)?;
+            if !hive_name.is_empty() {
+                metadata.insert(
+                    "Registry:HiveName".to_string(),
+                    TagValue::String(hive_name.clone()),
+                );
+
+                if let Some(purpose) = Self::infer_hive_purpose(&hive_name) {
+                    metadata.insert(
+                        "Registry:HivePurpose".to_string(),
+                        TagValue::String(purpose.to_string()),
+                    );
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format

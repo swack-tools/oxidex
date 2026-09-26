@@ -692,11 +692,15 @@ impl FITParser {
 
 impl FormatParser for FITParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("invalid FIT signature"));
-        }
-        let file = reader.read(0, reader.size() as usize)?;
-        Ok(extract(&FIT_PROTOCOL, file))
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("invalid FIT signature"));
+            }
+            let file = reader.read(0, reader.size() as usize)?;
+            Ok(extract(&FIT_PROTOCOL, file))
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

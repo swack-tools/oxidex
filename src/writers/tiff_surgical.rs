@@ -306,6 +306,25 @@ pub(crate) fn rewrite_tiff_file_with_removals(
     rewrite_tiff_payload_with_removals(file_bytes, original, desired, removed, false)
 }
 
+/// Whether an XP string the caller assigned at its stored text must be
+/// rewritten: yes (`xp_strings::is_explicit_xp_set`: ExifTool re-encodes the
+/// assigned text, and a stored pair, lone surrogate or BOM decodes to text
+/// that encodes to other bytes) -- except when the entry already holds
+/// exactly the bytes this writer would emit
+/// (`exif_surgical::stored_entry_matches`), where a rewrite only moves the
+/// same bytes to the end of the file. Pinned 13.59 writes
+/// `-XPTitle='héllo wörld'` twice on tests/fixtures/tiff/sample.tif to
+/// identical bytes.
+fn explicit_xp_rewrite(
+    file_bytes: &[u8],
+    desired: &MetadataMap,
+    key: &str,
+    value: &crate::core::tag_value::TagValue,
+) -> bool {
+    crate::writers::xp_strings::is_explicit_xp_set(desired, key)
+        && crate::writers::exif_surgical::stored_entry_matches(file_bytes, key, value) != Some(true)
+}
+
 /// Embedded EXIF has no TIFF image payload to protect from whole-map clearing.
 /// The JPEG transaction owns whether the resulting empty APP1 is removed.
 pub(crate) fn rewrite_tiff_payload_with_removals(
@@ -408,10 +427,18 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // The edit is whichever spelling the caller staged a *different* value
         // under. A value equal to its original is carried over, so an alias the
         // reader itself emitted never overwrites the entry it aliases.
+        // An XP string the caller assigned is an edit even at its original
+        // value: its text can stand for other bytes than the entry's
+        // (`xp_strings::is_explicit_xp_set`) -- unless the entry already
+        // holds exactly the bytes it encodes to (`explicit_xp_rewrite`).
         let edit = keys
             .iter()
             .find_map(|k| match (desired.get(k), original.get(k)) {
-                (Some(new), orig) if Some(new) != orig => Some((k.clone(), new.clone())),
+                (Some(new), orig)
+                    if Some(new) != orig || explicit_xp_rewrite(file_bytes, desired, k, new) =>
+                {
+                    Some((k.clone(), new.clone()))
+                }
                 _ => None,
             });
         consumed.extend(keys);
@@ -449,7 +476,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // IFD1, MakerNotes). Adding it to IFD0 would fabricate a duplicate
         // under a name the file already uses, so refuse the edit instead.
         if let Some(original_value) = original.get(key) {
-            if value == original_value {
+            if value == original_value && !explicit_xp_rewrite(file_bytes, desired, key, value) {
                 continue; // untouched — carried by not touching its bytes
             }
             if !borrowed.iter().any(|k| k == key) {

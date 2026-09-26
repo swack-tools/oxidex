@@ -1697,7 +1697,12 @@ fn plan_exif_write_inner(
             value: Some(desired_value.clone()),
             rowless: None,
         });
-        if desired_value == original_value {
+        // An XP string the caller assigned is rewritten even at its original
+        // value: its text can stand for other bytes than the entry's
+        // (`xp_strings::is_explicit_xp_set`).
+        if desired_value == original_value
+            && !crate::writers::xp_strings::is_explicit_xp_set(desired, &key)
+        {
             bucket(&mut plan, carry);
             continue;
         }
@@ -2693,10 +2698,16 @@ fn is_planned_key(key: &str) -> bool {
 /// Every planned row of `desired` is its `baseline` value and no planned
 /// `baseline` row is gone.
 fn rows_unchanged(baseline: &MetadataMap, desired: &MetadataMap) -> bool {
+    // An XP string the caller assigned is a write even at its baseline
+    // value: ExifTool re-encodes the assigned text, which can differ from
+    // the stored bytes it decodes from (`xp_strings::is_explicit_xp_set`).
     desired
         .iter()
         .filter(|(key, _)| is_planned_key(key))
-        .all(|(key, value)| baseline.get(key.as_str()) == Some(value))
+        .all(|(key, value)| {
+            baseline.get(key.as_str()) == Some(value)
+                && !crate::writers::xp_strings::is_explicit_xp_set(desired, key)
+        })
         && baseline
             .iter()
             .filter(|(key, _)| is_planned_key(key))
@@ -3301,9 +3312,10 @@ pub(crate) fn normalize_write_request(
     // `ExifIFD:ISO` carried beside its own removal -- unless the map sets it
     // to a value the file does not hold, which a carried row never is: then
     // the set is the request (delete, then set). A set to the value the file
-    // already holds is told apart from a carried row only by the
-    // transaction's own record of what was assigned, which
-    // `core::operations::write_metadata_transaction` resolves before this.
+    // already holds is told apart from a carried row only by the map's own
+    // record of what was assigned (`MetadataMap::is_assigned`),
+    // which `core::operations::write_metadata_transaction` resolves before
+    // this.
     let mut removed = removed;
     removed.retain(|key| {
         if group_removal(key).is_some() || !baseline.contains_key(key.as_str()) {
@@ -3554,10 +3566,18 @@ pub(crate) fn verify_exif_write(
     // `IFD0:All` / `EXIF:All` delete the carrier, whatever it held (it is
     // never read): nothing may be left of it but a block built from the
     // tags the same write sets, checked below against an empty original.
+    // A row being set: changed against the baseline, or an XP string the
+    // caller assigned at its baseline value, which ExifTool re-encodes
+    // (`xp_strings::is_explicit_xp_set`) -- verified like any other set.
+    let is_set = |key: &str, value: &TagValue| {
+        is_exif(key)
+            && (baseline.get(key) != Some(value)
+                || crate::writers::xp_strings::is_explicit_xp_set(desired, key))
+    };
     let carrier_deleted = removes_carrier(removed);
     let first_set = desired
         .iter()
-        .find(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
+        .find(|(key, value)| is_set(key, value))
         .map(|(key, _)| key.clone());
     if carrier_deleted {
         // An empty output is the carrier gone -- right only when the write
@@ -3599,7 +3619,7 @@ pub(crate) fn verify_exif_write(
     // replacement). An unchanged row keeps nothing alive against a removal.
     let kept: Vec<(IfdKind, u16)> = desired
         .iter()
-        .filter(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
+        .filter(|(key, value)| is_set(key, value))
         .flat_map(|(key, _)| key_addresses(key))
         .collect();
 
@@ -3805,7 +3825,7 @@ pub(crate) fn verify_exif_write(
 
     // (b) sets
     for (key, value) in desired.iter() {
-        if !is_exif(key) || baseline.get(key) == Some(value) {
+        if !is_set(key, value) {
             continue;
         }
         let addresses = key_addresses(key);
@@ -5531,6 +5551,66 @@ mod tests {
             err.to_string().contains("IFD1:PanasonicTitle"),
             "got: {err}"
         );
+    }
+
+    /// An XP string the caller assigned at its read value is a set the
+    /// verifier checks: a writer that carried the stored surrogate pair
+    /// instead of ExifTool's re-encoded `41 00 8c f3 00 00` is refused, the
+    /// planned rewrite passes, and an untouched entry is not a set at all.
+    #[test]
+    fn the_write_postcondition_checks_an_explicit_xp_same_value_set() {
+        let pair = [0x41u8, 0, 0x3c, 0xd8, 0x8c, 0xdf, 0, 0];
+        let mut tiff = b"II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        tiff.extend_from_slice(&0x9c9bu16.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&(pair.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&pair);
+        let (scan, mut baseline) = scan_and_maps(&tiff);
+        assert_eq!(baseline.get_string("IFD0:XPTitle"), Some("A🎌"));
+        baseline.mark_read_complete();
+
+        let untouched = baseline.clone();
+        verify_exif_write(
+            Some(&tiff),
+            &tiff,
+            &baseline,
+            &untouched,
+            &[],
+            EXIF_BLOCK_MAGICS,
+        )
+        .unwrap();
+
+        let mut assigned = baseline.clone();
+        assigned.insert("IFD0:XPTitle", TagValue::new_string("A🎌"));
+        let err = verify_exif_write(
+            Some(&tiff),
+            &tiff,
+            &baseline,
+            &assigned,
+            &[],
+            EXIF_BLOCK_MAGICS,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("IFD0:XPTitle"), "{err}");
+        let good = serialize_exif(&plan_exif_write(&scan, &baseline, &assigned).unwrap()).unwrap();
+        let written = scan_exif_entries(&good).unwrap();
+        let entry = written
+            .entries
+            .iter()
+            .find(|e| e.tag_id == 0x9c9b)
+            .expect("XPTitle written");
+        assert_eq!(entry.value, [0x41, 0, 0x8c, 0xf3, 0, 0]);
+        verify_exif_write(
+            Some(&tiff),
+            &good,
+            &baseline,
+            &assigned,
+            &[],
+            EXIF_BLOCK_MAGICS,
+        )
+        .unwrap();
     }
 
     /// The pointer refusal list agrees with the repo's own transcription of

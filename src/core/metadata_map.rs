@@ -69,13 +69,9 @@ pub struct MetadataMap {
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
     raw_blocks: Vec<RawMetadataBlock>,
-    /// The file-order position one past the last occurrence a read recorded
-    /// ([`Self::mark_read_complete`]), or `None` for a map no read produced.
-    /// An occurrence at or past it was recorded after the read -- a caller's
-    /// assignment ([`Self::assigned_after_read`]).
-    read_end: Option<u32>,
     /// The file the read that produced this map read ([`Self::read_from`]),
-    /// canonicalized; `None` for a map no read produced.
+    /// canonicalized; `None` for a map no read produced. Which rows are the
+    /// caller's is each occurrence's own flag ([`Self::is_assigned`]).
     read_source: Option<std::path::PathBuf>,
 }
 
@@ -116,7 +112,6 @@ impl MetadataMap {
         Self {
             sink: TagSink::new(),
             raw_blocks: Vec::new(),
-            read_end: None,
             read_source: None,
         }
     }
@@ -129,35 +124,73 @@ impl MetadataMap {
         Self {
             sink: TagSink::with_capacity(capacity),
             raw_blocks: Vec::new(),
-            read_end: None,
             read_source: None,
         }
     }
 
-    /// Marks every occurrence recorded so far as the file's own: the read
-    /// that produced this map is complete. `read_metadata` and its report
-    /// variants call it last, so an occurrence recorded afterwards -- by
-    /// `insert()` in `modify_tag`, the CLI's `-TAG=VALUE`, an FFI setter, a
-    /// library caller -- is an assignment ([`Self::assigned_after_read`]).
+    /// Marks every occurrence recorded so far as read from the file.
     ///
-    /// (Ported from #949, `staging/beta1/xp-explicit-provenance`, which lands
-    /// first; the two copies are identical.)
+    /// Provenance is a property of each occurrence
+    /// ([`TagSink`]'s `assigned` flags), not a position: a public mutation
+    /// -- [`Self::insert`], [`Self::get_mut`] -- marks the occurrence it
+    /// records or changes as the caller's assignment; readers record through
+    /// the same `insert`, so every public producer of file-derived rows
+    /// (`read_metadata*`, `read_metadata_report*`, the public parsers, the
+    /// format dispatcher) calls this before handing its map out. Clones and
+    /// copies carry each occurrence's flag; [`Self::clear`] drops them with
+    /// the occurrences.
     pub(crate) fn mark_read_complete(&mut self) {
-        self.read_end = Some(self.sink.next_order());
+        self.sink.mark_all_read();
+    }
+
+    /// [`Self::mark_read_complete`] by value, for a producer's return.
+    pub(crate) fn read_rows(mut self) -> Self {
+        self.mark_read_complete();
+        self
     }
 
     /// Whether the winning occurrence for `key` was assigned by a caller
-    /// rather than read from the file: recorded after
-    /// [`Self::mark_read_complete`], or in a map no read produced (every
-    /// value there is the caller's). A writer that must tell an explicit
-    /// assignment from a carried-over value asks this, never whether the
-    /// value happens to equal the file's (the XP strings, whose same text
-    /// can be two different byte strings: `writers::xp_strings`).
-    pub(crate) fn assigned_after_read(&self, key: &str) -> bool {
-        match (self.read_end, self.sink.winner_occurrence(key)) {
-            (_, None) => false,
-            (None, Some(_)) => true,
-            (Some(end), Some(occurrence)) => occurrence.order >= end,
+    /// ([`Self::insert`], [`Self::get_mut`]) rather than read from the file.
+    /// A writer that must tell an explicit assignment from a carried-over
+    /// value asks this, never whether the value happens to equal the file's
+    /// (the XP strings, whose same text can be two different byte strings:
+    /// `writers::xp_strings`; a same-value set under a removal:
+    /// `core::operations::write_metadata_transaction`).
+    pub fn is_assigned(&self, key: &str) -> bool {
+        self.sink.winner_is_assigned(key)
+    }
+
+    /// Every key whose winning occurrence the caller assigned
+    /// ([`Self::is_assigned`]), in file order: the one record of what a
+    /// write transaction explicitly sets, whatever the value.
+    pub(crate) fn assigned_keys(&self) -> Vec<String> {
+        self.iter()
+            .map(|(key, _)| key)
+            .filter(|key| self.is_assigned(key))
+            .cloned()
+            .collect()
+    }
+
+    /// Sets the provenance of the most recently recorded occurrence -- for a
+    /// copy that re-records an occurrence of another map and must carry that
+    /// occurrence's flag.
+    pub(crate) fn set_last_assigned(&mut self, assigned: bool) {
+        if let Some(idx) = self.sink.recorded_len().checked_sub(1) {
+            self.sink.set_assigned(idx, assigned);
+        }
+    }
+
+    /// Gives each key of this map the provenance its winner has in `source`
+    /// (a map this one was derived from by value, key for key); keys
+    /// `source` does not hold keep their own.
+    pub(crate) fn copy_provenance_from(&mut self, source: &MetadataMap) {
+        let keys: Vec<String> = self.keys().cloned().collect();
+        for key in keys {
+            if source.contains_key(&key)
+                && let Some(idx) = self.sink.winner_index(&key)
+            {
+                self.sink.set_assigned(idx, source.is_assigned(&key));
+            }
         }
     }
 
@@ -171,10 +204,9 @@ impl MetadataMap {
     /// a deletion `write_metadata` applies. A map built from scratch, or read
     /// from another file, names only what it sets.
     pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
-        self.read_end.is_some()
-            && self.read_source.as_deref().is_some_and(|source| {
-                std::fs::canonicalize(path).map_or(source == path, |path| source == path)
-            })
+        self.read_source.as_deref().is_some_and(|source| {
+            std::fs::canonicalize(path).map_or(source == path, |path| source == path)
+        })
     }
 
     /// Uninterpreted blocks in parser encounter order, separate from named tags.
@@ -224,6 +256,10 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let occurrence = TagOccurrence::from_insert_shim(&key, value, order);
         self.sink.record(key, occurrence);
+        // A public mutation: the caller's assignment, whatever the value
+        // (a reader recording through `insert` is marked read when its
+        // producer returns, `mark_read_complete`).
+        self.sink.mark_assigned(order as usize);
         previous
     }
 
@@ -307,6 +343,7 @@ impl MetadataMap {
                     self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1)
                 }
             };
+            self.set_last_assigned(source.is_assigned(key));
         }
     }
 
@@ -552,6 +589,12 @@ impl MetadataMap {
     }
 
     /// The allocation-free form of [`all_occurrences`](Self::all_occurrences).
+    pub(crate) fn keyed_occurrences_with_provenance(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, bool)> {
+        self.sink.keyed_occurrences_with_provenance()
+    }
+
     pub(crate) fn keyed_occurrences(&self) -> impl Iterator<Item = (&str, &TagOccurrence)> {
         self.sink.keyed_occurrences()
     }
@@ -652,8 +695,9 @@ impl MetadataMap {
     /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         self.raw_blocks.extend(other.raw_blocks);
-        for (key, occurrence) in other.sink.into_keyed_occurrences() {
+        for (key, occurrence, assigned) in other.sink.into_keyed_occurrences_with_provenance() {
             self.sink.record_keyed_carrying_over(key, occurrence);
+            self.set_last_assigned(assigned);
         }
     }
 
@@ -671,7 +715,11 @@ impl MetadataMap {
         // A mutable reference can change the visible value without another
         // call into this map, so its old ValueConv form is no longer sound.
         // `TagSink::get_mut` itself clears the winner occurrence's `value`
-        // field for exactly this reason -- see its own doc comment.
+        // field for exactly this reason -- see its own doc comment. And the
+        // value is now the caller's: an assignment, whatever it is set to.
+        if let Some(idx) = self.sink.winner_index(key) {
+            self.sink.mark_assigned(idx);
+        }
         self.sink.get_mut(key)
     }
 
@@ -758,6 +806,7 @@ impl MetadataMap {
         for (key, occurrence) in self.winner_occurrences() {
             let value = occurrence.value_conv();
             out.insert(key.clone(), value);
+            out.set_last_assigned(self.is_assigned(key));
         }
         out
     }
@@ -789,6 +838,35 @@ impl MetadataMap {
     pub fn get_datetime(&self, key: &str) -> Option<&chrono::DateTime<chrono::Utc>> {
         self.get(key).and_then(|v| v.as_datetime())
     }
+}
+
+/// A producer's result whose rows are read from a file: a map, or a
+/// `Result` holding one. See [`file_rows`].
+pub(crate) trait FileRows {
+    /// Marks every row read ([`MetadataMap::mark_read_complete`]).
+    fn into_read_rows(self) -> Self;
+}
+
+impl FileRows for MetadataMap {
+    fn into_read_rows(self) -> Self {
+        self.read_rows()
+    }
+}
+
+impl<E> FileRows for std::result::Result<MetadataMap, E> {
+    fn into_read_rows(self) -> Self {
+        self.map(MetadataMap::read_rows)
+    }
+}
+
+/// Runs a public producer's body and marks every row it returns as read from
+/// the file. Readers record through the same [`MetadataMap::insert`] a
+/// caller's assignment uses, so each public function that hands out
+/// file-derived rows wraps its body in this: the map it returns has no
+/// assignment in it, and a caller's later `insert` / `get_mut` is exactly
+/// what [`MetadataMap::is_assigned`] reports.
+pub(crate) fn file_rows<R: FileRows>(produce: impl FnOnce() -> R) -> R {
+    produce().into_read_rows()
 }
 
 impl Default for MetadataMap {
@@ -854,6 +932,161 @@ impl IntoIterator for MetadataMap {
 mod tests {
     use super::super::tag_occurrence::{Instance, Provenance};
     use super::*;
+
+    /// Provenance is a property of each occurrence, driven by the public
+    /// map API: every public mutation records an assignment, a read marks
+    /// every row read, `clear` drops the flags with the rows, and every copy
+    /// -- `clone`, normalization, the formatted and filtered projections, the
+    /// merges --
+    /// carries each row's own flag. One row per API; `IFD0:XPTitle` and
+    /// `IFD0:Artist` start as read rows, `IFD0:Make` as an assignment.
+    #[test]
+    fn provenance_follows_every_public_map_api() {
+        use crate::core::exiftool_compat::format_for_exiftool;
+        use crate::core::read_options::ReadOptions;
+        use crate::core::tag_normalization::normalize_metadata_map;
+
+        fn base() -> MetadataMap {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:XPTitle", TagValue::new_string("A"));
+            map.insert("IFD0:Artist", TagValue::new_string("me"));
+            map.mark_read_complete();
+            map.insert("IFD0:Make", TagValue::new_string("Acme"));
+            map
+        }
+        type Op = fn(MetadataMap) -> MetadataMap;
+        // (API, operation, expected is_assigned for XPTitle, Artist, Make)
+        let cases: Vec<(&str, Op, [bool; 3])> = vec![
+            ("read + insert", |m| m, [false, false, true]),
+            (
+                "insert same value",
+                |mut m| {
+                    m.insert("IFD0:XPTitle", TagValue::new_string("A"));
+                    m
+                },
+                [true, false, true],
+            ),
+            (
+                "get_mut same value",
+                |mut m| {
+                    *m.get_mut("IFD0:XPTitle").unwrap() = TagValue::new_string("A");
+                    m
+                },
+                [true, false, true],
+            ),
+            (
+                "get_mut read only",
+                |mut m| {
+                    let _ = m.get_mut("IFD0:Artist");
+                    m
+                },
+                [false, true, true],
+            ),
+            (
+                "clear then re-insert",
+                |m| {
+                    let rows: Vec<_> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let mut m = m;
+                    m.clear();
+                    assert!(m.is_empty());
+                    for (k, v) in rows {
+                        m.insert(k, v);
+                    }
+                    m
+                },
+                [true, true, true],
+            ),
+            (
+                "remove then insert",
+                |mut m| {
+                    m.remove("IFD0:XPTitle");
+                    m.insert("IFD0:XPTitle", TagValue::new_string("A"));
+                    m
+                },
+                [true, false, true],
+            ),
+            ("clone", |m| m.clone(), [false, false, true]),
+            (
+                "normalize_metadata_map",
+                |m| normalize_metadata_map(&m),
+                [false, false, true],
+            ),
+            (
+                "without_print_conv",
+                |m| m.without_print_conv(),
+                [false, false, true],
+            ),
+            (
+                "format_for_exiftool",
+                |m| format_for_exiftool(&m),
+                [false, false, true],
+            ),
+            (
+                "strip_extended_only",
+                |m| ReadOptions::default_full_listing().strip_extended_only(&m),
+                [false, false, true],
+            ),
+            (
+                "merge into a fresh map",
+                |m| {
+                    let mut out = MetadataMap::new();
+                    out.merge(m);
+                    out
+                },
+                [false, false, true],
+            ),
+            (
+                "merge_winners_keeping_group1",
+                |m| {
+                    let mut out = MetadataMap::new();
+                    out.merge_winners_keeping_group1(&m);
+                    out
+                },
+                [false, false, true],
+            ),
+            (
+                "FromIterator (a caller-built map)",
+                |m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                [true, true, true],
+            ),
+            (
+                "Deserialize (a caller-built map)",
+                |m| serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap(),
+                [true, true, true],
+            ),
+            (
+                "mark_read_complete again",
+                |mut m| {
+                    m.mark_read_complete();
+                    m
+                },
+                [false, false, false],
+            ),
+        ];
+        for (api, op, expected) in cases {
+            let map = op(base());
+            let got = ["IFD0:XPTitle", "IFD0:Artist", "IFD0:Make"].map(|k| map.is_assigned(k));
+            assert_eq!(got, expected, "{api}");
+        }
+        // Equality is about the rows, not who put them there.
+        let mut read = base();
+        read.mark_read_complete();
+        assert_eq!(read, base());
+    }
+
+    /// A public producer's rows are read (`file_rows`): the map a parser
+    /// hands out has no assignment in it.
+    #[test]
+    fn a_public_producer_hands_out_read_rows() {
+        let produced = file_rows(|| {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:XPTitle", TagValue::new_string("A"));
+            map
+        });
+        assert!(!produced.is_assigned("IFD0:XPTitle"));
+        let failed: std::result::Result<MetadataMap, ()> = file_rows(|| Err(()));
+        assert!(failed.is_err());
+    }
 
     fn source_occurrence(id: oxidex_tags::TagId, name: &str, raw: TagValue) -> TagOccurrence {
         use super::super::tag_occurrence::intern;

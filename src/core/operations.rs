@@ -374,7 +374,8 @@ pub fn read_metadata_with_detector_and_options(
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
     // Everything recorded by the read is the file's own; what a caller
-    // inserts afterwards is an assignment (`MetadataMap::assigned_after_read`).
+    // inserts or mutates afterwards is an assignment
+    // (`MetadataMap::is_assigned`).
     read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
         metadata.mark_read_complete();
         metadata.set_read_source(path);
@@ -1026,17 +1027,21 @@ pub(crate) fn write_metadata_with_removals(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
-    write_metadata_transaction(path, metadata, removed, &[])
+    write_metadata_transaction(path, metadata, removed)
 }
 
 /// One write transaction: `removed` (named tags and `<group>:All`) applied
-/// first, then the map -- and `assigned`, the keys the caller explicitly set
+/// first, then the map -- whose assigned keys are the caller's explicit sets
 /// (`modify_tag`'s tag, a batch's `-TAG=value`s), whatever their value.
 ///
-/// Provenance, not equality, decides what a set is. A value that differs
-/// from the file's is a set whatever the list says (a carried row never
-/// differs); an assigned key whose value equals the file's is a set too,
-/// which the map alone cannot show. When such a same-value set falls under
+/// Provenance, not equality, decides what a set is, and the map records it
+/// per occurrence: a value a public mutation (`insert`, `get_mut`) put there
+/// is an assignment, a row a reader produced is not
+/// (`MetadataMap::is_assigned`, the single notion the writers --
+/// this transaction, the XP strings' direct write -- all ask). A value that
+/// differs from the file's is a set whatever its provenance (a carried row
+/// never differs); an assigned key whose value equals the file's is a set
+/// too, which the values alone cannot show. When such a same-value set falls under
 /// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
 /// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
 /// ExifTool's order -- the removals, then the sets -- as two passes on a
@@ -1047,9 +1052,9 @@ pub(crate) fn write_metadata_transaction(
     path: &Path,
     metadata: &MetadataMap,
     removed: &[String],
-    assigned: &[String],
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
+    let assigned = metadata.assigned_keys();
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -3764,9 +3769,9 @@ mod removal_then_set_tests {
     /// (`removed = ["IFD0:Make"]`, then `IFD0:Make=Acme` with Make already
     /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`
     /// keeps Make. 00f0c398 inferred from the equal value that the row was
-    /// carried and deleted it; the transaction now records what was assigned
-    /// (`write_metadata_transaction`'s `assigned`), and a carried row -- the
-    /// same map without the assignment -- still goes. The same holds under a
+    /// carried and deleted it; the map now records what was assigned (a value
+    /// the caller inserted, `MetadataMap::is_assigned`), and a
+    /// carried row -- the same map without the assignment -- still goes. The same holds under a
     /// carrier removal (`EXIF:All` then `IFD0:Make=Acme`). JPEG and PNG, II
     /// and MM.
     #[test]
@@ -3781,13 +3786,10 @@ mod removal_then_set_tests {
                     std::fs::write(&path, &original).unwrap();
                     let map = read_metadata(&path).unwrap();
                     assert_eq!(map.get_string("IFD0:Make"), Some("Acme"), "{label}");
-                    write_metadata_transaction(
-                        &path,
-                        &map,
-                        &[removal.to_string()],
-                        &["IFD0:Make".to_string()],
-                    )
-                    .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    let mut assigned = map.clone();
+                    assigned.insert("IFD0:Make", TagValue::new_string("Acme"));
+                    write_metadata_transaction(&path, &assigned, &[removal.to_string()])
+                        .unwrap_or_else(|e| panic!("{label}: {e}"));
                     let after = read_metadata(&path).unwrap();
                     assert_eq!(
                         after.get_string("IFD0:Make"),
@@ -3800,7 +3802,7 @@ mod removal_then_set_tests {
 
                     // Carried, not assigned: the removal wins.
                     std::fs::write(&path, &original).unwrap();
-                    write_metadata_transaction(&path, &map, &[removal.to_string()], &[])
+                    write_metadata_transaction(&path, &map, &[removal.to_string()])
                         .unwrap_or_else(|e| panic!("{label} carried: {e}"));
                     assert!(
                         !read_metadata(&path).unwrap().contains_key("IFD0:Make"),

@@ -343,76 +343,80 @@ fn format_cfa_pattern2(bytes: &[u8], value_count: u32) -> String {
 /// Proprietary formats (CR3, X3F, MRW) require specialized parsers and are currently
 /// stubbed for future implementation.
 pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
-    match format {
-        // TIFF-based formats - use existing TIFF parser infrastructure
-        // These formats all follow the TIFF/EXIF structure with manufacturer-specific extensions
-        RawFormat::CanonCR2
-        | RawFormat::NikonNEF
-        | RawFormat::NikonNRW
-        | RawFormat::SonyARW
-        | RawFormat::SonySR2
-        | RawFormat::SonySRF
-        | RawFormat::SonySRW
-        | RawFormat::SonyARQ
-        | RawFormat::SonyARI
-        | RawFormat::AdobeDNG
-        | RawFormat::PentaxPEF
-        | RawFormat::OlympusORF
-        | RawFormat::OlympusORI
-        | RawFormat::FujifilmRAF
-        | RawFormat::PanasonicRW2
-        | RawFormat::PanasonicRWL
-        | RawFormat::Hasselblad3FR
-        | RawFormat::HasselbladFFF
-        | RawFormat::PhaseOneIIQ
-        | RawFormat::MamiyaMEF
-        | RawFormat::LeafMOS
-        | RawFormat::KodakDCR
-        | RawFormat::KodakKDC
-        | RawFormat::MinoltaMDC
-        | RawFormat::EpsonERF
-        | RawFormat::GoProGPR
-        | RawFormat::HEIFHIF
-        | RawFormat::LightLRI
-        | RawFormat::SinarSTI => parse_tiff_based_raw(data, format),
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        match format {
+            // TIFF-based formats - use existing TIFF parser infrastructure
+            // These formats all follow the TIFF/EXIF structure with manufacturer-specific extensions
+            RawFormat::CanonCR2
+            | RawFormat::NikonNEF
+            | RawFormat::NikonNRW
+            | RawFormat::SonyARW
+            | RawFormat::SonySR2
+            | RawFormat::SonySRF
+            | RawFormat::SonySRW
+            | RawFormat::SonyARQ
+            | RawFormat::SonyARI
+            | RawFormat::AdobeDNG
+            | RawFormat::PentaxPEF
+            | RawFormat::OlympusORF
+            | RawFormat::OlympusORI
+            | RawFormat::FujifilmRAF
+            | RawFormat::PanasonicRW2
+            | RawFormat::PanasonicRWL
+            | RawFormat::Hasselblad3FR
+            | RawFormat::HasselbladFFF
+            | RawFormat::PhaseOneIIQ
+            | RawFormat::MamiyaMEF
+            | RawFormat::LeafMOS
+            | RawFormat::KodakDCR
+            | RawFormat::KodakKDC
+            | RawFormat::MinoltaMDC
+            | RawFormat::EpsonERF
+            | RawFormat::GoProGPR
+            | RawFormat::HEIFHIF
+            | RawFormat::LightLRI
+            | RawFormat::SinarSTI => parse_tiff_based_raw(data, format),
 
-        // Canon CR3 uses ISO Base Media Format (similar to MP4)
-        // This is a different container format from TIFF
-        RawFormat::CanonCR3 => parse_cr3(data, format),
+            // Canon CR3 uses ISO Base Media Format (similar to MP4)
+            // This is a different container format from TIFF
+            RawFormat::CanonCR3 => parse_cr3(data, format),
 
-        // Sigma X3F uses proprietary FOVb format
-        RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
+            // Sigma X3F uses proprietary FOVb format
+            RawFormat::SigmaX3F => parse_sigma_x3f(data, format),
 
-        // Minolta MRW uses proprietary MRM format
-        RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
+            // Minolta MRW uses proprietary MRM format
+            RawFormat::MinoltaMRW => parse_minolta_mrw(data, format),
 
-        // Canon CRW is an older proprietary format
-        RawFormat::CanonCRW => parse_canon_crw(data, format),
+            // Canon CRW is an older proprietary format
+            RawFormat::CanonCRW => parse_canon_crw(data, format),
 
-        // Generic/fallback formats
-        //
-        // ExifTool's own magic number for the shared `RAW` extension is
-        // `(.{25}ARECOYK|II|MM)` (ExifTool.pm's %magicNumber): a `.raw` file
-        // is either Kyocera Contax N Digital RAW or a TIFF-based format
-        // (typically Panasonic RAW). Check the Kyocera signature first, the
-        // same order ExifTool's own `['RAW','TIFF']` candidate list tries --
-        // then fall back to TIFF parsing as most other raw formats are
-        // TIFF-based.
-        RawFormat::GenericRAW if crate::parsers::raw::looks_like_kyocera_raw(data) => {
-            crate::parsers::raw::kyocera::parse_kyocera_raw_metadata(data)
+            // Generic/fallback formats
+            //
+            // ExifTool's own magic number for the shared `RAW` extension is
+            // `(.{25}ARECOYK|II|MM)` (ExifTool.pm's %magicNumber): a `.raw` file
+            // is either Kyocera Contax N Digital RAW or a TIFF-based format
+            // (typically Panasonic RAW). Check the Kyocera signature first, the
+            // same order ExifTool's own `['RAW','TIFF']` candidate list tries --
+            // then fall back to TIFF parsing as most other raw formats are
+            // TIFF-based.
+            RawFormat::GenericRAW if crate::parsers::raw::looks_like_kyocera_raw(data) => {
+                crate::parsers::raw::kyocera::parse_kyocera_raw_metadata(data)
+            }
+            RawFormat::GenericRAW | RawFormat::GenericCAM | RawFormat::GenericREV => {
+                parse_tiff_based_raw(data, format).or_else(|_| {
+                    // If TIFF parsing fails, return minimal metadata
+                    let mut metadata = MetadataMap::new();
+                    metadata.insert(
+                        "File:FileType".to_string(),
+                        TagValue::new_string(format.file_type()),
+                    );
+                    Ok(metadata)
+                })
+            }
         }
-        RawFormat::GenericRAW | RawFormat::GenericCAM | RawFormat::GenericREV => {
-            parse_tiff_based_raw(data, format).or_else(|_| {
-                // If TIFF parsing fails, return minimal metadata
-                let mut metadata = MetadataMap::new();
-                metadata.insert(
-                    "File:FileType".to_string(),
-                    TagValue::new_string(format.file_type()),
-                );
-                Ok(metadata)
-            })
-        }
-    }
+    })
 }
 
 /// Parse TIFF-based raw formats using existing TIFF parser infrastructure

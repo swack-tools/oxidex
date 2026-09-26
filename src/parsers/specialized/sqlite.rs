@@ -256,196 +256,200 @@ impl FormatParser for SQLiteParser {
     /// * `Ok(MetadataMap)` - Extracted metadata including forensic indicators
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify this is a valid SQLite file
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid SQLite signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Basic file information
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String("SQLite".to_string()),
-        );
-
-        // File identification
-        let page_size = Self::read_page_size(reader)?;
-        metadata.insert(
-            "PageSize".to_string(),
-            TagValue::String(format!("{} bytes", page_size)),
-        );
-        // Add SQLITE:PageSize for Worker 29 compatibility.
-        //
-        // Must mirror the unprefixed PageSize value. Until 2026-07-26 this
-        // inserted a bare integer while PageSize carried "<n> bytes", so a real
-        // database emitted both at once:
-        //   $ oxidex dup.db | rg -i pagesize
-        //   PageSize: 4096 bytes
-        //   SQLITE:PageSize: 4096
-        // There is no ExifTool ground truth to arbitrate the two -- exiftool
-        // 13.55 answers `Error : Unknown file type` for a SQLite database -- so
-        // the tiebreak is the representation the existing tests already pin
-        // ("4096 bytes" at tests/forensic/sqlite_tests.rs:137 and the 65536
-        // special case at :155).
-        metadata.insert(
-            "SQLITE:PageSize".to_string(),
-            TagValue::String(format!("{} bytes", page_size)),
-        );
-
-        let write_version = Self::read_write_version(reader)?;
-        metadata.insert(
-            "WriteVersion".to_string(),
-            TagValue::String(write_version.to_string()),
-        );
-
-        let read_version = Self::read_read_version(reader)?;
-        metadata.insert(
-            "ReadVersion".to_string(),
-            TagValue::String(read_version.to_string()),
-        );
-
-        // Database statistics
-        let change_counter = Self::read_change_counter(reader)?;
-        metadata.insert(
-            "ChangeCounter".to_string(),
-            TagValue::String(change_counter.to_string()),
-        );
-
-        let page_count = Self::read_page_count(reader)?;
-        metadata.insert(
-            "PageCount".to_string(),
-            TagValue::String(page_count.to_string()),
-        );
-
-        // Calculate and store database size
-        let db_size = page_count as u64 * page_size as u64;
-        metadata.insert(
-            "DatabaseSize".to_string(),
-            TagValue::String(format!("{} bytes", db_size)),
-        );
-
-        // Forensic indicators
-        let free_page_count = Self::read_free_page_count(reader)?;
-        metadata.insert(
-            "FreePageCount".to_string(),
-            TagValue::String(free_page_count.to_string()),
-        );
-        // Add SQLITE:FreePages for Worker 29 compatibility
-        metadata.insert(
-            "SQLITE:FreePages".to_string(),
-            TagValue::new_integer(free_page_count as i64),
-        );
-
-        // Add SQLITE:TotalPages for Worker 29 compatibility
-        metadata.insert(
-            "SQLITE:TotalPages".to_string(),
-            TagValue::new_integer(page_count as i64),
-        );
-
-        if free_page_count > 0 {
-            metadata.insert(
-                "ForensicNote".to_string(),
-                TagValue::String(format!(
-                    "Database contains {} free pages - deleted data may be recoverable",
-                    free_page_count
-                )),
-            );
-        }
-
-        let schema_cookie = Self::read_schema_cookie(reader)?;
-        metadata.insert(
-            "SchemaCookie".to_string(),
-            TagValue::String(schema_cookie.to_string()),
-        );
-        // Add SQLITE:SchemaVersion for Worker 29 compatibility
-        metadata.insert(
-            "SQLITE:SchemaVersion".to_string(),
-            TagValue::new_integer(schema_cookie as i64),
-        );
-
-        // Application identification
-        let app_id = Self::read_application_id(reader)?;
-        metadata.insert(
-            "ApplicationID".to_string(),
-            TagValue::String(format!("0x{:08X}", app_id)),
-        );
-
-        if let Some(app_name) = Self::identify_application(app_id) {
-            metadata.insert(
-                "ApplicationName".to_string(),
-                TagValue::String(app_name.to_string()),
-            );
-        }
-
-        let user_version = Self::read_user_version(reader)?;
-        metadata.insert(
-            "UserVersion".to_string(),
-            TagValue::String(user_version.to_string()),
-        );
-        // Add SQLITE:CacheSize for Worker 29 compatibility (user_version is sometimes used for cache size)
-        metadata.insert(
-            "SQLITE:CacheSize".to_string(),
-            TagValue::new_integer(user_version as i64),
-        );
-
-        // Text encoding
-        let text_encoding = Self::read_text_encoding(reader)?;
-        let encoding_str = Self::decode_text_encoding(text_encoding);
-        metadata.insert(
-            "TextEncoding".to_string(),
-            TagValue::String(encoding_str.to_string()),
-        );
-        // Add SQLITE:Encoding for Worker 29 compatibility
-        metadata.insert(
-            "SQLITE:Encoding".to_string(),
-            TagValue::new_string(encoding_str.to_string()),
-        );
-
-        // SQLite version
-        let version_valid_for = Self::read_version_valid_for(reader)?;
-        metadata.insert(
-            "VersionValidFor".to_string(),
-            TagValue::String(version_valid_for.to_string()),
-        );
-
-        let sqlite_version = Self::read_sqlite_version_number(reader)?;
-        metadata.insert(
-            "SQLiteVersion".to_string(),
-            TagValue::String(Self::format_sqlite_version(sqlite_version)),
-        );
-        metadata.insert(
-            "SQLiteVersionNumber".to_string(),
-            TagValue::String(sqlite_version.to_string()),
-        );
-
-        // Add estimated table and index counts for Worker 29 compatibility
-        // Note: Full schema parsing would require reading the sqlite_master table
-        let (_table_count, _index_count) = Self::estimate_schema_objects(reader);
-        // For now, we add placeholder tags that could be enhanced with full schema parsing
-        // metadata.insert("SQLITE:TableCount".to_string(), TagValue::new_integer(table_count));
-        // metadata.insert("SQLITE:IndexCount".to_string(), TagValue::new_integer(index_count));
-
-        // WAL mode detection (placeholder - needs file system access)
-        let (wal_exists, shm_exists) = Self::check_wal_mode_files(reader);
-        if wal_exists || shm_exists {
-            let mut wal_files = Vec::new();
-            if wal_exists {
-                wal_files.push(".wal");
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify this is a valid SQLite file
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid SQLite signature"));
             }
-            if shm_exists {
-                wal_files.push(".shm");
-            }
-            metadata.insert(
-                "WALModeFiles".to_string(),
-                TagValue::String(format!(
-                    "Companion files detected: {}",
-                    wal_files.join(", ")
-                )),
-            );
-        }
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+
+            // Basic file information
+            metadata.insert(
+                "FileType".to_string(),
+                TagValue::String("SQLite".to_string()),
+            );
+
+            // File identification
+            let page_size = Self::read_page_size(reader)?;
+            metadata.insert(
+                "PageSize".to_string(),
+                TagValue::String(format!("{} bytes", page_size)),
+            );
+            // Add SQLITE:PageSize for Worker 29 compatibility.
+            //
+            // Must mirror the unprefixed PageSize value. Until 2026-07-26 this
+            // inserted a bare integer while PageSize carried "<n> bytes", so a real
+            // database emitted both at once:
+            //   $ oxidex dup.db | rg -i pagesize
+            //   PageSize: 4096 bytes
+            //   SQLITE:PageSize: 4096
+            // There is no ExifTool ground truth to arbitrate the two -- exiftool
+            // 13.55 answers `Error : Unknown file type` for a SQLite database -- so
+            // the tiebreak is the representation the existing tests already pin
+            // ("4096 bytes" at tests/forensic/sqlite_tests.rs:137 and the 65536
+            // special case at :155).
+            metadata.insert(
+                "SQLITE:PageSize".to_string(),
+                TagValue::String(format!("{} bytes", page_size)),
+            );
+
+            let write_version = Self::read_write_version(reader)?;
+            metadata.insert(
+                "WriteVersion".to_string(),
+                TagValue::String(write_version.to_string()),
+            );
+
+            let read_version = Self::read_read_version(reader)?;
+            metadata.insert(
+                "ReadVersion".to_string(),
+                TagValue::String(read_version.to_string()),
+            );
+
+            // Database statistics
+            let change_counter = Self::read_change_counter(reader)?;
+            metadata.insert(
+                "ChangeCounter".to_string(),
+                TagValue::String(change_counter.to_string()),
+            );
+
+            let page_count = Self::read_page_count(reader)?;
+            metadata.insert(
+                "PageCount".to_string(),
+                TagValue::String(page_count.to_string()),
+            );
+
+            // Calculate and store database size
+            let db_size = page_count as u64 * page_size as u64;
+            metadata.insert(
+                "DatabaseSize".to_string(),
+                TagValue::String(format!("{} bytes", db_size)),
+            );
+
+            // Forensic indicators
+            let free_page_count = Self::read_free_page_count(reader)?;
+            metadata.insert(
+                "FreePageCount".to_string(),
+                TagValue::String(free_page_count.to_string()),
+            );
+            // Add SQLITE:FreePages for Worker 29 compatibility
+            metadata.insert(
+                "SQLITE:FreePages".to_string(),
+                TagValue::new_integer(free_page_count as i64),
+            );
+
+            // Add SQLITE:TotalPages for Worker 29 compatibility
+            metadata.insert(
+                "SQLITE:TotalPages".to_string(),
+                TagValue::new_integer(page_count as i64),
+            );
+
+            if free_page_count > 0 {
+                metadata.insert(
+                    "ForensicNote".to_string(),
+                    TagValue::String(format!(
+                        "Database contains {} free pages - deleted data may be recoverable",
+                        free_page_count
+                    )),
+                );
+            }
+
+            let schema_cookie = Self::read_schema_cookie(reader)?;
+            metadata.insert(
+                "SchemaCookie".to_string(),
+                TagValue::String(schema_cookie.to_string()),
+            );
+            // Add SQLITE:SchemaVersion for Worker 29 compatibility
+            metadata.insert(
+                "SQLITE:SchemaVersion".to_string(),
+                TagValue::new_integer(schema_cookie as i64),
+            );
+
+            // Application identification
+            let app_id = Self::read_application_id(reader)?;
+            metadata.insert(
+                "ApplicationID".to_string(),
+                TagValue::String(format!("0x{:08X}", app_id)),
+            );
+
+            if let Some(app_name) = Self::identify_application(app_id) {
+                metadata.insert(
+                    "ApplicationName".to_string(),
+                    TagValue::String(app_name.to_string()),
+                );
+            }
+
+            let user_version = Self::read_user_version(reader)?;
+            metadata.insert(
+                "UserVersion".to_string(),
+                TagValue::String(user_version.to_string()),
+            );
+            // Add SQLITE:CacheSize for Worker 29 compatibility (user_version is sometimes used for cache size)
+            metadata.insert(
+                "SQLITE:CacheSize".to_string(),
+                TagValue::new_integer(user_version as i64),
+            );
+
+            // Text encoding
+            let text_encoding = Self::read_text_encoding(reader)?;
+            let encoding_str = Self::decode_text_encoding(text_encoding);
+            metadata.insert(
+                "TextEncoding".to_string(),
+                TagValue::String(encoding_str.to_string()),
+            );
+            // Add SQLITE:Encoding for Worker 29 compatibility
+            metadata.insert(
+                "SQLITE:Encoding".to_string(),
+                TagValue::new_string(encoding_str.to_string()),
+            );
+
+            // SQLite version
+            let version_valid_for = Self::read_version_valid_for(reader)?;
+            metadata.insert(
+                "VersionValidFor".to_string(),
+                TagValue::String(version_valid_for.to_string()),
+            );
+
+            let sqlite_version = Self::read_sqlite_version_number(reader)?;
+            metadata.insert(
+                "SQLiteVersion".to_string(),
+                TagValue::String(Self::format_sqlite_version(sqlite_version)),
+            );
+            metadata.insert(
+                "SQLiteVersionNumber".to_string(),
+                TagValue::String(sqlite_version.to_string()),
+            );
+
+            // Add estimated table and index counts for Worker 29 compatibility
+            // Note: Full schema parsing would require reading the sqlite_master table
+            let (_table_count, _index_count) = Self::estimate_schema_objects(reader);
+            // For now, we add placeholder tags that could be enhanced with full schema parsing
+            // metadata.insert("SQLITE:TableCount".to_string(), TagValue::new_integer(table_count));
+            // metadata.insert("SQLITE:IndexCount".to_string(), TagValue::new_integer(index_count));
+
+            // WAL mode detection (placeholder - needs file system access)
+            let (wal_exists, shm_exists) = Self::check_wal_mode_files(reader);
+            if wal_exists || shm_exists {
+                let mut wal_files = Vec::new();
+                if wal_exists {
+                    wal_files.push(".wal");
+                }
+                if shm_exists {
+                    wal_files.push(".shm");
+                }
+                metadata.insert(
+                    "WALModeFiles".to_string(),
+                    TagValue::String(format!(
+                        "Companion files detected: {}",
+                        wal_files.join(", ")
+                    )),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format

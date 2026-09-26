@@ -147,42 +147,46 @@ impl ARParser {
 
 impl FormatParser for ARParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("not an ar archive"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("not an ar archive"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        let file_type = if has_mach_member(reader) {
-            "Mach-O static library"
-        } else {
-            "Static library"
-        };
-        // Written into the `File` group for the same reason as the ELF and
-        // Mach-O parsers: this is ExifTool's own answer for the format, and it
-        // has to outrank `%fileTypeLookup`, which calls the file `A`.
-        metadata.insert(
-            "File:FileType".to_string(),
-            TagValue::String(file_type.to_string()),
-        );
-        metadata.insert(
-            "File:FileTypeExtension".to_string(),
-            TagValue::String("a".to_string()),
-        );
-        // `%mimeType` has no row for a name like this -- ExifTool reaches
-        // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
-        // the base type `%fileTypeLookup` routes this family to. Without it the
-        // file falls through to `application/unknown`.
-        if let Some(mime) = crate::filetype::mime_for_type("EXE")
-            && !crate::exiftool_tables::attribution::silenced(
-                crate::exiftool_tables::attribution::Token::Producers,
-            )
-        {
+            let mut metadata = MetadataMap::new();
+            let file_type = if has_mach_member(reader) {
+                "Mach-O static library"
+            } else {
+                "Static library"
+            };
+            // Written into the `File` group for the same reason as the ELF and
+            // Mach-O parsers: this is ExifTool's own answer for the format, and it
+            // has to outrank `%fileTypeLookup`, which calls the file `A`.
             metadata.insert(
-                "File:MIMEType".to_string(),
-                TagValue::String(mime.to_string()),
+                "File:FileType".to_string(),
+                TagValue::String(file_type.to_string()),
             );
-        }
-        Ok(metadata)
+            metadata.insert(
+                "File:FileTypeExtension".to_string(),
+                TagValue::String("a".to_string()),
+            );
+            // `%mimeType` has no row for a name like this -- ExifTool reaches
+            // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+            // the base type `%fileTypeLookup` routes this family to. Without it the
+            // file falls through to `application/unknown`.
+            if let Some(mime) = crate::filetype::mime_for_type("EXE")
+                && !crate::exiftool_tables::attribution::silenced(
+                    crate::exiftool_tables::attribution::Token::Producers,
+                )
+            {
+                metadata.insert(
+                    "File:MIMEType".to_string(),
+                    TagValue::String(mime.to_string()),
+                );
+            }
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

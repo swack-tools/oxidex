@@ -90,39 +90,43 @@ const AROT_CURVE_OFFSET: usize = 10;
 /// assert_eq!(metadata.get_integer("HDR:GainCurveSize"), Some(4));
 /// ```
 pub fn parse_app10_hdr(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Validate minimum segment length
-    if data.len() < MIN_HDR_SEGMENT_LENGTH {
-        return Err(crate::error::ExifToolError::parse_error(
-            "APP10 HDR segment too short to contain valid data",
-        ));
-    }
+        // Validate minimum segment length
+        if data.len() < MIN_HDR_SEGMENT_LENGTH {
+            return Err(crate::error::ExifToolError::parse_error(
+                "APP10 HDR segment too short to contain valid data",
+            ));
+        }
 
-    // Attempt to detect and parse known HDR formats
-    if data.len() >= HDR_IDENTIFIER.len() && &data[..HDR_IDENTIFIER.len()] == HDR_IDENTIFIER {
-        // Standard HDR format with "HDR\0" prefix
-        parse_standard_hdr(&data[HDR_IDENTIFIER.len()..], &mut metadata)?;
-        metadata.insert("HDR:Format", TagValue::String("HDR".to_string()));
-    } else if data.len() >= AROT_IDENTIFIER.len()
-        && &data[..AROT_IDENTIFIER.len()] == AROT_IDENTIFIER
-    {
-        // Android AROT HDR gain map format.
-        //
-        // Pass the WHOLE segment, identifier included: ExifTool's HDRGainInfo
-        // table indexes from the start of the segment (offset 6 is the size,
-        // offset 10 the curve), so stripping the prefix here would silently
-        // shift every field by four bytes.
-        parse_arot_hdr(data, &mut metadata)?;
-        metadata.insert("HDR:Format", TagValue::String("AROT".to_string()));
-    } else {
-        // Unknown format - attempt generic parsing
-        // Store the entire data as the gain curve for formats we don't recognize
-        parse_generic_hdr(data, &mut metadata)?;
-        metadata.insert("HDR:Format", TagValue::String("Unknown".to_string()));
-    }
+        // Attempt to detect and parse known HDR formats
+        if data.len() >= HDR_IDENTIFIER.len() && &data[..HDR_IDENTIFIER.len()] == HDR_IDENTIFIER {
+            // Standard HDR format with "HDR\0" prefix
+            parse_standard_hdr(&data[HDR_IDENTIFIER.len()..], &mut metadata)?;
+            metadata.insert("HDR:Format", TagValue::String("HDR".to_string()));
+        } else if data.len() >= AROT_IDENTIFIER.len()
+            && &data[..AROT_IDENTIFIER.len()] == AROT_IDENTIFIER
+        {
+            // Android AROT HDR gain map format.
+            //
+            // Pass the WHOLE segment, identifier included: ExifTool's HDRGainInfo
+            // table indexes from the start of the segment (offset 6 is the size,
+            // offset 10 the curve), so stripping the prefix here would silently
+            // shift every field by four bytes.
+            parse_arot_hdr(data, &mut metadata)?;
+            metadata.insert("HDR:Format", TagValue::String("AROT".to_string()));
+        } else {
+            // Unknown format - attempt generic parsing
+            // Store the entire data as the gain curve for formats we don't recognize
+            parse_generic_hdr(data, &mut metadata)?;
+            metadata.insert("HDR:Format", TagValue::String("Unknown".to_string()));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Parses standard HDR format data (after the "HDR\0" identifier).

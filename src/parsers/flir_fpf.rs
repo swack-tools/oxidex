@@ -109,194 +109,198 @@ fn pixel_format_name(v: u16) -> Option<&'static str> {
 /// Returns `ParseError` when the file is shorter than the 892-byte header or
 /// the magic does not match (mirrors `ProcessFPF` returning 0 on either).
 pub fn parse_fpf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let size = reader.size();
-    if size < HEADER_LEN as u64 {
-        return Err(ExifToolError::parse_error("FPF header truncated"));
-    }
-    let buf = reader
-        .read(0, HEADER_LEN)
-        .map_err(|e| ExifToolError::parse_error(format!("FPF read failed: {e}")))?;
-    if !buf.starts_with(b"FPF Public Image Format\0") {
-        return Err(ExifToolError::parse_error("Not an FPF file"));
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let size = reader.size();
+        if size < HEADER_LEN as u64 {
+            return Err(ExifToolError::parse_error("FPF header truncated"));
+        }
+        let buf = reader
+            .read(0, HEADER_LEN)
+            .map_err(|e| ExifToolError::parse_error(format!("FPF read failed: {e}")))?;
+        if !buf.starts_with(b"FPF Public Image Format\0") {
+            return Err(ExifToolError::parse_error("Not an FPF file"));
+        }
 
-    // SetByteOrder('II'); ToggleByteOrder() unless Get32u(\$buff, 0x20) & 0xffff;
-    let le_version = read_u32(buf, 0x20, true).unwrap_or(0);
-    let little_endian = (le_version & 0xffff) != 0;
+        // SetByteOrder('II'); ToggleByteOrder() unless Get32u(\$buff, 0x20) & 0xffff;
+        let le_version = read_u32(buf, 0x20, true).unwrap_or(0);
+        let little_endian = (le_version & 0xffff) != 0;
 
-    let mut metadata = MetadataMap::new();
+        let mut metadata = MetadataMap::new();
 
-    if let Some(v) = read_u32(buf, 0x20, little_endian) {
-        metadata.insert(format!("{GROUP}:FPFVersion"), TagValue::Integer(v as i64));
-    }
-    if let Some(v) = read_u32(buf, 0x24, little_endian) {
-        metadata.insert(
-            format!("{GROUP}:ImageDataOffset"),
-            TagValue::Integer(v as i64),
-        );
-    }
-    if let Some(v) = read_u16(buf, 0x28, little_endian) {
-        if let Some(label) = image_type_name(v) {
+        if let Some(v) = read_u32(buf, 0x20, little_endian) {
+            metadata.insert(format!("{GROUP}:FPFVersion"), TagValue::Integer(v as i64));
+        }
+        if let Some(v) = read_u32(buf, 0x24, little_endian) {
             metadata.insert(
-                format!("{GROUP}:ImageType"),
-                TagValue::String(label.to_string()),
+                format!("{GROUP}:ImageDataOffset"),
+                TagValue::Integer(v as i64),
             );
         }
-    }
-    if let Some(v) = read_u16(buf, 0x2a, little_endian) {
-        if let Some(label) = pixel_format_name(v) {
+        if let Some(v) = read_u16(buf, 0x28, little_endian) {
+            if let Some(label) = image_type_name(v) {
+                metadata.insert(
+                    format!("{GROUP}:ImageType"),
+                    TagValue::String(label.to_string()),
+                );
+            }
+        }
+        if let Some(v) = read_u16(buf, 0x2a, little_endian) {
+            if let Some(label) = pixel_format_name(v) {
+                metadata.insert(
+                    format!("{GROUP}:ImagePixelFormat"),
+                    TagValue::String(label.to_string()),
+                );
+            }
+        }
+        if let Some(v) = read_u16(buf, 0x2c, little_endian) {
+            metadata.insert(format!("{GROUP}:ImageWidth"), TagValue::Integer(v as i64));
+        }
+        if let Some(v) = read_u16(buf, 0x2e, little_endian) {
+            metadata.insert(format!("{GROUP}:ImageHeight"), TagValue::Integer(v as i64));
+        }
+        if let Some(v) = read_u32(buf, 0x30, little_endian) {
             metadata.insert(
-                format!("{GROUP}:ImagePixelFormat"),
-                TagValue::String(label.to_string()),
+                format!("{GROUP}:ExternalTriggerCount"),
+                TagValue::Integer(v as i64),
             );
         }
-    }
-    if let Some(v) = read_u16(buf, 0x2c, little_endian) {
-        metadata.insert(format!("{GROUP}:ImageWidth"), TagValue::Integer(v as i64));
-    }
-    if let Some(v) = read_u16(buf, 0x2e, little_endian) {
-        metadata.insert(format!("{GROUP}:ImageHeight"), TagValue::Integer(v as i64));
-    }
-    if let Some(v) = read_u32(buf, 0x30, little_endian) {
-        metadata.insert(
-            format!("{GROUP}:ExternalTriggerCount"),
-            TagValue::Integer(v as i64),
-        );
-    }
-    if let Some(v) = read_u32(buf, 0x34, little_endian) {
-        metadata.insert(
-            format!("{GROUP}:SequenceFrameNumber"),
-            TagValue::Integer(v as i64),
-        );
-    }
-
-    insert_str(&mut metadata, "CameraModel", read_str(buf, 0x78, 32));
-    insert_str(&mut metadata, "CameraPartNumber", read_str(buf, 0x98, 32));
-    insert_str(&mut metadata, "CameraSerialNumber", read_str(buf, 0xb8, 32));
-
-    if let Some(v) = read_f32(buf, 0xd8, little_endian) {
-        insert_kelvin(&mut metadata, "CameraTemperatureRangeMin", v);
-    }
-    if let Some(v) = read_f32(buf, 0xdc, little_endian) {
-        insert_kelvin(&mut metadata, "CameraTemperatureRangeMax", v);
-    }
-
-    insert_str(&mut metadata, "LensModel", read_str(buf, 0xe0, 32));
-    insert_str(&mut metadata, "LensPartNumber", read_str(buf, 0x100, 32));
-    insert_str(&mut metadata, "LensSerialNumber", read_str(buf, 0x120, 32));
-    insert_str(&mut metadata, "FilterModel", read_str(buf, 0x140, 32));
-    insert_str(&mut metadata, "FilterPartNumber", read_str(buf, 0x150, 32));
-    insert_str(
-        &mut metadata,
-        "FilterSerialNumber",
-        read_str(buf, 0x180, 32),
-    );
-
-    if let Some(v) = read_f32(buf, 0x1e0, little_endian) {
-        insert_float(&mut metadata, "Emissivity", v, 2);
-    }
-    if let Some(v) = read_f32(buf, 0x1e4, little_endian) {
-        metadata.insert(
-            format!("{GROUP}:ObjectDistance"),
-            TagValue::String(format!("{:.2} m", v)),
-        );
-    }
-    if let Some(v) = read_f32(buf, 0x1e8, little_endian) {
-        insert_kelvin(&mut metadata, "ReflectedApparentTemperature", v);
-    }
-    if let Some(v) = read_f32(buf, 0x1ec, little_endian) {
-        insert_kelvin(&mut metadata, "AtmosphericTemperature", v);
-    }
-    if let Some(v) = read_f32(buf, 0x1f0, little_endian) {
-        // `PrintConv => 'sprintf("%.1f %%",$val*100)'` (FLIR.pm:945).
-        metadata.insert(
-            format!("{GROUP}:RelativeHumidity"),
-            TagValue::String(format!("{:.1} %", v as f64 * 100.0)),
-        );
-    }
-    if let Some(v) = read_f32(buf, 0x1f4, little_endian) {
-        insert_float(&mut metadata, "ComputedAtmosphericTrans", v, 2);
-    }
-    if let Some(v) = read_f32(buf, 0x1f8, little_endian) {
-        insert_float(&mut metadata, "EstimatedAtmosphericTrans", v, 2);
-    }
-    if let Some(v) = read_f32(buf, 0x1fc, little_endian) {
-        insert_kelvin(&mut metadata, "ReferenceTemperature", v);
-    }
-    if let Some(v) = read_f32(buf, 0x200, little_endian) {
-        insert_kelvin(&mut metadata, "IRWindowTemperature", v);
-    }
-    if let Some(v) = read_f32(buf, 0x204, little_endian) {
-        insert_float(&mut metadata, "IRWindowTransmission", v, 2);
-    }
-
-    // FLIR.pm FPF: `int32u[7]`, ValueConv =>
-    // `sprintf("%.4d:%.2d:%.2d %.2d:%.2d:%.2d.%.3d", split(" ",$val))`.
-    // This format has no timezone or locale conversion.
-    if let (
-        Some(year),
-        Some(month),
-        Some(day),
-        Some(hour),
-        Some(minute),
-        Some(second),
-        Some(millis),
-    ) = (
-        read_u32(buf, 0x248, little_endian),
-        read_u32(buf, 0x24c, little_endian),
-        read_u32(buf, 0x250, little_endian),
-        read_u32(buf, 0x254, little_endian),
-        read_u32(buf, 0x258, little_endian),
-        read_u32(buf, 0x25c, little_endian),
-        read_u32(buf, 0x260, little_endian),
-    ) {
-        metadata.insert(
-            format!("{GROUP}:DateTimeOriginal"),
-            TagValue::String(format!(
-                "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}"
-            )),
-        );
-    }
-
-    if let Some(v) = read_f32(buf, 0x2a4, little_endian) {
-        insert_float(&mut metadata, "CameraScaleMin", v, 1);
-    }
-    if let Some(v) = read_f32(buf, 0x2a8, little_endian) {
-        insert_float(&mut metadata, "CameraScaleMax", v, 1);
-    }
-    if let Some(v) = read_f32(buf, 0x2ac, little_endian) {
-        insert_float(&mut metadata, "CalculatedScaleMin", v, 1);
-    }
-    if let Some(v) = read_f32(buf, 0x2b0, little_endian) {
-        insert_float(&mut metadata, "CalculatedScaleMax", v, 1);
-    }
-    if let Some(v) = read_f32(buf, 0x2b4, little_endian) {
-        insert_float(&mut metadata, "ActualScaleMin", v, 1);
-    }
-    if let Some(v) = read_f32(buf, 0x2b8, little_endian) {
-        insert_float(&mut metadata, "ActualScaleMax", v, 1);
-    }
-
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error("No FPF tags decoded"));
-    }
-
-    if let Some(id) = crate::filetype::identify_by_extension("fpf")
-        && !crate::exiftool_tables::attribution::silenced(
-            crate::exiftool_tables::attribution::Token::Producers,
-        )
-    {
-        metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
-        metadata.insert(
-            "File:FileTypeExtension",
-            TagValue::new_string(id.extension.as_ref()),
-        );
-        if let Some(mime) = id.mime_type {
-            metadata.insert("File:MIMEType", TagValue::new_string(mime));
+        if let Some(v) = read_u32(buf, 0x34, little_endian) {
+            metadata.insert(
+                format!("{GROUP}:SequenceFrameNumber"),
+                TagValue::Integer(v as i64),
+            );
         }
-    }
 
-    Ok(metadata)
+        insert_str(&mut metadata, "CameraModel", read_str(buf, 0x78, 32));
+        insert_str(&mut metadata, "CameraPartNumber", read_str(buf, 0x98, 32));
+        insert_str(&mut metadata, "CameraSerialNumber", read_str(buf, 0xb8, 32));
+
+        if let Some(v) = read_f32(buf, 0xd8, little_endian) {
+            insert_kelvin(&mut metadata, "CameraTemperatureRangeMin", v);
+        }
+        if let Some(v) = read_f32(buf, 0xdc, little_endian) {
+            insert_kelvin(&mut metadata, "CameraTemperatureRangeMax", v);
+        }
+
+        insert_str(&mut metadata, "LensModel", read_str(buf, 0xe0, 32));
+        insert_str(&mut metadata, "LensPartNumber", read_str(buf, 0x100, 32));
+        insert_str(&mut metadata, "LensSerialNumber", read_str(buf, 0x120, 32));
+        insert_str(&mut metadata, "FilterModel", read_str(buf, 0x140, 32));
+        insert_str(&mut metadata, "FilterPartNumber", read_str(buf, 0x150, 32));
+        insert_str(
+            &mut metadata,
+            "FilterSerialNumber",
+            read_str(buf, 0x180, 32),
+        );
+
+        if let Some(v) = read_f32(buf, 0x1e0, little_endian) {
+            insert_float(&mut metadata, "Emissivity", v, 2);
+        }
+        if let Some(v) = read_f32(buf, 0x1e4, little_endian) {
+            metadata.insert(
+                format!("{GROUP}:ObjectDistance"),
+                TagValue::String(format!("{:.2} m", v)),
+            );
+        }
+        if let Some(v) = read_f32(buf, 0x1e8, little_endian) {
+            insert_kelvin(&mut metadata, "ReflectedApparentTemperature", v);
+        }
+        if let Some(v) = read_f32(buf, 0x1ec, little_endian) {
+            insert_kelvin(&mut metadata, "AtmosphericTemperature", v);
+        }
+        if let Some(v) = read_f32(buf, 0x1f0, little_endian) {
+            // `PrintConv => 'sprintf("%.1f %%",$val*100)'` (FLIR.pm:945).
+            metadata.insert(
+                format!("{GROUP}:RelativeHumidity"),
+                TagValue::String(format!("{:.1} %", v as f64 * 100.0)),
+            );
+        }
+        if let Some(v) = read_f32(buf, 0x1f4, little_endian) {
+            insert_float(&mut metadata, "ComputedAtmosphericTrans", v, 2);
+        }
+        if let Some(v) = read_f32(buf, 0x1f8, little_endian) {
+            insert_float(&mut metadata, "EstimatedAtmosphericTrans", v, 2);
+        }
+        if let Some(v) = read_f32(buf, 0x1fc, little_endian) {
+            insert_kelvin(&mut metadata, "ReferenceTemperature", v);
+        }
+        if let Some(v) = read_f32(buf, 0x200, little_endian) {
+            insert_kelvin(&mut metadata, "IRWindowTemperature", v);
+        }
+        if let Some(v) = read_f32(buf, 0x204, little_endian) {
+            insert_float(&mut metadata, "IRWindowTransmission", v, 2);
+        }
+
+        // FLIR.pm FPF: `int32u[7]`, ValueConv =>
+        // `sprintf("%.4d:%.2d:%.2d %.2d:%.2d:%.2d.%.3d", split(" ",$val))`.
+        // This format has no timezone or locale conversion.
+        if let (
+            Some(year),
+            Some(month),
+            Some(day),
+            Some(hour),
+            Some(minute),
+            Some(second),
+            Some(millis),
+        ) = (
+            read_u32(buf, 0x248, little_endian),
+            read_u32(buf, 0x24c, little_endian),
+            read_u32(buf, 0x250, little_endian),
+            read_u32(buf, 0x254, little_endian),
+            read_u32(buf, 0x258, little_endian),
+            read_u32(buf, 0x25c, little_endian),
+            read_u32(buf, 0x260, little_endian),
+        ) {
+            metadata.insert(
+                format!("{GROUP}:DateTimeOriginal"),
+                TagValue::String(format!(
+                    "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}.{millis:03}"
+                )),
+            );
+        }
+
+        if let Some(v) = read_f32(buf, 0x2a4, little_endian) {
+            insert_float(&mut metadata, "CameraScaleMin", v, 1);
+        }
+        if let Some(v) = read_f32(buf, 0x2a8, little_endian) {
+            insert_float(&mut metadata, "CameraScaleMax", v, 1);
+        }
+        if let Some(v) = read_f32(buf, 0x2ac, little_endian) {
+            insert_float(&mut metadata, "CalculatedScaleMin", v, 1);
+        }
+        if let Some(v) = read_f32(buf, 0x2b0, little_endian) {
+            insert_float(&mut metadata, "CalculatedScaleMax", v, 1);
+        }
+        if let Some(v) = read_f32(buf, 0x2b4, little_endian) {
+            insert_float(&mut metadata, "ActualScaleMin", v, 1);
+        }
+        if let Some(v) = read_f32(buf, 0x2b8, little_endian) {
+            insert_float(&mut metadata, "ActualScaleMax", v, 1);
+        }
+
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error("No FPF tags decoded"));
+        }
+
+        if let Some(id) = crate::filetype::identify_by_extension("fpf")
+            && !crate::exiftool_tables::attribution::silenced(
+                crate::exiftool_tables::attribution::Token::Producers,
+            )
+        {
+            metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
+            metadata.insert(
+                "File:FileTypeExtension",
+                TagValue::new_string(id.extension.as_ref()),
+            );
+            if let Some(mime) = id.mime_type {
+                metadata.insert("File:MIMEType", TagValue::new_string(mime));
+            }
+        }
+
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

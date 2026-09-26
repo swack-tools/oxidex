@@ -522,61 +522,65 @@ impl EPSParser {
 
 impl FormatParser for EPSParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Read the file data
-        let file_size = reader.size() as usize;
-        let read_size = file_size.min(MAX_READ_SIZE);
-        let data = reader.read(0, read_size)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Read the file data
+            let file_size = reader.size() as usize;
+            let read_size = file_size.min(MAX_READ_SIZE);
+            let data = reader.read(0, read_size)?;
 
-        // Verify EPS signature
-        if !Self::verify_signature(data) {
-            return Err(ExifToolError::parse_error("Invalid EPS signature"));
-        }
+            // Verify EPS signature
+            if !Self::verify_signature(data) {
+                return Err(ExifToolError::parse_error("Invalid EPS signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Set basic file info
-        metadata.insert("FileType".to_string(), TagValue::String("EPS".to_string()));
+            // Set basic file info
+            metadata.insert("FileType".to_string(), TagValue::String("EPS".to_string()));
 
-        // Handle binary EPS (DOS EPS) header
-        let ps_data = if data.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) && data.len() >= 30 {
-            // Binary EPS header contains offsets to the PostScript section
-            let ps_start = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
-            let ps_length = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+            // Handle binary EPS (DOS EPS) header
+            let ps_data = if data.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) && data.len() >= 30 {
+                // Binary EPS header contains offsets to the PostScript section
+                let ps_start = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+                let ps_length = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
 
-            if ps_start < data.len() && ps_start + ps_length <= data.len() {
-                &data[ps_start..ps_start + ps_length]
+                if ps_start < data.len() && ps_start + ps_length <= data.len() {
+                    &data[ps_start..ps_start + ps_length]
+                } else {
+                    data
+                }
             } else {
                 data
+            };
+
+            // Convert to text for DSC comment parsing
+            if let Ok(text) = std::str::from_utf8(ps_data) {
+                Self::extract_dsc_comments(text, &mut metadata);
+            } else {
+                // Try to find ASCII portions for DSC parsing
+                // Some EPS files have mixed binary/text content
+                let text: String = ps_data.iter().map(|&b| b as char).collect();
+                Self::extract_dsc_comments(&text, &mut metadata);
             }
-        } else {
-            data
-        };
 
-        // Convert to text for DSC comment parsing
-        if let Ok(text) = std::str::from_utf8(ps_data) {
-            Self::extract_dsc_comments(text, &mut metadata);
-        } else {
-            // Try to find ASCII portions for DSC parsing
-            // Some EPS files have mixed binary/text content
-            let text: String = ps_data.iter().map(|&b| b as char).collect();
-            Self::extract_dsc_comments(&text, &mut metadata);
-        }
+            // Extract XMP metadata
+            Self::extract_xmp(data, &mut metadata);
 
-        // Extract XMP metadata
-        Self::extract_xmp(data, &mut metadata);
+            // Extract IPTC metadata from raw binary 8BIM blocks, if present
+            Self::extract_iptc(data, &mut metadata);
 
-        // Extract IPTC metadata from raw binary 8BIM blocks, if present
-        Self::extract_iptc(data, &mut metadata);
+            // ASCII EPS files typically embed the Photoshop 8BIM resource data
+            // (IPTC + IPTC digest) as a hex-encoded %%BeginPhotoshop block rather
+            // than raw binary, since PostScript is a text format. Decode that
+            // block, if present, and extract IPTC from it too.
+            if let Some(photoshop_data) = Self::extract_photoshop_block(data) {
+                Self::extract_iptc(&photoshop_data, &mut metadata);
+            }
 
-        // ASCII EPS files typically embed the Photoshop 8BIM resource data
-        // (IPTC + IPTC digest) as a hex-encoded %%BeginPhotoshop block rather
-        // than raw binary, since PostScript is a text format. Decode that
-        // block, if present, and extract IPTC from it too.
-        if let Some(photoshop_data) = Self::extract_photoshop_block(data) {
-            Self::extract_iptc(&photoshop_data, &mut metadata);
-        }
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

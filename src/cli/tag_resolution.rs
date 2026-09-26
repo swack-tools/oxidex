@@ -469,6 +469,9 @@ pub fn build_display_map(
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         out.insert(key, value);
     }
+    // A display projection of rows the read produced, never a caller's
+    // assignment.
+    out.mark_read_complete();
     out
 }
 

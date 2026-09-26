@@ -190,6 +190,8 @@ impl ReadOptions {
             }
             out.insert(key.clone(), value.clone());
         }
+        // A filtered copy is the same rows: each keeps its provenance.
+        out.copy_provenance_from(metadata);
         out
     }
 }

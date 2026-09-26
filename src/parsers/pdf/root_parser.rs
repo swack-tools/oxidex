@@ -68,43 +68,47 @@ use std::str;
 /// - Outlines (Yes/No - indicates if document has bookmarks)
 /// - Names (Yes/No - indicates if document has named destinations)
 pub fn parse_root_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF navigation context (xref table and trailer)
-    let context = PdfContext::load(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF navigation context (xref table and trailer)
+        let context = PdfContext::load(reader)?;
 
-    // Find and parse the Root dictionary
-    let root_ref = find_dict_reference(&context.xref_data, "/Root")?;
-    let root_offset = context.get_object_offset(root_ref.object_num, "Root")?;
-    let root_data = reader.read(
-        root_offset,
-        std::cmp::min(8192, reader.size().saturating_sub(root_offset) as usize),
-    )?;
-    let root_dict = parse_root_object(root_data)?;
+        // Find and parse the Root dictionary
+        let root_ref = find_dict_reference(&context.xref_data, "/Root")?;
+        let root_offset = context.get_object_offset(root_ref.object_num, "Root")?;
+        let root_data = reader.read(
+            root_offset,
+            std::cmp::min(8192, reader.size().saturating_sub(root_offset) as usize),
+        )?;
+        let root_dict = parse_root_object(root_data)?;
 
-    // Convert dictionary to metadata map with basic fields
-    let mut metadata = convert_root_dict_to_metadata(root_dict);
+        // Convert dictionary to metadata map with basic fields
+        let mut metadata = convert_root_dict_to_metadata(root_dict);
 
-    // Detect JavaScript presence (security indicator)
-    let has_javascript = detect_javascript(root_data, reader, &context);
-    metadata.insert(
-        "PDF:JavaScript".to_string(),
-        TagValue::new_string(if has_javascript { "Yes" } else { "No" }),
-    );
+        // Detect JavaScript presence (security indicator)
+        let has_javascript = detect_javascript(root_data, reader, &context);
+        metadata.insert(
+            "PDF:JavaScript".to_string(),
+            TagValue::new_string(if has_javascript { "Yes" } else { "No" }),
+        );
 
-    // Detect Outlines/Bookmarks
-    let has_outlines = detect_outlines(root_data);
-    metadata.insert(
-        "PDF:Outlines".to_string(),
-        TagValue::new_string(if has_outlines { "Yes" } else { "No" }),
-    );
+        // Detect Outlines/Bookmarks
+        let has_outlines = detect_outlines(root_data);
+        metadata.insert(
+            "PDF:Outlines".to_string(),
+            TagValue::new_string(if has_outlines { "Yes" } else { "No" }),
+        );
 
-    // Detect Named Destinations
-    let has_names = detect_names(root_data);
-    metadata.insert(
-        "PDF:Names".to_string(),
-        TagValue::new_string(if has_names { "Yes" } else { "No" }),
-    );
+        // Detect Named Destinations
+        let has_names = detect_names(root_data);
+        metadata.insert(
+            "PDF:Names".to_string(),
+            TagValue::new_string(if has_names { "Yes" } else { "No" }),
+        );
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 //

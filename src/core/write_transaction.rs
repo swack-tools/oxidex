@@ -225,7 +225,7 @@ pub(crate) fn changes_between(
         if is_file_system_fact(key) {
             continue;
         }
-        // Provenance first (`MetadataMap::assigned_after_read`): a value the
+        // Provenance first (`MetadataMap::is_assigned`): a value the
         // caller assigned is a set whatever it equals -- an explicit
         // same-text XP set can need different bytes. In a read of this file,
         // a row the caller did not assign is the file's own: a set only if
@@ -233,7 +233,14 @@ pub(crate) fn changes_between(
         // `get_mut`), never because a read with options (a requested
         // `File:JPEGQualityEstimate`) produced a row the default read lacks.
         // Any other map is judged by value.
-        let assigned = desired.assigned_after_read(key);
+        // A descriptive row (`File:`, `Composite:`, ...) is not stored in the
+        // file, so it has no bytes an explicit same-value set could change:
+        // an assigned one is a request (and refused) only when it is new or
+        // differs. A map cleared and refilled with the file's own rows
+        // (#949's `values_reinserted_after_clear_are_assignments`) sets
+        // nothing there.
+        let assigned =
+            desired.is_assigned(key) && !(is_descriptive(key) && baseline.get(key) == Some(value));
         let is_set = if deletions {
             assigned || baseline.get(key).is_some_and(|held| held != value)
         } else {
@@ -428,10 +435,6 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
             .map_or(plan.steps.len(), |offset| index + offset);
         let mut desired = read_metadata(path)?;
         let mut removed: Vec<String> = Vec::new();
-        // The keys this pass sets: explicit sets, whatever their value
-        // (#943's `write_metadata_transaction`: a same-value set a removal
-        // covers is still a set, not a carried row).
-        let mut assigned: Vec<String> = Vec::new();
         for step in &plan.steps[index..end] {
             match step {
                 // A group removal's post-condition is the writer's: #943's
@@ -443,8 +446,13 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
                     remove_field(&mut desired, &request.key);
                     match request.value {
                         Some(value) => {
+                            // `insert` marks the occurrence assigned
+                            // (#949's per-occurrence provenance): an explicit
+                            // set whatever its value, which
+                            // `write_metadata_transaction` reads back off the
+                            // map (a same-value set a removal covers is still
+                            // a set, not a carried row).
                             desired.insert(request.key.clone(), value.clone());
-                            assigned.push(request.key.clone());
                         }
                         // The key goes along: an EXIF entry the reader
                         // surfaces no row for has no key to take out of the
@@ -455,7 +463,7 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
                 }
             }
         }
-        write_metadata_transaction(path, &desired, &removed, &assigned).map_err(typed_refusal)?;
+        write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
         index = end;
     }
     // The read-back proves every field request no later group removal can

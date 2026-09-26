@@ -286,162 +286,166 @@ impl FormatParser for EVTXParser {
     /// * `Ok(MetadataMap)` - Extracted metadata including forensic indicators
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify this is a valid EVTX file
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid EVTX signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Basic file information
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String("Windows Event Log".to_string()),
-        );
-
-        // Version information
-        let major_version = Self::read_major_version(reader)?;
-        let minor_version = Self::read_minor_version(reader)?;
-        metadata.insert(
-            "EVTX:Version".to_string(),
-            TagValue::String(Self::format_version(major_version, minor_version)),
-        );
-        metadata.insert(
-            "EVTX:MajorVersion".to_string(),
-            TagValue::String(major_version.to_string()),
-        );
-        metadata.insert(
-            "EVTX:MinorVersion".to_string(),
-            TagValue::String(minor_version.to_string()),
-        );
-
-        // Header information
-        let header_size = Self::read_header_size(reader)?;
-        metadata.insert(
-            "EVTX:HeaderSize".to_string(),
-            TagValue::String(format!("{} bytes", header_size)),
-        );
-
-        let header_block_size = Self::read_header_block_size(reader)?;
-        metadata.insert(
-            "EVTX:HeaderBlockSize".to_string(),
-            TagValue::String(format!("{} bytes", header_block_size)),
-        );
-
-        // Chunk information
-        let first_chunk = Self::read_first_chunk(reader)?;
-        metadata.insert(
-            "EVTX:FirstChunk".to_string(),
-            TagValue::String(first_chunk.to_string()),
-        );
-
-        let last_chunk = Self::read_last_chunk(reader)?;
-        metadata.insert(
-            "EVTX:LastChunk".to_string(),
-            TagValue::String(last_chunk.to_string()),
-        );
-
-        let chunk_count = Self::read_chunk_count(reader)?;
-        metadata.insert(
-            "EVTX:ChunkCount".to_string(),
-            TagValue::String(chunk_count.to_string()),
-        );
-
-        // Record information
-        let next_record_id = Self::read_next_record_id(reader)?;
-        metadata.insert(
-            "EVTX:NextRecordID".to_string(),
-            TagValue::String(next_record_id.to_string()),
-        );
-
-        // Calculate estimated event count from first chunk
-        let first_chunk_offset = EVTX_HEADER_BLOCK_SIZE as u64;
-        if Self::verify_chunk_signature(reader, first_chunk_offset)? {
-            let first_record_id = Self::read_chunk_first_record_id(reader, first_chunk_offset)?;
-            let last_record_id = Self::read_chunk_last_record_id(reader, first_chunk_offset)?;
-
-            // Estimate event count
-            if next_record_id > 0 {
-                let event_count = next_record_id - 1; // Record IDs start at 1
-                metadata.insert(
-                    "EVTX:EventCount".to_string(),
-                    TagValue::String(format!("{} (estimated)", event_count)),
-                );
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify this is a valid EVTX file
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid EVTX signature"));
             }
 
-            // First and last event times from first chunk
-            let first_timestamp = Self::read_chunk_first_timestamp(reader, first_chunk_offset)?;
-            if first_timestamp > 0 {
-                metadata.insert(
-                    "EVTX:FirstEventTime".to_string(),
-                    TagValue::String(Self::convert_filetime(first_timestamp)),
-                );
-            }
+            let mut metadata = MetadataMap::new();
 
-            let last_timestamp = Self::read_chunk_last_timestamp(reader, first_chunk_offset)?;
-            if last_timestamp > 0 {
-                metadata.insert(
-                    "EVTX:LastEventTime".to_string(),
-                    TagValue::String(Self::convert_filetime(last_timestamp)),
-                );
-            }
-
-            // Record range in first chunk
-            if first_record_id > 0 && last_record_id > 0 {
-                metadata.insert(
-                    "EVTX:FirstChunkRecordRange".to_string(),
-                    TagValue::String(format!("{} - {}", first_record_id, last_record_id)),
-                );
-            }
-        }
-
-        // Flags and forensic indicators
-        let flags = Self::read_flags(reader)?;
-        metadata.insert(
-            "EVTX:Flags".to_string(),
-            TagValue::String(Self::format_flags(flags)),
-        );
-
-        let is_dirty = Self::is_dirty(flags);
-        metadata.insert(
-            "EVTX:IsDirty".to_string(),
-            TagValue::String(is_dirty.to_string()),
-        );
-
-        if is_dirty {
+            // Basic file information
             metadata.insert(
+                "FileType".to_string(),
+                TagValue::String("Windows Event Log".to_string()),
+            );
+
+            // Version information
+            let major_version = Self::read_major_version(reader)?;
+            let minor_version = Self::read_minor_version(reader)?;
+            metadata.insert(
+                "EVTX:Version".to_string(),
+                TagValue::String(Self::format_version(major_version, minor_version)),
+            );
+            metadata.insert(
+                "EVTX:MajorVersion".to_string(),
+                TagValue::String(major_version.to_string()),
+            );
+            metadata.insert(
+                "EVTX:MinorVersion".to_string(),
+                TagValue::String(minor_version.to_string()),
+            );
+
+            // Header information
+            let header_size = Self::read_header_size(reader)?;
+            metadata.insert(
+                "EVTX:HeaderSize".to_string(),
+                TagValue::String(format!("{} bytes", header_size)),
+            );
+
+            let header_block_size = Self::read_header_block_size(reader)?;
+            metadata.insert(
+                "EVTX:HeaderBlockSize".to_string(),
+                TagValue::String(format!("{} bytes", header_block_size)),
+            );
+
+            // Chunk information
+            let first_chunk = Self::read_first_chunk(reader)?;
+            metadata.insert(
+                "EVTX:FirstChunk".to_string(),
+                TagValue::String(first_chunk.to_string()),
+            );
+
+            let last_chunk = Self::read_last_chunk(reader)?;
+            metadata.insert(
+                "EVTX:LastChunk".to_string(),
+                TagValue::String(last_chunk.to_string()),
+            );
+
+            let chunk_count = Self::read_chunk_count(reader)?;
+            metadata.insert(
+                "EVTX:ChunkCount".to_string(),
+                TagValue::String(chunk_count.to_string()),
+            );
+
+            // Record information
+            let next_record_id = Self::read_next_record_id(reader)?;
+            metadata.insert(
+                "EVTX:NextRecordID".to_string(),
+                TagValue::String(next_record_id.to_string()),
+            );
+
+            // Calculate estimated event count from first chunk
+            let first_chunk_offset = EVTX_HEADER_BLOCK_SIZE as u64;
+            if Self::verify_chunk_signature(reader, first_chunk_offset)? {
+                let first_record_id = Self::read_chunk_first_record_id(reader, first_chunk_offset)?;
+                let last_record_id = Self::read_chunk_last_record_id(reader, first_chunk_offset)?;
+
+                // Estimate event count
+                if next_record_id > 0 {
+                    let event_count = next_record_id - 1; // Record IDs start at 1
+                    metadata.insert(
+                        "EVTX:EventCount".to_string(),
+                        TagValue::String(format!("{} (estimated)", event_count)),
+                    );
+                }
+
+                // First and last event times from first chunk
+                let first_timestamp = Self::read_chunk_first_timestamp(reader, first_chunk_offset)?;
+                if first_timestamp > 0 {
+                    metadata.insert(
+                        "EVTX:FirstEventTime".to_string(),
+                        TagValue::String(Self::convert_filetime(first_timestamp)),
+                    );
+                }
+
+                let last_timestamp = Self::read_chunk_last_timestamp(reader, first_chunk_offset)?;
+                if last_timestamp > 0 {
+                    metadata.insert(
+                        "EVTX:LastEventTime".to_string(),
+                        TagValue::String(Self::convert_filetime(last_timestamp)),
+                    );
+                }
+
+                // Record range in first chunk
+                if first_record_id > 0 && last_record_id > 0 {
+                    metadata.insert(
+                        "EVTX:FirstChunkRecordRange".to_string(),
+                        TagValue::String(format!("{} - {}", first_record_id, last_record_id)),
+                    );
+                }
+            }
+
+            // Flags and forensic indicators
+            let flags = Self::read_flags(reader)?;
+            metadata.insert(
+                "EVTX:Flags".to_string(),
+                TagValue::String(Self::format_flags(flags)),
+            );
+
+            let is_dirty = Self::is_dirty(flags);
+            metadata.insert(
+                "EVTX:IsDirty".to_string(),
+                TagValue::String(is_dirty.to_string()),
+            );
+
+            if is_dirty {
+                metadata.insert(
                 "EVTX:ForensicNote".to_string(),
                 TagValue::String(
                     "Log file was not properly closed - possible system crash or improper shutdown"
                         .to_string(),
                 ),
             );
-        }
+            }
 
-        let is_full = Self::is_full(flags);
-        metadata.insert(
-            "EVTX:IsFull".to_string(),
-            TagValue::String(is_full.to_string()),
-        );
-
-        if is_full {
+            let is_full = Self::is_full(flags);
             metadata.insert(
-                "EVTX:ForensicWarning".to_string(),
-                TagValue::String(
-                    "Log file reached size limit and stopped recording - events may be missing"
-                        .to_string(),
-                ),
+                "EVTX:IsFull".to_string(),
+                TagValue::String(is_full.to_string()),
             );
-        }
 
-        // Checksum
-        let checksum = Self::read_checksum(reader)?;
-        metadata.insert(
-            "EVTX:Checksum".to_string(),
-            TagValue::String(format!("0x{:08X}", checksum)),
-        );
+            if is_full {
+                metadata.insert(
+                    "EVTX:ForensicWarning".to_string(),
+                    TagValue::String(
+                        "Log file reached size limit and stopped recording - events may be missing"
+                            .to_string(),
+                    ),
+                );
+            }
 
-        Ok(metadata)
+            // Checksum
+            let checksum = Self::read_checksum(reader)?;
+            metadata.insert(
+                "EVTX:Checksum".to_string(),
+                TagValue::String(format!("0x{:08X}", checksum)),
+            );
+
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format

@@ -80,167 +80,171 @@ pub fn parse_ogg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for OggParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify OGG signature
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be OGG"));
-        }
-
-        let header = reader.read(0, 4)?;
-        if header != OGG_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid OGG signature: expected {:?}, found {:?}",
-                OGG_SIGNATURE, header
-            )));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(16);
-
-        // Parse OGG pages to find Vorbis comment header
-        let mut offset = 0u64;
-        let file_size = reader.size();
-        let mut page_sequence = 0u32;
-        let mut serial_number: Option<u32> = None;
-
-        while offset < file_size {
-            // Read OGG page header (27 bytes minimum)
-            if offset + 27 > file_size {
-                break;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify OGG signature
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be OGG"));
             }
 
-            let page_header = reader.read(offset, 27)?;
-
-            // Verify page signature
-            if &page_header[0..4] != OGG_SIGNATURE {
-                break;
+            let header = reader.read(0, 4)?;
+            if header != OGG_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid OGG signature: expected {:?}, found {:?}",
+                    OGG_SIGNATURE, header
+                )));
             }
 
-            // Parse page header
-            let _header_type = page_header[5];
-            let segment_count = page_header[26] as usize;
+            let mut metadata = MetadataMap::with_capacity(16);
 
-            // Extract serial number from page header (bytes 10-13, little-endian)
-            let page_serial = u32::from_le_bytes([
-                page_header[10],
-                page_header[11],
-                page_header[12],
-                page_header[13],
-            ]);
+            // Parse OGG pages to find Vorbis comment header
+            let mut offset = 0u64;
+            let file_size = reader.size();
+            let mut page_sequence = 0u32;
+            let mut serial_number: Option<u32> = None;
 
-            // Extract page sequence number (bytes 18-21, little-endian)
-            let seq_number = u32::from_le_bytes([
-                page_header[18],
-                page_header[19],
-                page_header[20],
-                page_header[21],
-            ]);
-
-            // Store the first serial number we encounter
-            if serial_number.is_none() {
-                serial_number = Some(page_serial);
-            }
-
-            page_sequence = seq_number;
-
-            // Read segment table
-            if offset + 27 + segment_count as u64 > file_size {
-                break;
-            }
-            let segment_table = reader.read(offset + 27, segment_count)?;
-
-            // Calculate total page size
-            let mut page_body_size = 0u64;
-            for &segment_size in segment_table.iter() {
-                page_body_size += segment_size as u64;
-            }
-
-            // Read page body
-            let page_body_offset = offset + 27 + segment_count as u64;
-            if page_body_offset + page_body_size > file_size {
-                break;
-            }
-
-            // Check if this is a Vorbis comment header or FLAC header
-            if page_body_size > 0 {
-                let page_body = reader.read(page_body_offset, page_body_size as usize)?;
-
-                // Vorbis packets start with packet type (1 byte) + "vorbis" (6 bytes)
-                if page_body.len() >= 7 && &page_body[1..7] == b"vorbis" {
-                    match page_body[0] {
-                        VORBIS_ID_HEADER => {
-                            // Parse Vorbis identification header
-                            parse_vorbis_id_header(&page_body[7..], &mut metadata)?;
-                        }
-                        VORBIS_COMMENT_HEADER => {
-                            // Parse Vorbis comments
-                            parse_vorbis_comments(&page_body[7..], &mut metadata)?;
-                            break; // Found comments, we're done
-                        }
-                        _ => {}
-                    }
+            while offset < file_size {
+                // Read OGG page header (27 bytes minimum)
+                if offset + 27 > file_size {
+                    break;
                 }
-                // Ogg Opus: the identification and comment packets are
-                // named outright rather than carrying a packet-type byte.
-                // Detection currently resolves every "OggS" file to OGG
-                // (the signature table matches before the Opus variant
-                // probe runs), so an Opus stream reaches this parser and
-                // has to be handled here rather than in the Opus parser.
-                else if page_body.len() >= 8 && &page_body[0..8] == OPUS_HEAD {
-                    parse_opus_head(&page_body[8..], &mut metadata);
-                } else if page_body.len() >= 8 && &page_body[0..8] == OPUS_TAGS {
-                    parse_vorbis_comments(&page_body[8..], &mut metadata)?;
-                    break; // comments are the last metadata packet
+
+                let page_header = reader.read(offset, 27)?;
+
+                // Verify page signature
+                if &page_header[0..4] != OGG_SIGNATURE {
+                    break;
                 }
-                // OGG FLAC header: 0x7F "FLAC" version info + STREAMINFO
-                else if page_body.len() >= 13
-                    && page_body[0] == OGG_FLAC_MARKER
-                    && &page_body[1..5] == b"FLAC"
-                {
-                    parse_ogg_flac_header(&page_body, &mut metadata)?;
+
+                // Parse page header
+                let _header_type = page_header[5];
+                let segment_count = page_header[26] as usize;
+
+                // Extract serial number from page header (bytes 10-13, little-endian)
+                let page_serial = u32::from_le_bytes([
+                    page_header[10],
+                    page_header[11],
+                    page_header[12],
+                    page_header[13],
+                ]);
+
+                // Extract page sequence number (bytes 18-21, little-endian)
+                let seq_number = u32::from_le_bytes([
+                    page_header[18],
+                    page_header[19],
+                    page_header[20],
+                    page_header[21],
+                ]);
+
+                // Store the first serial number we encounter
+                if serial_number.is_none() {
+                    serial_number = Some(page_serial);
                 }
-                // FLAC metadata block: first byte contains type (bits 0-6) and last-block flag (bit 7)
-                // Type 4 = VORBIS_COMMENT, contains vendor string and user comments
-                else if page_body.len() >= 4 {
-                    let block_type = page_body[0] & 0x7F; // Mask off last-block flag
-                    if block_type == FLAC_METADATA_VORBIS_COMMENT {
-                        // Block header: 1 byte type + 3 bytes big-endian size
-                        let block_size = ((page_body[1] as u32) << 16)
-                            | ((page_body[2] as u32) << 8)
-                            | (page_body[3] as u32);
-                        if page_body.len() >= 4 + block_size as usize {
-                            // Parse Vorbis comments from the block data (after 4-byte header)
-                            parse_vorbis_comments(
-                                &page_body[4..4 + block_size as usize],
-                                &mut metadata,
-                            )?;
-                            break; // Found comments, we're done
+
+                page_sequence = seq_number;
+
+                // Read segment table
+                if offset + 27 + segment_count as u64 > file_size {
+                    break;
+                }
+                let segment_table = reader.read(offset + 27, segment_count)?;
+
+                // Calculate total page size
+                let mut page_body_size = 0u64;
+                for &segment_size in segment_table.iter() {
+                    page_body_size += segment_size as u64;
+                }
+
+                // Read page body
+                let page_body_offset = offset + 27 + segment_count as u64;
+                if page_body_offset + page_body_size > file_size {
+                    break;
+                }
+
+                // Check if this is a Vorbis comment header or FLAC header
+                if page_body_size > 0 {
+                    let page_body = reader.read(page_body_offset, page_body_size as usize)?;
+
+                    // Vorbis packets start with packet type (1 byte) + "vorbis" (6 bytes)
+                    if page_body.len() >= 7 && &page_body[1..7] == b"vorbis" {
+                        match page_body[0] {
+                            VORBIS_ID_HEADER => {
+                                // Parse Vorbis identification header
+                                parse_vorbis_id_header(&page_body[7..], &mut metadata)?;
+                            }
+                            VORBIS_COMMENT_HEADER => {
+                                // Parse Vorbis comments
+                                parse_vorbis_comments(&page_body[7..], &mut metadata)?;
+                                break; // Found comments, we're done
+                            }
+                            _ => {}
                         }
                     }
+                    // Ogg Opus: the identification and comment packets are
+                    // named outright rather than carrying a packet-type byte.
+                    // Detection currently resolves every "OggS" file to OGG
+                    // (the signature table matches before the Opus variant
+                    // probe runs), so an Opus stream reaches this parser and
+                    // has to be handled here rather than in the Opus parser.
+                    else if page_body.len() >= 8 && &page_body[0..8] == OPUS_HEAD {
+                        parse_opus_head(&page_body[8..], &mut metadata);
+                    } else if page_body.len() >= 8 && &page_body[0..8] == OPUS_TAGS {
+                        parse_vorbis_comments(&page_body[8..], &mut metadata)?;
+                        break; // comments are the last metadata packet
+                    }
+                    // OGG FLAC header: 0x7F "FLAC" version info + STREAMINFO
+                    else if page_body.len() >= 13
+                        && page_body[0] == OGG_FLAC_MARKER
+                        && &page_body[1..5] == b"FLAC"
+                    {
+                        parse_ogg_flac_header(&page_body, &mut metadata)?;
+                    }
+                    // FLAC metadata block: first byte contains type (bits 0-6) and last-block flag (bit 7)
+                    // Type 4 = VORBIS_COMMENT, contains vendor string and user comments
+                    else if page_body.len() >= 4 {
+                        let block_type = page_body[0] & 0x7F; // Mask off last-block flag
+                        if block_type == FLAC_METADATA_VORBIS_COMMENT {
+                            // Block header: 1 byte type + 3 bytes big-endian size
+                            let block_size = ((page_body[1] as u32) << 16)
+                                | ((page_body[2] as u32) << 8)
+                                | (page_body[3] as u32);
+                            if page_body.len() >= 4 + block_size as usize {
+                                // Parse Vorbis comments from the block data (after 4-byte header)
+                                parse_vorbis_comments(
+                                    &page_body[4..4 + block_size as usize],
+                                    &mut metadata,
+                                )?;
+                                break; // Found comments, we're done
+                            }
+                        }
+                    }
                 }
+
+                // Move to next page
+                offset = page_body_offset + page_body_size;
             }
 
-            // Move to next page
-            offset = page_body_offset + page_body_size;
-        }
+            // Add OGG format-specific tags
+            if let Some(sn) = serial_number {
+                metadata.insert(
+                    "OGG:SerialNumber".to_string(),
+                    TagValue::new_string(format!("{}", sn)),
+                );
+            }
 
-        // Add OGG format-specific tags
-        if let Some(sn) = serial_number {
             metadata.insert(
-                "OGG:SerialNumber".to_string(),
-                TagValue::new_string(format!("{}", sn)),
+                "OGG:PageSequence".to_string(),
+                TagValue::new_integer(page_sequence as i64),
             );
-        }
 
-        metadata.insert(
-            "OGG:PageSequence".to_string(),
-            TagValue::new_integer(page_sequence as i64),
-        );
+            // Duration: Would require scanning entire file for proper calculation
+            // For now, add a placeholder that can be improved in future versions
+            // This would ideally be calculated from granule positions in OGG pages
+            // metadata.insert("OGG:Duration".to_string(), TagValue::new_string("".to_string()));
 
-        // Duration: Would require scanning entire file for proper calculation
-        // For now, add a placeholder that can be improved in future versions
-        // This would ideally be calculated from granule positions in OGG pages
-        // metadata.insert("OGG:Duration".to_string(), TagValue::new_string("".to_string()));
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

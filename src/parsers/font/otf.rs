@@ -255,50 +255,54 @@ impl OTFParser {
 
 impl FormatParser for OTFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid OTF signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid OTF signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        metadata.insert("FileType".to_string(), TagValue::String("OTF".to_string()));
+            metadata.insert("FileType".to_string(), TagValue::String("OTF".to_string()));
 
-        let num_tables = Self::read_num_tables(reader)?;
-        metadata.insert(
-            "NumTables".to_string(),
-            TagValue::String(num_tables.to_string()),
-        );
-
-        // Parse table directory
-        let tables = Self::parse_table_directory(reader, num_tables)?;
-
-        // Check for CFF table (OTF-specific)
-        if Self::find_table(&tables, b"CFF ").is_some() {
+            let num_tables = Self::read_num_tables(reader)?;
             metadata.insert(
-                "OutlineFormat".to_string(),
-                TagValue::String("CFF".to_string()),
+                "NumTables".to_string(),
+                TagValue::String(num_tables.to_string()),
             );
-        }
 
-        // Parse name table
-        if let Some(name_table) = Self::find_table(&tables, b"name")
-            && let Err(e) = Self::parse_name_table(reader, name_table, &mut metadata)
-        {
-            // Log error but continue parsing
-            eprintln!("Warning: Failed to parse name table: {}", e);
-        }
+            // Parse table directory
+            let tables = Self::parse_table_directory(reader, num_tables)?;
 
-        // Parse head table
-        if let Some(head_table) = Self::find_table(&tables, b"head")
-            && let Err(e) = Self::parse_head_table(reader, head_table, &mut metadata)
-        {
-            eprintln!("Warning: Failed to parse head table: {}", e);
-        }
+            // Check for CFF table (OTF-specific)
+            if Self::find_table(&tables, b"CFF ").is_some() {
+                metadata.insert(
+                    "OutlineFormat".to_string(),
+                    TagValue::String("CFF".to_string()),
+                );
+            }
 
-        // Add OTF-specific tag aliases for Worker 22 requirements
-        add_otf_tag_aliases(&mut metadata);
+            // Parse name table
+            if let Some(name_table) = Self::find_table(&tables, b"name")
+                && let Err(e) = Self::parse_name_table(reader, name_table, &mut metadata)
+            {
+                // Log error but continue parsing
+                eprintln!("Warning: Failed to parse name table: {}", e);
+            }
 
-        Ok(metadata)
+            // Parse head table
+            if let Some(head_table) = Self::find_table(&tables, b"head")
+                && let Err(e) = Self::parse_head_table(reader, head_table, &mut metadata)
+            {
+                eprintln!("Warning: Failed to parse head table: {}", e);
+            }
+
+            // Add OTF-specific tag aliases for Worker 22 requirements
+            add_otf_tag_aliases(&mut metadata);
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

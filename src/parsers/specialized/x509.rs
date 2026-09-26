@@ -845,37 +845,41 @@ impl FormatParser for X509Parser {
     /// * `Ok(MetadataMap)` - Extracted certificate metadata
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify this is a valid certificate
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error(
-                "Invalid X.509 certificate signature",
-            ));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify this is a valid certificate
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error(
+                    "Invalid X.509 certificate signature",
+                ));
+            }
 
-        // Detect format
-        let format = Self::detect_format(reader)?;
+            // Detect format
+            let format = Self::detect_format(reader)?;
 
-        // Read all data
-        let data = reader.read(0, reader.size() as usize)?;
+            // Read all data
+            let data = reader.read(0, reader.size() as usize)?;
 
-        // Convert PEM to DER if needed
-        let der = if format == "PEM" {
-            Self::decode_pem(data)
-                .ok_or_else(|| ExifToolError::parse_error("Failed to decode PEM"))?
-        } else {
-            data.to_vec()
-        };
+            // Convert PEM to DER if needed
+            let der = if format == "PEM" {
+                Self::decode_pem(data)
+                    .ok_or_else(|| ExifToolError::parse_error("Failed to decode PEM"))?
+            } else {
+                data.to_vec()
+            };
 
-        // Extract certificate info
-        let mut metadata = Self::extract_certificate_info(&der)?;
+            // Extract certificate info
+            let mut metadata = Self::extract_certificate_info(&der)?;
 
-        // Add format info
-        metadata.insert(
-            "X509:Format".to_string(),
-            TagValue::String(format.to_string()),
-        );
+            // Add format info
+            metadata.insert(
+                "X509:Format".to_string(),
+                TagValue::String(format.to_string()),
+            );
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format

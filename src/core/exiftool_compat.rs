@@ -132,6 +132,8 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
         let formatted_value = format_tag_value(tag_name, value);
         result.insert(tag_name.clone(), formatted_value);
     }
+    // A formatted copy is the same rows: each keeps its provenance.
+    result.copy_provenance_from(metadata);
 
     result
 }

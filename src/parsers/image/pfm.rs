@@ -105,73 +105,77 @@ impl PFMParser {
 
 impl FormatParser for PFMParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let probe_len = reader.size().min(256) as usize;
-        let probe = reader.read(0, probe_len)?;
-        let header =
-            parse_header(probe).ok_or_else(|| ExifToolError::parse_error("Invalid PFM header"))?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let probe_len = reader.size().min(256) as usize;
+            let probe = reader.read(0, probe_len)?;
+            let header = parse_header(probe)
+                .ok_or_else(|| ExifToolError::parse_error("Invalid PFM header"))?;
 
-        let mut metadata = MetadataMap::new();
-        // A name for `normalize_identity_tags` to fall back on, nothing more:
-        // it is dropped once `File:FileType` carries a real value, which for
-        // `.pfm` it always does.
-        //
-        // The MIME type used to be hardcoded beside it, because ExifTool
-        // hardcodes it -- `%mimeType` has no PFM entry, since the extension is
-        // shared with Windows Printer Font Metrics, which takes the Font
-        // module's `application/x-font-type1`, so `ProcessPFM2` supplies the
-        // image MIME type itself (Other.pm:44):
-        //
-        // ```text
-        //     $et->SetFileType('PFM', 'image/x-pfm');
-        // ```
-        //
-        // `crate::filetype::refine` already draws exactly that distinction for
-        // the `File:`-grouped tags, keyed on the magic number rather than the
-        // extension, and `normalize_identity_tags` never promotes a parser's
-        // MIMEType. Writing it here only produced a second, ungrouped copy of an
-        // answer the tables had already given correctly.
-        metadata.insert("FileType".to_string(), TagValue::String("PFM".to_string()));
-        // PrintConv { PF => 'RGB', Pf => 'Monochrome' } over the magic
-        // number; `-n` prints the magic itself (pinned 13.59:
-        // `"File:ColorSpace": "PF"` for PFM.pfm).
-        metadata.insert_with_group1_and_value(
-            "File:ColorSpace",
-            TagValue::String(
-                match header.color_space {
-                    "PF" => "RGB",
-                    "Pf" => "Monochrome",
-                    other => other,
-                }
-                .to_string(),
-            ),
-            TagValue::String(header.color_space.to_string()),
-            "",
-        );
-        metadata.insert(
-            "File:ImageWidth".to_string(),
-            TagValue::Integer(header.width as i64),
-        );
-        metadata.insert(
-            "File:ImageHeight".to_string(),
-            TagValue::Integer(header.height as i64),
-        );
-        // PrintConv `$val > 0 ? "Big-endian" : "Little-endian"` over the
-        // scale; `-n` prints the scale as written.
-        metadata.insert_with_group1_and_value(
-            "File:ByteOrder",
-            TagValue::String(
-                if header.scale > 0.0 {
-                    "Big-endian"
-                } else {
-                    "Little-endian"
-                }
-                .to_string(),
-            ),
-            TagValue::String(header.scale_text.clone()),
-            "",
-        );
+            let mut metadata = MetadataMap::new();
+            // A name for `normalize_identity_tags` to fall back on, nothing more:
+            // it is dropped once `File:FileType` carries a real value, which for
+            // `.pfm` it always does.
+            //
+            // The MIME type used to be hardcoded beside it, because ExifTool
+            // hardcodes it -- `%mimeType` has no PFM entry, since the extension is
+            // shared with Windows Printer Font Metrics, which takes the Font
+            // module's `application/x-font-type1`, so `ProcessPFM2` supplies the
+            // image MIME type itself (Other.pm:44):
+            //
+            // ```text
+            //     $et->SetFileType('PFM', 'image/x-pfm');
+            // ```
+            //
+            // `crate::filetype::refine` already draws exactly that distinction for
+            // the `File:`-grouped tags, keyed on the magic number rather than the
+            // extension, and `normalize_identity_tags` never promotes a parser's
+            // MIMEType. Writing it here only produced a second, ungrouped copy of an
+            // answer the tables had already given correctly.
+            metadata.insert("FileType".to_string(), TagValue::String("PFM".to_string()));
+            // PrintConv { PF => 'RGB', Pf => 'Monochrome' } over the magic
+            // number; `-n` prints the magic itself (pinned 13.59:
+            // `"File:ColorSpace": "PF"` for PFM.pfm).
+            metadata.insert_with_group1_and_value(
+                "File:ColorSpace",
+                TagValue::String(
+                    match header.color_space {
+                        "PF" => "RGB",
+                        "Pf" => "Monochrome",
+                        other => other,
+                    }
+                    .to_string(),
+                ),
+                TagValue::String(header.color_space.to_string()),
+                "",
+            );
+            metadata.insert(
+                "File:ImageWidth".to_string(),
+                TagValue::Integer(header.width as i64),
+            );
+            metadata.insert(
+                "File:ImageHeight".to_string(),
+                TagValue::Integer(header.height as i64),
+            );
+            // PrintConv `$val > 0 ? "Big-endian" : "Little-endian"` over the
+            // scale; `-n` prints the scale as written.
+            metadata.insert_with_group1_and_value(
+                "File:ByteOrder",
+                TagValue::String(
+                    if header.scale > 0.0 {
+                        "Big-endian"
+                    } else {
+                        "Little-endian"
+                    }
+                    .to_string(),
+                ),
+                TagValue::String(header.scale_text.clone()),
+                "",
+            );
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

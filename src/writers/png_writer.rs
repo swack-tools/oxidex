@@ -211,11 +211,18 @@ fn is_exif_key(key: &str) -> bool {
 
 /// The EXIF-family rows of a map.
 fn exif_rows(map: &MetadataMap) -> MetadataMap {
-    let mut rows = MetadataMap::new();
-    for (key, value) in map.iter() {
-        if is_exif_key(key) {
-            rows.insert(key, value.clone());
-        }
+    // Filtered from a clone, not re-inserted into a fresh map: each row keeps
+    // its occurrence, so a caller's assignment stays distinguishable from a
+    // value the read produced (`MetadataMap::is_assigned`, which
+    // `xp_strings::is_explicit_xp_set` asks).
+    let mut rows = map.clone();
+    let other: Vec<String> = map
+        .iter()
+        .map(|(key, _)| key.clone())
+        .filter(|key| !is_exif_key(key))
+        .collect();
+    for key in other {
+        rows.remove(&key);
     }
     rows
 }
@@ -225,16 +232,20 @@ fn exif_rows(map: &MetadataMap) -> MetadataMap {
 /// rewrites the `eXIf` directory only when a tag in it is being edited
 /// (`$$et{EDIT_DIRS}{IFD0}`, PNG.pm 13.59:1395-1399) and otherwise copies
 /// the chunk untouched, so an unrelated edit (`-XMP-dc:Title=`, a `PNG:`
-/// text key) must leave every EXIF byte as it was.
+/// text key) must leave every EXIF byte as it was. An XP string the caller
+/// assigned is an edit even at its baseline value
+/// (`xp_strings::is_explicit_xp_set`): ExifTool re-encodes the assigned text.
 fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[String]) -> bool {
     // A decoded maker-note row (`Canon:MacroMode`) left out of the map is an
     // EXIF change too, whatever its family-1 group.
     !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
         || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty()
         || removed.iter().any(|key| is_exif_key(key))
-        || metadata
-            .iter()
-            .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
+        || metadata.iter().any(|(key, value)| {
+            is_exif_key(key)
+                && (baseline.get(key) != Some(value)
+                    || crate::writers::xp_strings::is_explicit_xp_set(metadata, key))
+        })
         || baseline
             .iter()
             .any(|(key, _)| is_exif_key(key) && !metadata.contains_key(key))

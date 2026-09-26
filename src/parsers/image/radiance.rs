@@ -244,82 +244,86 @@ impl RadianceParser {
 
 impl FormatParser for RadianceParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let read_len = reader.size().min(MAX_HEADER_BYTES) as usize;
-        let data = reader.read(0, read_len)?;
-        let mut rest = data;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let read_len = reader.size().min(MAX_HEADER_BYTES) as usize;
+            let data = reader.read(0, read_len)?;
+            let mut rest = data;
 
-        let signature = next_line(&mut rest)
-            .ok_or_else(|| ExifToolError::parse_error("Empty Radiance file"))?;
-        // `next_line` has already removed the `\x0a` the magic number requires.
-        if !SIGNATURES
-            .iter()
-            .any(|expected| signature.as_slice() == &expected[..expected.len() - 1])
-        {
-            return Err(ExifToolError::parse_error("Invalid Radiance signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-        // A fallback name for `normalize_identity_tags`; the magic table
-        // already supplies `File:FileType`, `FileTypeExtension` and the
-        // `image/vnd.radiance` MIME type, and a parser's MIMEType is never
-        // promoted, so writing one here could only duplicate it.
-        metadata.insert("FileType".to_string(), TagValue::String("HDR".to_string()));
-
-        while let Some(line) = next_line(&mut rest) {
-            let line = String::from_utf8_lossy(&line).into_owned();
-            // The blank line ends the header and precedes the resolution.
-            if line.is_empty() || line.len() >= MAX_LINE_LEN {
-                break;
-            }
-
-            if let Some(comment) = line.strip_prefix('#') {
-                let comment = comment.trim_start();
-                if !comment.is_empty() {
-                    push_value(&mut metadata, "Comment", comment.to_string());
-                }
-                continue;
-            }
-
-            let Some((key, value)) = split_assignment(&line) else {
-                push_value(&mut metadata, "Command", line.clone());
-                continue;
-            };
-
-            let key = key.to_ascii_lowercase();
-            let tag = HEADER_TAGS
+            let signature = next_line(&mut rest)
+                .ok_or_else(|| ExifToolError::parse_error("Empty Radiance file"))?;
+            // `next_line` has already removed the `\x0a` the magic number requires.
+            if !SIGNATURES
                 .iter()
-                .find_map(|(header, tag)| (*header == key).then_some((*tag).to_string()))
-                .or_else(|| synthesized_tag_name(&key));
-            if let Some(tag) = tag {
-                push_value(&mut metadata, &tag, value.to_string());
+                .any(|expected| signature.as_slice() == &expected[..expected.len() - 1])
+            {
+                return Err(ExifToolError::parse_error("Invalid Radiance signature"));
             }
-        }
 
-        // The line after the header carries the orientation and dimensions.
-        if let Some(line) = next_line(&mut rest) {
-            let line = String::from_utf8_lossy(&line);
-            if let Some((axes, height, width)) = parse_resolution(&line) {
-                let orientation = ORIENTATION
+            let mut metadata = MetadataMap::new();
+            // A fallback name for `normalize_identity_tags`; the magic table
+            // already supplies `File:FileType`, `FileTypeExtension` and the
+            // `image/vnd.radiance` MIME type, and a parser's MIMEType is never
+            // promoted, so writing one here could only duplicate it.
+            metadata.insert("FileType".to_string(), TagValue::String("HDR".to_string()));
+
+            while let Some(line) = next_line(&mut rest) {
+                let line = String::from_utf8_lossy(&line).into_owned();
+                // The blank line ends the header and precedes the resolution.
+                if line.is_empty() || line.len() >= MAX_LINE_LEN {
+                    break;
+                }
+
+                if let Some(comment) = line.strip_prefix('#') {
+                    let comment = comment.trim_start();
+                    if !comment.is_empty() {
+                        push_value(&mut metadata, "Comment", comment.to_string());
+                    }
+                    continue;
+                }
+
+                let Some((key, value)) = split_assignment(&line) else {
+                    push_value(&mut metadata, "Command", line.clone());
+                    continue;
+                };
+
+                let key = key.to_ascii_lowercase();
+                let tag = HEADER_TAGS
                     .iter()
-                    .find_map(|(axes_key, label)| (*axes_key == axes).then_some(*label));
-                // ExifTool prints the raw axis pair when the PrintConv has no
-                // entry for it, rather than inventing a label.
-                metadata.insert(
-                    "Orientation".to_string(),
-                    TagValue::String(orientation.unwrap_or(&axes).to_string()),
-                );
-                metadata.insert(
-                    "File:ImageHeight".to_string(),
-                    TagValue::Integer(height as i64),
-                );
-                metadata.insert(
-                    "File:ImageWidth".to_string(),
-                    TagValue::Integer(width as i64),
-                );
+                    .find_map(|(header, tag)| (*header == key).then_some((*tag).to_string()))
+                    .or_else(|| synthesized_tag_name(&key));
+                if let Some(tag) = tag {
+                    push_value(&mut metadata, &tag, value.to_string());
+                }
             }
-        }
 
-        Ok(metadata)
+            // The line after the header carries the orientation and dimensions.
+            if let Some(line) = next_line(&mut rest) {
+                let line = String::from_utf8_lossy(&line);
+                if let Some((axes, height, width)) = parse_resolution(&line) {
+                    let orientation = ORIENTATION
+                        .iter()
+                        .find_map(|(axes_key, label)| (*axes_key == axes).then_some(*label));
+                    // ExifTool prints the raw axis pair when the PrintConv has no
+                    // entry for it, rather than inventing a label.
+                    metadata.insert(
+                        "Orientation".to_string(),
+                        TagValue::String(orientation.unwrap_or(&axes).to_string()),
+                    );
+                    metadata.insert(
+                        "File:ImageHeight".to_string(),
+                        TagValue::Integer(height as i64),
+                    );
+                    metadata.insert(
+                        "File:ImageWidth".to_string(),
+                        TagValue::Integer(width as i64),
+                    );
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

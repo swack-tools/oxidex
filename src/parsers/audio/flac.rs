@@ -82,66 +82,70 @@ pub fn parse_flac_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
 impl FormatParser for FlacParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify file size
-        let file_size = reader.size();
-        if file_size < 8 {
-            return Err(ExifToolError::parse_error("File too small to be FLAC"));
-        }
-
-        // Read and verify signature
-        let header = reader.read(0, 4)?;
-        if header != FLAC_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid FLAC signature: expected {:?}, found {:?}",
-                FLAC_SIGNATURE, header
-            )));
-        }
-
-        // Initialize metadata map
-        let mut metadata = MetadataMap::with_capacity(32);
-
-        // Parse metadata blocks
-        let mut offset = 4u64; // After "fLaC"
-        let mut is_last = false;
-
-        while !is_last && offset < file_size {
-            // Read block header (4 bytes)
-            let block_header = reader.read(offset, 4)?;
-            let (_, (is_last_flag, block_type, block_length)) = parse_block_header(block_header)
-                .map_err(|e| {
-                    ExifToolError::parse_error(format!("Failed to parse block header: {:?}", e))
-                })?;
-
-            is_last = is_last_flag;
-            offset += 4;
-
-            // Read block data
-            if block_length > 0 && offset + block_length as u64 <= file_size {
-                let block_data = reader.read(offset, block_length as usize)?;
-
-                // Process block based on type
-                match block_type {
-                    BLOCK_TYPE_STREAMINFO => {
-                        parse_streaminfo_block(block_data, &mut metadata)?;
-                    }
-                    BLOCK_TYPE_VORBIS_COMMENT => {
-                        parse_vorbis_comment_block(block_data, &mut metadata)?;
-                    }
-                    BLOCK_TYPE_PICTURE => {
-                        parse_picture_block(block_data, &mut metadata)?;
-                    }
-                    _ => {
-                        // Skip other block types for now
-                    }
-                }
-
-                offset += block_length as u64;
-            } else {
-                break;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify file size
+            let file_size = reader.size();
+            if file_size < 8 {
+                return Err(ExifToolError::parse_error("File too small to be FLAC"));
             }
-        }
 
-        Ok(metadata)
+            // Read and verify signature
+            let header = reader.read(0, 4)?;
+            if header != FLAC_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid FLAC signature: expected {:?}, found {:?}",
+                    FLAC_SIGNATURE, header
+                )));
+            }
+
+            // Initialize metadata map
+            let mut metadata = MetadataMap::with_capacity(32);
+
+            // Parse metadata blocks
+            let mut offset = 4u64; // After "fLaC"
+            let mut is_last = false;
+
+            while !is_last && offset < file_size {
+                // Read block header (4 bytes)
+                let block_header = reader.read(offset, 4)?;
+                let (_, (is_last_flag, block_type, block_length)) =
+                    parse_block_header(block_header).map_err(|e| {
+                        ExifToolError::parse_error(format!("Failed to parse block header: {:?}", e))
+                    })?;
+
+                is_last = is_last_flag;
+                offset += 4;
+
+                // Read block data
+                if block_length > 0 && offset + block_length as u64 <= file_size {
+                    let block_data = reader.read(offset, block_length as usize)?;
+
+                    // Process block based on type
+                    match block_type {
+                        BLOCK_TYPE_STREAMINFO => {
+                            parse_streaminfo_block(block_data, &mut metadata)?;
+                        }
+                        BLOCK_TYPE_VORBIS_COMMENT => {
+                            parse_vorbis_comment_block(block_data, &mut metadata)?;
+                        }
+                        BLOCK_TYPE_PICTURE => {
+                            parse_picture_block(block_data, &mut metadata)?;
+                        }
+                        _ => {
+                            // Skip other block types for now
+                        }
+                    }
+
+                    offset += block_length as u64;
+                } else {
+                    break;
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

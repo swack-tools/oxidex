@@ -55,61 +55,65 @@ fn dpx_create_date(value: &str) -> String {
 
 impl FormatParser for DPXParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if reader.size() < DPX_HEADER_LEN as u64 {
-            return Err(ExifToolError::parse_error(
-                "DPX header is shorter than 2080 bytes",
-            ));
-        }
-        let header = reader.read(0, DPX_HEADER_LEN)?;
-        let byte_order = Self::byte_order(header)
-            .ok_or_else(|| ExifToolError::parse_error("Invalid DPX signature"))?;
-        let table = find_table("DPX", "Main")
-            .ok_or_else(|| ExifToolError::parse_error("Missing generated DPX::Main table"))?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if reader.size() < DPX_HEADER_LEN as u64 {
+                return Err(ExifToolError::parse_error(
+                    "DPX header is shorter than 2080 bytes",
+                ));
+            }
+            let header = reader.read(0, DPX_HEADER_LEN)?;
+            let byte_order = Self::byte_order(header)
+                .ok_or_else(|| ExifToolError::parse_error("Invalid DPX signature"))?;
+            let table = find_table("DPX", "Main")
+                .ok_or_else(|| ExifToolError::parse_error("Missing generated DPX::Main table"))?;
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType", TagValue::String("DPX".to_string()));
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType", TagValue::String("DPX".to_string()));
 
-        // CreateDate is the one `DPX::Main` field whose `ValueConv` the
-        // generated schema refuses to model (`omitted.value_conv`);
-        // `dpx_create_date` above is the hand-verified equivalent and this
-        // citation is RawAccess's required acknowledgment. Its PrintConv is
-        // `$self->ConvertDateTime($val)`, identity under default options
-        // (the generated `SelfConvertDateTimeVal7455B8` expr).
-        const CREATE_DATE_CITATION: PerlCitation = PerlCitation {
-            module: "DPX",
-            table: "Main",
-            tag: "CreateDate",
-            lines: "ValueConv 's/(\\d{4}:\\d{2}:\\d{2}):/$1 /', DPX.pm",
-        };
+            // CreateDate is the one `DPX::Main` field whose `ValueConv` the
+            // generated schema refuses to model (`omitted.value_conv`);
+            // `dpx_create_date` above is the hand-verified equivalent and this
+            // citation is RawAccess's required acknowledgment. Its PrintConv is
+            // `$self->ConvertDateTime($val)`, identity under default options
+            // (the generated `SelfConvertDateTimeVal7455B8` expr).
+            const CREATE_DATE_CITATION: PerlCitation = PerlCitation {
+                module: "DPX",
+                table: "Main",
+                tag: "CreateDate",
+                lines: "ValueConv 's/(\\d{4}:\\d{2}:\\d{2}):/$1 /', DPX.pm",
+            };
 
-        // Every clean field (`Omitted::NONE`) renders through the generated
-        // table's own emit path -- enum PrintConvs, the `sprintf("%.8x")`
-        // EncryptionKey expr, and plain values alike. The four fields whose
-        // `RawConv` the schema refuses (`Image2Description`..
-        // `Image8Description`, `AspectRatio`, `ShutterAngle`, `FrameRate`)
-        // stay omitted here; see the module tests for the citations.
-        for decoded in decode_binary_table(table, header, byte_order).fields() {
-            if decoded.field.name == "CreateDate" {
-                let value =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &CREATE_DATE_CITATION)
-                        .and_then(|access| match access.raw() {
-                            DecodedValue::String(value) => Some(value.clone()),
-                            _ => None,
-                        });
-                if let Some(value) = value {
-                    metadata.insert(
-                        "File:CreateDate".to_string(),
-                        TagValue::new_string(dpx_create_date(&value)),
-                    );
+            // Every clean field (`Omitted::NONE`) renders through the generated
+            // table's own emit path -- enum PrintConvs, the `sprintf("%.8x")`
+            // EncryptionKey expr, and plain values alike. The four fields whose
+            // `RawConv` the schema refuses (`Image2Description`..
+            // `Image8Description`, `AspectRatio`, `ShutterAngle`, `FrameRate`)
+            // stay omitted here; see the module tests for the citations.
+            for decoded in decode_binary_table(table, header, byte_order).fields() {
+                if decoded.field.name == "CreateDate" {
+                    let value =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &CREATE_DATE_CITATION)
+                            .and_then(|access| match access.raw() {
+                                DecodedValue::String(value) => Some(value.clone()),
+                                _ => None,
+                            });
+                    if let Some(value) = value {
+                        metadata.insert(
+                            "File:CreateDate".to_string(),
+                            TagValue::new_string(dpx_create_date(&value)),
+                        );
+                    }
+                    continue;
                 }
-                continue;
+                if let Some(value) = decoded.emit() {
+                    metadata.insert(format!("File:{}", decoded.field.name), value);
+                }
             }
-            if let Some(value) = decoded.emit() {
-                metadata.insert(format!("File:{}", decoded.field.name), value);
-            }
-        }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

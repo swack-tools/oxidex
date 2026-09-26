@@ -90,74 +90,78 @@ const MIN_ADOBE_SEGMENT_LENGTH: usize = 12;
 /// assert_eq!(metadata.get_string("APP14:ColorTransform"), Some("YCbCr"));
 /// ```
 pub fn parse_app14_adobe(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Validate minimum segment length
-    if data.len() < MIN_ADOBE_SEGMENT_LENGTH {
-        return Err(ExifToolError::parse_error(format!(
-            "APP14 Adobe segment too short: expected at least {} bytes, got {}",
-            MIN_ADOBE_SEGMENT_LENGTH,
-            data.len()
-        )));
-    }
-
-    // Validate "Adobe" identifier at the start of the segment
-    if &data[..ADOBE_IDENTIFIER.len()] != ADOBE_IDENTIFIER {
-        return Err(ExifToolError::parse_error(
-            "APP14 segment does not contain Adobe identifier",
-        ));
-    }
-
-    // Parse fields after the "Adobe" identifier (big-endian byte order)
-    // Offset 5: DCTEncodeVersion (2 bytes)
-    let dct_version = u16::from_be_bytes([data[5], data[6]]);
-    metadata.insert_with_group1(
-        "APP14:DCTEncodeVersion",
-        TagValue::Integer(i64::from(dct_version)),
-        ADOBE_GROUP1,
-    );
-
-    // Offset 7: APP14Flags0 (2 bytes)
-    let flags0 = u16::from_be_bytes([data[7], data[8]]);
-    metadata.insert_with_group1(
-        "APP14:APP14Flags0",
-        TagValue::Integer(i64::from(flags0)),
-        ADOBE_GROUP1,
-    );
-
-    // Offset 9: APP14Flags1 (2 bytes)
-    let flags1 = u16::from_be_bytes([data[9], data[10]]);
-    metadata.insert_with_group1(
-        "APP14:APP14Flags1",
-        TagValue::Integer(i64::from(flags1)),
-        ADOBE_GROUP1,
-    );
-
-    // Offset 11: ColorTransform (1 byte)
-    let color_transform = data[11];
-    let transform_string = match color_transform {
-        0 => "Unknown",
-        1 => "YCbCr",
-        2 => "YCCK",
-        other => {
-            // For unknown values, we still record them but as a numeric string
-            // This matches ExifTool's behavior of showing unexpected values
-            metadata.insert_with_group1(
-                "APP14:ColorTransform",
-                TagValue::String(format!("Unknown ({})", other)),
-                ADOBE_GROUP1,
-            );
-            return Ok(metadata);
+        // Validate minimum segment length
+        if data.len() < MIN_ADOBE_SEGMENT_LENGTH {
+            return Err(ExifToolError::parse_error(format!(
+                "APP14 Adobe segment too short: expected at least {} bytes, got {}",
+                MIN_ADOBE_SEGMENT_LENGTH,
+                data.len()
+            )));
         }
-    };
 
-    metadata.insert_with_group1(
-        "APP14:ColorTransform",
-        TagValue::String(transform_string.to_string()),
-        ADOBE_GROUP1,
-    );
+        // Validate "Adobe" identifier at the start of the segment
+        if &data[..ADOBE_IDENTIFIER.len()] != ADOBE_IDENTIFIER {
+            return Err(ExifToolError::parse_error(
+                "APP14 segment does not contain Adobe identifier",
+            ));
+        }
 
-    Ok(metadata)
+        // Parse fields after the "Adobe" identifier (big-endian byte order)
+        // Offset 5: DCTEncodeVersion (2 bytes)
+        let dct_version = u16::from_be_bytes([data[5], data[6]]);
+        metadata.insert_with_group1(
+            "APP14:DCTEncodeVersion",
+            TagValue::Integer(i64::from(dct_version)),
+            ADOBE_GROUP1,
+        );
+
+        // Offset 7: APP14Flags0 (2 bytes)
+        let flags0 = u16::from_be_bytes([data[7], data[8]]);
+        metadata.insert_with_group1(
+            "APP14:APP14Flags0",
+            TagValue::Integer(i64::from(flags0)),
+            ADOBE_GROUP1,
+        );
+
+        // Offset 9: APP14Flags1 (2 bytes)
+        let flags1 = u16::from_be_bytes([data[9], data[10]]);
+        metadata.insert_with_group1(
+            "APP14:APP14Flags1",
+            TagValue::Integer(i64::from(flags1)),
+            ADOBE_GROUP1,
+        );
+
+        // Offset 11: ColorTransform (1 byte)
+        let color_transform = data[11];
+        let transform_string = match color_transform {
+            0 => "Unknown",
+            1 => "YCbCr",
+            2 => "YCCK",
+            other => {
+                // For unknown values, we still record them but as a numeric string
+                // This matches ExifTool's behavior of showing unexpected values
+                metadata.insert_with_group1(
+                    "APP14:ColorTransform",
+                    TagValue::String(format!("Unknown ({})", other)),
+                    ADOBE_GROUP1,
+                );
+                return Ok(metadata);
+            }
+        };
+
+        metadata.insert_with_group1(
+            "APP14:ColorTransform",
+            TagValue::String(transform_string.to_string()),
+            ADOBE_GROUP1,
+        );
+
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

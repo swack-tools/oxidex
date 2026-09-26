@@ -80,43 +80,47 @@ pub struct WebmParser;
 
 impl FormatParser for WebmParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify EBML signature
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be WebM"));
-        }
-
-        let header = reader.read(0, 4)?;
-        if header != EBML_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid WebM/EBML signature: expected {:?}, found {:?}",
-                EBML_SIGNATURE, header
-            )));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Parse EBML header to verify it's a WebM file
-        match parse_ebml_header(reader, 0, &mut metadata) {
-            Ok(_) => {
-                // Verify this is actually WebM (DocType should be "webm")
-                if let Some(TagValue::String(doc_type)) = metadata.get("WebM:DocType") {
-                    if doc_type != "webm" {
-                        return Err(ExifToolError::parse_error(format!(
-                            "Invalid WebM DocType: expected 'webm', found '{}'",
-                            doc_type
-                        )));
-                    }
-                } else {
-                    return Err(ExifToolError::parse_error("Missing WebM DocType"));
-                }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify EBML signature
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be WebM"));
             }
-            Err(e) => return Err(e),
-        }
 
-        // Parse the Segment for audio/video information
-        parse_segment(reader, 12, reader.size(), &mut metadata)?;
+            let header = reader.read(0, 4)?;
+            if header != EBML_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid WebM/EBML signature: expected {:?}, found {:?}",
+                    EBML_SIGNATURE, header
+                )));
+            }
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+
+            // Parse EBML header to verify it's a WebM file
+            match parse_ebml_header(reader, 0, &mut metadata) {
+                Ok(_) => {
+                    // Verify this is actually WebM (DocType should be "webm")
+                    if let Some(TagValue::String(doc_type)) = metadata.get("WebM:DocType") {
+                        if doc_type != "webm" {
+                            return Err(ExifToolError::parse_error(format!(
+                                "Invalid WebM DocType: expected 'webm', found '{}'",
+                                doc_type
+                            )));
+                        }
+                    } else {
+                        return Err(ExifToolError::parse_error("Missing WebM DocType"));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+
+            // Parse the Segment for audio/video information
+            parse_segment(reader, 12, reader.size(), &mut metadata)?;
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

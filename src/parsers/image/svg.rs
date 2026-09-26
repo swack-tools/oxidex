@@ -588,151 +588,155 @@ fn capitalize_first(s: &str) -> String {
 
 impl FormatParser for SVGParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid SVG signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid SVG signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("SVG".to_string()));
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("SVG".to_string()));
 
-        // Read up to 64KB for parsing (SVG metadata is in the header)
-        let read_size = std::cmp::min(reader.size() as usize, MAX_READ_SIZE);
-        let content = reader.read(0, read_size)?;
-        let text = std::str::from_utf8(content).unwrap_or("");
+            // Read up to 64KB for parsing (SVG metadata is in the header)
+            let read_size = std::cmp::min(reader.size() as usize, MAX_READ_SIZE);
+            let content = reader.read(0, read_size)?;
+            let text = std::str::from_utf8(content).unwrap_or("");
 
-        // Extract <svg> tag (find first occurrence)
-        if let Some(svg_start) = text.find("<svg") {
-            let svg_end = text[svg_start..]
-                .find('>')
-                .map(|pos| svg_start + pos)
-                .unwrap_or(text.len());
-            let svg_tag = &text[svg_start..svg_end];
+            // Extract <svg> tag (find first occurrence)
+            if let Some(svg_start) = text.find("<svg") {
+                let svg_end = text[svg_start..]
+                    .find('>')
+                    .map(|pos| svg_start + pos)
+                    .unwrap_or(text.len());
+                let svg_tag = &text[svg_start..svg_end];
 
-            // XMP2.pl's `%Image::ExifTool::XMP::SVG` table (GROUPS 0 and 1
-            // both `SVG`) names the root `width`/`height` attributes
-            // `ImageWidth`/`ImageHeight`, with `ValueConv => '$val =~ s/px$//;
-            // $val'` -- a case-sensitive strip of one trailing `px` and
-            // nothing else: no trim, no unit parsing. Pinned 13.59:
-            // `width="4in"` -> `[SVG] ImageWidth: 4in`, `"100px"` -> `100`,
-            // `" 12 "` -> ` 12 `, `"7PX"` -> `7PX`. `viewBox` is never read
-            // as a dimension (a viewBox-only file has no ImageWidth at all),
-            // and there is no `SVG:Width`/`SVG:Height`. See
-            // oxidex-ops/evidence/20260917-fits-svg/oracle-13.59-svg-edgecases.txt.
-            for (attr, tag) in [("width", "SVG:ImageWidth"), ("height", "SVG:ImageHeight")] {
-                if let Some(value) = Self::extract_attribute(svg_tag, attr)
-                    .and_then(|raw| Self::svg_dimension_value_conv(&raw))
-                {
-                    metadata.insert(tag.to_string(), TagValue::String(value));
+                // XMP2.pl's `%Image::ExifTool::XMP::SVG` table (GROUPS 0 and 1
+                // both `SVG`) names the root `width`/`height` attributes
+                // `ImageWidth`/`ImageHeight`, with `ValueConv => '$val =~ s/px$//;
+                // $val'` -- a case-sensitive strip of one trailing `px` and
+                // nothing else: no trim, no unit parsing. Pinned 13.59:
+                // `width="4in"` -> `[SVG] ImageWidth: 4in`, `"100px"` -> `100`,
+                // `" 12 "` -> ` 12 `, `"7PX"` -> `7PX`. `viewBox` is never read
+                // as a dimension (a viewBox-only file has no ImageWidth at all),
+                // and there is no `SVG:Width`/`SVG:Height`. See
+                // oxidex-ops/evidence/20260917-fits-svg/oracle-13.59-svg-edgecases.txt.
+                for (attr, tag) in [("width", "SVG:ImageWidth"), ("height", "SVG:ImageHeight")] {
+                    if let Some(value) = Self::extract_attribute(svg_tag, attr)
+                        .and_then(|raw| Self::svg_dimension_value_conv(&raw))
+                    {
+                        metadata.insert(tag.to_string(), TagValue::String(value));
+                    }
+                }
+
+                // ViewBox is reported as-is; it never stands in for a dimension.
+                if let Some(viewbox) = Self::extract_attribute(svg_tag, "viewBox") {
+                    metadata.insert("SVG:ViewBox".to_string(), TagValue::new_string(viewbox));
+                }
+
+                // Extract xmlns (namespace) - ExifTool calls this "Xmlns"
+                if let Some(xmlns) = Self::extract_attribute(svg_tag, "xmlns") {
+                    metadata.insert("SVG:Xmlns".to_string(), TagValue::String(xmlns));
+                }
+
+                // Extract version - ExifTool calls this "SVGVersion" or "Version"
+                if let Some(version) = Self::extract_attribute(svg_tag, "version") {
+                    // XMP::SVG `version => 'SVGVersion'`; there is no `SVG:Version`.
+                    metadata.insert("SVG:SVGVersion".to_string(), TagValue::String(version));
+                }
+
+                // Extract preserveAspectRatio
+                if let Some(preserve) = Self::extract_attribute(svg_tag, "preserveAspectRatio") {
+                    metadata.insert(
+                        "SVG:PreserveAspectRatio".to_string(),
+                        TagValue::new_string(preserve),
+                    );
                 }
             }
 
-            // ViewBox is reported as-is; it never stands in for a dimension.
-            if let Some(viewbox) = Self::extract_attribute(svg_tag, "viewBox") {
-                metadata.insert("SVG:ViewBox".to_string(), TagValue::new_string(viewbox));
+            // Extract title
+            if let Some(title) = Self::extract_element_content(text, "title") {
+                metadata.insert("Title".to_string(), TagValue::String(title));
             }
 
-            // Extract xmlns (namespace) - ExifTool calls this "Xmlns"
-            if let Some(xmlns) = Self::extract_attribute(svg_tag, "xmlns") {
-                metadata.insert("SVG:Xmlns".to_string(), TagValue::String(xmlns));
+            // Extract description
+            if let Some(desc) = Self::extract_element_content(text, "desc") {
+                metadata.insert("Description".to_string(), TagValue::String(desc));
             }
 
-            // Extract version - ExifTool calls this "SVGVersion" or "Version"
-            if let Some(version) = Self::extract_attribute(svg_tag, "version") {
-                // XMP::SVG `version => 'SVGVersion'`; there is no `SVG:Version`.
-                metadata.insert("SVG:SVGVersion".to_string(), TagValue::String(version));
+            // Extract embedded XMP metadata first
+            Self::extract_xmp(text, &mut metadata);
+
+            // Extract Dublin Core metadata if present
+            if text.contains("dc:") {
+                if let Some(dc_title) = Self::extract_element_content(text, "dc:title") {
+                    insert_grouped_xmp_tag(
+                        &mut metadata,
+                        "XMP:Title",
+                        "XMP-dc",
+                        TagValue::String(dc_title),
+                    );
+                }
+                if let Some(dc_creator) = Self::extract_dc_creator(text) {
+                    insert_grouped_xmp_tag(
+                        &mut metadata,
+                        "XMP:Creator",
+                        "XMP-dc",
+                        TagValue::String(dc_creator),
+                    );
+                }
+                if let Some(dc_desc) = Self::extract_element_content(text, "dc:description") {
+                    insert_grouped_xmp_tag(
+                        &mut metadata,
+                        "XMP:Description",
+                        "XMP-dc",
+                        TagValue::String(dc_desc),
+                    );
+                }
+
+                // Extract additional Dublin Core elements
+                Self::extract_dublin_core(text, &mut metadata);
             }
 
-            // Extract preserveAspectRatio
-            if let Some(preserve) = Self::extract_attribute(svg_tag, "preserveAspectRatio") {
+            // Extract SVG-specific desc metadata with roles
+            Self::extract_svg_desc_metadata(text, &mut metadata);
+
+            // Extract embedded C2PA/JUMBF manifest data, if present
+            Self::extract_c2pa_manifest(text, &mut metadata);
+
+            // Check if animated
+            if Self::is_animated(text) {
                 metadata.insert(
-                    "SVG:PreserveAspectRatio".to_string(),
-                    TagValue::new_string(preserve),
-                );
-            }
-        }
-
-        // Extract title
-        if let Some(title) = Self::extract_element_content(text, "title") {
-            metadata.insert("Title".to_string(), TagValue::String(title));
-        }
-
-        // Extract description
-        if let Some(desc) = Self::extract_element_content(text, "desc") {
-            metadata.insert("Description".to_string(), TagValue::String(desc));
-        }
-
-        // Extract embedded XMP metadata first
-        Self::extract_xmp(text, &mut metadata);
-
-        // Extract Dublin Core metadata if present
-        if text.contains("dc:") {
-            if let Some(dc_title) = Self::extract_element_content(text, "dc:title") {
-                insert_grouped_xmp_tag(
-                    &mut metadata,
-                    "XMP:Title",
-                    "XMP-dc",
-                    TagValue::String(dc_title),
-                );
-            }
-            if let Some(dc_creator) = Self::extract_dc_creator(text) {
-                insert_grouped_xmp_tag(
-                    &mut metadata,
-                    "XMP:Creator",
-                    "XMP-dc",
-                    TagValue::String(dc_creator),
-                );
-            }
-            if let Some(dc_desc) = Self::extract_element_content(text, "dc:description") {
-                insert_grouped_xmp_tag(
-                    &mut metadata,
-                    "XMP:Description",
-                    "XMP-dc",
-                    TagValue::String(dc_desc),
+                    "SVG:Animated".to_string(),
+                    TagValue::String("true".to_string()),
                 );
             }
 
-            // Extract additional Dublin Core elements
-            Self::extract_dublin_core(text, &mut metadata);
-        }
+            // Count SVG elements (shapes, text, etc.) for Worker 26
+            let element_count = Self::count_svg_elements(text);
+            if element_count > 0 {
+                metadata.insert(
+                    "SVG:ElementCount".to_string(),
+                    TagValue::new_integer(element_count),
+                );
+            }
 
-        // Extract SVG-specific desc metadata with roles
-        Self::extract_svg_desc_metadata(text, &mut metadata);
-
-        // Extract embedded C2PA/JUMBF manifest data, if present
-        Self::extract_c2pa_manifest(text, &mut metadata);
-
-        // Check if animated
-        if Self::is_animated(text) {
+            // Check for <defs> definitions
+            let has_definitions = text.contains("<defs");
             metadata.insert(
-                "SVG:Animated".to_string(),
-                TagValue::String("true".to_string()),
+                "SVG:HasDefinitions".to_string(),
+                TagValue::new_string(if has_definitions { "true" } else { "false" }),
             );
-        }
 
-        // Count SVG elements (shapes, text, etc.) for Worker 26
-        let element_count = Self::count_svg_elements(text);
-        if element_count > 0 {
+            // Check for <metadata> element
+            let has_metadata = text.contains("<metadata");
             metadata.insert(
-                "SVG:ElementCount".to_string(),
-                TagValue::new_integer(element_count),
+                "SVG:HasMetadata".to_string(),
+                TagValue::new_string(if has_metadata { "true" } else { "false" }),
             );
-        }
 
-        // Check for <defs> definitions
-        let has_definitions = text.contains("<defs");
-        metadata.insert(
-            "SVG:HasDefinitions".to_string(),
-            TagValue::new_string(if has_definitions { "true" } else { "false" }),
-        );
-
-        // Check for <metadata> element
-        let has_metadata = text.contains("<metadata");
-        metadata.insert(
-            "SVG:HasMetadata".to_string(),
-            TagValue::new_string(if has_metadata { "true" } else { "false" }),
-        );
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
