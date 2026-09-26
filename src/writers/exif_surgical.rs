@@ -3938,6 +3938,13 @@ fn key_addresses(key: &str) -> Vec<(IfdKind, u16)> {
 /// override that names the EXIF GPS group). The reader keys a decoded
 /// maker-note row by these (`Canon:MacroMode`, `Pentax:AEAperture`), and
 /// its occurrence's family-0 label is not reliably `MakerNotes` (`Canon`).
+/// Whether `group` is a maker-note group ([`MAKERNOTE_GROUPS`]).
+pub(crate) fn is_makernote_group(group: &str) -> bool {
+    MAKERNOTE_GROUPS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+}
+
 const MAKERNOTE_GROUPS: &[&str] = &[
     "AdobeDNG",
     "Apple",

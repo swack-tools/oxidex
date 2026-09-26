@@ -364,23 +364,25 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 ));
                 continue;
             }
+            // ExifTool's group deletion removes every value set in the group
+            // before it (Writer.pl `SetNewValue` -> `RemoveNewValuesForGroup`),
+            // whatever the file holds: the earlier requests it covers are
+            // cancelled here, with their refusals, before the deletion itself
+            // is planned. 13.59: `-XMP:Title=x -XMP:All=` on a file without
+            // XMP is `unchanged` (#957, PRRT_kwDOQNbr5M6mQbb-); `-IFD1:Make=x
+            // -EXIF:All=` on a JPEG with EXIF clears the EXIF and never asks
+            // for the IFD1 set oxidex cannot make (PRRT_kwDOQNbr5M6mRRX8);
+            // `-XMP-dc:Title=x -XMP:All=` where oxidex cannot delete the XMP
+            // is refused for `XMP:All` alone.
+            pending.retain(|earlier| {
+                !group_covers(group, earlier.request.requested)
+                    && !group_covers(group, &earlier.request.key)
+            });
+            request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
             match plan_group_deletion(path, change.tag(), group) {
                 Ok(Some(key)) => groups.push((at, key)),
-                // Provably nothing of the group in the file -- but ExifTool's
-                // group deletion also removes every value set in the group
-                // before it (Writer.pl `RemoveNewValuesForGroup`): 13.59's
-                // `-XMP:Title=x -XMP:All=` on a file without XMP is
-                // `unchanged`. So the earlier requests it covers go too;
-                // dropping the deletion alone left them to be written (or
-                // refused) as if it had not been asked (#957,
-                // PRRT_kwDOQNbr5M6mQbb-).
-                Ok(None) => {
-                    pending.retain(|earlier| {
-                        !group_covers(group, earlier.request.requested)
-                            && !group_covers(group, &earlier.request.key)
-                    });
-                    request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-                }
+                // Provably nothing of the group in the file.
+                Ok(None) => {}
                 // Kept at its place among the requests' refusals; no later
                 // deletion cancels a deletion's own refusal.
                 Err(ExifToolError::TagsNotWritten { tags }) => {
@@ -493,12 +495,16 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
-/// (the requested spelling, or the address it resolved to): a tag of that
-/// group; for the XMP (XML) family, any `XMP-*` (`XML-*`) group, and an
-/// `XMP:Name` request the namespace of whose tag is the deleted one
-/// (`XMP:Title` is `XMP-dc:Title`, which 13.59's `-XMP-dc:All=` cancels).
-/// An ungrouped name, or a namespace the registry does not tell, is not
-/// covered: its request stays, and is written or refused by name.
+/// (the requested spelling, or the address it resolved to) -- Writer.pl's
+/// `RemoveNewValuesForGroup` with its `%removeGroups`: a tag of that group;
+/// for `EXIF` and `IFD0` (which also removes `EXIF` and `MakerNotes`
+/// values), every EXIF directory and maker-note group; for `ExifIFD` (also
+/// `MakerNotes`, `InteropIFD`), those; for the XMP (XML) family, any `XMP-*`
+/// (`XML-*`) group, and an `XMP:Name` request the namespace of whose tag is
+/// the deleted one (`XMP:Title` is `XMP-dc:Title`, which 13.59's
+/// `-XMP-dc:All=` cancels). An ungrouped name, or a namespace the registry
+/// does not tell, is not covered: its request stays, and is written or
+/// refused by name.
 fn group_covers(group: &str, tag: &str) -> bool {
     let Some((tag_group, _)) = tag.rsplit_once(':') else {
         return false;
@@ -507,6 +513,18 @@ fn group_covers(group: &str, tag: &str) -> bool {
         return true;
     }
     let (group_lower, tag_lower) = (group.to_ascii_lowercase(), tag_group.to_ascii_lowercase());
+    let exif_directory = EXIF_DIRECTORIES
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(tag_group))
+        || tag_lower == "exif";
+    let makernote =
+        tag_lower == "makernotes" || crate::writers::exif_surgical::is_makernote_group(tag_group);
+    match group_lower.as_str() {
+        "exif" | "ifd0" if exif_directory || makernote => return true,
+        "exififd" if tag_lower == "interopifd" || makernote => return true,
+        "makernotes" if makernote => return true,
+        _ => {}
+    }
     match group_lower.split_once('-') {
         None if group_lower == "xmp" || group_lower == "xml" => {
             tag_lower.starts_with(&format!("{group_lower}-"))
