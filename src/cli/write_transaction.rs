@@ -70,8 +70,18 @@ pub fn partition_defined(
 /// on the line: `-all= -XPTitle=x` cleared the file and reported an update
 /// with no XPTitle written, and `-DateTimeOriginal+=1 -XPTitle=x` only
 /// shifted the date. A plan carries all of them, applied together in one
-/// transaction in ExifTool's order (clear, then copy, then shifts and sets),
-/// or is refused before any file is touched.
+/// transaction in ExifTool's order, or is refused before any file is
+/// touched.
+///
+/// ExifTool applies a command's requests in argument order, and `-all=`
+/// removes every value assigned before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but none assigned after it. So a `-TAG=VALUE`
+/// before the last `-all=` is superseded and dropped (13.59:
+/// `-IFD0:Artist=x -all=` leaves no EXIF; `-all= -IFD0:Artist=x` leaves
+/// Artist), and a `-TagsFromFile` before it is applied before the clear
+/// (13.59: `-TagsFromFile SRC -all= DST` leaves DST without SRC's tags;
+/// `-all= -TagsFromFile SRC DST` leaves them). Applying the clear first
+/// whatever the order used to keep both.
 #[derive(Debug, Clone, Default)]
 pub struct WritePlan {
     /// `-all=`.
@@ -86,6 +96,9 @@ pub struct WritePlan {
     pub warnings: Vec<String>,
     /// Whether any `-TAG=VALUE` was given, defined or not.
     requested_sets: bool,
+    /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
+    /// then applied first and cleared with the rest.
+    copy_before_clear: bool,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
@@ -99,8 +112,20 @@ impl WritePlan {
     /// Classifies `args`. `Err` is a refusal to print after `Error: ` (exit 1,
     /// nothing touched): a combination oxidex cannot apply faithfully.
     pub fn from_args(args: &CliArgs) -> Result<Self, String> {
-        let raw_sets = args.plain_tag_modifications();
-        let (warnings, sets) = partition_defined(&raw_sets);
+        let raw_sets = args.plain_tag_modifications_with_positions();
+        let clear_at = args.clear_all_position();
+        // Every name is judged (and an undefined one warned about) wherever
+        // it stands, as ExifTool's `SetNewValue` judges each; only then does
+        // a later `-all=` remove the values assigned before it.
+        let mut warnings = Vec::new();
+        let mut sets = Vec::new();
+        for (at, tag, value) in &raw_sets {
+            let (mut warned, defined) = partition_defined(&[(tag.clone(), value.clone())]);
+            warnings.append(&mut warned);
+            if clear_at.is_none_or(|clear| *at > clear) {
+                sets.extend(defined);
+            }
+        }
         let mut shifts = Vec::new();
         for (tag, op, value) in args.date_shift_operations() {
             let operation = match op.as_str() {
@@ -128,6 +153,11 @@ impl WritePlan {
             sets,
             warnings,
             requested_sets: !raw_sets.is_empty(),
+            copy_before_clear: args.tags_from_file.is_some()
+                && matches!(
+                    (args.tags_from_file_position, clear_at),
+                    (Some(copy), Some(clear)) if copy <= clear
+                ),
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -206,10 +236,15 @@ pub fn write_plan_file(
         path,
         || on_commit.take().map_or(Ok(()), |commit| commit()),
         |scratch| {
-            if plan.clear_all {
+            let clear = || {
                 clear_all_metadata(scratch).map_err(|e| {
                     format!("Failed to clear metadata from '{}': {}", path.display(), e)
-                })?;
+                })
+            };
+            // `-all=` where it stood relative to `-TagsFromFile` (the sets
+            // before it were already dropped, see `WritePlan`).
+            if plan.clear_all && !plan.copy_before_clear {
+                clear()?;
             }
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
@@ -221,6 +256,9 @@ pub fn write_plan_file(
                         e
                     )
                 })?);
+            }
+            if plan.clear_all && plan.copy_before_clear {
+                clear()?;
             }
             for (tag_pattern, operation, offset) in &plan.shifts {
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
