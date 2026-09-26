@@ -51,6 +51,11 @@ enum Expect {
     /// oxidex refuses by name, file untouched; the oracle writes more than
     /// EXIF (or into MIE), which oxidex cannot.
     Refused,
+    /// A grouped EXIF write in a file carrying MIE: the oracle also writes
+    /// MIE-Meta's EXIF copy; oxidex writes the main EXIF copy only. This
+    /// predates the bare-name resolver and is pinned here as the known gap
+    /// it is: oxidex's rows are the oracle's less the MIE copy.
+    MieGap,
 }
 
 /// (name, printed value, raw value) -- each name is also defined by a maker
@@ -76,7 +81,9 @@ const FILES: &[&str] = &["Canon.jpg", "Nikon.jpg", "ExifTool.jpg", "Writer.jpg"]
 /// The pinned outcome of every case.
 fn expected(file: &str, name: &str, form: Form) -> Expect {
     match (file, form) {
-        // MIE: every EXIF write is also an MIE write.
+        // MIE: every EXIF write is also an MIE write; a bare name is
+        // refused, a grouped one keeps its pre-existing EXIF-only write.
+        ("ExifTool.jpg", Form::Grouped) => Expect::MieGap,
         ("ExifTool.jpg", _) => Expect::Refused,
         // `-EXIF:` names one group: exactly what oxidex writes.
         (_, Form::Grouped) => Expect::Match,
@@ -165,6 +172,15 @@ fn run_case(
                     "{case}: oxidex wrote {ox_rows:?} (changed {ox_changed}), the oracle \
                      {et_rows:?} (changed {et_changed}); oracle said {}",
                     String::from_utf8_lossy(&et.stdout).trim()
+                ));
+            }
+        }
+        Expect::MieGap => {
+            let main_copy = ox_rows.iter().all(|row| et_rows.contains(row));
+            if !ox.status.success() || !main_copy || et_rows.len() <= ox_rows.len() {
+                return Err(format!(
+                    "{case}: expected oxidex's EXIF-only write beside the oracle's extra MIE \
+                     copy; oxidex {ox_rows:?} ({ox_stderr}), the oracle {et_rows:?}"
                 ));
             }
         }

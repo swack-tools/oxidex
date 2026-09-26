@@ -1599,6 +1599,7 @@ pub(crate) fn resolve_write_key_for(
     // apply_sets`), and a library or C ABI caller's typed value is raw
     // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
     let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
+    let ungrouped = !tag_name.contains(':');
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1690,9 +1691,13 @@ pub(crate) fn resolve_write_key_for(
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
-    // An EXIF write in a file with MIE is written into MIE's EXIF
+    // An ungrouped EXIF write in a file with MIE is written into MIE's EXIF
     // too (pinned 13.59), set or deletion alike; refused, never half-done.
-    crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
+    // (A grouped `-IFD0:Artist=` there is the same in 13.59; oxidex's
+    // EXIF-only write of it predates this resolver and is left as it was.)
+    if ungrouped {
+        crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
+    }
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose

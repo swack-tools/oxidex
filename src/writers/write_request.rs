@@ -652,7 +652,8 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
         .map(|(key, _)| key)
 }
 
-/// Refuses an EXIF-family `key` in a file that carries MIE: pinned 13.59
+/// Refuses an ungrouped request resolved to the EXIF-family `key` in a file
+/// that carries MIE: pinned 13.59
 /// writes an EXIF tag into MIE-Meta's own EXIF directory as well, creating
 /// it (`-IFD0:CalibrationIlluminant1#=20` on t/images/ExifTool.jpg, `-v2`:
 /// `Creating EXIF` under `MIE1-Meta1`, and two `[IFD0]
@@ -727,12 +728,27 @@ pub(crate) fn makernote_may_hold(
     if decoded.is_empty() && !block {
         return None;
     }
-    // The EXIF maker note must be one the reader decoded: rows only from
+    // The EXIF maker note must be one the reader identified: rows only from
     // outside it (a JPEG's CIFF segment, a Qualcomm APP7) say nothing of it.
+    // A note ExifTool reads as one value (`MakerNoteUnknownBinary`, a
+    // value-typed `MakerNotes::Main` entry, which the reader reports under
+    // that name) holds no tags at all.
+    let value_typed = MAKERNOTE_ROOTS.iter().any(|root| {
+        root.table.is_empty()
+            && baseline.keys().any(|key| {
+                key.rsplit(':')
+                    .next()
+                    .is_some_and(|row| row.eq_ignore_ascii_case(root.entry))
+            })
+    });
+    if value_typed && decoded.is_empty() {
+        return None;
+    }
     if block
-        && !MAKERNOTE_ROOTS
-            .iter()
-            .any(|root| root.entry != "CIFF" && decoded.contains(root.group))
+        && !value_typed
+        && !MAKERNOTE_ROOTS.iter().any(|root| {
+            root.entry != "CIFF" && !root.group.is_empty() && decoded.contains(root.group)
+        })
     {
         return Some(format!(
             "the file carries a maker note oxidex cannot identify, where ExifTool also \
@@ -746,7 +762,7 @@ pub(crate) fn makernote_may_hold(
     let mut reachable: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for root in MAKERNOTE_ROOTS
         .iter()
-        .filter(|root| decoded.contains(root.group))
+        .filter(|root| !root.group.is_empty() && decoded.contains(root.group))
     {
         reachable.extend(root.closure.iter().copied());
     }
@@ -1024,8 +1040,15 @@ mod tests {
         assert!(
             MAKERNOTE_ROOTS
                 .iter()
+                .filter(|root| !root.table.is_empty())
                 .all(|root| root.closure.contains(&root.group))
         );
+        // The value-typed entries hold no tags.
+        let binary = MAKERNOTE_ROOTS
+            .iter()
+            .find(|root| root.entry == "MakerNoteUnknownBinary")
+            .unwrap();
+        assert!(binary.table.is_empty() && binary.closure.is_empty());
     }
 
     /// `Exif::Main`'s `Protected => 2` entries (0x0111, 0x0117, 0x014a,
@@ -1096,6 +1119,14 @@ mod tests {
         assert!(makernote_may_hold("WhiteBalance", &empty, &|| false).is_none());
         let err = makernote_may_hold("WhiteBalance", &empty, &|| true).unwrap();
         assert!(err.contains("cannot identify"), "{err}");
+        // A note ExifTool reads as one value holds no tags (a SilverFast
+        // `LSI1` note is `MakerNoteUnknownBinary`, MakerNotes.pm 13.59).
+        let mut binary = MetadataMap::new();
+        binary.insert(
+            "ExifIFD:MakerNoteUnknownBinary",
+            TagValue::new_string("(Binary data)"),
+        );
+        assert!(makernote_may_hold("Artist", &binary, &|| true).is_none());
     }
 
     /// Only a same-named row a candidate can be is one ExifTool also

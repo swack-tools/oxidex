@@ -14,6 +14,10 @@ read with one root table (`@Image::ExifTool::MakerNotes::Main`, whose first
 matching `Condition` wins) plus every table its `SubDirectory` edges reach,
 so the answer is the family-1 group closure captured here.
 
+A value-typed entry (no `SubDirectory` table: `MakerNoteUnknownBinary`,
+`MakerNoteUnknownText`, `MakerNoteSamsung1a`, `MakerNoteMinolta3`) is kept
+with an empty table and closure: a note read that way holds no tags.
+
 Each row is one `MakerNotes::Main` entry (and the CIFF root, which ExifTool
 reads from a JPEG `APP0` segment and reports under family-1 `CIFF`): its
 name, the root table, the root's family-1 group, and the sorted union of
@@ -56,12 +60,14 @@ sub walk {
         }
     }
 }
-my @roots = map { [$$_{Name}, $$_{SubDirectory}{TagTable}] }
-            grep { ref $_ eq 'HASH' and $$_{SubDirectory} and $$_{SubDirectory}{TagTable} }
-            @Image::ExifTool::MakerNotes::Main;
+my @roots = map { [$$_{Name}, $$_{SubDirectory} ? $$_{SubDirectory}{TagTable} : undef] }
+            grep { ref $_ eq 'HASH' } @Image::ExifTool::MakerNotes::Main;
 push @roots, ['CIFF', 'Image::ExifTool::CanonRaw::Main'];
 foreach my $root (@roots) {
     my ($entry, $tt) = @$root;
+    # A value-typed entry (no SubDirectory table): the note is one value,
+    # holding no tags.
+    unless ($tt) { print join("\t", $entry, '', '', ''), "\n"; next; }
     my (%acc, %seen);
     walk($tt, \%acc, \%seen);
     my $g1 = Image::ExifTool::GetTagTable($tt)->{GROUPS}{1};
@@ -100,6 +106,11 @@ def main() -> int:
     for line in perl(args.perl, lib, WALK).splitlines():
         entry, table, group, closure = line.split("\t")
         groups = [g for g in closure.split(",") if g]
+        if not table:
+            if group or groups:
+                raise SystemExit(f"{entry}: a value-typed entry with groups")
+            rows.append((entry, table, group, groups))
+            continue
         if group not in groups:
             raise SystemExit(f"{entry}: root group {group} missing from its own closure")
         rows.append((entry, table, group, groups))
@@ -125,9 +136,11 @@ def main() -> int:
         "pub(crate) struct MakerNoteRoot {\n",
         "    /// The `MakerNotes::Main` entry (`MakerNoteCanon`), or `CIFF`.\n",
         "    pub entry: &'static str,\n",
-        "    /// Its root tag table.\n",
+        "    /// Its root tag table; empty for a value-typed entry (the note is\n",
+        "    /// one value and holds no tags: `MakerNoteUnknownBinary`).\n",
         "    pub table: &'static str,\n",
-        "    /// The root table's family-1 group (`CIFF` for the CIFF root).\n",
+        "    /// The root table's family-1 group (`CIFF` for the CIFF root); empty\n",
+        "    /// for a value-typed entry.\n",
         "    pub group: &'static str,\n",
         "    /// Every family-1 group of every table reachable from the root\n",
         "    /// through `SubDirectory` edges, sorted.\n",
