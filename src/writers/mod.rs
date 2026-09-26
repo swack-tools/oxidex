@@ -45,6 +45,10 @@ pub mod png_writer;
 pub(crate) mod rw2_ifd0;
 // Source-selected final scalar stage remains internal until file parity is proved.
 pub(crate) mod generated_tag_exists;
+// Where pinned ExifTool's `-TagsFromFile` writes each copied name (SetNewValue
+// captured per name), and which of those a destination realises.
+pub(crate) mod copy_targets;
+pub(crate) mod generated_copy_targets;
 pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
