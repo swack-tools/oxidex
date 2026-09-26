@@ -48,22 +48,19 @@ const XP_TAG_NAMES: [&str; 5] = [
 /// How `tag_name` (as typed after `-`, before `=`) relates to the XP strings.
 #[derive(Debug, PartialEq, Eq)]
 enum XpDestination {
-    /// `IFD0:XPTitle` or `EXIF:XPTitle`: the spellings this module encodes,
-    /// both of which reach the IFD0 entry (the tags' `WriteGroup`).
-    Grouped,
-    /// A bare `XPTitle`. ExifTool writes it to IFD0, but oxidex's writer
-    /// does not reach the file for an ungrouped XP name -- `-XPTitle=Hi`
-    /// reports `1 image files updated` and changes nothing -- so accepting
-    /// bytes for it would report a write that never happens.
-    Bare,
+    /// `XPTitle`, `IFD0:XPTitle` or `EXIF:XPTitle`: the spellings this
+    /// module encodes, all of which reach the IFD0 entry (the tags'
+    /// `WriteGroup`) -- the bare name through `writers::write_request`'s
+    /// resolution, which refuses rather than drops when it cannot.
+    Xp,
     /// Anything else, including an XP name under another group.
     Other,
 }
 
 fn xp_destination(tag_name: &str) -> XpDestination {
     match tag_name.rsplit_once(':') {
-        Some(("IFD0" | "EXIF", name)) if XP_TAG_NAMES.contains(&name) => XpDestination::Grouped,
-        None if XP_TAG_NAMES.contains(&tag_name) => XpDestination::Bare,
+        Some(("IFD0" | "EXIF", name)) if XP_TAG_NAMES.contains(&name) => XpDestination::Xp,
+        None if XP_TAG_NAMES.contains(&tag_name) => XpDestination::Xp,
         _ => XpDestination::Other,
     }
 }
@@ -220,15 +217,7 @@ pub(crate) fn xp_value(tag_name: &str, bytes: &[u8]) -> Result<TagValue> {
 /// ([`refuse_value`]).
 pub(crate) fn tag_value(tag_name: &str, bytes: &[u8]) -> Result<TagValue> {
     match xp_destination(tag_name) {
-        XpDestination::Grouped => xp_value(tag_name, bytes),
-        XpDestination::Bare => Err(invalid(
-            tag_name,
-            &format!(
-                "value is not valid UTF-8 ({}); oxidex writes non-UTF-8 bytes to an XP \
-                 tag only when its group is given: -IFD0:{tag_name}=",
-                hex_bytes(bytes)
-            ),
-        )),
+        XpDestination::Xp => xp_value(tag_name, bytes),
         XpDestination::Other => Err(refuse_value(tag_name, bytes)),
     }
 }
@@ -495,7 +484,10 @@ mod tests {
 
     #[test]
     fn only_xp_destinations_take_bytes() {
+        // The bare spelling resolves to IFD0 (`writers::write_request`), where
+        // pinned ExifTool 13.59 writes it too.
         for name in [
+            "XPTitle",
             "IFD0:XPTitle",
             "IFD0:XPComment",
             "EXIF:XPAuthor",
@@ -503,10 +495,6 @@ mod tests {
         ] {
             assert!(tag_value(name, b"A\xed\xa0\x80").is_ok(), "{name}");
         }
-        let error = tag_value("XPTitle", b"A\xed\xa0\x80")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("-IFD0:XPTitle="), "{error}");
         for name in [
             "Artist",
             "IFD0:Artist",

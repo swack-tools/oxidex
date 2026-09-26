@@ -785,3 +785,289 @@ fn oracle_writes_the_same_xp_bytes() {
         assert_eq!(et_text(&ours), et_text(&reference), "copy of {label}");
     }
 }
+
+/// One stored XP shape for the explicit-set cases: (label, source type,
+/// stored bytes, the text oxidex reads from them, the bytes the oracle's
+/// `-XPTitle=<that text>` writes over them).
+type ExplicitCase = (&'static str, u16, Vec<u8>, &'static str, Vec<u8>);
+
+/// The stored shapes whose decoded text, assigned back unchanged, is NOT
+/// re-encoded to the same bytes -- plus a canonical control and an `undef`
+/// one. Expected bytes are the oracle's (13.59): a direct write always
+/// re-encodes the assigned text (`pack('v*')`), whatever the entry held.
+fn explicit_cases() -> Vec<ExplicitCase> {
+    vec![
+        // A stored surrogate pair reads as U+1F38C; typed, that keeps its
+        // low 16 bits.
+        (
+            "pair",
+            1,
+            hex("41003cd88cdf0000"),
+            "A🎌",
+            hex("41008cf30000"),
+        ),
+        // A lone surrogate reads as U+FFFD, which is what gets written.
+        (
+            "lone",
+            1,
+            hex("410000d842000000"),
+            "A\u{fffd}B",
+            hex("4100fdff42000000"),
+        ),
+        // A BOM is gone from the typed value.
+        (
+            "bom_be",
+            1,
+            hex("feff0042004f004d006200650000"),
+            "BOMbe",
+            hex("42004f004d00620065000000"),
+        ),
+        // Canonical BMP text: the same bytes either way.
+        (
+            "bmp",
+            1,
+            ucs2("é中文 café"),
+            "é中文 café",
+            ucs2("é中文 café"),
+        ),
+    ]
+}
+
+/// Codex review of #942 (P2, png_writer.rs:217): assigning an XP tag the very
+/// text the file already decodes to is a direct write, never a carry-over.
+/// The PNG rebuild inferred provenance from value equality and refused
+/// `A🎌`; the JPEG and TIFF writers carried the stored bytes (pair, lone
+/// surrogate, BOM) where ExifTool re-encodes the assigned text. Every
+/// container, both byte orders, and both spellings of the tag.
+#[test]
+fn an_explicit_set_of_the_stored_text_writes_exiftools_direct_bytes() {
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, text, oracle) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            for key in ["IFD0:XPTitle", "EXIF:XPTitle"] {
+                let dir = tempfile::tempdir().unwrap();
+                for (name, bytes) in [
+                    ("set.jpg", jpeg_with(&block)),
+                    ("set.tif", block.clone()),
+                    ("set.png", png_with(Some(&block))),
+                ] {
+                    let path = write(dir.path(), name, &bytes);
+                    assert_eq!(
+                        xp_text(&path, "XPTitle").as_deref(),
+                        Some(text),
+                        "{label} {name}: the text being assigned back"
+                    );
+                    modify_tag(&path, key, TagValue::new_string(text))
+                        .unwrap_or_else(|e| panic!("{label} {order:?} {key} {name}: {e}"));
+                    assert_eq!(
+                        xp_entries(&path).get(&XP_TITLE),
+                        Some(&(1, oracle.clone())),
+                        "{label} {order:?} {key} {name}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The other half of the contract: an XP entry nobody assigned keeps its
+/// stored bytes when another tag is written -- the JPEG, TIFF and PNG
+/// `eXIf` writers leave them verbatim, as ExifTool's `-IFD0:Artist=you`
+/// does.
+#[test]
+fn an_untouched_xp_entry_keeps_its_stored_bytes() {
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, _, _) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            let dir = tempfile::tempdir().unwrap();
+            for (name, bytes) in [
+                ("carry.jpg", jpeg_with(&block)),
+                ("carry.tif", block.clone()),
+                ("carry.png", png_with(Some(&block))),
+            ] {
+                let path = write(dir.path(), name, &bytes);
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
+                assert_eq!(
+                    xp_entries(&path).get(&XP_TITLE),
+                    Some(&(typ, raw.clone())),
+                    "{label} {order:?} {name}"
+                );
+            }
+        }
+    }
+}
+
+/// The explicit-set cases graded live: the oracle's `-XPTitle=<text>` and
+/// oxidex's `modify_tag` over the same source, in each container and byte
+/// order, write identical XP entries.
+#[test]
+fn oracle_explicit_set_of_the_stored_text_matches() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let artist = (0x013b, 2, 3, b"me\0".to_vec());
+    for (label, typ, raw, text, _) in explicit_cases() {
+        for order in [Order::Ii, Order::Mm] {
+            let block = tiff(
+                order,
+                &[
+                    artist.clone(),
+                    (XP_TITLE, typ, raw.len() as u32, raw.clone()),
+                ],
+            );
+            let dir = tempfile::tempdir().unwrap();
+            for (ext, bytes) in [
+                ("jpg", jpeg_with(&block)),
+                ("tif", block.clone()),
+                ("png", png_with(Some(&block))),
+            ] {
+                let reference = write(dir.path(), &format!("ref.{ext}"), &bytes);
+                let arg = format!("-XPTitle={text}");
+                let out = oracle
+                    .command()
+                    .args([
+                        "-q".as_ref(),
+                        "-overwrite_original".as_ref(),
+                        std::ffi::OsStr::new(&arg),
+                        reference.as_os_str(),
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{label} {ext}: oracle write failed");
+                let ours = write(dir.path(), &format!("ours.{ext}"), &bytes);
+                modify_tag(&ours, "IFD0:XPTitle", TagValue::new_string(text)).unwrap();
+                assert_eq!(
+                    xp_entries(&ours).get(&XP_TITLE),
+                    xp_entries(&reference).get(&XP_TITLE),
+                    "{label} {order:?} {ext}"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provenance is a property of each occurrence (review of #949, four P2
+// threads): a value is the caller's when a public mutation put it there, and
+// the file's when a reader produced it -- through clears, normalized copies,
+// the public PNG parser and in-place mutation alike. Each case below is a
+// same-text XP set (must write ExifTool's direct bytes, 41 00 8c f3 00 00 for
+// a stored pair) or an untouched XP row (must keep the stored pair).
+// ---------------------------------------------------------------------------
+
+const PAIR: &str = "41003cd88cdf0000";
+const PAIR_DIRECT: &str = "41008cf30000";
+
+fn pair_file(dir: &Path, name: &str, png: bool) -> std::path::PathBuf {
+    let raw = hex(PAIR);
+    let block = tiff(
+        Order::Ii,
+        &[
+            (0x013b, 2, 3, b"me\0".to_vec()),
+            (XP_TITLE, 1, raw.len() as u32, raw),
+        ],
+    );
+    let bytes = if png {
+        png_with(Some(&block))
+    } else {
+        jpeg_with(&block)
+    };
+    write(dir, name, &bytes)
+}
+
+/// Thread metadata_map.rs:152: `clear()` then re-inserting the read values
+/// is a caller's map -- every value in it is assigned, so the same-text
+/// XPTitle is a direct write.
+#[test]
+fn values_reinserted_after_clear_are_assignments() {
+    use oxidex::core::operations::write_metadata;
+    let dir = tempfile::tempdir().unwrap();
+    let path = pair_file(dir.path(), "clear.jpg", false);
+    let mut map = read_metadata(&path).unwrap();
+    let rows: Vec<(String, TagValue)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    map.clear();
+    for (key, value) in rows {
+        map.insert(key, value);
+    }
+    write_metadata(&path, &map).unwrap();
+    assert_eq!(
+        xp_entries(&path).get(&XP_TITLE),
+        Some(&(1, hex(PAIR_DIRECT)))
+    );
+}
+
+/// Thread metadata_map.rs:128: a normalized copy of a read map is still the
+/// file's rows -- writing it back unchanged keeps the stored pair.
+#[test]
+fn a_normalized_copy_keeps_read_provenance() {
+    use oxidex::core::operations::write_metadata;
+    use oxidex::core::tag_normalization::normalize_metadata_map;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, png) in [("norm.jpg", false), ("norm.png", true)] {
+        let path = pair_file(dir.path(), name, png);
+        let normalized = normalize_metadata_map(&read_metadata(&path).unwrap());
+        write_metadata(&path, &normalized).unwrap();
+        assert_eq!(
+            xp_entries(&path).get(&XP_TITLE),
+            Some(&(1, hex(PAIR))),
+            "{name}"
+        );
+    }
+}
+
+/// Thread xp_strings.rs:150: the public PNG parser's rows are read values.
+/// The documented parse -> edit -> `write_png_metadata_with_baseline` flow
+/// that edits another tag leaves the untouched XPTitle's stored pair.
+#[test]
+fn public_png_parser_rows_are_read_values() {
+    use oxidex::io::buffered_reader::BufferedReader;
+    use oxidex::parsers::png::parse_png_metadata;
+    use oxidex::writers::png_writer::write_png_metadata_with_baseline;
+    let dir = tempfile::tempdir().unwrap();
+    let path = pair_file(dir.path(), "parsed.png", true);
+    let reader = BufferedReader::new(&path).unwrap();
+    let baseline = parse_png_metadata(&reader).unwrap();
+    let mut map = parse_png_metadata(&reader).unwrap();
+    map.insert("IFD0:Artist", TagValue::new_string("you"));
+    write_png_metadata_with_baseline(&path, &reader, &map, &baseline).unwrap();
+    drop(reader);
+    assert_eq!(xp_entries(&path).get(&XP_TITLE), Some(&(1, hex(PAIR))));
+    assert_eq!(
+        read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+        Some("you")
+    );
+}
+
+/// Thread metadata_map.rs:76: assigning through `get_mut` is a set, even to
+/// the text the file already decodes to.
+#[test]
+fn a_get_mut_assignment_is_a_set() {
+    use oxidex::core::operations::write_metadata;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, png) in [("mut.jpg", false), ("mut.png", true)] {
+        let path = pair_file(dir.path(), name, png);
+        let mut map = read_metadata(&path).unwrap();
+        *map.get_mut("IFD0:XPTitle").unwrap() = TagValue::new_string("A🎌");
+        write_metadata(&path, &map).unwrap();
+        assert_eq!(
+            xp_entries(&path).get(&XP_TITLE),
+            Some(&(1, hex(PAIR_DIRECT))),
+            "{name}"
+        );
+    }
+}

@@ -603,134 +603,140 @@ const GATED_FIELDS: &[GatedField] = &[
 /// then -- when present -- `MRC::FEI12`'s extended header (section 0 only;
 /// see the module doc comment).
 pub fn parse_mrc_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("MRC file is too short for the 1024-byte header".to_string());
-    }
-    let header = reader
-        .read(0, HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-
-    let table = find_table("MRC", "Main").ok_or("missing MRC::Main table")?;
-    let decode = decode_binary_table(table, header, ByteOrder::Little);
-
-    let mut number_of_labels = 0_i64;
-    let mut image_depth: Option<i64> = None;
-    let mut extended_header_size: Option<i64> = None;
-    let mut extended_header_type: Option<String> = None;
-    for decoded in decode.fields() {
-        match decoded.field.name {
-            "NumberOfLabels" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &NUMBER_OF_LABELS)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    number_of_labels = raw;
-                }
-            }
-            "ImageDepth" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &IMAGE_DEPTH)
-                {
-                    image_depth = access.raw().as_integer();
-                }
-            }
-            "ExtendedHeaderSize" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_SIZE)
-                {
-                    extended_header_size = access.raw().as_integer();
-                }
-            }
-            "ExtendedHeaderType" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_TYPE)
-                    && let DecodedValue::String(value) = access.raw()
-                {
-                    extended_header_type = Some(value.clone());
-                }
-            }
-            _ => {}
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("MRC file is too short for the 1024-byte header".to_string());
         }
-    }
+        let header = reader
+            .read(0, HEADER_LEN)
+            .map_err(|error| error.to_string())?;
 
-    let mut metadata = MetadataMap::new();
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("File:{name}");
-        if let Some(label_index) = name
-            .strip_prefix("Label")
-            .and_then(|n| n.parse::<i64>().ok())
-        {
-            // MRC.pm:77-86: `Condition => '$$self{NLab} > N'`.
-            if number_of_labels > label_index
-                && let Some(value) = decoded.emit()
+        let table = find_table("MRC", "Main").ok_or("missing MRC::Main table")?;
+        let decode = decode_binary_table(table, header, ByteOrder::Little);
+
+        let mut number_of_labels = 0_i64;
+        let mut image_depth: Option<i64> = None;
+        let mut extended_header_size: Option<i64> = None;
+        let mut extended_header_type: Option<String> = None;
+        for decoded in decode.fields() {
+            match decoded.field.name {
+                "NumberOfLabels" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &NUMBER_OF_LABELS)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        number_of_labels = raw;
+                    }
+                }
+                "ImageDepth" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &IMAGE_DEPTH)
+                    {
+                        image_depth = access.raw().as_integer();
+                    }
+                }
+                "ExtendedHeaderSize" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_SIZE)
+                    {
+                        extended_header_size = access.raw().as_integer();
+                    }
+                }
+                "ExtendedHeaderType" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_TYPE)
+                        && let DecodedValue::String(value) = access.raw()
+                    {
+                        extended_header_type = Some(value.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut metadata = MetadataMap::new();
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("File:{name}");
+            if let Some(label_index) = name
+                .strip_prefix("Label")
+                .and_then(|n| n.parse::<i64>().ok())
             {
-                metadata.insert(key, value);
-            }
-            continue;
-        }
-        match name {
-            "ImageDepth" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &IMAGE_DEPTH)
+                // MRC.pm:77-86: `Condition => '$$self{NLab} > N'`.
+                if number_of_labels > label_index
+                    && let Some(value) = decoded.emit()
                 {
-                    metadata.insert(key, access.emit_raw());
-                }
-            }
-            "ExtendedHeaderSize" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_SIZE)
-                {
-                    metadata.insert(key, access.emit_raw());
-                }
-            }
-            "ExtendedHeaderType" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_TYPE)
-                {
-                    metadata.insert(key, access.emit_raw());
-                }
-            }
-            "NumberOfLabels" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &NUMBER_OF_LABELS)
-                {
-                    metadata.insert(key, access.emit_raw());
-                }
-            }
-            // `MachineStamp`'s PrintConv (`sprintf("0x%.2x 0x%.2x 0x%.2x
-            // 0x%.2x",split " ", $val)`, MRC.pm:73) is a list-domain
-            // expression the generator now compiles, so `emit()` hands back
-            // the rendered string. This arm used to match `TagValue::Array`
-            // and format the four bytes itself because the table carried
-            // `PrintConv::None`; the moment the generator could render the
-            // field, that match silently dropped the tag (the same shape as
-            // DJI's RelativeHumidity in slice 2). Take the rendering.
-            "MachineStamp" => {
-                if let Some(TagValue::String(rendered)) = decoded.emit() {
-                    metadata.insert(key, TagValue::new_string(rendered));
-                }
-            }
-            "GridSize" | "StartPoint" | "Origin" => {
-                if let Some(value) = decoded.emit().and_then(space_joined) {
                     metadata.insert(key, value);
                 }
+                continue;
             }
-            _ => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(key, value);
+            match name {
+                "ImageDepth" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &IMAGE_DEPTH)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                "ExtendedHeaderSize" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_SIZE)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                "ExtendedHeaderType" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &EXTENDED_HEADER_TYPE)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                "NumberOfLabels" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &NUMBER_OF_LABELS)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                // `MachineStamp`'s PrintConv (`sprintf("0x%.2x 0x%.2x 0x%.2x
+                // 0x%.2x",split " ", $val)`, MRC.pm:73) is a list-domain
+                // expression the generator now compiles, so `emit()` hands back
+                // the rendered string. This arm used to match `TagValue::Array`
+                // and format the four bytes itself because the table carried
+                // `PrintConv::None`; the moment the generator could render the
+                // field, that match silently dropped the tag (the same shape as
+                // DJI's RelativeHumidity in slice 2). Take the rendering.
+                "MachineStamp" => {
+                    if let Some(TagValue::String(rendered)) = decoded.emit() {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
+                }
+                "GridSize" | "StartPoint" | "Origin" => {
+                    if let Some(value) = decoded.emit().and_then(space_joined) {
+                        metadata.insert(key, value);
+                    }
+                }
+                _ => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(key, value);
+                    }
                 }
             }
         }
-    }
 
-    if let (Some(image_depth), Some(extended_header_size)) = (image_depth, extended_header_size)
-        && extended_header_type
-            .as_deref()
-            .is_some_and(|value| value.starts_with("FEI1") || value.starts_with("FEI2"))
-    {
-        parse_fei12_extended_header(reader, &mut metadata, image_depth, extended_header_size);
-    }
+        if let (Some(image_depth), Some(extended_header_size)) = (image_depth, extended_header_size)
+            && extended_header_type
+                .as_deref()
+                .is_some_and(|value| value.starts_with("FEI1") || value.starts_with("FEI2"))
+        {
+            parse_fei12_extended_header(reader, &mut metadata, image_depth, extended_header_size);
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// ExifTool's rendering of a fixed-count binary field with no `List` flag

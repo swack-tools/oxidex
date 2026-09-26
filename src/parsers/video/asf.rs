@@ -94,67 +94,71 @@ pub struct AsfParser;
 
 impl FormatParser for AsfParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify ASF header
-        if reader.size() < 30 {
-            return Err(ExifToolError::parse_error("File too small to be ASF"));
-        }
-
-        let header = reader.read(0, 30)?;
-
-        // Check ASF header GUID
-        if &header[0..16] != ASF_HEADER_GUID {
-            return Err(ExifToolError::parse_error("Invalid ASF header GUID"));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(32);
-
-        // Parse header object
-        let r = EndianReader::little_endian(&header);
-
-        // Header object size (8 bytes at offset 16)
-        let header_size = r.u64_at(16).unwrap_or(0);
-
-        // Number of header objects (4 bytes at offset 24)
-        let num_objects = r.u32_at(24).unwrap_or(0);
-
-        // Parse header objects
-        let mut offset = 30u64;
-        let header_end = header_size.min(reader.size());
-
-        for _ in 0..num_objects {
-            if offset + 24 > header_end {
-                break;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify ASF header
+            if reader.size() < 30 {
+                return Err(ExifToolError::parse_error("File too small to be ASF"));
             }
 
-            // Read object header (GUID + Size)
-            let obj_header = reader.read(offset, 24)?;
-            let obj_guid = &obj_header[0..16];
-            let obj_r = EndianReader::little_endian(&obj_header);
-            let obj_size = obj_r.u64_at(16).unwrap_or(0);
+            let header = reader.read(0, 30)?;
 
-            if obj_size < 24 || offset + obj_size > header_end {
-                break;
+            // Check ASF header GUID
+            if &header[0..16] != ASF_HEADER_GUID {
+                return Err(ExifToolError::parse_error("Invalid ASF header GUID"));
             }
 
-            // Parse based on object type
-            if obj_guid == FILE_PROPERTIES_GUID {
-                parse_file_properties(reader, offset, obj_size, &mut metadata)?;
-            } else if obj_guid == STREAM_PROPERTIES_GUID {
-                parse_stream_properties(reader, offset, obj_size, &mut metadata)?;
-            } else if obj_guid == CONTENT_DESCRIPTION_GUID {
-                parse_content_description(reader, offset, obj_size, &mut metadata)?;
-            } else if obj_guid == EXTENDED_CONTENT_GUID {
-                parse_extended_content(reader, offset, obj_size, &mut metadata)?;
-            } else if obj_guid == CODEC_LIST_GUID {
-                parse_codec_list(reader, offset, obj_size, &mut metadata)?;
-            } else if obj_guid == HEADER_EXTENSION_GUID {
-                parse_header_extension(reader, offset, obj_size, &mut metadata)?;
+            let mut metadata = MetadataMap::with_capacity(32);
+
+            // Parse header object
+            let r = EndianReader::little_endian(&header);
+
+            // Header object size (8 bytes at offset 16)
+            let header_size = r.u64_at(16).unwrap_or(0);
+
+            // Number of header objects (4 bytes at offset 24)
+            let num_objects = r.u32_at(24).unwrap_or(0);
+
+            // Parse header objects
+            let mut offset = 30u64;
+            let header_end = header_size.min(reader.size());
+
+            for _ in 0..num_objects {
+                if offset + 24 > header_end {
+                    break;
+                }
+
+                // Read object header (GUID + Size)
+                let obj_header = reader.read(offset, 24)?;
+                let obj_guid = &obj_header[0..16];
+                let obj_r = EndianReader::little_endian(&obj_header);
+                let obj_size = obj_r.u64_at(16).unwrap_or(0);
+
+                if obj_size < 24 || offset + obj_size > header_end {
+                    break;
+                }
+
+                // Parse based on object type
+                if obj_guid == FILE_PROPERTIES_GUID {
+                    parse_file_properties(reader, offset, obj_size, &mut metadata)?;
+                } else if obj_guid == STREAM_PROPERTIES_GUID {
+                    parse_stream_properties(reader, offset, obj_size, &mut metadata)?;
+                } else if obj_guid == CONTENT_DESCRIPTION_GUID {
+                    parse_content_description(reader, offset, obj_size, &mut metadata)?;
+                } else if obj_guid == EXTENDED_CONTENT_GUID {
+                    parse_extended_content(reader, offset, obj_size, &mut metadata)?;
+                } else if obj_guid == CODEC_LIST_GUID {
+                    parse_codec_list(reader, offset, obj_size, &mut metadata)?;
+                } else if obj_guid == HEADER_EXTENSION_GUID {
+                    parse_header_extension(reader, offset, obj_size, &mut metadata)?;
+                }
+
+                offset += obj_size;
             }
 
-            offset += obj_size;
-        }
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -164,8 +168,12 @@ impl FormatParser for AsfParser {
 
 /// Convenience function to parse ASF metadata from a reader.
 pub fn parse_asf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = AsfParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = AsfParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Format GUID as string (uppercase, with dashes): ExifTool's

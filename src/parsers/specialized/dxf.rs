@@ -184,68 +184,72 @@ impl DXFParser {
 
 impl FormatParser for DXFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid DXF signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("DXF".to_string()));
-
-        let content = Self::parse_content(reader)?;
-
-        // Extract AutoCAD version
-        if let Some(version) = content.header_vars.get("$ACADVER") {
-            metadata.insert(
-                "AutoCADVersion".to_string(),
-                TagValue::String(Self::map_version(version).to_string()),
-            );
-        }
-
-        // Extract drawing units
-        if let Some(units) = content.header_vars.get("$INSUNITS") {
-            metadata.insert(
-                "DrawingUnits".to_string(),
-                TagValue::String(Self::map_units(units).to_string()),
-            );
-        }
-
-        // Extract drawing extents (bounding box)
-        if let Some(x) = content.header_vars.get("$EXTMIN_X")
-            && let Some(y) = content.header_vars.get("$EXTMIN_Y")
-        {
-            metadata.insert(
-                "ExtentMin".to_string(),
-                TagValue::String(format!("{}, {}", x, y)),
-            );
-        }
-        if let Some(x) = content.header_vars.get("$EXTMAX_X")
-            && let Some(y) = content.header_vars.get("$EXTMAX_Y")
-        {
-            metadata.insert(
-                "ExtentMax".to_string(),
-                TagValue::String(format!("{}, {}", x, y)),
-            );
-        }
-
-        // Entity and layer counts
-        let counts = [
-            ("LineCount", content.line_count),
-            ("CircleCount", content.circle_count),
-            ("ArcCount", content.arc_count),
-            ("TextCount", content.text_count),
-            ("PolylineCount", content.polyline_count),
-            ("PointCount", content.point_count),
-            ("EllipseCount", content.ellipse_count),
-            ("SplineCount", content.spline_count),
-            ("LayerCount", content.layer_count),
-        ];
-        for (name, count) in counts {
-            if count > 0 {
-                metadata.insert(name.to_string(), TagValue::Integer(count as i64));
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid DXF signature"));
             }
-        }
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("DXF".to_string()));
+
+            let content = Self::parse_content(reader)?;
+
+            // Extract AutoCAD version
+            if let Some(version) = content.header_vars.get("$ACADVER") {
+                metadata.insert(
+                    "AutoCADVersion".to_string(),
+                    TagValue::String(Self::map_version(version).to_string()),
+                );
+            }
+
+            // Extract drawing units
+            if let Some(units) = content.header_vars.get("$INSUNITS") {
+                metadata.insert(
+                    "DrawingUnits".to_string(),
+                    TagValue::String(Self::map_units(units).to_string()),
+                );
+            }
+
+            // Extract drawing extents (bounding box)
+            if let Some(x) = content.header_vars.get("$EXTMIN_X")
+                && let Some(y) = content.header_vars.get("$EXTMIN_Y")
+            {
+                metadata.insert(
+                    "ExtentMin".to_string(),
+                    TagValue::String(format!("{}, {}", x, y)),
+                );
+            }
+            if let Some(x) = content.header_vars.get("$EXTMAX_X")
+                && let Some(y) = content.header_vars.get("$EXTMAX_Y")
+            {
+                metadata.insert(
+                    "ExtentMax".to_string(),
+                    TagValue::String(format!("{}, {}", x, y)),
+                );
+            }
+
+            // Entity and layer counts
+            let counts = [
+                ("LineCount", content.line_count),
+                ("CircleCount", content.circle_count),
+                ("ArcCount", content.arc_count),
+                ("TextCount", content.text_count),
+                ("PolylineCount", content.polyline_count),
+                ("PointCount", content.point_count),
+                ("EllipseCount", content.ellipse_count),
+                ("SplineCount", content.spline_count),
+                ("LayerCount", content.layer_count),
+            ];
+            for (name, count) in counts {
+                if count > 0 {
+                    metadata.insert(name.to_string(), TagValue::Integer(count as i64));
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -275,8 +279,12 @@ struct DXFContent {
 ///
 /// This is a convenience wrapper around DXFParser that provides a functional API.
 pub fn parse_dxf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = DXFParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = DXFParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

@@ -136,78 +136,82 @@ impl ICOParser {
 
 impl FormatParser for ICOParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid ICO/CUR signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid ICO/CUR signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        let file_type = Self::read_file_type(reader)?;
-        let type_name = if file_type == ICO_TYPE_CURSOR {
-            "CUR"
-        } else {
-            "ICO"
-        };
-
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String(type_name.to_string()),
-        );
-
-        let image_count = Self::read_image_count(reader)?;
-        metadata.insert(
-            "File:ImageCount".to_string(),
-            TagValue::String(image_count.to_string()),
-        );
-
-        if image_count > 0 && reader.size() >= 6 + (image_count as u64 * 16) {
-            let (
-                max_width,
-                max_height,
-                max_bits,
-                color_count,
-                color_planes,
-                image_length,
-                available_sizes,
-            ) = Self::analyze_entries(reader, image_count)?;
+            let file_type = Self::read_file_type(reader)?;
+            let type_name = if file_type == ICO_TYPE_CURSOR {
+                "CUR"
+            } else {
+                "ICO"
+            };
 
             metadata.insert(
-                "File:ImageWidth".to_string(),
-                TagValue::String(max_width.to_string()),
+                "FileType".to_string(),
+                TagValue::String(type_name.to_string()),
             );
+
+            let image_count = Self::read_image_count(reader)?;
             metadata.insert(
-                "File:ImageHeight".to_string(),
-                TagValue::String(max_height.to_string()),
+                "File:ImageCount".to_string(),
+                TagValue::String(image_count.to_string()),
             );
-            metadata.insert(
-                "File:NumColors".to_string(),
-                TagValue::String(color_count.to_string()),
-            );
-            metadata.insert(
-                "File:ImageLength".to_string(),
-                TagValue::String(image_length.to_string()),
-            );
-            if file_type == ICO_TYPE_ICON {
+
+            if image_count > 0 && reader.size() >= 6 + (image_count as u64 * 16) {
+                let (
+                    max_width,
+                    max_height,
+                    max_bits,
+                    color_count,
+                    color_planes,
+                    image_length,
+                    available_sizes,
+                ) = Self::analyze_entries(reader, image_count)?;
+
                 metadata.insert(
-                    "File:ColorPlanes".to_string(),
-                    TagValue::String(color_planes.to_string()),
+                    "File:ImageWidth".to_string(),
+                    TagValue::String(max_width.to_string()),
                 );
                 metadata.insert(
-                    "BitDepth".to_string(),
-                    TagValue::String(max_bits.to_string()),
+                    "File:ImageHeight".to_string(),
+                    TagValue::String(max_height.to_string()),
                 );
                 metadata.insert(
-                    "File:BitsPerPixel".to_string(),
-                    TagValue::String(max_bits.to_string()),
+                    "File:NumColors".to_string(),
+                    TagValue::String(color_count.to_string()),
+                );
+                metadata.insert(
+                    "File:ImageLength".to_string(),
+                    TagValue::String(image_length.to_string()),
+                );
+                if file_type == ICO_TYPE_ICON {
+                    metadata.insert(
+                        "File:ColorPlanes".to_string(),
+                        TagValue::String(color_planes.to_string()),
+                    );
+                    metadata.insert(
+                        "BitDepth".to_string(),
+                        TagValue::String(max_bits.to_string()),
+                    );
+                    metadata.insert(
+                        "File:BitsPerPixel".to_string(),
+                        TagValue::String(max_bits.to_string()),
+                    );
+                }
+                metadata.insert(
+                    "AvailableSizes".to_string(),
+                    TagValue::String(available_sizes),
                 );
             }
-            metadata.insert(
-                "AvailableSizes".to_string(),
-                TagValue::String(available_sizes),
-            );
-        }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -219,6 +223,10 @@ impl FormatParser for ICOParser {
 ///
 /// This is a convenience wrapper around ICOParser that provides a functional API.
 pub fn parse_ico_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = ICOParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = ICOParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }

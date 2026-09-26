@@ -150,31 +150,35 @@ const KNOWN_TAGS: &[&str] = &[
 /// assert_eq!(metadata.get_string("APP12:CameraType"), Some("OLYMPUS DIGITAL CAMERA"));
 /// ```
 pub fn parse_app12_olympus(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // Validate minimum data length - need at least a few bytes for any useful data
-    if data.len() < 4 {
-        return Err(crate::error::ExifToolError::parse_error(
-            "APP12 Olympus segment too short",
-        ));
-    }
+        // Validate minimum data length - need at least a few bytes for any useful data
+        if data.len() < 4 {
+            return Err(crate::error::ExifToolError::parse_error(
+                "APP12 Olympus segment too short",
+            ));
+        }
 
-    // Convert data to string, handling potential encoding issues gracefully.
-    // Olympus uses ASCII/Latin-1 encoding for text data.
-    let text = decode_olympus_text(data);
+        // Convert data to string, handling potential encoding issues gracefully.
+        // Olympus uses ASCII/Latin-1 encoding for text data.
+        let text = decode_olympus_text(data);
 
-    // Check for Olympus identifiers in the data.
-    // Valid Olympus APP12 segments contain recognizable markers.
-    if !is_olympus_picture_info(&text) {
-        return Err(crate::error::ExifToolError::parse_error(
-            "Not an Olympus Picture Info segment",
-        ));
-    }
+        // Check for Olympus identifiers in the data.
+        // Valid Olympus APP12 segments contain recognizable markers.
+        if !is_olympus_picture_info(&text) {
+            return Err(crate::error::ExifToolError::parse_error(
+                "Not an Olympus Picture Info segment",
+            ));
+        }
 
-    // Parse the key=value pairs from the text data
-    parse_key_value_pairs(&text, &mut metadata);
+        // Parse the key=value pairs from the text data
+        parse_key_value_pairs(&text, &mut metadata);
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Decode Olympus text data from raw bytes.

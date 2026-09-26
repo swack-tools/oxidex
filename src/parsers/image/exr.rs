@@ -311,40 +311,45 @@ impl EXRParser {
 
 impl FormatParser for EXRParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid EXR signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Basic file info
-        metadata.insert("FileType".to_string(), TagValue::String("EXR".to_string()));
-
-        // Parse version and flags
-        let (version, tiled, long_names, deep_data, multipart) = Self::read_version_flags(reader)?;
-        metadata.insert("EXRVersion".to_string(), TagValue::Integer(version as i64));
-
-        // Add Flags tag in ExifTool format
-        metadata.insert(
-            "Flags".to_string(),
-            TagValue::String(Self::decode_flags(tiled, long_names, deep_data, multipart)),
-        );
-
-        for (flag, name) in [
-            (tiled, "Tiled"),
-            (long_names, "LongNames"),
-            (deep_data, "DeepData"),
-            (multipart, "Multipart"),
-        ] {
-            if flag {
-                metadata.insert(name.to_string(), TagValue::String("Yes".to_string()));
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid EXR signature"));
             }
-        }
 
-        // Parse header attributes
-        Self::parse_attributes(reader, &mut metadata)?;
+            let mut metadata = MetadataMap::new();
 
-        Ok(metadata)
+            // Basic file info
+            metadata.insert("FileType".to_string(), TagValue::String("EXR".to_string()));
+
+            // Parse version and flags
+            let (version, tiled, long_names, deep_data, multipart) =
+                Self::read_version_flags(reader)?;
+            metadata.insert("EXRVersion".to_string(), TagValue::Integer(version as i64));
+
+            // Add Flags tag in ExifTool format
+            metadata.insert(
+                "Flags".to_string(),
+                TagValue::String(Self::decode_flags(tiled, long_names, deep_data, multipart)),
+            );
+
+            for (flag, name) in [
+                (tiled, "Tiled"),
+                (long_names, "LongNames"),
+                (deep_data, "DeepData"),
+                (multipart, "Multipart"),
+            ] {
+                if flag {
+                    metadata.insert(name.to_string(), TagValue::String("Yes".to_string()));
+                }
+            }
+
+            // Parse header attributes
+            Self::parse_attributes(reader, &mut metadata)?;
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -356,6 +361,10 @@ impl FormatParser for EXRParser {
 ///
 /// This is a convenience wrapper around EXRParser that provides a functional API.
 pub fn parse_exr_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = EXRParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = EXRParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }

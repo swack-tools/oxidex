@@ -87,97 +87,101 @@ struct WOFF2Header {
 
 impl FormatParser for WOFF2Parser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid WOFF2 signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid WOFF2 signature"));
+            }
 
-        let header = Self::read_header(reader)?;
-        let mut metadata = MetadataMap::new();
+            let header = Self::read_header(reader)?;
+            let mut metadata = MetadataMap::new();
 
-        // Basic file information
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String("WOFF2".to_string()),
-        );
-        metadata.insert("FontFlavor".to_string(), TagValue::String(header.flavor));
-
-        // WOFF2 header fields
-        metadata.insert(
-            "NumTables".to_string(),
-            TagValue::Integer(header.num_tables as i64),
-        );
-        metadata.insert(
-            "TotalSfntSize".to_string(),
-            TagValue::Integer(header.total_sfnt_size as i64),
-        );
-        metadata.insert(
-            "TotalCompressedSize".to_string(),
-            TagValue::Integer(header.total_compressed_size as i64),
-        );
-
-        // Version information
-        let version = format!("{}.{}", header.major_version, header.minor_version);
-        metadata.insert("FontVersion".to_string(), TagValue::String(version));
-
-        // Compression ratio (compressed / original * 100)
-        if header.total_sfnt_size > 0 {
-            let ratio =
-                (header.total_compressed_size as f64 / header.total_sfnt_size as f64) * 100.0;
+            // Basic file information
             metadata.insert(
-                "CompressionRatio".to_string(),
-                TagValue::String(format!("{:.1}%", ratio)),
+                "FileType".to_string(),
+                TagValue::String("WOFF2".to_string()),
             );
-        }
+            metadata.insert("FontFlavor".to_string(), TagValue::String(header.flavor));
 
-        // Metadata block presence
-        let has_metadata = header.meta_offset > 0 && header.meta_length > 0;
-        metadata.insert(
-            "HasMetadata".to_string(),
-            TagValue::String(if has_metadata {
-                "Yes".to_string()
-            } else {
-                "No".to_string()
-            }),
-        );
-
-        if has_metadata {
+            // WOFF2 header fields
             metadata.insert(
-                "MetadataOffset".to_string(),
-                TagValue::Integer(header.meta_offset as i64),
+                "NumTables".to_string(),
+                TagValue::Integer(header.num_tables as i64),
             );
             metadata.insert(
-                "MetadataLength".to_string(),
-                TagValue::Integer(header.meta_length as i64),
+                "TotalSfntSize".to_string(),
+                TagValue::Integer(header.total_sfnt_size as i64),
             );
             metadata.insert(
-                "MetadataOrigLength".to_string(),
-                TagValue::Integer(header.meta_orig_length as i64),
+                "TotalCompressedSize".to_string(),
+                TagValue::Integer(header.total_compressed_size as i64),
             );
-        }
 
-        // Private data block presence
-        let has_private = header.priv_offset > 0 && header.priv_length > 0;
-        metadata.insert(
-            "HasPrivateData".to_string(),
-            TagValue::String(if has_private {
-                "Yes".to_string()
-            } else {
-                "No".to_string()
-            }),
-        );
+            // Version information
+            let version = format!("{}.{}", header.major_version, header.minor_version);
+            metadata.insert("FontVersion".to_string(), TagValue::String(version));
 
-        if has_private {
+            // Compression ratio (compressed / original * 100)
+            if header.total_sfnt_size > 0 {
+                let ratio =
+                    (header.total_compressed_size as f64 / header.total_sfnt_size as f64) * 100.0;
+                metadata.insert(
+                    "CompressionRatio".to_string(),
+                    TagValue::String(format!("{:.1}%", ratio)),
+                );
+            }
+
+            // Metadata block presence
+            let has_metadata = header.meta_offset > 0 && header.meta_length > 0;
             metadata.insert(
-                "PrivateDataOffset".to_string(),
-                TagValue::Integer(header.priv_offset as i64),
+                "HasMetadata".to_string(),
+                TagValue::String(if has_metadata {
+                    "Yes".to_string()
+                } else {
+                    "No".to_string()
+                }),
             );
-            metadata.insert(
-                "PrivateDataLength".to_string(),
-                TagValue::Integer(header.priv_length as i64),
-            );
-        }
 
-        Ok(metadata)
+            if has_metadata {
+                metadata.insert(
+                    "MetadataOffset".to_string(),
+                    TagValue::Integer(header.meta_offset as i64),
+                );
+                metadata.insert(
+                    "MetadataLength".to_string(),
+                    TagValue::Integer(header.meta_length as i64),
+                );
+                metadata.insert(
+                    "MetadataOrigLength".to_string(),
+                    TagValue::Integer(header.meta_orig_length as i64),
+                );
+            }
+
+            // Private data block presence
+            let has_private = header.priv_offset > 0 && header.priv_length > 0;
+            metadata.insert(
+                "HasPrivateData".to_string(),
+                TagValue::String(if has_private {
+                    "Yes".to_string()
+                } else {
+                    "No".to_string()
+                }),
+            );
+
+            if has_private {
+                metadata.insert(
+                    "PrivateDataOffset".to_string(),
+                    TagValue::Integer(header.priv_offset as i64),
+                );
+                metadata.insert(
+                    "PrivateDataLength".to_string(),
+                    TagValue::Integer(header.priv_length as i64),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -189,8 +193,12 @@ impl FormatParser for WOFF2Parser {
 ///
 /// This is a convenience wrapper around WOFF2Parser that provides a functional API.
 pub fn parse_woff2_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = WOFF2Parser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = WOFF2Parser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

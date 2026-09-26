@@ -178,9 +178,20 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     let output = reconstruct_jpeg(head_segments, new_exif_segment, exif_position, raw_tail)?;
 
     // Step 6: the verbatim tail moved by the length change; re-base the
-    // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217).
+    // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217)
+    // and re-point a Leica IFD2 PreviewImage after the image as ExifTool
+    // re-points it (Writer.pl 13.59:6177-6226).
+    // The EOI is searched from the same boundary `transform_exif` and the
+    // verifier use (`exif_surgical::jpeg_scan_boundary`): the scan data, or,
+    // with no scan, the EOI marker, which `reconstruct_jpeg` re-emits last --
+    // then the moved region starts there when the output ends with it.
     let tail_start = file_size - raw_tail.len();
-    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, tail_start, tail_start, output)
+    let (moved_from, scan_from) = match crate::writers::exif_surgical::jpeg_scan_boundary(&segments)
+    {
+        Some(eoi) if sos_index.is_none() && output.ends_with(&file_bytes[eoi..]) => (eoi, eoi),
+        _ => (tail_start, tail_start),
+    };
+    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, moved_from, scan_from, output)
 }
 
 /// Checks if a segment is an EXIF APP1 segment.
@@ -287,7 +298,7 @@ pub(crate) fn write_public_exif_transaction(
             &|| source_raw_properties(head),
             baseline,
             plan,
-            crate::writers::exif_surgical::FreshOrder::BigEndian,
+            crate::writers::exif_surgical::FreshOrder::SetPreferred,
         )
         .map(|bytes| (bytes, ()))
     })
@@ -335,18 +346,22 @@ pub(crate) fn rewrite_generated_exif_payload(
     // read -- it may be unreadable, and pinned ExifTool 13.59 discards it
     // unparsed. The write then always stages (the fresh block of the legacy
     // sets, or an empty IFD0 in the fresh byte order), and nothing below
-    // reads the deleted block. Seeding stays off, as it was for a readable
-    // deleted block: a new block's mandatory entries are #955's (known gap).
+    // reads the deleted block. The fresh block's IFD0 is created, so it is
+    // seeded as a block the carrier never had is (`$numEntries` 0; pinned
+    // ExifTool 13.59's `-EXIF:All= -IFD0:Artist=x` block carries
+    // YCbCrPositioning); the legacy half seeds the sub-directories it
+    // creates.
     let deletes_carrier = crate::writers::exif_surgical::removes_carrier(&plan.legacy_removed);
     let creation_count = match original {
-        Some(_) if deletes_carrier => Some(u16::MAX),
+        Some(_) if deletes_carrier => Some(0),
         Some(tiff) => Some(tiff_surgical::ifd0_state(tiff)?.0),
         None => None,
     };
     let mut plan = plan;
     let staged;
     let restaged = matches!(original, Some(_) if deletes_carrier
-        || plan.has_legacy_changes && legacy_deletes(baseline, &plan));
+        || plan.has_legacy_changes && legacy_deletes(baseline, &plan)
+        || plan.has_legacy_changes && legacy_adds_sub_ifd(original, baseline, &plan)?);
     let original = match original {
         Some(tiff) if restaged => {
             let kept = crate::writers::exif_surgical::rewrite_tiff_exif_keeping_carrier(
@@ -360,7 +375,7 @@ pub(crate) fn rewrite_generated_exif_payload(
                 // A deleted carrier's order is only its byte-order mark
                 // (`FreshOrder`); a kept one's is its scan.
                 let order = match if deletes_carrier {
-                    crate::writers::exif_surgical::fresh_byte_order(tiff, fresh)
+                    crate::writers::exif_surgical::fresh_byte_order(tiff, fresh)?
                 } else {
                     crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
                 } {
@@ -385,7 +400,14 @@ pub(crate) fn rewrite_generated_exif_payload(
     let tiff = match original {
         Some(tiff) => tiff,
         None => {
-            let order = source_fresh_byte_order()?;
+            let order = match crate::writers::exif_surgical::fresh_byte_order(&[], fresh)? {
+                crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                    mandatory::TiffByteOrder::Little
+                }
+                crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                    mandatory::TiffByteOrder::Big
+                }
+            };
             empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
                 .map_err(ExifToolError::unsupported_format)?;
             &empty
@@ -510,13 +532,41 @@ pub(crate) fn rewrite_generated_exif_payload(
 /// MakerNotes row dropped from the map must reach the reconstructing
 /// writer, which refuses it, not the in-place payload writer, which never
 /// walks those directories and would report success with the row kept.
+/// Whether the legacy delta adds a tag to ExifIFD or the GPS IFD while the
+/// payload `original` has no such directory. The in-place payload writer
+/// cannot create one; the reconstructing writer the legacy-only path uses
+/// can, so such a plan is restaged like a deleting one. Before, one write
+/// setting `IFD0:Artist` (a generated route) and `GPS:GPSAltitude` on a JPEG
+/// with no GPS IFD failed "Adding a GPS tag to a file with no GPS IFD",
+/// where pinned 13.59 writes both -- and so did tip, which applied the CLI's
+/// requests one at a time (#951 applies them in one pass).
+fn legacy_adds_sub_ifd(
+    original: Option<&[u8]>,
+    baseline: &MetadataMap,
+    plan: &crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<bool> {
+    let Some(tiff) = original else {
+        return Ok(false);
+    };
+    let adds = |prefix: &str| {
+        plan.legacy_metadata
+            .iter()
+            .any(|(key, _)| key.starts_with(prefix) && !baseline.contains_key(key))
+    };
+    if !adds("ExifIFD:") && !adds("GPS:") {
+        return Ok(false);
+    }
+    let (exif_missing, gps_missing) = crate::writers::tiff_surgical::missing_sub_ifds(tiff)?;
+    Ok(exif_missing && adds("ExifIFD:") || gps_missing && adds("GPS:"))
+}
+
 fn legacy_deletes(
     baseline: &MetadataMap,
     plan: &crate::writers::generated_public_write::PublicWritePlan,
 ) -> bool {
     !plan.legacy_removed.is_empty()
         || baseline.iter().any(|(key, _)| {
-            [
+            ([
                 "IFD0:",
                 "ExifIFD:",
                 "GPS:",
@@ -527,6 +577,7 @@ fn legacy_deletes(
             ]
             .iter()
             .any(|prefix| key.starts_with(prefix))
+                || crate::writers::exif_surgical::chain_key_dir(key).is_some())
                 && !plan.legacy_metadata.contains_key(key)
         })
 }
@@ -583,7 +634,7 @@ fn mandatory_default_edits(
         })
 }
 
-fn validate_creation_sources() -> Result<()> {
+pub(crate) fn validate_creation_sources() -> Result<()> {
     let address =
         crate::writers::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
             .ok_or_else(|| {
@@ -609,7 +660,8 @@ fn validate_creation_sources() -> Result<()> {
     Ok(())
 }
 
-fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
+pub(crate) fn source_fresh_byte_order()
+-> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
     use crate::writers::generated_fresh_jpeg_byte_order::*;
     use crate::writers::mandatory_defaults_runtime::TiffByteOrder;
     validate_creation_sources()?;
@@ -628,7 +680,9 @@ fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtim
     })
 }
 
-fn source_raw_properties(head: &[Segment<'_>]) -> Result<std::collections::BTreeMap<String, i64>> {
+pub(crate) fn source_raw_properties(
+    head: &[Segment<'_>],
+) -> Result<std::collections::BTreeMap<String, i64>> {
     let mut properties = std::collections::BTreeMap::new();
     for segment in head {
         if let Some(found) = crate::writers::raw_segment_properties::decode_raw_segment(
@@ -778,8 +832,9 @@ fn transform_exif<T>(
     }
     out.extend_from_slice(&bytes[end..]);
     // Everything from `end` moved by the length change, including any AFCP
-    // trailer and its absolute offsets (AFCP.pm 13.59:205-217). Its EOI is
-    // searched from the end of the SOS header, or is the EOI marker itself.
+    // trailer and its absolute offsets (AFCP.pm 13.59:205-217) and a Leica
+    // IFD2 PreviewImage after the image (Writer.pl 13.59:6177-6226). Its EOI
+    // is searched from the end of the SOS header, or is the EOI marker itself.
     let boundary = &head[end_index];
     let scan_from = usize::try_from(boundary.offset)
         .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?
@@ -899,6 +954,72 @@ fn reconstruct_jpeg(
 ///
 /// - `Ok(())`: Segment written successfully
 /// - `Err(ExifToolError)`: If segment is too large (>65533 bytes)
+/// ExifTool's `-all=` on a JPEG (`clear_all_metadata`): every metadata
+/// segment goes -- APP0 through APP13 and APP15 (JFIF, EXIF, XMP, ICC,
+/// FPXR, MPF, Photoshop/IPTC, ...) and COM -- except an `Adobe` APP14,
+/// which ExifTool protects (Writer.pl `$protectedGroups`); and so does
+/// everything after EOI (the `Trailer` group: AFCP, PhotoMechanic, MPF
+/// images). Every other segment, the scans and EOI are kept byte for byte.
+/// Pinned 13.59 on t/images/ExifTool.jpg leaves `APP14:Adobe` alone, on
+/// AFCP.jpg and PhotoMechanic.jpg no trailer. `None` for bytes that are not
+/// a JPEG.
+///
+/// The EXIF-only clear this replaces left the XMP, JFIF, ICC and comment
+/// segments and reported the file updated (`-all=` then read back XMP).
+pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return Ok(None);
+    }
+    let truncated = || ExifToolError::parse_error("Truncated JPEG segment before the image data");
+    let mut output = bytes[..2].to_vec();
+    let mut at = 2;
+    loop {
+        // Fill bytes (0xFF padding) may precede a marker.
+        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
+            at += 1;
+        }
+        let (Some(&0xFF), Some(&marker)) = (bytes.get(at), bytes.get(at + 1)) else {
+            return Err(truncated());
+        };
+        // Standalone markers carry no length.
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            output.extend_from_slice(&bytes[at..at + 2]);
+            at += 2;
+            continue;
+        }
+        if marker == 0xD9 {
+            // EOI before any scan: keep it, drop what follows.
+            output.extend_from_slice(&bytes[at..at + 2]);
+            return Ok(Some(output));
+        }
+        if marker == 0xDA {
+            // The scans run to the first EOI (entropy-coded data never holds
+            // an unescaped 0xFF 0xD9); what follows it is the trailer.
+            let end = bytes[at..]
+                .windows(2)
+                .position(|pair| pair == [0xFF, 0xD9])
+                .map_or(bytes.len(), |offset| at + offset + 2);
+            output.extend_from_slice(&bytes[at..end]);
+            return Ok(Some(output));
+        }
+        let length = bytes
+            .get(at + 2..at + 4)
+            .map(|pair| usize::from(u16::from_be_bytes([pair[0], pair[1]])))
+            .ok_or_else(truncated)?;
+        let end = at + 2 + length;
+        let payload = bytes.get(at + 4..end).ok_or_else(truncated)?;
+        let metadata = match marker {
+            0xE0..=0xED | 0xEF | 0xFE => true,
+            0xEE => !payload.starts_with(b"Adobe"),
+            _ => false,
+        };
+        if !metadata {
+            output.extend_from_slice(&bytes[at..end]);
+        }
+        at = end;
+    }
+}
+
 fn write_segment(output: &mut Vec<u8>, marker: u16, data: &[u8]) -> Result<()> {
     // Write marker (2 bytes, big-endian)
     output.extend_from_slice(&marker.to_be_bytes());
@@ -1592,10 +1713,12 @@ mod tests {
         // Should start with EXIF identifier
         assert_eq!(&segment_data[0..6], EXIF_IDENTIFIER);
 
-        // Should have TIFF header
-        assert_eq!(&segment_data[6..8], &[0x49, 0x49]); // Little-endian
-        assert_eq!(&segment_data[8..10], &[0x2A, 0x00]); // Magic
-        assert_eq!(&segment_data[10..14], &[0x08, 0x00, 0x00, 0x00]); // IFD offset
+        // Should have TIFF header, big-endian: pinned ExifTool 13.59 creates
+        // a new block in `SetPreferredByteOrder`'s default order
+        // (Writer.pl 13.59:5183-5195), MM with no option or ExifByteOrder.
+        assert_eq!(&segment_data[6..8], &[0x4D, 0x4D]); // Big-endian
+        assert_eq!(&segment_data[8..10], &[0x00, 0x2A]); // Magic
+        assert_eq!(&segment_data[10..14], &[0x00, 0x00, 0x00, 0x08]); // IFD offset
 
         // The segment must actually parse and contain the tag we asked for
         let tiff = &segment_data[EXIF_IDENTIFIER.len()..];
@@ -1606,6 +1729,17 @@ mod tests {
             .find(|e| e.tag_id == 0x010F)
             .expect("Make tag must be present");
         assert_eq!(make.value, b"Canon\0");
+        // The IFD0 it creates carries WriteExif's mandatory YCbCrPositioning
+        // (WriteExif.pl 13.59:25-32, 714-719).
+        let positioning = scan
+            .entries
+            .iter()
+            .find(|e| e.tag_id == 0x0213)
+            .expect("YCbCrPositioning must be present");
+        assert_eq!(
+            (positioning.field_type, positioning.value.as_slice()),
+            (3, &[0, 1][..])
+        );
     }
 
     #[test]

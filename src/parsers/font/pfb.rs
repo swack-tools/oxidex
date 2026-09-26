@@ -128,17 +128,21 @@ fn font_program_start(header: &[u8]) -> Option<usize> {
 
 /// Extract PostScript Type 1 font metadata.
 pub fn parse_pfb_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let peek_len = DISPATCH_PEEK.min(reader.size() as usize);
-    let peek = reader
-        .read(0, peek_len)
-        .map_err(|error| error.to_string())?;
-    let start = font_program_start(&peek).ok_or("not a PostScript Type 1 font")?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let peek_len = DISPATCH_PEEK.min(reader.size() as usize);
+        let peek = reader
+            .read(0, peek_len)
+            .map_err(|error| error.to_string())?;
+        let start = font_program_start(&peek).ok_or("not a PostScript Type 1 font")?;
 
-    let size = usize::try_from(reader.size()).map_err(|_| "font file is too large")?;
-    let data = reader.read(0, size).map_err(|error| error.to_string())?;
-    let mut metadata = MetadataMap::new();
-    parse_font_program(&data[start..], &mut metadata);
-    Ok(metadata)
+        let size = usize::try_from(reader.size()).map_err(|_| "font file is too large")?;
+        let data = reader.read(0, size).map_err(|error| error.to_string())?;
+        let mut metadata = MetadataMap::new();
+        parse_font_program(&data[start..], &mut metadata);
+        Ok(metadata)
+    })
 }
 
 /// PostScript.pm:524-768's line loop, restricted to the font arm.

@@ -56,122 +56,129 @@ pub struct FlvParser;
 
 impl FormatParser for FlvParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify FLV signature
-        if reader.size() < 9 {
-            return Err(ExifToolError::parse_error("File too small to be FLV"));
-        }
-
-        let header = reader.read(0, 9)?;
-        if &header[0..3] != FLV_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid FLV signature: expected {:?}, found {:?}",
-                FLV_SIGNATURE,
-                &header[0..3]
-            )));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(16);
-
-        // Parse FLV header
-        let version = header[3];
-        let flags = header[4];
-        let has_video = (flags & 0x01) != 0;
-        let has_audio = (flags & 0x04) != 0;
-
-        // Note: FLVVersion is available but ExifTool doesn't output it, so we skip it
-        let _version = version;
-
-        metadata.insert(
-            "Flash:HasVideo".to_string(),
-            TagValue::new_string(if has_video { "Yes" } else { "No" }),
-        );
-        metadata.insert(
-            "Flash:HasAudio".to_string(),
-            TagValue::new_string(if has_audio { "Yes" } else { "No" }),
-        );
-
-        // Look for onMetaData script tag and first audio tag
-        // Skip: Previous Tag Size 0 (4 bytes after header)
-        let mut offset = 13u64;
-        let file_size = reader.size();
-
-        // Search for script and audio tags (limited search to avoid scanning entire file)
-        let max_search_offset = (offset + 10_000).min(file_size);
-        let mut found_script = false;
-        let mut found_audio = false;
-
-        while offset + 11 < max_search_offset && (!found_script || !found_audio) {
-            // Read tag header (11 bytes)
-            let tag_header = reader.read(offset, 11)?;
-
-            let r = EndianReader::big_endian(tag_header);
-            let tag_type = tag_header[0];
-            // Read 24-bit big-endian value (3 bytes) for data size
-            let data_size = ((r.u8_at(1).unwrap_or(0) as u32) << 16)
-                | ((r.u8_at(2).unwrap_or(0) as u32) << 8)
-                | (r.u8_at(3).unwrap_or(0) as u32);
-
-            // Check if this is a script data tag
-            if tag_type == TAG_TYPE_SCRIPT && data_size > 0 && data_size < 100_000 && !found_script
-            {
-                // Read script data
-                let script_data = reader.read(offset + 11, data_size as usize)?;
-
-                // Parse onMetaData (simplified parsing)
-                parse_on_metadata(script_data, &mut metadata)?;
-                found_script = true;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify FLV signature
+            if reader.size() < 9 {
+                return Err(ExifToolError::parse_error("File too small to be FLV"));
             }
 
-            // Check if this is an audio tag - extract codec info from first byte
-            if tag_type == TAG_TYPE_AUDIO && data_size > 0 && !found_audio {
-                let audio_data = reader.read(offset + 11, 1)?;
-                let audio_flags = audio_data[0];
-
-                // Parse audio flags:
-                // Bits 4-7: Sound format (codec)
-                // Bits 2-3: Sample rate (0=5.5kHz, 1=11kHz, 2=22kHz, 3=44kHz)
-                // Bit 1: Sample size (0=8-bit, 1=16-bit)
-                // Bit 0: Channel type (0=mono, 1=stereo)
-                let sample_size = if (audio_flags & 0x02) != 0 { 16 } else { 8 };
-                let channels = if (audio_flags & 0x01) != 0 { 2 } else { 1 };
-                let sample_rate_code = (audio_flags >> 2) & 0x03;
-                let sample_rate = match sample_rate_code {
-                    0 => 5512,
-                    1 => 11025,
-                    2 => 22050,
-                    3 => 44100,
-                    _ => 44100,
-                };
-
-                metadata.insert(
-                    "Flash:AudioBitsPerSample".to_string(),
-                    TagValue::new_integer(sample_size),
-                );
-
-                let channels_str = if channels == 1 {
-                    "1 (mono)".to_string()
-                } else {
-                    format!("{} (stereo)", channels)
-                };
-                metadata.insert(
-                    "Flash:AudioChannels".to_string(),
-                    TagValue::new_string(channels_str),
-                );
-
-                // Update sample rate from audio tag (more accurate than metadata)
-                metadata.insert(
-                    "Flash:AudioSampleRate".to_string(),
-                    TagValue::new_integer(sample_rate),
-                );
-
-                found_audio = true;
+            let header = reader.read(0, 9)?;
+            if &header[0..3] != FLV_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid FLV signature: expected {:?}, found {:?}",
+                    FLV_SIGNATURE,
+                    &header[0..3]
+                )));
             }
 
-            // Move to next tag (tag header + data size + previous tag size)
-            offset += 11 + data_size as u64 + 4;
-        }
+            let mut metadata = MetadataMap::with_capacity(16);
 
-        Ok(metadata)
+            // Parse FLV header
+            let version = header[3];
+            let flags = header[4];
+            let has_video = (flags & 0x01) != 0;
+            let has_audio = (flags & 0x04) != 0;
+
+            // Note: FLVVersion is available but ExifTool doesn't output it, so we skip it
+            let _version = version;
+
+            metadata.insert(
+                "Flash:HasVideo".to_string(),
+                TagValue::new_string(if has_video { "Yes" } else { "No" }),
+            );
+            metadata.insert(
+                "Flash:HasAudio".to_string(),
+                TagValue::new_string(if has_audio { "Yes" } else { "No" }),
+            );
+
+            // Look for onMetaData script tag and first audio tag
+            // Skip: Previous Tag Size 0 (4 bytes after header)
+            let mut offset = 13u64;
+            let file_size = reader.size();
+
+            // Search for script and audio tags (limited search to avoid scanning entire file)
+            let max_search_offset = (offset + 10_000).min(file_size);
+            let mut found_script = false;
+            let mut found_audio = false;
+
+            while offset + 11 < max_search_offset && (!found_script || !found_audio) {
+                // Read tag header (11 bytes)
+                let tag_header = reader.read(offset, 11)?;
+
+                let r = EndianReader::big_endian(tag_header);
+                let tag_type = tag_header[0];
+                // Read 24-bit big-endian value (3 bytes) for data size
+                let data_size = ((r.u8_at(1).unwrap_or(0) as u32) << 16)
+                    | ((r.u8_at(2).unwrap_or(0) as u32) << 8)
+                    | (r.u8_at(3).unwrap_or(0) as u32);
+
+                // Check if this is a script data tag
+                if tag_type == TAG_TYPE_SCRIPT
+                    && data_size > 0
+                    && data_size < 100_000
+                    && !found_script
+                {
+                    // Read script data
+                    let script_data = reader.read(offset + 11, data_size as usize)?;
+
+                    // Parse onMetaData (simplified parsing)
+                    parse_on_metadata(script_data, &mut metadata)?;
+                    found_script = true;
+                }
+
+                // Check if this is an audio tag - extract codec info from first byte
+                if tag_type == TAG_TYPE_AUDIO && data_size > 0 && !found_audio {
+                    let audio_data = reader.read(offset + 11, 1)?;
+                    let audio_flags = audio_data[0];
+
+                    // Parse audio flags:
+                    // Bits 4-7: Sound format (codec)
+                    // Bits 2-3: Sample rate (0=5.5kHz, 1=11kHz, 2=22kHz, 3=44kHz)
+                    // Bit 1: Sample size (0=8-bit, 1=16-bit)
+                    // Bit 0: Channel type (0=mono, 1=stereo)
+                    let sample_size = if (audio_flags & 0x02) != 0 { 16 } else { 8 };
+                    let channels = if (audio_flags & 0x01) != 0 { 2 } else { 1 };
+                    let sample_rate_code = (audio_flags >> 2) & 0x03;
+                    let sample_rate = match sample_rate_code {
+                        0 => 5512,
+                        1 => 11025,
+                        2 => 22050,
+                        3 => 44100,
+                        _ => 44100,
+                    };
+
+                    metadata.insert(
+                        "Flash:AudioBitsPerSample".to_string(),
+                        TagValue::new_integer(sample_size),
+                    );
+
+                    let channels_str = if channels == 1 {
+                        "1 (mono)".to_string()
+                    } else {
+                        format!("{} (stereo)", channels)
+                    };
+                    metadata.insert(
+                        "Flash:AudioChannels".to_string(),
+                        TagValue::new_string(channels_str),
+                    );
+
+                    // Update sample rate from audio tag (more accurate than metadata)
+                    metadata.insert(
+                        "Flash:AudioSampleRate".to_string(),
+                        TagValue::new_integer(sample_rate),
+                    );
+
+                    found_audio = true;
+                }
+
+                // Move to next tag (tag header + data size + previous tag size)
+                offset += 11 + data_size as u64 + 4;
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -193,8 +200,12 @@ impl FormatParser for FlvParser {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_flv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = FlvParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = FlvParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Map FLV metadata key to ExifTool tag name

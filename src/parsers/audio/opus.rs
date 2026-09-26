@@ -68,93 +68,98 @@ pub fn parse_opus_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
 impl FormatParser for OpusParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify OGG signature
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be Opus"));
-        }
-
-        let header = reader.read(0, 4)?;
-        if header != OGG_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid OGG signature: expected {:?}, found {:?}",
-                OGG_SIGNATURE, header
-            )));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(16);
-
-        // Parse OGG pages to find OpusHead and OpusTags
-        let mut offset = 0u64;
-        let file_size = reader.size();
-        let mut found_opus_head = false;
-
-        while offset < file_size {
-            // Read OGG page header (27 bytes minimum)
-            if offset + 27 > file_size {
-                break;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify OGG signature
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be Opus"));
             }
 
-            let page_header = reader.read(offset, 27)?;
-
-            // Verify page signature
-            if &page_header[0..4] != OGG_SIGNATURE {
-                break;
+            let header = reader.read(0, 4)?;
+            if header != OGG_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid OGG signature: expected {:?}, found {:?}",
+                    OGG_SIGNATURE, header
+                )));
             }
 
-            // Parse page header
-            let segment_count = page_header[26] as usize;
+            let mut metadata = MetadataMap::with_capacity(16);
 
-            // Read segment table
-            if offset + 27 + segment_count as u64 > file_size {
-                break;
-            }
-            let segment_table = reader.read(offset + 27, segment_count)?;
+            // Parse OGG pages to find OpusHead and OpusTags
+            let mut offset = 0u64;
+            let file_size = reader.size();
+            let mut found_opus_head = false;
 
-            // Calculate total page size
-            let mut page_body_size = 0u64;
-            for &segment_size in segment_table.iter() {
-                page_body_size += segment_size as u64;
-            }
-
-            // Read page body
-            let page_body_offset = offset + 27 + segment_count as u64;
-            if page_body_offset + page_body_size > file_size {
-                break;
-            }
-
-            // Check if this is an Opus packet
-            if page_body_size >= 8 {
-                let page_body = reader.read(page_body_offset, page_body_size.min(256) as usize)?;
-
-                // Check for OpusHead
-                if page_body.len() >= 19 && &page_body[0..8] == OPUS_HEAD {
-                    parse_opus_head(&page_body[8..], &mut metadata)?;
-                    found_opus_head = true;
+            while offset < file_size {
+                // Read OGG page header (27 bytes minimum)
+                if offset + 27 > file_size {
+                    break;
                 }
-                // Check for OpusTags
-                else if page_body.len() >= 8
-                    && &page_body[0..8] == OPUS_TAGS
-                    && page_body_size <= 1_000_000
-                {
-                    // Safety limit
-                    let full_tags =
-                        reader.read(page_body_offset + 8, (page_body_size - 8) as usize)?;
-                    parse_opus_tags(full_tags, &mut metadata)?;
-                    break; // Found both head and tags, we're done
+
+                let page_header = reader.read(offset, 27)?;
+
+                // Verify page signature
+                if &page_header[0..4] != OGG_SIGNATURE {
+                    break;
                 }
+
+                // Parse page header
+                let segment_count = page_header[26] as usize;
+
+                // Read segment table
+                if offset + 27 + segment_count as u64 > file_size {
+                    break;
+                }
+                let segment_table = reader.read(offset + 27, segment_count)?;
+
+                // Calculate total page size
+                let mut page_body_size = 0u64;
+                for &segment_size in segment_table.iter() {
+                    page_body_size += segment_size as u64;
+                }
+
+                // Read page body
+                let page_body_offset = offset + 27 + segment_count as u64;
+                if page_body_offset + page_body_size > file_size {
+                    break;
+                }
+
+                // Check if this is an Opus packet
+                if page_body_size >= 8 {
+                    let page_body =
+                        reader.read(page_body_offset, page_body_size.min(256) as usize)?;
+
+                    // Check for OpusHead
+                    if page_body.len() >= 19 && &page_body[0..8] == OPUS_HEAD {
+                        parse_opus_head(&page_body[8..], &mut metadata)?;
+                        found_opus_head = true;
+                    }
+                    // Check for OpusTags
+                    else if page_body.len() >= 8
+                        && &page_body[0..8] == OPUS_TAGS
+                        && page_body_size <= 1_000_000
+                    {
+                        // Safety limit
+                        let full_tags =
+                            reader.read(page_body_offset + 8, (page_body_size - 8) as usize)?;
+                        parse_opus_tags(full_tags, &mut metadata)?;
+                        break; // Found both head and tags, we're done
+                    }
+                }
+
+                // Move to next page
+                offset = page_body_offset + page_body_size;
             }
 
-            // Move to next page
-            offset = page_body_offset + page_body_size;
-        }
+            if !found_opus_head {
+                return Err(ExifToolError::parse_error(
+                    "Invalid Opus file: OpusHead packet not found",
+                ));
+            }
 
-        if !found_opus_head {
-            return Err(ExifToolError::parse_error(
-                "Invalid Opus file: OpusHead packet not found",
-            ));
-        }
-
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

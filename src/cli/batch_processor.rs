@@ -10,9 +10,10 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::value_parser::parse_cli_tag_value_os;
+use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
 use crate::core::MetadataMap;
-use crate::core::operations::{modify_tag, read_metadata_with_detector_and_options};
+use crate::core::operations::read_metadata_report_with_detector_and_options;
+use crate::core::read_report::{ParseStatus, ReadReport};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -31,6 +32,12 @@ pub struct BatchStats {
     pub files_read: usize,
     /// Number of files successfully updated (for write operations)
     pub files_updated: usize,
+    /// Number of files every write request succeeded on without changing a
+    /// byte (ExifTool's `image files unchanged`); never counted as updated.
+    pub files_unchanged: usize,
+    /// Whether these are write statistics, which ExifTool summarizes
+    /// differently from a read (see [`BatchStats::print`]).
+    pub write_mode: bool,
     /// Number of files that encountered errors
     pub errors: usize,
     /// Number of files a directory walk found but never attempted to read,
@@ -54,13 +61,44 @@ impl BatchStats {
         Self {
             files_read: 0,
             files_updated: 0,
+            files_unchanged: 0,
+            write_mode: false,
             errors: 0,
             unidentified: 0,
         }
     }
 
+    /// Empty statistics for a write run (see [`BatchStats::print`]).
+    pub fn for_write() -> Self {
+        Self {
+            write_mode: true,
+            ..Self::new()
+        }
+    }
+
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
+        // A write run prints what exiftool:2071-2074 (13.59) prints for one:
+        // `updated` whenever a write was attempted (even `0`), `unchanged`
+        // and `weren't updated due to errors` when non-zero, and no read
+        // count -- `exiftool -XPTitle= a.jpg b.jpg` answers
+        // `    0 image files updated` / `    2 image files unchanged`.
+        if self.write_mode {
+            println!("{:5} image files updated", self.files_updated);
+            if self.files_unchanged > 0 {
+                println!("{:5} image files unchanged", self.files_unchanged);
+            }
+            if self.errors > 0 {
+                println!("{:5} files weren't updated due to errors", self.errors);
+            }
+            if self.unidentified > 0 {
+                println!(
+                    "{:5} files skipped (extension not recognized)",
+                    self.unidentified
+                );
+            }
+            return;
+        }
         // ExifTool's summary is `printf("%5d image files read\n", ...)`
         // (`exiftool`:2071-2077, 13.59): the count is right-aligned in five
         // columns, so ten or more files print `   12 ...`, not `    12 ...`.
@@ -113,6 +151,21 @@ impl BatchStats {
 /// Individual file errors are logged to stderr but do not stop batch processing.
 /// All errors are counted and reported in the final statistics.
 pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
+    batch_process_requests(path, args, &args.plain_tag_modifications())
+}
+
+/// [`batch_process`] with the write requests given rather than reparsed from
+/// `args`: the CLI passes its `WritePlan`'s sets, the one classification of
+/// the command line every write path consumes (undefined names already
+/// warned about and dropped, names in their canonical spelling), so a
+/// directory write can never apply a different request list than the
+/// single-file write of the same command (#957, PRRT_kwDOQNbr5M6mR8dA).
+/// Empty `modifications` is a read.
+pub fn batch_process_requests(
+    path: &Path,
+    args: &CliArgs,
+    modifications: &[(String, OsString)],
+) -> Result<BatchStats> {
     // Validate that the path exists
     if !path.exists() {
         return Err(ExifToolError::from(std::io::Error::new(
@@ -134,7 +187,6 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Determine operation mode
-    let modifications = args.tag_modifications();
     let is_write_mode = !modifications.is_empty();
 
     // Validate readonly flag for write operations
@@ -147,7 +199,7 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
 
     // Process files based on mode
     let mut stats = if is_write_mode {
-        batch_write(files, &modifications, args)?
+        batch_write(files, modifications, args)?
     } else {
         batch_read(files, args)?
     };
@@ -225,7 +277,7 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
 /// This is a fast pre-filter, not the identification itself. A file that
 /// passes still goes through the exact same magic-number pipeline
 /// single-file mode uses --
-/// [`read_metadata_with_detector_and_options`](crate::core::operations::read_metadata_with_detector_and_options)
+/// [`read_metadata_report_with_detector_and_options`](crate::core::operations::read_metadata_report_with_detector_and_options)
 /// -- which is what actually decides whether the file can be read; a
 /// recognized extension whose header disagrees, or whose format has no
 /// parser, is still counted correctly afterward (as a read error or, per
@@ -294,12 +346,22 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     let read_options =
         crate::core::ReadOptions::new(tag_filter.as_deref().unwrap_or(&[]), args.extended_output);
 
-    // Process files in parallel
-    let results: Vec<_> = files
+    // Process files in parallel. Every file goes through the same
+    // report-carrying read single-file mode uses
+    // (`main.rs::handle_read_operation`), not the fail-fast
+    // `read_metadata_with_detector_and_options`: a malformed JPEG or PNG
+    // that reads alone as `ParseStatus::Partial` (filesystem and identity
+    // tags plus ExifTool's `Warning: JPEG format error`) must read the same
+    // way when another path is on the command line or when a directory walk
+    // finds it, rather than turning into an error that drops its metadata
+    // (#957, PRRT_kwDOQNbr5M6mTtBR). `--strict` refuses such a read here
+    // exactly as it does for one file.
+    let results: Vec<(PathBuf, Result<ReadReport>)> = files
         .par_iter()
         .map(|path| {
             let result =
-                read_metadata_with_detector_and_options(path, args.detector, &read_options);
+                read_metadata_report_with_detector_and_options(path, args.detector, &read_options)
+                    .and_then(|report| refuse_degraded_when_strict(report, args));
 
             match &result {
                 Ok(_) => {
@@ -344,9 +406,36 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     Ok(BatchStats {
         files_read: success_count.load(Ordering::Relaxed),
         files_updated: 0,
+        files_unchanged: 0,
+        write_mode: false,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
     })
+}
+
+/// `--strict`'s refusal of a read that did not fully parse, as
+/// `main.rs::handle_read_operation` applies it to one file: anything but
+/// [`ParseStatus::Parsed`] or [`ParseStatus::IdentifiedOnly`] is an error,
+/// reported with the first diagnostic and the status. Without `--strict`
+/// the report passes through and its status travels into formatting.
+fn refuse_degraded_when_strict(report: ReadReport, args: &CliArgs) -> Result<ReadReport> {
+    if args.strict
+        && !matches!(
+            report.status,
+            ParseStatus::Parsed | ParseStatus::IdentifiedOnly
+        )
+    {
+        let reason = report
+            .diagnostics
+            .first()
+            .map(|d| d.message.clone())
+            .unwrap_or_else(|| report.status.to_string());
+        return Err(ExifToolError::parse_error(format!(
+            "{reason} (status: {})",
+            report.status
+        )));
+    }
+    Ok(report)
 }
 
 /// Performs batch write operations on a collection of files.
@@ -368,21 +457,26 @@ pub fn batch_write(
     args: &CliArgs,
 ) -> Result<BatchStats> {
     let file_count = files.len();
+    // Undefined names were warned about before dispatch; they are not
+    // requests (ExifTool drops them in `SetNewValue`).
+    let (_, modifications) = partition_defined(modifications);
 
     // Create progress bar
     let progress = create_progress_bar(file_count, "Writing");
 
     // Atomic counters for thread-safe statistics
-    let success_count = AtomicUsize::new(0);
+    let updated_count = AtomicUsize::new(0);
+    let unchanged_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
-        let result = apply_modifications(path, modifications, args);
-
-        match result {
-            Ok(_) => {
-                success_count.fetch_add(1, Ordering::Relaxed);
+        match apply_modifications(path, &modifications, args) {
+            Ok(WriteOutcome::Updated) => {
+                updated_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(WriteOutcome::Unchanged) => {
+                unchanged_count.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 error_count.fetch_add(1, Ordering::Relaxed);
@@ -399,8 +493,10 @@ pub fn batch_write(
     progress.finish_and_clear();
 
     Ok(BatchStats {
-        files_read: file_count,
-        files_updated: success_count.load(Ordering::Relaxed),
+        files_read: 0,
+        files_updated: updated_count.load(Ordering::Relaxed),
+        files_unchanged: unchanged_count.load(Ordering::Relaxed),
+        write_mode: true,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
     })
@@ -408,50 +504,49 @@ pub fn batch_write(
 
 /// Applies tag modifications to a single file.
 ///
-/// Handles file preservation options (backup, preserve timestamps).
-///
-/// # Arguments
-///
-/// * `path` - File to modify
-/// * `modifications` - Tag modifications to apply
-/// * `args` - CLI arguments for preservation options
+/// The same transaction the single-file path uses
+/// (`cli::write_transaction::write_file`): all requests or none, `-TAG=` is a
+/// deletion, and a file whose bytes did not change is `Unchanged`, never
+/// counted as updated. Handles file preservation options (backup, preserve
+/// timestamps) around an actual update only.
 fn apply_modifications(
     path: &Path,
     modifications: &[(String, OsString)],
     args: &CliArgs,
-) -> Result<()> {
+) -> std::result::Result<WriteOutcome, String> {
+    // Every write target is checked as the single-file write checks it
+    // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
+    // over a file list does: a read-only file is refused, never replaced.
+    // The atomic rename below would replace a 0444 file in a writable
+    // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
+    // `-Artist=x ro.jpg` refuses.
+    let target = fs::metadata(path)
+        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    if target.permissions().readonly() {
+        return Err(format!("File is read-only: {}", path.display()));
+    }
     // Preserve original file times if requested
-    let original_metadata = if args.preserve_file_times {
-        Some(fs::metadata(path)?)
-    } else {
-        None
+    let original_metadata = args.preserve_file_times.then_some(target);
+
+    // Create backup if requested, once the write is known to change the file.
+    // `photo.jpg` -> `photo.jpg.bak`, `a` -> `a.bak` (the single-file
+    // spelling, built on the `OsStr`; `with_extension` made `a..bak`).
+    let backup = || {
+        if !args.backup {
+            return Ok(());
+        }
+        let mut backup_path = path.as_os_str().to_owned();
+        backup_path.push(".bak");
+        fs::copy(path, PathBuf::from(backup_path))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     };
 
-    // Create backup if requested
-    if args.backup {
-        // `<ext>.bak`, built on the `OsStr`: a `to_str()` here dropped an
-        // extension that is not UTF-8, and `n.\xff` backed up to `n.bak`.
-        let backup_path = match path.extension() {
-            Some(extension) => {
-                let mut extension = extension.to_os_string();
-                extension.push(".bak");
-                path.with_extension(extension)
-            }
-            None => path.with_extension(".bak"),
-        };
-        fs::copy(path, &backup_path)?;
-    }
-
-    // Apply all modifications
-    for (tag_name, value_str) in modifications {
-        // Parse the string into the type the tag declares, not into whatever
-        // type the value's own shape suggests.
-        let tag_value = parse_cli_tag_value_os(tag_name, value_str)?;
-        modify_tag(path, tag_name, tag_value)?;
-    }
+    let outcome = write_file(path, modifications, backup)?;
 
     // Restore file times if requested
-    if let Some(metadata) = original_metadata
+    if outcome == WriteOutcome::Updated
+        && let Some(metadata) = original_metadata
         && let Ok(mtime) = metadata.modified()
     {
         use std::fs::File;
@@ -461,7 +556,7 @@ fn apply_modifications(
         }
     }
 
-    Ok(())
+    Ok(outcome)
 }
 
 /// Creates a progress bar for batch processing.
@@ -498,7 +593,7 @@ fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArg
     }
 }
 
-fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
+fn output_csv_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     let formatter = CsvFormatter;
     let mut writer = csv::Writer::from_writer(Vec::new());
 
@@ -507,8 +602,8 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
         .map_err(|e| ExifToolError::parse_error(format!("CSV formatting failed: {e}")))?;
 
     for (path, result) in results {
-        if let Ok(metadata) = result {
-            let metadata = resolved_metadata_for_structured_output(metadata, args);
+        if let Ok(report) = result {
+            let metadata = resolved_metadata_for_structured_output(&report.metadata, args);
             let rendered = formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
             // The path's own bytes, as ExifTool's `-csv` prints them.
             let source_file = os_bytes(path.as_os_str());
@@ -559,13 +654,13 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
 /// (`exiftool`:2328-2332, printed whenever more than one file is processed),
 /// including a file that has none of the requested tags; the caller prints
 /// the `%5d image files read` summary after the last one.
-fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
+fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
     let formatter = ShortFormatter;
 
     for (path, result) in results {
-        if let Ok(metadata) = result {
+        if let Ok(report) = result {
             PathLine::new("======== ").path(path).print();
-            match resolve_file_output(metadata, args) {
+            match resolve_file_output(&report.metadata, args) {
                 ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                 ResolvedFileOutput::Metadata(metadata) => {
                     let output =
@@ -583,7 +678,7 @@ fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliAr
 /// - SourceFile: file path
 /// - All metadata tags (for successful reads)
 /// - Error message (for failed reads)
-fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
+fn output_json_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     let formatter = JsonFormatter;
 
     // Build each object as a `JsonNode` tree directly. Rendering to text and
@@ -594,9 +689,20 @@ fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArg
         .iter()
         .map(|(path, result)| {
             let mut map = match result {
-                Ok(metadata) => {
-                    let metadata = resolved_metadata_for_structured_output(metadata, args);
-                    formatter.build_json_map(&metadata, None, !args.exiftool_compat())
+                Ok(report) => {
+                    let metadata = resolved_metadata_for_structured_output(&report.metadata, args);
+                    let mut map =
+                        formatter.build_json_map(&metadata, None, !args.exiftool_compat());
+                    // The `Status` marker single-file `-j` carries for a read
+                    // that did not fully parse (`JsonFormatter::
+                    // format_with_status_and_mode`); absent for `Parsed`.
+                    if report.status != ParseStatus::Parsed {
+                        map.insert(
+                            "Status".to_string(),
+                            JsonNode::String(report.status.as_str().to_string()),
+                        );
+                    }
+                    map
                 }
                 Err(e) => BTreeMap::from([("Error".to_string(), JsonNode::String(e.to_string()))]),
             };
@@ -706,14 +812,14 @@ mod json_ordering_tests {
 /// Outputs results in human-readable format.
 ///
 /// Prints each file's metadata with a file path header.
-fn output_human_readable_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) {
+fn output_human_readable_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
     let formatter = HumanReadableFormatter;
 
     for (path, result) in results {
         match result {
-            Ok(metadata) => {
+            Ok(report) => {
                 PathLine::new("File: ").path(path).print();
-                match resolve_file_output(metadata, args) {
+                match resolve_file_output(&report.metadata, args) {
                     ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                     ResolvedFileOutput::Metadata(metadata) => {
                         let output =

@@ -114,6 +114,19 @@ pub fn is_walkable_tiff(bytes: &[u8]) -> bool {
 /// of a TIFF-structured file scans with exactly this set.
 pub(crate) const WALKABLE_TIFF_MAGICS: &[u16] = &[42, 85];
 
+/// Which of ExifIFD and the GPS IFD the TIFF structure `bytes` lacks, as
+/// `(exif_missing, gps_missing)`: this in-place writer can grow either but
+/// cannot create one (pass 3 below refuses "Adding a GPS tag to a file with
+/// no GPS IFD"), so a caller holding a reconstructing writer routes such an
+/// addition there instead (`jpeg_writer::rewrite_generated_exif_payload`).
+pub(crate) fn missing_sub_ifds(bytes: &[u8]) -> Result<(bool, bool)> {
+    let scan = scan_tiff(bytes)?;
+    Ok((
+        scan.exif_ifd_offset.is_none(),
+        scan.gps_ifd_offset.is_none(),
+    ))
+}
+
 /// Walks IFD0, the ExifIFD and the GPS IFD, recording where each entry
 /// record physically sits.
 ///
@@ -306,6 +319,25 @@ pub(crate) fn rewrite_tiff_file_with_removals(
     rewrite_tiff_payload_with_removals(file_bytes, original, desired, removed, false)
 }
 
+/// Whether an XP string the caller assigned at its stored text must be
+/// rewritten: yes (`xp_strings::is_explicit_xp_set`: ExifTool re-encodes the
+/// assigned text, and a stored pair, lone surrogate or BOM decodes to text
+/// that encodes to other bytes) -- except when the entry already holds
+/// exactly the bytes this writer would emit
+/// (`exif_surgical::stored_entry_matches`), where a rewrite only moves the
+/// same bytes to the end of the file. Pinned 13.59 writes
+/// `-XPTitle='héllo wörld'` twice on tests/fixtures/tiff/sample.tif to
+/// identical bytes.
+fn explicit_xp_rewrite(
+    file_bytes: &[u8],
+    desired: &MetadataMap,
+    key: &str,
+    value: &crate::core::tag_value::TagValue,
+) -> bool {
+    crate::writers::xp_strings::is_explicit_xp_set(desired, key)
+        && crate::writers::exif_surgical::stored_entry_matches(file_bytes, key, value) != Some(true)
+}
+
 /// Embedded EXIF has no TIFF image payload to protect from whole-map clearing.
 /// The JPEG transaction owns whether the resulting empty APP1 is removed.
 pub(crate) fn rewrite_tiff_payload_with_removals(
@@ -327,10 +359,13 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         .iter()
         .find(|key| crate::writers::exif_surgical::group_removal(key).is_some())
     {
-        return Err(ExifToolError::unsupported_format(format!(
-            "Removing '{key}' from a TIFF-structured file is not supported: this \
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Removing '{key}' from a TIFF-structured file is not supported: this \
              writer edits entries in place and cannot delete a directory"
-        )));
+            ),
+        ));
     }
 
     if !embedded_exif && !desired.iter().any(|(k, _)| is_exif_family(k)) {
@@ -386,32 +421,46 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                 .iter()
                 .find(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original))
             {
-                return Err(ExifToolError::unsupported_format(format!(
-                    "Removing tag '{}' from a TIFF-structured file is not yet \
+                return Err(ExifToolError::tag_not_written(
+                    key.to_string(),
+                    format!(
+                        "Removing tag '{}' from a TIFF-structured file is not yet \
                      supported: this writer edits entries in place and cannot \
                      shrink an IFD table",
-                    key
-                )));
+                        key
+                    ),
+                ));
             }
             rowless.push((entry, None));
             continue;
         };
         if !desired.contains_key(base_key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Removing tag '{}' from a TIFF-structured file is not yet \
+            return Err(ExifToolError::tag_not_written(
+                base_key.to_string(),
+                format!(
+                    "Removing tag '{}' from a TIFF-structured file is not yet \
                  supported: this writer edits entries in place and cannot \
                  shrink an IFD table",
-                base_key
-            )));
+                    base_key
+                ),
+            ));
         }
 
         // The edit is whichever spelling the caller staged a *different* value
         // under. A value equal to its original is carried over, so an alias the
         // reader itself emitted never overwrites the entry it aliases.
+        // An XP string the caller assigned is an edit even at its original
+        // value: its text can stand for other bytes than the entry's
+        // (`xp_strings::is_explicit_xp_set`) -- unless the entry already
+        // holds exactly the bytes it encodes to (`explicit_xp_rewrite`).
         let edit = keys
             .iter()
             .find_map(|k| match (desired.get(k), original.get(k)) {
-                (Some(new), orig) if Some(new) != orig => Some((k.clone(), new.clone())),
+                (Some(new), orig)
+                    if Some(new) != orig || explicit_xp_rewrite(file_bytes, desired, k, new) =>
+                {
+                    Some((k.clone(), new.clone()))
+                }
                 _ => None,
             });
         consumed.extend(keys);
@@ -422,7 +471,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
 
         validate_changed(&key, &desired_value)?;
         let (ft, count, native) =
-            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type))?;
+            tag_value_to_field_for_key(&key, &desired_value, Some(entry.field_type), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
         write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
     }
@@ -449,32 +498,38 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // IFD1, MakerNotes). Adding it to IFD0 would fabricate a duplicate
         // under a name the file already uses, so refuse the edit instead.
         if let Some(original_value) = original.get(key) {
-            if value == original_value {
+            if value == original_value && !explicit_xp_rewrite(file_bytes, desired, key, value) {
                 continue; // untouched — carried by not touching its bytes
             }
             if !borrowed.iter().any(|k| k == key) {
-                return Err(ExifToolError::unsupported_format(format!(
-                    "Editing tag '{}' is not yet supported for TIFF-structured \
+                return Err(ExifToolError::tag_not_written(
+                    key.to_string(),
+                    format!(
+                        "Editing tag '{}' is not yet supported for TIFF-structured \
                      files: it lives outside IFD0/ExifIFD/GPS (SubIFD, IFD1 or \
                      MakerNote), which this writer carries untouched",
-                    key
-                )));
+                        key
+                    ),
+                ));
             }
             // A borrowed engine name: added below under the name's own id.
         }
 
         if requires_subifd_write(key) {
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                format!(
+                    "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
+                    key
+                ),
+            ));
         }
 
         let Some(descriptor) = get_tag_descriptor(key) else {
-            return Err(ExifToolError::parse_error(format!(
-                "Cannot add tag '{}': not a known EXIF tag",
-                key
-            )));
+            return Err(ExifToolError::tag_not_written(
+                key.to_string(),
+                "not a known EXIF tag, so it cannot be added",
+            ));
         };
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
@@ -502,19 +557,22 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             match patched {
                 Some(previous) if previous == value => continue,
                 Some(_) => {
-                    return Err(ExifToolError::unsupported_format(format!(
-                        "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, \
+                    return Err(ExifToolError::tag_not_written(
+                        key.to_string(),
+                        format!(
+                            "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, \
                          which another name already writes with a different \
                          value; write the tag under a single name.",
-                        key,
-                        entry.ifd.prefix(),
-                        tag_id,
-                    )));
+                            key,
+                            entry.ifd.prefix(),
+                            tag_id,
+                        ),
+                    ));
                 }
                 None => {}
             }
             let (ft, count, native) =
-                tag_value_to_field_for_key(key, value, Some(entry.field_type))?;
+                tag_value_to_field_for_key(key, value, Some(entry.field_type), bo)?;
             let bytes = native_to_byte_order(ft, &native, bo);
             write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
             *patched = Some(value.clone());
@@ -523,7 +581,7 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         // As in the EXIF writer: a created tag has no existing entry to take
         // an IEEE 754 width from, so the declared type has to supply it.
         let (ft, count, native) =
-            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key))?;
+            tag_value_to_field_for_key(key, value, declared_ieee_field_type(key), bo)?;
         let bytes = native_to_byte_order(ft, &native, bo);
 
         let bucket = if key.starts_with("ExifIFD:") {
@@ -607,6 +665,112 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     }
 
     Ok(out)
+}
+
+/// WriteExif seeds a directory's %mandatory entries from the tags being set
+/// anywhere in the table, not only in that directory: rewriting IFD1, it
+/// adds each IFD1 %mandatory tag (Compression, XResolution, YResolution,
+/// ResolutionUnit) that the write sets -- in IFD0 -- and IFD1 lacks, with
+/// the %mandatory value (WriteExif.pl 13.59:1150-1200: the tag is in `%set`,
+/// has no new value for IFD1, and `$$mandatory{$newID}` is defined). Pinned
+/// 13.59, `-IFD0:XResolution=1` on tests/fixtures/tiff/sample.tif (whose IFD1
+/// holds only ImageWidth, ImageHeight and Model): `+ IFD1:XResolution = '72'
+/// (mandatory)`. The values are the generated recipe's
+/// (`generated_mandatory_defaults`).
+///
+/// `desired` is the write's map: its assigned IFD0 rows (`IFD0:` or the
+/// `EXIF:` family, which writes these tags to IFD0) are the tags set.
+pub(crate) fn add_ifd1_mandatory_entries(out: &mut Vec<u8>, desired: &MetadataMap) -> Result<()> {
+    use crate::writers::mandatory_defaults_runtime::{TiffByteOrder, encode_creation_defaults};
+    let ifd0_set: Vec<u16> = desired
+        .assigned_keys()
+        .iter()
+        .filter_map(|key| {
+            let (group, name) = key.split_once(':')?;
+            if !(group.eq_ignore_ascii_case("IFD0") || group.eq_ignore_ascii_case("EXIF")) {
+                return None;
+            }
+            match name {
+                "Compression" => Some(0x0103),
+                "XResolution" => Some(0x011a),
+                "YResolution" => Some(0x011b),
+                "ResolutionUnit" => Some(0x0128),
+                _ => None,
+            }
+        })
+        .collect();
+    if ifd0_set.is_empty() || !is_walkable_tiff(out) {
+        return Ok(());
+    }
+    let scan = scan_tiff(out)?;
+    let bo = scan.byte_order;
+    let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    let order = match bo {
+        ByteOrder::LittleEndian => TiffByteOrder::Little,
+        ByteOrder::BigEndian => TiffByteOrder::Big,
+    };
+    let defaults =
+        encode_creation_defaults(recipe, "IFD1", order, &std::collections::BTreeMap::new())
+            .map_err(ExifToolError::unsupported_format)?;
+    if !defaults
+        .iter()
+        .any(|default| ifd0_set.contains(&default.tag_id))
+    {
+        return Ok(());
+    }
+    // IFD1 is IFD0's next directory.
+    let ifd0 = scan.ifd0_offset;
+    let Some(count) = out.get(ifd0..ifd0 + 2).map(|b| read_u16(b, bo) as usize) else {
+        return Ok(());
+    };
+    let next_at = ifd0 + 2 + count * 12;
+    let Some(ifd1) = out
+        .get(next_at..next_at + 4)
+        .map(|b| read_u32(b, bo) as usize)
+        .filter(|offset| *offset != 0)
+    else {
+        return Ok(());
+    };
+    let Some(ifd1_count) = out.get(ifd1..ifd1 + 2).map(|b| read_u16(b, bo) as usize) else {
+        return Ok(());
+    };
+    let Some(records) = out.get(ifd1 + 2..ifd1 + 2 + ifd1_count * 12) else {
+        return Ok(());
+    };
+    let present: Vec<u16> = records
+        .chunks_exact(12)
+        .map(|record| read_u16(&record[0..2], bo))
+        .collect();
+    let mut additions = Vec::new();
+    for default in defaults {
+        if !ifd0_set.contains(&default.tag_id) || present.contains(&default.tag_id) {
+            continue;
+        }
+        let mut inline_or_offset = [0u8; 4];
+        if default.bytes.len() <= 4 {
+            inline_or_offset[..default.bytes.len()].copy_from_slice(&default.bytes);
+        } else {
+            let at = append_aligned(out, &default.bytes);
+            put_u32(
+                &mut inline_or_offset,
+                u32::try_from(at).map_err(too_big)?,
+                bo,
+            );
+        }
+        additions.push(NewRecord {
+            tag_id: default.tag_id,
+            field_type: default.tiff_type,
+            count: default.count,
+            inline_or_offset,
+        });
+    }
+    if additions.is_empty() {
+        return Ok(());
+    }
+    let new_at = grow_ifd(out, ifd1, &additions, bo)?;
+    let new_at = u32::try_from(new_at).map_err(too_big)?;
+    put_u32(&mut out[next_at..next_at + 4], new_at, bo);
+    Ok(())
 }
 
 fn too_big(_: std::num::TryFromIntError) -> ExifToolError {

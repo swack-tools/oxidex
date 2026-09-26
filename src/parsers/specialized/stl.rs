@@ -262,28 +262,32 @@ impl STLParser {
 
 impl FormatParser for STLParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid STL signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid STL signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("STL".to_string()));
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("STL".to_string()));
 
-        let is_ascii = Self::detect_format(reader)?;
-        metadata.insert(
-            "STLFormat".to_string(),
-            TagValue::String(if is_ascii { "ASCII" } else { "Binary" }.to_string()),
-        );
+            let is_ascii = Self::detect_format(reader)?;
+            metadata.insert(
+                "STLFormat".to_string(),
+                TagValue::String(if is_ascii { "ASCII" } else { "Binary" }.to_string()),
+            );
 
-        let format_metadata = if is_ascii {
-            self.parse_ascii(reader)?
-        } else {
-            self.parse_binary(reader)?
-        };
-        for (key, value) in format_metadata {
-            metadata.insert(key, value);
-        }
-        Ok(metadata)
+            let format_metadata = if is_ascii {
+                self.parse_ascii(reader)?
+            } else {
+                self.parse_binary(reader)?
+            };
+            for (key, value) in format_metadata {
+                metadata.insert(key, value);
+            }
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -295,8 +299,12 @@ impl FormatParser for STLParser {
 ///
 /// This is a convenience wrapper around STLParser that provides a functional API.
 pub fn parse_stl_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = STLParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = STLParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

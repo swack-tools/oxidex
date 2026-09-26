@@ -278,29 +278,33 @@ impl ISOParser {
 
 impl FormatParser for ISOParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify signature
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid ISO 9660 signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify signature
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid ISO 9660 signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        metadata.insert("FileType".to_string(), TagValue::String("ISO".to_string()));
+            metadata.insert("FileType".to_string(), TagValue::String("ISO".to_string()));
 
-        // Descriptor type: 1=Primary, 2=Supplementary, 255=Terminator
-        let descriptor_type = Self::read_descriptor_type(reader)?;
-        metadata.insert(
-            "VolumeDescriptorType".to_string(),
-            TagValue::String(descriptor_type.to_string()),
-        );
+            // Descriptor type: 1=Primary, 2=Supplementary, 255=Terminator
+            let descriptor_type = Self::read_descriptor_type(reader)?;
+            metadata.insert(
+                "VolumeDescriptorType".to_string(),
+                TagValue::String(descriptor_type.to_string()),
+            );
 
-        // Extract Primary Volume Descriptor metadata
-        Self::extract_pvd_metadata(reader, &mut metadata)?;
+            // Extract Primary Volume Descriptor metadata
+            Self::extract_pvd_metadata(reader, &mut metadata)?;
 
-        // The boot record lives in a later descriptor sector, if at all.
-        Self::extract_boot_record(reader, &mut metadata)?;
+            // The boot record lives in a later descriptor sector, if at all.
+            Self::extract_boot_record(reader, &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -324,10 +328,14 @@ impl FormatParser for ISOParser {
 pub fn parse_iso_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = ISOParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("ISO parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = ISOParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("ISO parse error: {}", e))
+    })
 }
 
 #[cfg(test)]

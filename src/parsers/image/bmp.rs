@@ -165,157 +165,161 @@ impl BMPParser {
 
 impl FormatParser for BMPParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid BMP signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid BMP signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        metadata.insert("FileType".to_string(), TagValue::String("BMP".to_string()));
+            metadata.insert("FileType".to_string(), TagValue::String("BMP".to_string()));
 
-        let bmp_version = Self::read_bmp_version(reader)?;
-        if bmp_version >= 40 {
-            let version = BMP_MAIN
-                .fields
-                .iter()
-                .find(|field| field.name == "BMPVersion")
-                .and_then(|field| field.print_conv.apply(i64::from(bmp_version)))
-                .unwrap_or_else(|| bmp_version.to_string());
-            metadata.insert("File:BMPVersion".to_string(), TagValue::String(version));
+            let bmp_version = Self::read_bmp_version(reader)?;
+            if bmp_version >= 40 {
+                let version = BMP_MAIN
+                    .fields
+                    .iter()
+                    .find(|field| field.name == "BMPVersion")
+                    .and_then(|field| field.print_conv.apply(i64::from(bmp_version)))
+                    .unwrap_or_else(|| bmp_version.to_string());
+                metadata.insert("File:BMPVersion".to_string(), TagValue::String(version));
 
-            let image_length = Self::read_image_length(reader)?;
+                let image_length = Self::read_image_length(reader)?;
+                metadata.insert(
+                    "File:ImageLength".to_string(),
+                    TagValue::Integer(i64::from(image_length)),
+                );
+
+                let pixels_per_meter_x = Self::read_pixels_per_meter_x(reader)?;
+                metadata.insert(
+                    "File:PixelsPerMeterX".to_string(),
+                    TagValue::Integer(i64::from(pixels_per_meter_x)),
+                );
+
+                let pixels_per_meter_y = Self::read_pixels_per_meter_y(reader)?;
+                metadata.insert(
+                    "File:PixelsPerMeterY".to_string(),
+                    TagValue::Integer(i64::from(pixels_per_meter_y)),
+                );
+            }
+
+            let (width, height) = Self::read_dimensions(reader)?;
+            let abs_width = width.abs() as u64;
+            let abs_height = height.abs() as u64;
+
             metadata.insert(
-                "File:ImageLength".to_string(),
-                TagValue::Integer(i64::from(image_length)),
+                "File:ImageWidth".to_string(),
+                TagValue::String(abs_width.to_string()),
+            );
+            metadata.insert(
+                "File:ImageHeight".to_string(),
+                TagValue::String(abs_height.to_string()),
             );
 
-            let pixels_per_meter_x = Self::read_pixels_per_meter_x(reader)?;
+            // Add BMP: prefixed versions for format-specific tagging
+            metadata.insert("BMP:Width".to_string(), TagValue::Integer(abs_width as i64));
             metadata.insert(
-                "File:PixelsPerMeterX".to_string(),
-                TagValue::Integer(i64::from(pixels_per_meter_x)),
+                "BMP:Height".to_string(),
+                TagValue::Integer(abs_height as i64),
             );
 
-            let pixels_per_meter_y = Self::read_pixels_per_meter_y(reader)?;
+            let planes = Self::read_planes(reader)?;
+            metadata.insert("File:Planes".to_string(), TagValue::Integer(planes as i64));
+
+            let bit_depth = Self::read_bit_depth(reader)?;
             metadata.insert(
-                "File:PixelsPerMeterY".to_string(),
-                TagValue::Integer(i64::from(pixels_per_meter_y)),
-            );
-        }
-
-        let (width, height) = Self::read_dimensions(reader)?;
-        let abs_width = width.abs() as u64;
-        let abs_height = height.abs() as u64;
-
-        metadata.insert(
-            "File:ImageWidth".to_string(),
-            TagValue::String(abs_width.to_string()),
-        );
-        metadata.insert(
-            "File:ImageHeight".to_string(),
-            TagValue::String(abs_height.to_string()),
-        );
-
-        // Add BMP: prefixed versions for format-specific tagging
-        metadata.insert("BMP:Width".to_string(), TagValue::Integer(abs_width as i64));
-        metadata.insert(
-            "BMP:Height".to_string(),
-            TagValue::Integer(abs_height as i64),
-        );
-
-        let planes = Self::read_planes(reader)?;
-        metadata.insert("File:Planes".to_string(), TagValue::Integer(planes as i64));
-
-        let bit_depth = Self::read_bit_depth(reader)?;
-        metadata.insert(
-            "File:BitDepth".to_string(),
-            TagValue::String(bit_depth.to_string()),
-        );
-        // Add BMP: prefixed version for format-specific tagging
-        metadata.insert(
-            "BMP:BitDepth".to_string(),
-            TagValue::Integer(bit_depth as i64),
-        );
-
-        // Compression method
-        let compression = Self::read_compression(reader)?;
-        let compression_str = match compression {
-            0 => "None",
-            1 => "RLE 8-bit",
-            2 => "RLE 4-bit",
-            3 => "Bitfields",
-            4 => "JPEG",
-            5 => "PNG",
-            _ => "Unknown",
-        };
-        metadata.insert(
-            "File:Compression".to_string(),
-            TagValue::String(compression_str.to_string()),
-        );
-        // Add BMP: prefixed version for format-specific tagging
-        metadata.insert(
-            "BMP:Compression".to_string(),
-            TagValue::String(compression_str.to_string()),
-        );
-
-        // Resolution
-        let h_res = Self::read_h_resolution(reader)?;
-        let v_res = Self::read_v_resolution(reader)?;
-        if h_res > 0 {
-            metadata.insert(
-                "XResolution".to_string(),
-                TagValue::String(format!("{} pixels/meter", h_res)),
+                "File:BitDepth".to_string(),
+                TagValue::String(bit_depth.to_string()),
             );
             // Add BMP: prefixed version for format-specific tagging
             metadata.insert(
-                "BMP:XResolution".to_string(),
-                TagValue::String(format!("{} pixels/meter", h_res)),
+                "BMP:BitDepth".to_string(),
+                TagValue::Integer(bit_depth as i64),
             );
-        }
-        if v_res > 0 {
+
+            // Compression method
+            let compression = Self::read_compression(reader)?;
+            let compression_str = match compression {
+                0 => "None",
+                1 => "RLE 8-bit",
+                2 => "RLE 4-bit",
+                3 => "Bitfields",
+                4 => "JPEG",
+                5 => "PNG",
+                _ => "Unknown",
+            };
             metadata.insert(
-                "YResolution".to_string(),
-                TagValue::String(format!("{} pixels/meter", v_res)),
+                "File:Compression".to_string(),
+                TagValue::String(compression_str.to_string()),
             );
             // Add BMP: prefixed version for format-specific tagging
             metadata.insert(
-                "BMP:YResolution".to_string(),
-                TagValue::String(format!("{} pixels/meter", v_res)),
+                "BMP:Compression".to_string(),
+                TagValue::String(compression_str.to_string()),
             );
-        }
 
-        // Color palette information
-        let num_colors = Self::read_num_colors(reader)?;
-        if num_colors > 0 {
-            metadata.insert(
-                "File:NumColors".to_string(),
-                TagValue::Integer(num_colors as i64),
-            );
-            // Add BMP: prefixed version for format-specific tagging
-            metadata.insert(
-                "BMP:ColorCount".to_string(),
-                TagValue::Integer(num_colors as i64),
-            );
-        }
+            // Resolution
+            let h_res = Self::read_h_resolution(reader)?;
+            let v_res = Self::read_v_resolution(reader)?;
+            if h_res > 0 {
+                metadata.insert(
+                    "XResolution".to_string(),
+                    TagValue::String(format!("{} pixels/meter", h_res)),
+                );
+                // Add BMP: prefixed version for format-specific tagging
+                metadata.insert(
+                    "BMP:XResolution".to_string(),
+                    TagValue::String(format!("{} pixels/meter", h_res)),
+                );
+            }
+            if v_res > 0 {
+                metadata.insert(
+                    "YResolution".to_string(),
+                    TagValue::String(format!("{} pixels/meter", v_res)),
+                );
+                // Add BMP: prefixed version for format-specific tagging
+                metadata.insert(
+                    "BMP:YResolution".to_string(),
+                    TagValue::String(format!("{} pixels/meter", v_res)),
+                );
+            }
 
-        // Calculate image size (file size - header size, approximately)
-        // DIB header is typically at offset 14, and image data follows the color table
-        let image_data_size = reader.size().saturating_sub(14);
-        if image_data_size > 0 {
-            metadata.insert(
-                "BMP:ImageSize".to_string(),
-                TagValue::Integer(image_data_size as i64),
-            );
-        }
+            // Color palette information
+            let num_colors = Self::read_num_colors(reader)?;
+            if num_colors > 0 {
+                metadata.insert(
+                    "File:NumColors".to_string(),
+                    TagValue::Integer(num_colors as i64),
+                );
+                // Add BMP: prefixed version for format-specific tagging
+                metadata.insert(
+                    "BMP:ColorCount".to_string(),
+                    TagValue::Integer(num_colors as i64),
+                );
+            }
 
-        let important_colors = Self::read_num_important_colors(reader)?;
-        if important_colors > 0 {
-            metadata.insert(
-                "File:NumImportantColors".to_string(),
-                TagValue::Integer(important_colors as i64),
-            );
-        }
+            // Calculate image size (file size - header size, approximately)
+            // DIB header is typically at offset 14, and image data follows the color table
+            let image_data_size = reader.size().saturating_sub(14);
+            if image_data_size > 0 {
+                metadata.insert(
+                    "BMP:ImageSize".to_string(),
+                    TagValue::Integer(image_data_size as i64),
+                );
+            }
 
-        Ok(metadata)
+            let important_colors = Self::read_num_important_colors(reader)?;
+            if important_colors > 0 {
+                metadata.insert(
+                    "File:NumImportantColors".to_string(),
+                    TagValue::Integer(important_colors as i64),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -327,8 +331,12 @@ impl FormatParser for BMPParser {
 ///
 /// This is a convenience wrapper around BMPParser that provides a functional API.
 pub fn parse_bmp_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = BMPParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = BMPParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

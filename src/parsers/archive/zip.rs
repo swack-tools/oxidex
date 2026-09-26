@@ -385,331 +385,337 @@ impl ZipParser {
 
 impl FormatParser for ZipParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify ZIP signature
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be ZIP"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify ZIP signature
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be ZIP"));
+            }
 
-        let header = reader.read(0, 2)?;
-        if header != ZIP_SIGNATURE {
-            return Err(ExifToolError::parse_error("Invalid ZIP signature"));
-        }
+            let header = reader.read(0, 2)?;
+            if header != ZIP_SIGNATURE {
+                return Err(ExifToolError::parse_error("Invalid ZIP signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Read entire file into memory for zip crate
-        let size = reader.size() as usize;
-        let file_data = reader.read(0, size)?;
+            // Read entire file into memory for zip crate
+            let size = reader.size() as usize;
+            let file_data = reader.read(0, size)?;
 
-        // Every archive member's ZIP:Zip* tags, first member winning the bare
-        // key -- see `record_member_tags` for the ExifTool citations.
-        Self::record_member_tags(file_data, &mut metadata);
+            // Every archive member's ZIP:Zip* tags, first member winning the bare
+            // key -- see `record_member_tags` for the ExifTool citations.
+            Self::record_member_tags(file_data, &mut metadata);
 
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| ExifToolError::parse_error(format!("Failed to read ZIP: {}", e)))?;
+            let cursor = Cursor::new(file_data);
+            let mut archive = ZipArchive::new(cursor)
+                .map_err(|e| ExifToolError::parse_error(format!("Failed to read ZIP: {}", e)))?;
 
-        // No EIP handling here: an archive with a `CaptureOne/*.cos` member
-        // is routed to `FileFormat::EIP` by content in `detect_zip_variant`
-        // before this parser ever runs, mirroring ExifTool's `ProcessZIP`
-        // hand-off to `CaptureOne::ProcessEIP` (`ZIP.pm:619-623`). See
-        // `crate::parsers::archive::captureone`.
+            // No EIP handling here: an archive with a `CaptureOne/*.cos` member
+            // is routed to `FileFormat::EIP` by content in `detect_zip_variant`
+            // before this parser ever runs, mirroring ExifTool's `ProcessZIP`
+            // hand-off to `CaptureOne::ProcessEIP` (`ZIP.pm:619-623`). See
+            // `crate::parsers::archive::captureone`.
 
-        // Archive-level metadata
-        let file_count = archive.len();
-        metadata.insert(
-            "ZIP:FileCount".to_string(),
-            TagValue::new_integer(file_count as i64),
-        );
-
-        // Archive comment
-        let comment = archive.comment();
-        if !comment.is_empty()
-            && let Ok(comment_str) = std::str::from_utf8(comment)
-        {
+            // Archive-level metadata
+            let file_count = archive.len();
             metadata.insert(
-                "ZIP:Comment".to_string(),
-                TagValue::new_string(comment_str.to_string()),
+                "ZIP:FileCount".to_string(),
+                TagValue::new_integer(file_count as i64),
             );
-        }
 
-        // Forensic summary tracking
-        let mut total_compressed_size: u64 = 0;
-        let mut total_uncompressed_size: u64 = 0;
-        let mut encrypted_file_count = 0;
-        let mut oldest_date: Option<zip::DateTime> = None;
-        let mut newest_date: Option<zip::DateTime> = None;
-        let mut file_names = Vec::new();
-
-        // Per-file metadata extraction
-        for i in 0..file_count {
-            if let Ok(file) = archive.by_index(i) {
-                let prefix = format!("ZIP:File{}:", i + 1);
-
-                // Basic file info
+            // Archive comment
+            let comment = archive.comment();
+            if !comment.is_empty()
+                && let Ok(comment_str) = std::str::from_utf8(comment)
+            {
                 metadata.insert(
-                    format!("{}Filename", prefix),
-                    TagValue::new_string(file.name().to_string()),
+                    "ZIP:Comment".to_string(),
+                    TagValue::new_string(comment_str.to_string()),
                 );
+            }
 
-                file_names.push(file.name().to_string());
+            // Forensic summary tracking
+            let mut total_compressed_size: u64 = 0;
+            let mut total_uncompressed_size: u64 = 0;
+            let mut encrypted_file_count = 0;
+            let mut oldest_date: Option<zip::DateTime> = None;
+            let mut newest_date: Option<zip::DateTime> = None;
+            let mut file_names = Vec::new();
 
-                // Sizes
-                let compressed_size = file.compressed_size();
-                let uncompressed_size = file.size();
+            // Per-file metadata extraction
+            for i in 0..file_count {
+                if let Ok(file) = archive.by_index(i) {
+                    let prefix = format!("ZIP:File{}:", i + 1);
 
-                metadata.insert(
-                    format!("{}CompressedSize", prefix),
-                    TagValue::new_integer(compressed_size as i64),
-                );
-
-                metadata.insert(
-                    format!("{}UncompressedSize", prefix),
-                    TagValue::new_integer(uncompressed_size as i64),
-                );
-
-                total_compressed_size += compressed_size;
-                total_uncompressed_size += uncompressed_size;
-
-                // CRC32 checksum
-                metadata.insert(
-                    format!("{}CRC32", prefix),
-                    TagValue::new_string(format!("0x{:08X}", file.crc32())),
-                );
-
-                // Compression method
-                let compression = file.compression();
-                metadata.insert(
-                    format!("{}CompressionMethod", prefix),
-                    TagValue::new_string(Self::compression_method_name(compression).to_string()),
-                );
-
-                // Store compression method as integer
-                // Note: CompressionMethod enum doesn't support direct cast to i64
-                // We store the discriminant value indirectly through display
-                let compression_value = match compression {
-                    zip::CompressionMethod::Stored => 0,
-                    zip::CompressionMethod::Deflated => 8,
-                    zip::CompressionMethod::Bzip2 => 12,
-                    zip::CompressionMethod::Zstd => 93,
-                    _ => 255, // Unknown
-                };
-                metadata.insert(
-                    format!("{}CompressionMethodRaw", prefix),
-                    TagValue::new_integer(compression_value),
-                );
-
-                // Last modified date/time (DOS format -> ISO 8601).
-                // zip 8.x returns Option<DateTime> (absent when the entry has no
-                // valid DOS timestamp), so only record it when present.
-                if let Some(last_modified) = file.last_modified() {
+                    // Basic file info
                     metadata.insert(
-                        format!("{}LastModified", prefix),
-                        TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
+                        format!("{}Filename", prefix),
+                        TagValue::new_string(file.name().to_string()),
                     );
 
-                    // Track oldest and newest dates
-                    match (&oldest_date, &newest_date) {
-                        (None, None) => {
-                            oldest_date = Some(last_modified);
-                            newest_date = Some(last_modified);
-                        }
-                        (Some(oldest), Some(newest)) => {
-                            if Self::datetime_compare(&last_modified, oldest) < 0 {
+                    file_names.push(file.name().to_string());
+
+                    // Sizes
+                    let compressed_size = file.compressed_size();
+                    let uncompressed_size = file.size();
+
+                    metadata.insert(
+                        format!("{}CompressedSize", prefix),
+                        TagValue::new_integer(compressed_size as i64),
+                    );
+
+                    metadata.insert(
+                        format!("{}UncompressedSize", prefix),
+                        TagValue::new_integer(uncompressed_size as i64),
+                    );
+
+                    total_compressed_size += compressed_size;
+                    total_uncompressed_size += uncompressed_size;
+
+                    // CRC32 checksum
+                    metadata.insert(
+                        format!("{}CRC32", prefix),
+                        TagValue::new_string(format!("0x{:08X}", file.crc32())),
+                    );
+
+                    // Compression method
+                    let compression = file.compression();
+                    metadata.insert(
+                        format!("{}CompressionMethod", prefix),
+                        TagValue::new_string(
+                            Self::compression_method_name(compression).to_string(),
+                        ),
+                    );
+
+                    // Store compression method as integer
+                    // Note: CompressionMethod enum doesn't support direct cast to i64
+                    // We store the discriminant value indirectly through display
+                    let compression_value = match compression {
+                        zip::CompressionMethod::Stored => 0,
+                        zip::CompressionMethod::Deflated => 8,
+                        zip::CompressionMethod::Bzip2 => 12,
+                        zip::CompressionMethod::Zstd => 93,
+                        _ => 255, // Unknown
+                    };
+                    metadata.insert(
+                        format!("{}CompressionMethodRaw", prefix),
+                        TagValue::new_integer(compression_value),
+                    );
+
+                    // Last modified date/time (DOS format -> ISO 8601).
+                    // zip 8.x returns Option<DateTime> (absent when the entry has no
+                    // valid DOS timestamp), so only record it when present.
+                    if let Some(last_modified) = file.last_modified() {
+                        metadata.insert(
+                            format!("{}LastModified", prefix),
+                            TagValue::new_string(Self::datetime_to_iso8601(last_modified)),
+                        );
+
+                        // Track oldest and newest dates
+                        match (&oldest_date, &newest_date) {
+                            (None, None) => {
                                 oldest_date = Some(last_modified);
-                            }
-                            if Self::datetime_compare(&last_modified, newest) > 0 {
                                 newest_date = Some(last_modified);
                             }
+                            (Some(oldest), Some(newest)) => {
+                                if Self::datetime_compare(&last_modified, oldest) < 0 {
+                                    oldest_date = Some(last_modified);
+                                }
+                                if Self::datetime_compare(&last_modified, newest) > 0 {
+                                    newest_date = Some(last_modified);
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
 
-                // File attributes (Unix mode if available)
-                if let Some(mode) = file.unix_mode() {
-                    metadata.insert(
-                        format!("{}UnixMode", prefix),
-                        TagValue::new_string(format!("0{:o}", mode)),
-                    );
-                }
-
-                // Encryption detection - check if file name suggests encryption
-                // Note: zip crate doesn't expose encryption flags directly in stable API
-                // We detect this indirectly through available methods
-                let is_encrypted = file.compressed_size() > 0
-                    && file.compression() == zip::CompressionMethod::Stored
-                    && file.crc32() == 0;
-
-                if is_encrypted {
-                    encrypted_file_count += 1;
-                    metadata.insert(
-                        format!("{}IsEncrypted", prefix),
-                        TagValue::new_string("true".to_string()),
-                    );
-                }
-
-                // Version made by
-                let (system, version) = file.version_made_by();
-                metadata.insert(
-                    format!("{}VersionMadeBy", prefix),
-                    TagValue::new_string(format!("{}.{}", system, version)),
-                );
-
-                // Is directory
-                if file.is_dir() {
-                    metadata.insert(
-                        format!("{}IsDirectory", prefix),
-                        TagValue::new_string("true".to_string()),
-                    );
-                }
-            }
-        }
-
-        // Comma-separated file list (backward compatibility)
-        if !file_names.is_empty() {
-            metadata.insert(
-                "ZIP:Files".to_string(),
-                TagValue::new_string(file_names.join(", ")),
-            );
-        }
-
-        // Forensic summary fields
-        metadata.insert(
-            "ZIP:TotalCompressedSize".to_string(),
-            TagValue::new_integer(total_compressed_size as i64),
-        );
-
-        metadata.insert(
-            "ZIP:TotalUncompressedSize".to_string(),
-            TagValue::new_integer(total_uncompressed_size as i64),
-        );
-
-        // Required archive-level tags per Worker 1 specification
-        // CompressedSize and UncompressedSize at archive level
-        metadata.insert(
-            "ZIP:CompressedSize".to_string(),
-            TagValue::new_integer(total_compressed_size as i64),
-        );
-
-        metadata.insert(
-            "ZIP:UncompressedSize".to_string(),
-            TagValue::new_integer(total_uncompressed_size as i64),
-        );
-
-        // CreationDate: Use oldest file date as archive creation date
-        if let Some(oldest) = oldest_date {
-            metadata.insert(
-                "ZIP:CreationDate".to_string(),
-                TagValue::new_string(Self::datetime_to_iso8601(oldest)),
-            );
-        }
-
-        // Determine primary compression method used in archive
-        if file_count > 0 {
-            // Find the most common compression method among files
-            let mut compression_counts: std::collections::HashMap<String, i32> =
-                std::collections::HashMap::new();
-            let mut most_common_compression = "Unknown".to_string();
-            let mut max_count = 0;
-
-            for i in 0..file_count {
-                if let Ok(file) = archive.by_index(i) {
-                    let method = Self::compression_method_name(file.compression()).to_string();
-                    let count = compression_counts.entry(method.clone()).or_insert(0);
-                    *count += 1;
-                    if *count > max_count {
-                        max_count = *count;
-                        most_common_compression = method;
+                    // File attributes (Unix mode if available)
+                    if let Some(mode) = file.unix_mode() {
+                        metadata.insert(
+                            format!("{}UnixMode", prefix),
+                            TagValue::new_string(format!("0{:o}", mode)),
+                        );
                     }
-                }
-            }
 
-            metadata.insert(
-                "ZIP:CompressionMethod".to_string(),
-                TagValue::new_string(most_common_compression),
-            );
-        }
-
-        // Determine encryption method used (if any files are encrypted)
-        if encrypted_file_count > 0 {
-            // Check the first encrypted file for encryption type
-            let mut encryption_method = "Unknown".to_string();
-            for i in 0..file_count {
-                if let Ok(file) = archive.by_index(i) {
+                    // Encryption detection - check if file name suggests encryption
+                    // Note: zip crate doesn't expose encryption flags directly in stable API
+                    // We detect this indirectly through available methods
                     let is_encrypted = file.compressed_size() > 0
                         && file.compression() == zip::CompressionMethod::Stored
                         && file.crc32() == 0;
+
                     if is_encrypted {
-                        // ZIP typically uses Traditional PKWARE or WinZip AES encryption
-                        // For now, we report as encrypted but can't determine the exact method
-                        // from the stable zip crate API
-                        encryption_method = "Traditional PKWARE".to_string();
-                        break;
+                        encrypted_file_count += 1;
+                        metadata.insert(
+                            format!("{}IsEncrypted", prefix),
+                            TagValue::new_string("true".to_string()),
+                        );
+                    }
+
+                    // Version made by
+                    let (system, version) = file.version_made_by();
+                    metadata.insert(
+                        format!("{}VersionMadeBy", prefix),
+                        TagValue::new_string(format!("{}.{}", system, version)),
+                    );
+
+                    // Is directory
+                    if file.is_dir() {
+                        metadata.insert(
+                            format!("{}IsDirectory", prefix),
+                            TagValue::new_string("true".to_string()),
+                        );
                     }
                 }
             }
+
+            // Comma-separated file list (backward compatibility)
+            if !file_names.is_empty() {
+                metadata.insert(
+                    "ZIP:Files".to_string(),
+                    TagValue::new_string(file_names.join(", ")),
+                );
+            }
+
+            // Forensic summary fields
             metadata.insert(
-                "ZIP:EncryptionMethod".to_string(),
-                TagValue::new_string(encryption_method),
+                "ZIP:TotalCompressedSize".to_string(),
+                TagValue::new_integer(total_compressed_size as i64),
             );
-        }
 
-        // SelfExtractingArchive: Check for executable markers
-        // A self-extracting archive typically has a prepended executable stub
-        // We detect this by checking if there's data before the ZIP signature
-        let first_bytes = reader.read(0, 4)?;
-        let is_self_extracting = !first_bytes.starts_with(ZIP_SIGNATURE);
-
-        metadata.insert(
-            "ZIP:SelfExtractingArchive".to_string(),
-            TagValue::new_string(is_self_extracting.to_string()),
-        );
-
-        // Compression ratio
-        if total_uncompressed_size > 0 {
-            let ratio = (total_compressed_size as f64 / total_uncompressed_size as f64) * 100.0;
             metadata.insert(
-                "ZIP:CompressionRatio".to_string(),
-                TagValue::new_string(format!("{:.2}%", ratio)),
+                "ZIP:TotalUncompressedSize".to_string(),
+                TagValue::new_integer(total_uncompressed_size as i64),
             );
-        }
 
-        if encrypted_file_count > 0 {
+            // Required archive-level tags per Worker 1 specification
+            // CompressedSize and UncompressedSize at archive level
             metadata.insert(
-                "ZIP:EncryptedFileCount".to_string(),
-                TagValue::new_integer(encrypted_file_count),
+                "ZIP:CompressedSize".to_string(),
+                TagValue::new_integer(total_compressed_size as i64),
             );
-        }
 
-        // Date range
-        if let Some(oldest) = oldest_date {
             metadata.insert(
-                "ZIP:OldestFileDate".to_string(),
-                TagValue::new_string(Self::datetime_to_iso8601(oldest)),
+                "ZIP:UncompressedSize".to_string(),
+                TagValue::new_integer(total_uncompressed_size as i64),
             );
-        }
 
-        if let Some(newest) = newest_date {
+            // CreationDate: Use oldest file date as archive creation date
+            if let Some(oldest) = oldest_date {
+                metadata.insert(
+                    "ZIP:CreationDate".to_string(),
+                    TagValue::new_string(Self::datetime_to_iso8601(oldest)),
+                );
+            }
+
+            // Determine primary compression method used in archive
+            if file_count > 0 {
+                // Find the most common compression method among files
+                let mut compression_counts: std::collections::HashMap<String, i32> =
+                    std::collections::HashMap::new();
+                let mut most_common_compression = "Unknown".to_string();
+                let mut max_count = 0;
+
+                for i in 0..file_count {
+                    if let Ok(file) = archive.by_index(i) {
+                        let method = Self::compression_method_name(file.compression()).to_string();
+                        let count = compression_counts.entry(method.clone()).or_insert(0);
+                        *count += 1;
+                        if *count > max_count {
+                            max_count = *count;
+                            most_common_compression = method;
+                        }
+                    }
+                }
+
+                metadata.insert(
+                    "ZIP:CompressionMethod".to_string(),
+                    TagValue::new_string(most_common_compression),
+                );
+            }
+
+            // Determine encryption method used (if any files are encrypted)
+            if encrypted_file_count > 0 {
+                // Check the first encrypted file for encryption type
+                let mut encryption_method = "Unknown".to_string();
+                for i in 0..file_count {
+                    if let Ok(file) = archive.by_index(i) {
+                        let is_encrypted = file.compressed_size() > 0
+                            && file.compression() == zip::CompressionMethod::Stored
+                            && file.crc32() == 0;
+                        if is_encrypted {
+                            // ZIP typically uses Traditional PKWARE or WinZip AES encryption
+                            // For now, we report as encrypted but can't determine the exact method
+                            // from the stable zip crate API
+                            encryption_method = "Traditional PKWARE".to_string();
+                            break;
+                        }
+                    }
+                }
+                metadata.insert(
+                    "ZIP:EncryptionMethod".to_string(),
+                    TagValue::new_string(encryption_method),
+                );
+            }
+
+            // SelfExtractingArchive: Check for executable markers
+            // A self-extracting archive typically has a prepended executable stub
+            // We detect this by checking if there's data before the ZIP signature
+            let first_bytes = reader.read(0, 4)?;
+            let is_self_extracting = !first_bytes.starts_with(ZIP_SIGNATURE);
+
             metadata.insert(
-                "ZIP:NewestFileDate".to_string(),
-                TagValue::new_string(Self::datetime_to_iso8601(newest)),
+                "ZIP:SelfExtractingArchive".to_string(),
+                TagValue::new_string(is_self_extracting.to_string()),
             );
-        }
 
-        // ZIP64 detection (files over 4GB or very large archives)
-        let is_zip64 = total_uncompressed_size > 0xFFFFFFFF
-            || total_compressed_size > 0xFFFFFFFF
-            || file_count > 0xFFFF;
+            // Compression ratio
+            if total_uncompressed_size > 0 {
+                let ratio = (total_compressed_size as f64 / total_uncompressed_size as f64) * 100.0;
+                metadata.insert(
+                    "ZIP:CompressionRatio".to_string(),
+                    TagValue::new_string(format!("{:.2}%", ratio)),
+                );
+            }
 
-        if is_zip64 {
-            metadata.insert(
-                "ZIP:IsZIP64".to_string(),
-                TagValue::new_string("true".to_string()),
-            );
-        }
+            if encrypted_file_count > 0 {
+                metadata.insert(
+                    "ZIP:EncryptedFileCount".to_string(),
+                    TagValue::new_integer(encrypted_file_count),
+                );
+            }
 
-        Ok(metadata)
+            // Date range
+            if let Some(oldest) = oldest_date {
+                metadata.insert(
+                    "ZIP:OldestFileDate".to_string(),
+                    TagValue::new_string(Self::datetime_to_iso8601(oldest)),
+                );
+            }
+
+            if let Some(newest) = newest_date {
+                metadata.insert(
+                    "ZIP:NewestFileDate".to_string(),
+                    TagValue::new_string(Self::datetime_to_iso8601(newest)),
+                );
+            }
+
+            // ZIP64 detection (files over 4GB or very large archives)
+            let is_zip64 = total_uncompressed_size > 0xFFFFFFFF
+                || total_compressed_size > 0xFFFFFFFF
+                || file_count > 0xFFFF;
+
+            if is_zip64 {
+                metadata.insert(
+                    "ZIP:IsZIP64".to_string(),
+                    TagValue::new_string("true".to_string()),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -724,10 +730,14 @@ impl FormatParser for ZipParser {
 pub fn parse_zip_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = ZipParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("ZIP parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = ZipParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("ZIP parse error: {}", e))
+    })
 }
 
 /// Records every ZIP member's `ZIP:Zip*` tags into `metadata`.

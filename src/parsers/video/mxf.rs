@@ -834,101 +834,105 @@ fn parse_mxf_timestamp(data: &[u8]) -> Option<String> {
 
 impl FormatParser for MxfParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let file_size = reader.size();
-        if file_size < 32 {
-            return Err(ExifToolError::parse_error("File too small for MXF"));
-        }
-
-        // Read initial header for validation
-        let header = reader.read(0, 16)?;
-        if !Self::verify_signature(header) {
-            return Err(ExifToolError::parse_error("Invalid MXF signature"));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(32);
-
-        // Read up to first 256KB for metadata parsing
-        let read_size = std::cmp::min(file_size as usize, 262144);
-        let data = reader.read(0, read_size)?;
-
-        let mut offset = 0;
-
-        // Parse KLV triplets
-        while offset + 20 < data.len() {
-            // Ensure we have a valid UL (starts with 06.0E.2B.34)
-            if data[offset] != 0x06
-                || data[offset + 1] != 0x0E
-                || data[offset + 2] != 0x2B
-                || data[offset + 3] != 0x34
-            {
-                offset += 1;
-                continue;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let file_size = reader.size();
+            if file_size < 32 {
+                return Err(ExifToolError::parse_error("File too small for MXF"));
             }
 
-            // Read 16-byte key
-            let key: [u8; 16] = data[offset..offset + 16].try_into().unwrap_or([0; 16]);
-            offset += 16;
-
-            // Decode BER length
-            let Some((length, len_bytes)) = Self::decode_ber_length(&data[offset..]) else {
-                break;
-            };
-            offset += len_bytes;
-
-            // Limit value size for safety
-            let value_len = length as usize;
-            if value_len > 1_000_000 || offset + value_len > data.len() {
-                break;
+            // Read initial header for validation
+            let header = reader.read(0, 16)?;
+            if !Self::verify_signature(header) {
+                return Err(ExifToolError::parse_error("Invalid MXF signature"));
             }
 
-            let value_data = &data[offset..offset + value_len];
-            offset += value_len;
+            let mut metadata = MetadataMap::with_capacity(32);
 
-            // Parse based on UL type
-            match Self::identify_ul(&key) {
-                ULType::HeaderPartitionPack => {
-                    let _ = Self::parse_header_partition(value_data, &mut metadata);
+            // Read up to first 256KB for metadata parsing
+            let read_size = std::cmp::min(file_size as usize, 262144);
+            let data = reader.read(0, read_size)?;
+
+            let mut offset = 0;
+
+            // Parse KLV triplets
+            while offset + 20 < data.len() {
+                // Ensure we have a valid UL (starts with 06.0E.2B.34)
+                if data[offset] != 0x06
+                    || data[offset + 1] != 0x0E
+                    || data[offset + 2] != 0x2B
+                    || data[offset + 3] != 0x34
+                {
+                    offset += 1;
+                    continue;
                 }
-                ULType::IdentificationSet => {
-                    Self::parse_identification_set(value_data, &mut metadata);
+
+                // Read 16-byte key
+                let key: [u8; 16] = data[offset..offset + 16].try_into().unwrap_or([0; 16]);
+                offset += 16;
+
+                // Decode BER length
+                let Some((length, len_bytes)) = Self::decode_ber_length(&data[offset..]) else {
+                    break;
+                };
+                offset += len_bytes;
+
+                // Limit value size for safety
+                let value_len = length as usize;
+                if value_len > 1_000_000 || offset + value_len > data.len() {
+                    break;
                 }
-                ULType::PrefaceSet => {
-                    Self::parse_preface_set(value_data, &mut metadata);
+
+                let value_data = &data[offset..offset + value_len];
+                offset += value_len;
+
+                // Parse based on UL type
+                match Self::identify_ul(&key) {
+                    ULType::HeaderPartitionPack => {
+                        let _ = Self::parse_header_partition(value_data, &mut metadata);
+                    }
+                    ULType::IdentificationSet => {
+                        Self::parse_identification_set(value_data, &mut metadata);
+                    }
+                    ULType::PrefaceSet => {
+                        Self::parse_preface_set(value_data, &mut metadata);
+                    }
+                    ULType::TimelineTrackSet | ULType::StaticTrackSet | ULType::EventTrackSet => {
+                        // These all derive from the common "Track" class, which
+                        // carries TrackID/TrackName/TrackNumber/EditRate/Origin
+                        // regardless of whether the track is a timeline, static,
+                        // or event track.
+                        Self::parse_timeline_track_set(value_data, &mut metadata);
+                    }
+                    ULType::TimecodeComponent => {
+                        Self::parse_timecode_component(value_data, &mut metadata);
+                    }
+                    ULType::SequenceSet => {
+                        Self::parse_sequence_set(value_data, &mut metadata);
+                    }
+                    ULType::WaveAudioDescriptor | ULType::AES3Descriptor => {
+                        // These subclass GenericSoundDescriptor -> FileDescriptor,
+                        // so they also carry FileDescriptor-level properties
+                        // (e.g. LinkedTrackID) in addition to their own.
+                        Self::parse_wave_audio_descriptor(value_data, &mut metadata);
+                        Self::parse_file_descriptor(value_data, &mut metadata);
+                    }
+                    ULType::FileDescriptor
+                    | ULType::GenericPictureDescriptor
+                    | ULType::GenericSoundDescriptor
+                    | ULType::SubDescriptor => {
+                        Self::parse_file_descriptor(value_data, &mut metadata);
+                    }
+                    ULType::SourcePackageSet => {
+                        Self::parse_source_package(value_data, &mut metadata);
+                    }
+                    _ => {}
                 }
-                ULType::TimelineTrackSet | ULType::StaticTrackSet | ULType::EventTrackSet => {
-                    // These all derive from the common "Track" class, which
-                    // carries TrackID/TrackName/TrackNumber/EditRate/Origin
-                    // regardless of whether the track is a timeline, static,
-                    // or event track.
-                    Self::parse_timeline_track_set(value_data, &mut metadata);
-                }
-                ULType::TimecodeComponent => {
-                    Self::parse_timecode_component(value_data, &mut metadata);
-                }
-                ULType::SequenceSet => {
-                    Self::parse_sequence_set(value_data, &mut metadata);
-                }
-                ULType::WaveAudioDescriptor | ULType::AES3Descriptor => {
-                    // These subclass GenericSoundDescriptor -> FileDescriptor,
-                    // so they also carry FileDescriptor-level properties
-                    // (e.g. LinkedTrackID) in addition to their own.
-                    Self::parse_wave_audio_descriptor(value_data, &mut metadata);
-                    Self::parse_file_descriptor(value_data, &mut metadata);
-                }
-                ULType::FileDescriptor
-                | ULType::GenericPictureDescriptor
-                | ULType::GenericSoundDescriptor
-                | ULType::SubDescriptor => {
-                    Self::parse_file_descriptor(value_data, &mut metadata);
-                }
-                ULType::SourcePackageSet => {
-                    Self::parse_source_package(value_data, &mut metadata);
-                }
-                _ => {}
             }
-        }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -938,8 +942,12 @@ impl FormatParser for MxfParser {
 
 /// Convenience function to parse MXF metadata from a reader.
 pub fn parse_mxf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MxfParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MxfParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

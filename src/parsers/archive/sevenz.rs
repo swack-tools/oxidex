@@ -68,84 +68,88 @@ impl SevenZParser {
 
 impl FormatParser for SevenZParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify signature
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid 7z signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify signature
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid 7z signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Parse start header
-        let start_header = StartHeader::parse(reader)?;
+            // Parse start header
+            let start_header = StartHeader::parse(reader)?;
 
-        // Basic metadata
-        metadata.insert("FileType".to_string(), TagValue::String("7z".to_string()));
-        metadata.insert(
-            "7zVersion".to_string(),
-            TagValue::String(format!(
-                "{}.{}",
-                start_header.major_version, start_header.minor_version
-            )),
-        );
-
-        // Start header metadata
-        metadata.insert(
-            "StartHeaderCRC".to_string(),
-            TagValue::String(format!("0x{:08X}", start_header.start_header_crc)),
-        );
-
-        // Next header (encoded header) information
-        metadata.insert(
-            "NextHeaderOffset".to_string(),
-            TagValue::String(start_header.next_header_offset.to_string()),
-        );
-        metadata.insert(
-            "NextHeaderSize".to_string(),
-            TagValue::String(start_header.next_header_size.to_string()),
-        );
-        metadata.insert(
-            "NextHeaderCRC".to_string(),
-            TagValue::String(format!("0x{:08X}", start_header.next_header_crc)),
-        );
-
-        // Calculate derived metrics
-        let data_offset = START_HEADER_SIZE as u64 + start_header.next_header_offset;
-        metadata.insert(
-            "DataOffset".to_string(),
-            TagValue::String(data_offset.to_string()),
-        );
-
-        let header_size = START_HEADER_SIZE as u64 + start_header.next_header_size;
-        metadata.insert(
-            "HeaderSize".to_string(),
-            TagValue::String(header_size.to_string()),
-        );
-
-        // Header overhead (total header size vs actual data)
-        let header_overhead = START_HEADER_SIZE as u64 + start_header.next_header_size;
-        metadata.insert(
-            "HeaderOverhead".to_string(),
-            TagValue::String(header_overhead.to_string()),
-        );
-
-        // Validate header CRC if possible
-        if let Ok(header_data) = reader.read(0, START_HEADER_SIZE) {
-            let calculated_crc = StartHeader::calculate_header_crc(header_data);
-            let crc_valid = calculated_crc == start_header.start_header_crc;
+            // Basic metadata
+            metadata.insert("FileType".to_string(), TagValue::String("7z".to_string()));
             metadata.insert(
-                "HeaderCRCValid".to_string(),
-                TagValue::String(crc_valid.to_string()),
+                "7zVersion".to_string(),
+                TagValue::String(format!(
+                    "{}.{}",
+                    start_header.major_version, start_header.minor_version
+                )),
             );
-        }
 
-        // Detect if archive has encoded header (check if next header exists)
-        let has_encoded_header = start_header.next_header_size > 0;
-        metadata.insert(
-            "HasEncodedHeader".to_string(),
-            TagValue::String(has_encoded_header.to_string()),
-        );
+            // Start header metadata
+            metadata.insert(
+                "StartHeaderCRC".to_string(),
+                TagValue::String(format!("0x{:08X}", start_header.start_header_crc)),
+            );
 
-        Ok(metadata)
+            // Next header (encoded header) information
+            metadata.insert(
+                "NextHeaderOffset".to_string(),
+                TagValue::String(start_header.next_header_offset.to_string()),
+            );
+            metadata.insert(
+                "NextHeaderSize".to_string(),
+                TagValue::String(start_header.next_header_size.to_string()),
+            );
+            metadata.insert(
+                "NextHeaderCRC".to_string(),
+                TagValue::String(format!("0x{:08X}", start_header.next_header_crc)),
+            );
+
+            // Calculate derived metrics
+            let data_offset = START_HEADER_SIZE as u64 + start_header.next_header_offset;
+            metadata.insert(
+                "DataOffset".to_string(),
+                TagValue::String(data_offset.to_string()),
+            );
+
+            let header_size = START_HEADER_SIZE as u64 + start_header.next_header_size;
+            metadata.insert(
+                "HeaderSize".to_string(),
+                TagValue::String(header_size.to_string()),
+            );
+
+            // Header overhead (total header size vs actual data)
+            let header_overhead = START_HEADER_SIZE as u64 + start_header.next_header_size;
+            metadata.insert(
+                "HeaderOverhead".to_string(),
+                TagValue::String(header_overhead.to_string()),
+            );
+
+            // Validate header CRC if possible
+            if let Ok(header_data) = reader.read(0, START_HEADER_SIZE) {
+                let calculated_crc = StartHeader::calculate_header_crc(header_data);
+                let crc_valid = calculated_crc == start_header.start_header_crc;
+                metadata.insert(
+                    "HeaderCRCValid".to_string(),
+                    TagValue::String(crc_valid.to_string()),
+                );
+            }
+
+            // Detect if archive has encoded header (check if next header exists)
+            let has_encoded_header = start_header.next_header_size > 0;
+            metadata.insert(
+                "HasEncodedHeader".to_string(),
+                TagValue::String(has_encoded_header.to_string()),
+            );
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -169,10 +173,14 @@ impl FormatParser for SevenZParser {
 pub fn parse_7z_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = SevenZParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("7z parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = SevenZParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("7z parse error: {}", e))
+    })
 }
 
 #[cfg(test)]

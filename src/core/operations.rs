@@ -26,9 +26,9 @@ use crate::core::read_report::{
 };
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
-use crate::core::tag_occurrence::ValueChannel;
 use crate::core::tiff_helpers::parse_ifd_chain_with_options;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
+use crate::core::write_transaction::WriteOutcome;
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::DetectorMode;
@@ -372,6 +372,21 @@ pub fn read_metadata_with_detector_and_options(
     detector_mode: DetectorMode,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
+    // Everything recorded by the read is the file's own; what a caller
+    // inserts or mutates afterwards is an assignment
+    // (`MetadataMap::is_assigned`).
+    read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
+        metadata.mark_read_complete();
+        metadata.set_read_source(path);
+        metadata
+    })
+}
+
+fn read_metadata_unmarked(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -621,6 +636,20 @@ pub fn read_metadata_report_with_detector(
 /// [`read_metadata_with_detector_and_options`]'s doc comment -- the same
 /// reasoning applies here.
 pub fn read_metadata_report_with_detector_and_options(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+) -> Result<ReadReport> {
+    // As `read_metadata_with_detector_and_options`: the read's occurrences
+    // are the file's, later insertions are assignments.
+    read_metadata_report_unmarked(path, detector_mode, options).map(|mut report| {
+        report.metadata.mark_read_complete();
+        report.metadata.set_read_source(path);
+        report
+    })
+}
+
+fn read_metadata_report_unmarked(
     path: &Path,
     detector_mode: DetectorMode,
     options: &ReadOptions,
@@ -885,7 +914,8 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// # Returns
 ///
 /// * `Ok(())` - Successfully validated and wrote metadata
-/// * `Err(ExifToolError)` - Validation failure, I/O error, or unsupported format
+/// * `Err(ExifToolError)` - A key that would not be written (`TagsNotWritten`),
+///   validation failure, I/O error, or unsupported format
 ///
 /// # Examples
 ///
@@ -928,8 +958,180 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 /// constraints, but they do not force strict fallback `String` matching.
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
-pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
-    write_metadata_with_removals(path, metadata, &[])
+///
+/// # What is requested, and the guarantee
+///
+/// Every row of `metadata` that is new or differs from the file's current
+/// map is a request to set it. A row of the file's map that `metadata` lacks
+/// is a request to delete it only when `metadata` is a read of this same
+/// file (`read_metadata(path)`, `Metadata::from_path`) from which the caller
+/// removed that row; a map built from scratch, or read from another file,
+/// only sets -- ExifTool's `SetNewValue` model, where a tag nobody named is
+/// never deleted (ExifTool.pod; maintainer decision on #951). Explicit
+/// deletions are [`remove_tag`]'s. The rows that describe the file rather
+/// than being stored in it (`File:`, `System:`, `Composite:`, `ExifTool:`)
+/// are never deletions, and the file-system facts among them (`FileName`,
+/// `Directory`, `FileSize`, the file dates and permissions) are never
+/// requests at all. A read-modify-write that changes nothing writes nothing.
+///
+/// The requests go through the same resolution as [`modify_tag`] and the
+/// CLI (`core::write_transaction`): an ungrouped name is written where
+/// pinned ExifTool writes it (`XPTitle` -> `IFD0:XPTitle`) or refused, and a
+/// key the format's writer cannot write -- `XMP:Title` in a JPEG, TIFF or
+/// PNG, a `File:` key, most `IFD1:` keys -- is refused. `Ok(())` means every
+/// request is in the file, proven by a read-back, and the [`WriteOutcome`]
+/// says whether the bytes changed (ExifTool `WriteInfo`'s 1 / 2); otherwise
+/// the error is
+/// [`ExifToolError::TagsNotWritten`] naming every key that would not be
+/// written, and the file is byte-identical to before the call.
+pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<WriteOutcome> {
+    write_metadata_in_call_order(path, metadata, &[])
+}
+
+/// [`write_metadata`] for a map edited by a sequence of calls, plus the
+/// `-GROUP:All=` group deletions (`"EXIF:All"`, `"GPS:All"`) among them, all
+/// in the one transaction and in call order. The C ABI's
+/// `exiftool_write_file` uses it: `mutations` is its handle's log -- the key
+/// each set or removal named, and each recorded group deletion, which names
+/// no row of the map and so cannot be carried by the map alone.
+///
+/// ExifTool applies a command's assignments in order, and a group deletion
+/// removes the values set before it (`Writer.pl`'s
+/// `RemoveNewValuesForGroup`) but not those set after it (13.59:
+/// `-EXIF:All= -IFD0:Artist=x` keeps Artist, `-IFD0:Artist=x -EXIF:All=`
+/// does not). Appending every group deletion after the map's changes made
+/// the deletion win whatever the call order, so a tag set after
+/// `exiftool_remove_tag(h, "EXIF:All")` was deleted by it. Each change of
+/// the map now takes the place of the last call that named its key (a
+/// change no call named -- a read map edited in place -- goes first), and
+/// the write transaction keeps that order (`write_transaction::plan_changes`).
+pub(crate) fn write_metadata_in_call_order(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+) -> Result<WriteOutcome> {
+    write_metadata_counted(path, metadata, mutations).map(|(outcome, _)| outcome)
+}
+
+/// [`write_metadata_in_call_order`], also returning how many sets the
+/// transaction applied and proved -- each resolved destination once (a PDF
+/// date's two spellings are one field), no-ops decided up front excluded
+/// (`write_transaction::apply_tag_changes_counted`). What a copy reports as
+/// [`CopyReport::copied`].
+pub(crate) fn write_metadata_counted(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+) -> Result<(WriteOutcome, usize)> {
+    use crate::core::write_transaction::{TagChange, changes_between};
+    use crate::writers::write_request::group_deletion;
+    let baseline = read_metadata(path)?;
+    let read = metadata.read_from(path);
+    let mut changes = changes_between(&baseline, metadata, read);
+    if read {
+        removals_in_call_order(metadata, mutations, &mut changes);
+    }
+    // Positions are 1-based in the log; 0 is "before every call".
+    let named = |call: &str, key: &str| {
+        call.eq_ignore_ascii_case(key)
+            || field_spellings(key)
+                .iter()
+                .any(|spelling| call.eq_ignore_ascii_case(spelling))
+    };
+    let mut ordered: Vec<(usize, TagChange)> = changes
+        .into_iter()
+        .map(|change| {
+            let at = mutations
+                .iter()
+                .rposition(|call| named(call, change.tag()))
+                .map_or(0, |index| index + 1);
+            (at, change)
+        })
+        .collect();
+    ordered.extend(
+        mutations
+            .iter()
+            .enumerate()
+            .filter(|(index, call)| {
+                group_deletion(call).is_some()
+                    // Back-to-back repeats of one deletion are one deletion.
+                    && (*index == 0 || mutations[index - 1] != **call)
+            })
+            .map(|(index, call)| (index + 1, TagChange::delete(call.clone()))),
+    );
+    // Stable: changes at one position keep the map's own order.
+    ordered.sort_by_key(|(at, _)| *at);
+    let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
+    if changes.is_empty() {
+        // the file already holds this map: nothing to write
+        return Ok((WriteOutcome::Unchanged, 0));
+    }
+    crate::core::write_transaction::apply_tag_changes_counted(path, &changes)
+}
+
+/// The removal calls of a read map's log (`mutations`) that the map's rows
+/// alone cannot express, made explicit in `changes`:
+///
+/// * A removal whose key the map never held under that spelling -- the
+///   read keys a tag otherwise (`XMP:Title` for a removed `XMP-dc:Title`),
+///   or the file lacks it -- is ExifTool's `-TAG=`, a deletion by name,
+///   which the transaction resolves, proves a no-op, or refuses by name.
+///   It used to change nothing and report success (the `-XMP-dc:Title=`
+///   the C ABI was asked for stayed in the file).
+/// * A PDF Info date the reader surfaces under two spellings is one field,
+///   and the last call naming either spelling decides it (#957,
+///   PRRT_kwDOQNbr5M6mRRXx): `set(PDF:CreateDate)` then
+///   `remove(PDF:CreationDate)` deletes the date, as 13.59's
+///   `-PDF:CreateDate=<new> -PDF:CreateDate=` does -- the map alone, which
+///   holds the assigned `CreateDate`, says to set it. A map written without
+///   a log (`write_metadata`) has no order to go by, and a set of the field
+///   under one spelling replaces a removal of the other.
+fn removals_in_call_order(
+    metadata: &MetadataMap,
+    mutations: &[String],
+    changes: &mut Vec<crate::core::write_transaction::TagChange>,
+) {
+    use crate::core::write_transaction::TagChange;
+    for (index, call) in mutations.iter().enumerate() {
+        let later = &mutations[index + 1..];
+        if crate::writers::write_request::group_deletion(call).is_some()
+            || later.iter().any(|next| next.eq_ignore_ascii_case(call))
+            // The last call on the key left it in the map: a set.
+            || metadata.contains_key(call)
+            // Rows describing the file are never deleted by name.
+            || call.split_once(':').is_some_and(|(group, _)| {
+                ["File", "System", "Composite", "ExifTool"]
+                    .iter()
+                    .any(|descriptive| descriptive.eq_ignore_ascii_case(group))
+            })
+        {
+            continue;
+        }
+        let spellings = field_spellings(call);
+        // A later call on the field's other spelling decides it instead.
+        if spellings.iter().any(|spelling| {
+            !spelling.eq_ignore_ascii_case(call)
+                && later.iter().any(|next| next.eq_ignore_ascii_case(spelling))
+        }) {
+            continue;
+        }
+        let field = spellings.first().copied().unwrap_or(call.as_str());
+        // The removal came after any set of the field under another spelling.
+        changes.retain(|change| {
+            change.value().is_none()
+                || !spellings
+                    .iter()
+                    .any(|spelling| spelling.eq_ignore_ascii_case(change.tag()))
+        });
+        let deleted = changes.iter().any(|change| {
+            change.value().is_none()
+                && (change.tag().eq_ignore_ascii_case(field)
+                    || change.tag().eq_ignore_ascii_case(call))
+        });
+        if !deleted {
+            changes.push(TagChange::delete(field));
+        }
+    }
 }
 
 /// [`write_metadata`], plus the keys the caller asked by name to delete. The
@@ -942,17 +1144,21 @@ pub(crate) fn write_metadata_with_removals(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
-    write_metadata_transaction(path, metadata, removed, &[])
+    write_metadata_transaction(path, metadata, removed)
 }
 
 /// One write transaction: `removed` (named tags and `<group>:All`) applied
-/// first, then the map -- and `assigned`, the keys the caller explicitly set
+/// first, then the map -- whose assigned keys are the caller's explicit sets
 /// (`modify_tag`'s tag, a batch's `-TAG=value`s), whatever their value.
 ///
-/// Provenance, not equality, decides what a set is. A value that differs
-/// from the file's is a set whatever the list says (a carried row never
-/// differs); an assigned key whose value equals the file's is a set too,
-/// which the map alone cannot show. When such a same-value set falls under
+/// Provenance, not equality, decides what a set is, and the map records it
+/// per occurrence: a value a public mutation (`insert`, `get_mut`) put there
+/// is an assignment, a row a reader produced is not
+/// (`MetadataMap::is_assigned`, the single notion the writers --
+/// this transaction, the XP strings' direct write -- all ask). A value that
+/// differs from the file's is a set whatever its provenance (a carried row
+/// never differs); an assigned key whose value equals the file's is a set
+/// too, which the values alone cannot show. When such a same-value set falls under
 /// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
 /// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
 /// ExifTool's order -- the removals, then the sets -- as two passes on a
@@ -963,9 +1169,10 @@ pub(crate) fn write_metadata_transaction(
     path: &Path,
     metadata: &MetadataMap,
     removed: &[String],
-    assigned: &[String],
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
+    let assigned = metadata.assigned_keys();
+    crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -1072,6 +1279,16 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
             file_bytes, &original, removed,
         )?;
+        // An IFD0-group edit of a Panasonic RAW/RW2/RWL that pinned
+        // ExifTool 13.59 makes in the embedded JpgFromRaw's IFD0, or in an
+        // outer `PanasonicRaw::Main` entry this writer cannot edit, is
+        // refused by name, before the no-op check can take it for one
+        // (`rw2_ifd0::refuse_rw2_ifd0_edits`).
+        if !whole_clear {
+            crate::writers::rw2_ifd0::refuse_rw2_ifd0_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
         // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
         // JpgFromRaw's own EXIF is refused by name, before the no-op check
         // (which reads only the outer directories) can take a tag held only
@@ -1116,9 +1333,10 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let plan = crate::writers::generated_public_write::plan_public_write(
             &original, metadata, removed,
         )?;
-        let out = crate::writers::generated_public_write::rewrite_tiff_transaction(
+        let mut out = crate::writers::generated_public_write::rewrite_tiff_transaction(
             file_bytes, &original, plan,
         )?;
+        crate::writers::tiff_surgical::add_ifd1_mandatory_entries(&mut out, metadata)?;
         // Every removal gone, every set present, before anything is written.
         if !whole_clear {
             crate::writers::exif_surgical::verify_exif_write(
@@ -1142,7 +1360,19 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 &out,
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
             )?;
+            // Every maker-note value still reads back, the data it locates
+            // outside the MakerNote included (`writers::makernote_guard`).
+            // Never on a whole clear or a carrier removal (a deleted carrier
+            // is not read), and a no-op returned above.
+            if !crate::writers::exif_surgical::removes_carrier(removed) {
+                crate::writers::makernote_guard::verify_makernote_preserved(
+                    crate::writers::makernote_guard::Carrier::block(file_bytes),
+                    crate::writers::makernote_guard::Carrier::block(&out),
+                    crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                )?;
+            }
         }
+        crate::writers::rw2_ifd0::verify_jpg_from_raw_kept(file_bytes, &out)?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -1253,17 +1483,27 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                     after.first().map(Vec::as_slice).unwrap_or_default(),
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
+                // The chain past IFD1 on the whole files: its IFD2 preview
+                // after the image re-pointed as ExifTool re-points it, and
+                // no other data outside the block kept (`verify_jpeg_chain`).
                 // A deleted carrier is not read (its chain went with it).
-                if let (false, Some(before), Some(after), Some(header)) = (
-                    crate::writers::exif_surgical::removes_carrier(removed),
-                    before.as_deref(),
-                    after.first(),
-                    crate::writers::exif_surgical::jpeg_exif_header_offset(file_bytes),
-                ) {
-                    crate::writers::exif_surgical::verify_chain_data_after_block(
-                        before,
-                        after,
-                        &file_bytes[header..],
+                if !crate::writers::exif_surgical::removes_carrier(removed) {
+                    crate::writers::exif_surgical::verify_jpeg_chain(
+                        file_bytes,
+                        &serialized_bytes,
+                    )?;
+                }
+                // Every maker-note value still reads back, the data it
+                // locates outside the MakerNote included -- here in the whole
+                // file, so a preview in the JPEG trailer that a longer EXIF
+                // segment would shift away is caught too
+                // (`writers::makernote_guard`). Never on a whole clear or a
+                // carrier removal (a deleted carrier is not read), and a no-op
+                // returned above.
+                if !crate::writers::exif_surgical::removes_carrier(removed) {
+                    crate::writers::makernote_guard::verify_jpeg_makernotes(
+                        file_bytes,
+                        &serialized_bytes,
                     )?;
                 }
             }
@@ -1331,7 +1571,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
 /// both TIFF-structured RAWs (NEF, CR2, IIQ, RW2, ARW, ...) and proprietary
 /// wrappers that merely embed a TIFF somewhere inside (RAF, MRW, X3F, CR3).
 /// Only the former can be edited in place.
-fn is_surgical_tiff_target(format: FileFormat, reader: &dyn FileReader) -> bool {
+pub(crate) fn is_surgical_tiff_target(format: FileFormat, reader: &dyn FileReader) -> bool {
     if !matches!(format, FileFormat::TIFF | FileFormat::CameraRaw(_)) {
         return false;
     }
@@ -1368,7 +1608,13 @@ fn validate_caller_changes(metadata: &MetadataMap, baseline: Option<&MetadataMap
         }
         // Look up tag descriptor in registry
         if let Some(descriptor) = get_tag_descriptor(tag_name) {
-            if has_reliable_value_type(tag_name) {
+            // A PDF Info date travels as text so its zone (or its absence)
+            // survives to the writer (`cli::value_parser::parse_pdf_date`;
+            // `TagValue::DateTime` cannot say "no zone").
+            let pdf_date_text = tag_name.starts_with("PDF:")
+                && matches!(tag_value, TagValue::String(_))
+                && matches!(descriptor.value_type, crate::core::ValueType::DateTime);
+            if has_reliable_value_type(tag_name) && !pdf_date_text {
                 // Pass the original tag_name (e.g., "IFD0:Make") for error messages.
                 validate_tag_value_with_name(tag_name, descriptor, tag_value)?;
             } else {
@@ -1422,6 +1668,437 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
     }
 }
 
+/// The key `modify_tag`/`remove_tag` hand to the writers for `tag_name`,
+/// or an error when no writer of this file's format would write it.
+///
+/// Without this, an ungrouped name (`XPTitle`) or a group the format's writer
+/// never visits (`XMP:Title` in a JPEG) was inserted into the map, skipped by
+/// the writer, and reported as a successful write. The hand-kept
+/// [`canonical_write_tag_name`] spellings keep their existing addresses;
+/// every other ungrouped name is resolved the way pinned ExifTool resolves it
+/// or refused (`writers::write_request::resolve_write_key`), and the result
+/// must be a key the format's writer addresses
+/// (`writers::write_request::ensure_writer_addresses`).
+pub(crate) fn resolve_write_address(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+) -> Result<String> {
+    let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    addressed?;
+    Ok(key)
+}
+
+/// [`resolve_write_address`] in two parts: the resolved key (or the error
+/// resolving it), and whether the format's writer addresses that key. A
+/// removal asks whether it is a no-op between the two (`remove_tag`): a
+/// deletion that names nothing succeeds untouched even where the writer
+/// could not have written the key.
+pub(crate) fn resolve_write_key_for(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+) -> Result<(String, Result<()>)> {
+    use crate::writers::write_request::{
+        ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
+        png_prefers_text, resolve_exif_family_key, resolve_write_key,
+    };
+    // Group and tag names are case-insensitive, as they are to ExifTool
+    // (`-exififd:ISO=200`, `-ExifIFD:iso=`): a grouped name is resolved in
+    // #943's canonical spelling (`exif_surgical::canonical_write_key`, the
+    // spelling its transaction entry uses too), or the address checks below
+    // refused `exififd` and a deletion of `ExifIFD:iso` looked absent.
+    // An ungrouped name takes the registry's spelling
+    // (`write_request::canonical_request_tag`): the hand-kept spellings below
+    // are matched exactly, so `-exposuretime=1/30` missed `ExposureTime` and
+    // was refused as a write ExifTool also applies elsewhere.
+    let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
+    let respelled = if respelled.contains(':') {
+        crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
+    } else {
+        respelled
+    };
+    let tag_name = respelled.as_str();
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    let surgical = is_surgical_tiff_target(format, &reader);
+    let png = matches!(format, FileFormat::PNG);
+    // ExifTool reads IFD0 with Exif::Main unless the TIFF header's identifier
+    // is Panasonic's 0x55, which selects PanasonicRaw::Main (ExifTool.pm:
+    // 8646-8659 vs 8718). A JPEG's APP1 TIFF and a PNG's eXIf are always
+    // Exif::Main.
+    let exif_ifd0_target = matches!(format, FileFormat::JPEG)
+        || png
+        || (surgical && {
+            let header = reader.read(0, reader.size().min(4) as usize).unwrap_or(&[]);
+            matches!(header, [b'I', b'I', 42, 0] | [b'M', b'M', 0, 42])
+        });
+    // A Panasonic RAW/RW2/RWL (IFD0 read with PanasonicRaw::Main): a bare
+    // name and `EXIF:<name>` act as `IFD0:<name>` there, and a
+    // PanasonicRaw tag no writable table names is ExifTool's "Sorry, ...
+    // doesn't exist or isn't writable" (#956's `rw2_ifd0::route_rw2_name`,
+    // measured against pinned 13.59: roll-up evidence
+    // `rw2-bare-names-oracle.txt`). Any other file, or a name neither table
+    // declares, keeps the resolution below (#945's refusal of an ungrouped
+    // name where IFD0 is not Exif::Main included).
+    let rw2_key;
+    let tag_name = if surgical && !exif_ifd0_target {
+        let file_bytes = reader.read(0, reader.size() as usize)?;
+        match crate::writers::rw2_ifd0::route_rw2_name(file_bytes, tag_name) {
+            crate::writers::rw2_ifd0::Rw2Name::Ifd0(key) => {
+                rw2_key = key;
+                rw2_key.as_str()
+            }
+            crate::writers::rw2_ifd0::Rw2Name::NotWritable => {
+                return Err(ExifToolError::tag_not_written(
+                    tag_name,
+                    crate::writers::write_request::sorry_not_writable(tag_name),
+                ));
+            }
+            crate::writers::rw2_ifd0::Rw2Name::NoOp | crate::writers::rw2_ifd0::Rw2Name::Other => {
+                tag_name
+            }
+        }
+    } else {
+        tag_name
+    };
+    let canonical = canonical_write_tag_name(tag_name);
+    let key = if canonical != tag_name {
+        // The hand-kept spellings keep their addresses, under the same checks
+        // as every other ungrouped name: only where IFD0 is EXIF, not where
+        // ExifTool writes a PNG text tag instead (a PNG's bare `Software` is
+        // ExifTool's `PNG:Software`), and never half of a write ExifTool also
+        // applies to another group (`XMP-tiff:Software`).
+        if (!exif_ifd0_target && !surgical) || (png && png_prefers_text(tag_name)) {
+            return Err(resolve_write_key(tag_name, exif_ifd0_target, png, baseline)
+                .err()
+                .unwrap_or_else(|| {
+                    ExifToolError::tag_not_written(tag_name, "name its group explicitly")
+                }));
+        }
+        ensure_not_also_updated(tag_name, canonical, baseline)?;
+        canonical.to_string()
+    } else if !tag_name.contains(':')
+        && surgical
+        && !exif_ifd0_target
+        && generated_route_resolves(tag_name)
+    {
+        // A Panasonic RAW's IFD0 is read with PanasonicRaw::Main, so the
+        // Exif::Main resolution does not apply there; the generated route's
+        // own ungrouped resolution, which predates this function, keeps
+        // answering the names it owns.
+        tag_name.to_string()
+    } else if let Some(resolved) = resolve_exif_family_key(tag_name) {
+        // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
+        resolved
+    } else {
+        resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
+    };
+    // `PNG:XMP` is oxidex's own key for the raw-packet route
+    // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
+    // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
+    // literal keyword is `XMP` (the reader reports it under this key exactly
+    // then, per `write_transaction::png_xmp_packets`'s doc): 13.59 answers
+    // `-PNG:XMP=world` and `-PNG:XMP=` alike on such a file with `Sorry,
+    // PNG:XMP doesn't exist or isn't writable` / `Nothing to do.`, file
+    // untouched (maintainer decision on PR #951 review comment 4098201945,
+    // superseding the literal-chunk edit this route used to perform). A
+    // packet write where no literal chunk exists is unaffected.
+    let addressed = if png && key == "PNG:XMP" && baseline.contains_key("PNG:XMP") {
+        Err(ExifToolError::tag_not_written(
+            tag_name,
+            crate::writers::write_request::sorry_not_writable(tag_name),
+        ))
+    } else {
+        ensure_writer_addresses(tag_name, &key, format, surgical)
+    };
+    Ok((key, addressed))
+}
+
+/// Whether deleting `key` from the file at `path` changes nothing: the map
+/// does not hold it (under any spelling) and -- for an EXIF carrier -- no
+/// entry of any EXIF block is named by it (`exif_surgical::
+/// exif_request_is_no_op`, #943's up-front no-op decision, which also sees
+/// entries the reader surfaces no row for). A PDF Info field or a PNG text
+/// tag the map lacks names nothing. Pinned ExifTool 13.59 answers such a
+/// deletion `0 image files updated` / `1 image files unchanged`, bytes
+/// untouched.
+pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -> Result<bool> {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, exif_request_is_no_op, jpeg_exif_payloads,
+    };
+    if metadata_holds(metadata, key) {
+        return Ok(false);
+    }
+    // Only where absence is provable: an EXIF directory the block scan below
+    // sees entry by entry, a PDF Info field, a PNG text tag. A group the map
+    // spells differently (the reader keys `XMP-dc:Title` as `XMP:Title`) is
+    // never judged absent from the map alone.
+    let group = key.split_once(':').map_or("", |(group, _)| group);
+    // The directory chain past IFD1 (`IFD2:`, ... -- #954's
+    // `exif_surgical::chain_key_dir`) is scanned entry by entry too: a
+    // removal naming nothing it holds is a no-op beside a real edit.
+    let exif_group = matches!(
+        group,
+        "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
+    ) || crate::writers::exif_surgical::chain_key_dir(key).is_some();
+    if !exif_group && group != "PDF" && group != "PNG" {
+        return Ok(false);
+    }
+    let removed = [key.to_string()];
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    let file_bytes = reader.read(0, reader.size() as usize)?;
+    // A PNG with a bad chunk CRC is refused before any no-op decision, as the
+    // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned
+    // 13.59 checks every CRC before it learns nothing changed.
+    if matches!(format, FileFormat::PNG) {
+        crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
+    }
+    // A single-tag removal acts on every block alike (only a group-wide
+    // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
+    // JPEG's APP1s, whose empty carrier a rewrite drops.
+    let no_op = |blocks: &[&[u8]], magics: &[u16], embedded: bool| {
+        exif_request_is_no_op(
+            blocks, blocks, magics, embedded, metadata, metadata, &removed,
+        )
+    };
+    Ok(if is_surgical_tiff_target(format, &reader) {
+        // The block scan below reads only the outer directories; a tag held
+        // only in a Panasonic RW2's embedded JpgFromRaw EXIF is not absent
+        // (ExifTool deletes it there), and #943 refuses that edit by name
+        // (`exif_surgical::refuse_embedded_jpeg_edits`) before any no-op
+        // decision -- so must this shortcut.
+        crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
+            file_bytes, metadata, metadata, &removed,
+        )?;
+        // Likewise an IFD0-group removal pinned 13.59 makes in a Panasonic
+        // RAW's embedded JpgFromRaw IFD0 (#956, `rw2_ifd0::refuse_rw2_ifd0_edits`,
+        // which the writer runs before its own no-op check).
+        crate::writers::rw2_ifd0::refuse_rw2_ifd0_edits(file_bytes, metadata, metadata, &removed)?;
+        no_op(
+            &[file_bytes],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            false,
+        )
+    } else {
+        match format {
+            FileFormat::PDF => group == "PDF",
+            // A PNG text tag the map lacks names nothing; a chunk-backed tag
+            // (`png_writer::chunk_tag_chunk`: tIME, gAMA, sRGB) names its
+            // chunk, which the map need not surface (the reader reports no
+            // `SRGBRendering`), so its deletion is a no-op only where the
+            // file holds no such chunk (13.59: `-PNG:SRGBRendering=` drops
+            // the sRGB chunk, `1 image files updated`).
+            FileFormat::PNG if group == "PNG" => {
+                match crate::writers::png_writer::chunk_tag_chunk(key) {
+                    Some(kind) => !crate::writers::png_writer::png_has_chunk(&reader, kind)?,
+                    None => true,
+                }
+            }
+            _ if !exif_group => false,
+            FileFormat::JPEG => {
+                let payloads = jpeg_exif_payloads(file_bytes)?;
+                let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                no_op(&blocks, EXIF_BLOCK_MAGICS, true)
+            }
+            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(&reader)? {
+                Some(payloads) => {
+                    let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                    no_op(&blocks, EXIF_BLOCK_MAGICS, false)
+                }
+                None => false,
+            },
+            _ => false,
+        }
+    })
+}
+
+/// The key [`modify_tag`]/[`remove_tag`] would write for `tag_name` in the
+/// file at `path`, or the error they would refuse it with. Lets a caller read
+/// back exactly the address a write request names.
+pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
+    let metadata = read_metadata(path)?;
+    resolve_write_address(path, tag_name, &metadata)
+}
+
+/// Whether `tag_name` names an EXIF-family group in a PDF: ExifTool keeps no
+/// EXIF block in a PDF, and pinned 13.59 answers every such write -- a set or
+/// a deletion, `-IFD0:Artist=you`, `-EXIF:XPTitle=v`, `-ExifIFD:ISO=200`,
+/// `-GPS:GPSAltitude=50`, `-IFD1:XResolution=300`, `-MakerNotes:OwnerName=x`,
+/// `-InteropIFD:InteropIndex=R03` on t/images/PDF.pdf and
+/// tests/fixtures/pdf/sample.pdf -- with `0 image files updated` / `1 image
+/// files unchanged`, bytes untouched. oxidex does the same instead of
+/// refusing -- for a name `SetNewValue` accepts in that group
+/// (`write_request::exif_group_answer`); any other is refused.
+pub(crate) fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
+    use crate::writers::write_request::{ExifGroupAnswer, exif_group_answer};
+    let Some((group, name)) = tag_name.rsplit_once(':') else {
+        return Ok(false);
+    };
+    let Some(answer) = exif_group_answer(group, name) else {
+        return Ok(false);
+    };
+    let reader = MMapReader::new(path)?;
+    if !matches!(detect_format(&reader)?, FileFormat::PDF) {
+        return Ok(false);
+    }
+    // Only a name `SetNewValue` accepts in that group is ExifTool's
+    // `unchanged` (it keeps no EXIF in a PDF). A name it does not define, or
+    // one with no address in the group (`GPS:Title`, pinned 13.59: `Sorry,
+    // GPS:Title doesn't exist or isn't writable`), is refused, not reported
+    // done; so is one oxidex cannot place either way.
+    let name = name.strip_suffix('#').unwrap_or(name);
+    if !crate::writers::write_request::exiftool_tag_exists(name) {
+        return Err(ExifToolError::tag_not_written(
+            tag_name,
+            format!("Tag '{tag_name}' is not defined"),
+        ));
+    }
+    match answer {
+        ExifGroupAnswer::Accepted => Ok(true),
+        ExifGroupAnswer::Rejected => Err(ExifToolError::tag_not_written(
+            tag_name,
+            format!("Sorry, {tag_name} doesn't exist or isn't writable"),
+        )),
+        ExifGroupAnswer::Unknown => Err(ExifToolError::tag_not_written(
+            tag_name,
+            format!(
+                "Cannot write '{tag_name}' to a PDF: oxidex cannot tell whether ExifTool \
+                 gives {name} an address in {group}"
+            ),
+        )),
+    }
+}
+
+/// `-GROUP:All=` (`remove_tag(path, "GPS:All")`): a group-wide deletion,
+/// decided for the library's write transaction (`core::write_transaction`).
+///
+/// An EXIF-family group (`exif_surgical::group_removal`) in a JPEG, PNG or
+/// TIFF-structured file goes to the writers' group-wide expansion (#943):
+/// `Some(key)` is the `<group>:All` removal to hand to
+/// [`write_metadata_with_removals`], whose up-front no-op check leaves a file
+/// holding nothing in the group byte-identical -- ExifTool's `0 image files
+/// updated` / `1 image files unchanged` (pinned 13.59 on t/images/PNG.png:
+/// `-GPS:All=`, `-ExifIFD:All=`, `-IFD1:All=`, `-InteropIFD:All=`,
+/// `-MakerNotes:All=`, `-IFD0:All=`, `-EXIF:All=`), and whose verifier
+/// checks the group is gone. A PDF keeps no EXIF (13.59: unchanged): `None`.
+/// Any other group is a no-op (`None`) only where [`group_is_empty`] proves
+/// the file holds none of it; otherwise the deletion is refused by name
+/// ([`ExifToolError::TagsNotWritten`]) -- never reported as an update that
+/// stripped nothing.
+pub(crate) fn plan_group_deletion(
+    path: &Path,
+    tag_name: &str,
+    group: &str,
+) -> Result<Option<String>> {
+    let key = format!("{group}:All");
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    if crate::writers::exif_surgical::group_removal(&key).is_some() {
+        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
+            || is_surgical_tiff_target(format, &reader);
+        if expanded {
+            return Ok(Some(key));
+        }
+        if matches!(format, FileFormat::PDF) {
+            return Ok(None);
+        }
+    } else {
+        drop(reader);
+        if group_is_empty(group, &read_metadata(path)?) {
+            return Ok(None);
+        }
+    }
+    Err(ExifToolError::tag_not_written(
+        tag_name,
+        format!(
+            "oxidex does not delete a whole {group} group from this file yet, and \
+             cannot prove it holds no {group} tags; delete the tags by name"
+        ),
+    ))
+}
+
+/// Whether the reader's map proves the file holds nothing in `group`.
+///
+/// Only for groups whose rows the map keys under the group's own name: XMP
+/// and XML (with every `XMP-*`/`XML-*` group), IPTC and PNG. A family-2
+/// group (`Time`, `Camera`) is no map key at all, and some family-0 groups
+/// are keyed under another spelling (`Adobe` rows as `APP14`, `MPF` as
+/// `MPF0`), so for those an absent key proves nothing: pinned 13.59 rewrites
+/// synthetic_text_001.png for `-Time:All=` although the map holds no `Time:`
+/// key.
+fn group_is_empty(group: &str, metadata: &MetadataMap) -> bool {
+    let lower = group.to_ascii_lowercase();
+    let key_group_matches = |pred: &dyn Fn(&str) -> bool| {
+        metadata.keys().any(|key| {
+            key.split_once(':')
+                .is_some_and(|(key_group, _)| pred(&key_group.to_ascii_lowercase()))
+        })
+    };
+    let family = lower.split('-').next().unwrap_or_default();
+    match family {
+        // Every XMP-* (XML-*) row is keyed under an `XMP` (`XML`) spelling:
+        // any such row makes every XMP-* group suspect.
+        "xmp" | "xml" => !key_group_matches(&|g| g.starts_with(family)),
+        // IPTC rides in a Photoshop IRB or a PNG raw profile: a row for
+        // either proves nothing about its absence.
+        "iptc" if lower == "iptc" => {
+            !key_group_matches(&|g| g == "iptc" || g == "photoshop")
+                && !metadata
+                    .keys()
+                    .any(|key| key.to_ascii_lowercase().contains("iptc"))
+        }
+        "png" if lower == "png" => !key_group_matches(&|g| g == "png"),
+        _ => false,
+    }
+}
+
+/// Every spelling under which the reader surfaces the PDF Info field `key`
+/// names: `PDF:CreateDate` and `PDF:CreationDate` (and `ModifyDate` /
+/// `ModDate`) are one field, both emitted for PDF.pdf. A single spelling
+/// otherwise.
+pub(crate) fn field_spellings(key: &str) -> &[&str] {
+    // Group and tag names compare without regard to case, as request
+    // resolution compares them (`pdf:creationdate` is `PDF:CreationDate`).
+    const FIELDS: &[&[&str]] = &[
+        &["PDF:CreateDate", "PDF:CreationDate"],
+        &["PDF:ModifyDate", "PDF:ModDate"],
+    ];
+    FIELDS
+        .iter()
+        .find(|spellings| {
+            spellings
+                .iter()
+                .any(|spelling| spelling.eq_ignore_ascii_case(key))
+        })
+        .copied()
+        .unwrap_or(&[])
+}
+
+/// Whether `metadata` holds `key` under any of its [`field_spellings`].
+pub(crate) fn metadata_holds(metadata: &MetadataMap, key: &str) -> bool {
+    let holds = |spelling: &str| {
+        metadata.contains_key(spelling)
+            || metadata
+                .keys()
+                .any(|row| row.eq_ignore_ascii_case(spelling))
+    };
+    holds(key) || field_spellings(key).iter().any(|alias| holds(alias))
+}
+
+/// Removes `key` and every other spelling of the same field. Removing only
+/// the requested spelling left the reader's alias in the map, which the PDF
+/// writer serialized straight back: `-PDF:CreateDate=` on PDF.pdf appended a
+/// revision that still carried the date and was reported as an update, and
+/// `-PDF:CreateDate=<new>` lost to the stale `CreationDate` spelling.
+pub(crate) fn remove_field(metadata: &mut MetadataMap, key: &str) {
+    metadata.remove(key);
+    for alias in field_spellings(key) {
+        metadata.remove(alias);
+    }
+}
+
 /// Modifies a single tag in a file's metadata.
 ///
 /// This is a convenience function that:
@@ -1466,21 +2143,23 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
 ///
 /// Returns an error if:
 /// - File cannot be read (IoError)
+/// - The tag would not be written (TagsNotWritten): an ungrouped name that
+///   does not resolve to one address, a group the file's writer cannot
+///   write, or a value the read-back after writing does not find
 /// - New value fails validation (InvalidTagValue)
 /// - File cannot be written (IoError)
-pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()> {
-    // Step 1: Read existing metadata (preserves all other tags)
-    let mut metadata = read_metadata(path)?;
-
-    // Step 2: Modify the single tag
-    let key = canonical_write_tag_name(tag_name);
-    metadata.insert(key, new_value);
-
-    // Step 3: Write all metadata back to file; the tag is an explicit set,
-    // whatever its value.
-    write_metadata_transaction(path, &metadata, &[], &[key.to_string()])?;
-
-    Ok(())
+///
+/// The file is unchanged whenever an error is returned.
+pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<WriteOutcome> {
+    // One request through the library's write transaction: resolved to an
+    // address the file's writer is proven to write (`resolve_write_address`),
+    // applied with every other tag preserved, and read back.
+    crate::core::write_transaction::apply_tag_changes(
+        path,
+        &[crate::core::write_transaction::TagChange::set(
+            tag_name, new_value,
+        )],
+    )
 }
 
 /// Removes a metadata tag from a file.
@@ -1495,8 +2174,10 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
 ///
 /// # Returns
 ///
-/// * `Ok(())` - Tag was removed (or didn't exist)
-/// * `Err` - I/O error or unsupported format
+/// * `Ok(())` - Tag was removed (or didn't exist), proven by a read-back
+/// * `Err` - The tag would not be removed (`TagsNotWritten`: a group the
+///   file's writer cannot write, or an entry still present after writing),
+///   I/O error or unsupported format; the file is unchanged then
 ///
 /// # Examples
 ///
@@ -1507,20 +2188,13 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
 /// // Remove the Artist tag from a JPEG file
 /// remove_tag(Path::new("photo.jpg"), "EXIF:Artist").unwrap();
 /// ```
-pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
-    // Step 1: Read existing metadata
-    let mut metadata = read_metadata(path)?;
-
-    // Step 2: Remove the tag (if it exists)
-    let key = canonical_write_tag_name(tag_name);
-    metadata.remove(key);
-
-    // Step 3: Write metadata back to file. The key goes along: an EXIF entry
-    // the reader surfaces no row for has no key to take out of the map, yet
-    // `-ExifIFD:ApplicationNotes=` still names it for deletion.
-    write_metadata_with_removals(path, &metadata, &[key.to_string()])?;
-
-    Ok(())
+pub fn remove_tag(path: &Path, tag_name: &str) -> Result<WriteOutcome> {
+    // One deletion through the library's write transaction (see
+    // `modify_tag`); deleting a tag the file does not carry is a no-op.
+    crate::core::write_transaction::apply_tag_changes(
+        path,
+        &[crate::core::write_transaction::TagChange::delete(tag_name)],
+    )
 }
 
 /// Clears all metadata from a file.
@@ -1547,14 +2221,26 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
 /// // Remove all metadata from a file (privacy)
 /// clear_all_metadata(Path::new("photo.jpg")).unwrap();
 /// ```
-pub fn clear_all_metadata(path: &Path) -> Result<()> {
-    // Create empty metadata map
-    let metadata = MetadataMap::new();
-
-    // Write empty metadata (format-specific writers handle cleanup)
-    write_metadata(path, &metadata)?;
-
-    Ok(())
+pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
+    // An empty map with no named removals is the writers' whole-carrier
+    // clear (`generated_public_write::plan_public_write`), not a series of
+    // per-tag deletions -- which `write_metadata` would now make of it. Run
+    // on a private copy so the outcome is decided by the bytes.
+    crate::core::write_transaction::transact(path, |scratch| {
+        // JPEG and PNG: ExifTool's delete lists, segment by segment and
+        // chunk by chunk (`jpeg_writer::strip_all_metadata`,
+        // `png_writer::strip_all_metadata`); the carrier writers' EXIF-only
+        // clear left XMP, JFIF, ICC, pHYs and tIME behind.
+        let bytes = std::fs::read(scratch)?;
+        let stripped = match crate::writers::jpeg_writer::strip_all_metadata(&bytes)? {
+            Some(stripped) => Some(stripped),
+            None => crate::writers::png_writer::strip_all_metadata(&bytes)?,
+        };
+        match stripped {
+            Some(stripped) => std::fs::write(scratch, stripped).map_err(ExifToolError::from),
+            None => write_metadata_with_removals(scratch, &MetadataMap::new(), &[]),
+        }
+    })
 }
 
 /// Copies metadata from a source file to a destination file.
@@ -1613,43 +2299,96 @@ pub fn clear_all_metadata(path: &Path) -> Result<()> {
 /// Returns an error if:
 /// - Source file cannot be read (IoError)
 /// - Destination file cannot be read (IoError)
+/// - A tag the caller named would not be written (TagsNotWritten, naming
+///   it). Without a filter the copy is best-effort, like ExifTool's
+///   `SetNewValuesFromFile` with no tag list ("All writable tags are set if
+///   none are specified"): every source tag the destination's writer cannot
+///   write is skipped, and [`copy_metadata_report`] returns them in
+///   [`CopyReport::uncopied_groups`] / [`CopyReport::uncopied_tags`]
+///   (maintainer decision on #951). The derived `File:`, `System:`,
+///   `Composite:` and `ExifTool:` rows are never copied.
 /// - Any tag value fails validation (InvalidTagValue)
 /// - Destination file cannot be written (IoError)
-pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<()> {
-    // Step 1: Read metadata from source file
+///
+/// The destination is unchanged whenever an error is returned.
+pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result<WriteOutcome> {
+    copy_metadata_report(src, dest, tags).map(|report| report.outcome)
+}
+
+/// What [`copy_metadata_report`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CopyReport {
+    /// Tags actually written to the destination: the sets the write
+    /// transaction applied and proved, each resolved destination once (two
+    /// filters redirected to one tag, or a PDF date's two spellings copied
+    /// from a PDF, are one copy), on the filtered and the copy-all path
+    /// alike.
+    pub copied: usize,
+    /// Tags the copy set: the source tags (one per name) and named tags
+    /// pinned ExifTool 13.59 has a writable destination for anywhere --
+    /// its tags "set from" the source. When it is zero the copy found
+    /// nothing to set (13.59: `Warning: No writable tags set from SRC`); a
+    /// tag this destination cannot hold (an EXIF tag into a PDF) was still
+    /// set, and 13.59 does not warn there.
+    pub requested: usize,
+    /// The family-1 groups of [`Self::uncopied_tags`] (`XMP-tiff`, `Canon`,
+    /// `JFIF`): where 13.59 writes and oxidex did not (never silently).
+    pub uncopied_groups: Vec<String>,
+    /// Every destination 13.59 writes that oxidex did not, as
+    /// `<family-1 group>:<tag>` (`XMP-tiff:ImageWidth`), with the reason.
+    pub uncopied_tags: Vec<crate::error::TagNotWritten>,
+    /// What the copy did to the destination's bytes.
+    pub outcome: WriteOutcome,
+}
+
+/// [`copy_metadata`], reporting how many tags were written.
+///
+/// With a filter, each entry is one ExifTool `-TagsFromFile` argument, as
+/// pinned 13.59 reads it:
+/// * `all` (or `*`, `all:all`): every source tag, as a copy without a
+///   filter; beside other selectors too (`-all -Make` is a copy-all);
+/// * `GROUP:all`, and a tag or group name with wildcards (`*Model`,
+///   `IFD0:*`): every source tag of that group or matching that name;
+/// * `-TAG`, `-GROUP:TAG`, `-GROUP:all` (ExifTool's `--TAG`: the CLI strips
+///   one `-`): excluded from the selection; exclusions alone select every
+///   tag first, as 13.59 does;
+/// * `TAG` or `GROUP:TAG`, optionally redirected (`SRC>DST` or `DST<SRC`):
+///   that one tag.
+///
+/// A group is a family-0 or family-1 group (`IFD0`, `XMP-dc`), or `EXIF` /
+/// `XMP` for any of their directories.
+///
+/// Each tag is copied **by name**, as 13.59 copies it (Writer.pl
+/// `SetNewValuesFromFile` -> `SetNewValue`): to the name's preferred group
+/// and to every other group the destination already carries it in -- a
+/// JPEG's `File:ImageWidth` into `XMP-tiff`, a PDF's Info fields into XMP,
+/// `Make` into a PNG's text chunk and its existing eXIf IFD0 -- with the
+/// value as ExifTool prints it, converted back as `-TAG=VALUE` converts it.
+/// `GROUP:all` and `GROUP:TAG` copy to that group only.
+/// (`core::tags_from_file`, `writers::copy_targets`.)
+///
+/// A selection (`all`, `GROUP:all`, a wildcard) is best-effort: every
+/// destination 13.59 writes that oxidex cannot is named, by family-1 group
+/// and tag, in [`CopyReport::uncopied_tags`] / [`CopyReport::uncopied_groups`]
+/// -- never skipped silently. A named tag is all-or-nothing: a destination
+/// it cannot reach refuses the whole copy, naming it; one the source does
+/// not carry is skipped, as ExifTool skips it (13.59: `-TagsFromFile src
+/// -XPSubject -XPTitle` copies XPTitle and says nothing about XPSubject).
+/// What 13.59 accepts and oxidex does not is refused by name, never
+/// approximated: a redirected selection (`all>XMP:all`), a redirected
+/// exclusion.
+///
+/// Every copied tag is written by one write transaction, only if every
+/// named tag is written.
+pub fn copy_metadata_report(
+    src: &Path,
+    dest: &Path,
+    tags: Option<&[String]>,
+) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
-
-    // Step 2: Read existing metadata from destination file
-    let mut dest_metadata = read_metadata(dest)?;
-
-    // Step 3: Filter and merge source tags into destination metadata
-    for (tag_name, occurrence) in source_metadata.winner_occurrences() {
-        // Check if this tag should be copied (if filter is specified)
-        let should_copy = tags.is_none_or(|filter| filter.contains(tag_name));
-
-        if should_copy {
-            // The value as the source file stores it where the producer keeps
-            // one beside its printed value (the ExifIFD engine rows: the
-            // SHORT behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
-            // placeholder, `TagOccurrence::stored`); the writer serializes
-            // stored forms, never printed ones.
-            let value = occurrence.project(ValueChannel::Stored).into_owned();
-            // An XP string copies as its stored bytes re-packed, which keeps
-            // a stored surrogate pair (ExifTool's `-TagsFromFile`). Text
-            // standing in for those bytes cannot say whether a code point
-            // above U+FFFF was a pair; refuse it rather than guess.
-            if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
-                crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
-            }
-            // Insert tag into destination (merges with existing, preserving others)
-            dest_metadata.insert(tag_name.clone(), value);
-        }
-    }
-
-    // Step 4: Write merged metadata back to destination file
-    write_metadata(dest, &dest_metadata)?;
-
-    Ok(())
+    let selectors = crate::core::tags_from_file::CopySelectors::parse(tags.unwrap_or(&[]))?;
+    crate::core::tags_from_file::copy_tags(&source_metadata, dest, &selectors)
 }
 
 // ============================================================================
@@ -2753,11 +3492,12 @@ mod tests {
 /// checking the sets: success, and the set lost (b92d0c44). Group removals
 /// cleared the directory the set had just been planned into.
 ///
-/// Known difference from the oracle, not asserted: a block or directory
-/// created so carries no mandatory entries (ExifTool adds YCbCrPositioning,
-/// ExifVersion/ComponentsConfiguration/ColorSpace, GPSVersionID...); those
-/// belong to staging/beta1/exififd-mandatory. IFD1 and InteropIFD sets are
-/// refused (a raw-carried class) where ExifTool creates the directory.
+/// A block or directory created so carries WriteExif's mandatory entries,
+/// as the oracle's does: the fresh block's IFD0 YCbCrPositioning, a
+/// re-created ExifIFD's ExifVersion/ComponentsConfiguration/ColorSpace, a
+/// re-created GPS IFD's GPSVersionID (WriteExif.pl 13.59:25-50, 714-719).
+/// InteropIFD sets are refused (a raw-carried class) where ExifTool
+/// creates the directory.
 #[cfg(test)]
 mod removal_then_set_tests {
     use super::*;
@@ -2962,6 +3702,12 @@ mod removal_then_set_tests {
                             b"MM"
                         };
                         assert_eq!(&written[..2], expected, "{label}: byte order");
+                        // The fresh block's IFD0 is created: WriteExif's
+                        // mandatory YCbCrPositioning (WriteExif.pl 13.59:28).
+                        assert!(
+                            after.contains_key("IFD0:YCbCrPositioning"),
+                            "{label}: no mandatory YCbCrPositioning"
+                        );
                     }
                 }
             }
@@ -3029,7 +3775,8 @@ mod removal_then_set_tests {
     /// `II` mark. One exception, the oracle's: `IFD0:All` keeps a PNG eXIf
     /// too short for a TIFF header, and ExifTool then writes nothing
     /// ("unchanged"); this writer refuses the set there instead of dropping
-    /// it. Known difference: no mandatory YCbCrPositioning yet (#955).
+    /// it. The new block's IFD0 carries the mandatory YCbCrPositioning, as
+    /// the oracle's does.
     #[test]
     fn a_deleted_unreadable_carrier_is_never_parsed() {
         let dir = tempfile::tempdir().unwrap();
@@ -3071,6 +3818,10 @@ mod removal_then_set_tests {
                             carrier == "u.png" && group == "IFD0:All" && payload.starts_with(b"II");
                         let expected: &[u8] = if keeps_ii { b"II" } else { b"MM" };
                         assert_eq!(&written[..2], expected, "{case}: byte order");
+                        assert!(
+                            after.contains_key("IFD0:YCbCrPositioning"),
+                            "{case}: no mandatory YCbCrPositioning"
+                        );
                     }
                 }
             }
@@ -3123,9 +3874,9 @@ mod removal_then_set_tests {
     /// (`removed = ["IFD0:Make"]`, then `IFD0:Make=Acme` with Make already
     /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`
     /// keeps Make. 00f0c398 inferred from the equal value that the row was
-    /// carried and deleted it; the transaction now records what was assigned
-    /// (`write_metadata_transaction`'s `assigned`), and a carried row -- the
-    /// same map without the assignment -- still goes. The same holds under a
+    /// carried and deleted it; the map now records what was assigned (a value
+    /// the caller inserted, `MetadataMap::is_assigned`), and a
+    /// carried row -- the same map without the assignment -- still goes. The same holds under a
     /// carrier removal (`EXIF:All` then `IFD0:Make=Acme`). JPEG and PNG, II
     /// and MM.
     #[test]
@@ -3140,13 +3891,10 @@ mod removal_then_set_tests {
                     std::fs::write(&path, &original).unwrap();
                     let map = read_metadata(&path).unwrap();
                     assert_eq!(map.get_string("IFD0:Make"), Some("Acme"), "{label}");
-                    write_metadata_transaction(
-                        &path,
-                        &map,
-                        &[removal.to_string()],
-                        &["IFD0:Make".to_string()],
-                    )
-                    .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    let mut assigned = map.clone();
+                    assigned.insert("IFD0:Make", TagValue::new_string("Acme"));
+                    write_metadata_transaction(&path, &assigned, &[removal.to_string()])
+                        .unwrap_or_else(|e| panic!("{label}: {e}"));
                     let after = read_metadata(&path).unwrap();
                     assert_eq!(
                         after.get_string("IFD0:Make"),
@@ -3159,11 +3907,90 @@ mod removal_then_set_tests {
 
                     // Carried, not assigned: the removal wins.
                     std::fs::write(&path, &original).unwrap();
-                    write_metadata_transaction(&path, &map, &[removal.to_string()], &[])
+                    write_metadata_transaction(&path, &map, &[removal.to_string()])
                         .unwrap_or_else(|e| panic!("{label} carried: {e}"));
                     assert!(
                         !read_metadata(&path).unwrap().contains_key("IFD0:Make"),
                         "{label}: carried Make kept"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every entry of IFD1 in a carrier's EXIF block, `(tag, type, count,
+    /// value bytes)`, the thumbnail pointer pair left out (its offset is
+    /// layout); `None` when there is no IFD1.
+    fn ifd1_entries(file: &[u8]) -> Option<Vec<(u16, u16, u32, Vec<u8>)>> {
+        let tiff = payload_of(file)?;
+        let scan = crate::writers::exif_surgical::scan_exif_entries(&tiff).unwrap();
+        let entries: Vec<_> = scan
+            .entries
+            .iter()
+            .filter(|entry| entry.ifd == crate::writers::exif_surgical::IfdKind::Ifd1)
+            .map(|entry| {
+                (
+                    entry.tag_id,
+                    entry.field_type,
+                    entry.count,
+                    entry.value.clone(),
+                )
+            })
+            .collect();
+        (!entries.is_empty()).then_some(entries)
+    }
+
+    /// One transaction deleting IFD1 (`IFD1:All`) or the whole carrier
+    /// (`EXIF:All`) and setting a generated IFD1 tag creates IFD1 anew, so
+    /// WriteExif gives it its other %mandatory entries (WriteExif.pl
+    /// 13.59:25-50, 714-719). Pinned ExifTool 13.59, one invocation of
+    /// `-IFD1:All= -IFD1:XResolution=300` (or `-EXIF:All= ...`), JPEG and
+    /// PNG, II and MM: IFD1 = {Compression 6, XResolution 300, YResolution
+    /// 72, ResolutionUnit 2}, the thumbnail gone. The transaction seeded
+    /// those entries, and then the group-removal verification refused them
+    /// as IFD1 content left behind (8b32abd8): a write ExifTool makes,
+    /// refused.
+    #[test]
+    fn a_recreated_ifd1_keeps_its_mandatory_entries() {
+        let Some(oracle) = crate::exiftool_oracle::graded() else {
+            eprintln!("skipping: no usable ExifTool oracle");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("r.jpg", jpeg(&tiff)), ("r.png", png(&tiff))] {
+                for group in ["IFD1:All", "EXIF:All"] {
+                    let label = format!("{bo:?} {carrier} {group}");
+                    let (result, _) = batch(
+                        dir.path(),
+                        carrier,
+                        &original,
+                        &[group],
+                        &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
+                    );
+                    result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                    // Compared in the block: the PNG reader surfaces no
+                    // IFD1 row.
+                    let ours = std::fs::read(dir.path().join(carrier)).unwrap();
+
+                    let theirs = dir.path().join(format!("oracle-{carrier}"));
+                    std::fs::write(&theirs, &original).unwrap();
+                    let status = oracle
+                        .command()
+                        .args(["-q", "-q", "-overwrite_original"])
+                        .arg(format!("-{group}="))
+                        .arg("-IFD1:XResolution=300")
+                        .arg(&theirs)
+                        .status()
+                        .unwrap();
+                    assert!(status.success(), "{label}: oracle failed");
+                    let theirs = std::fs::read(&theirs).unwrap();
+                    assert_eq!(ifd1_entries(&ours), ifd1_entries(&theirs), "{label}: IFD1");
+                    assert_eq!(
+                        ifd1_entries(&theirs).map(|e| e.len()),
+                        Some(4),
+                        "{label}: oracle IFD1"
                     );
                 }
             }
@@ -3188,6 +4015,14 @@ mod removal_then_set_tests {
                 assert_eq!(after.get_integer("ExifIFD:ISO"), Some(200), "{label}");
                 assert!(!after.contains_key("ExifIFD:ExposureProgram"), "{label}");
                 assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+                // The ExifIFD the removal deleted is created anew by the set.
+                for key in [
+                    "ExifIFD:ExifVersion",
+                    "ExifIFD:ComponentsConfiguration",
+                    "ExifIFD:ColorSpace",
+                ] {
+                    assert!(after.contains_key(key), "{label}: no mandatory {key}");
+                }
 
                 let (result, after) = batch(
                     dir.path(),
@@ -3202,23 +4037,32 @@ mod removal_then_set_tests {
                     "{label}: GPSAltitude lost"
                 );
                 assert!(!after.contains_key("GPS:GPSAltitudeRef"), "{label}");
+                assert!(
+                    after.contains_key("GPS:GPSVersionID"),
+                    "{label}: no mandatory GPSVersionID"
+                );
                 assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
 
-                // An IFD1 set: honored or refused (file untouched), never
-                // reported done and lost.
-                let (result, after) = batch(
+                // An IFD1 set: honored, never reported done and lost. Read
+                // from the block itself: the PNG reader surfaces no IFD1 row.
+                // (Its recreated IFD1 is pinned against the oracle in
+                // `a_recreated_ifd1_keeps_its_mandatory_entries`.)
+                let (result, _) = batch(
                     dir.path(),
                     carrier,
                     &original,
                     &["IFD1:All"],
                     &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
                 );
-                if result.is_ok() {
-                    assert!(
-                        after.contains_key("IFD1:XResolution"),
-                        "{label}: IFD1 set lost"
-                    );
-                }
+                result.unwrap_or_else(|e| panic!("{label} IFD1: {e}"));
+                let written = std::fs::read(dir.path().join(carrier)).unwrap();
+                assert!(
+                    ifd1_entries(&written)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|(tag, typ, count, _)| (*tag, *typ, *count) == (0x011a, 5, 1)),
+                    "{label}: IFD1 set lost"
+                );
             }
         }
     }

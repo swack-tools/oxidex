@@ -246,241 +246,247 @@ impl PhotoCDParser {
 
 impl FormatParser for PhotoCDParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let block = Self::read_ipi(reader).ok_or_else(|| {
-            ExifToolError::parse_error("not a Kodak Photo CD Image Pac (no PCD_IPI at 2048)")
-        })?;
-        let table = find_table("PhotoCD", "Main")
-            .ok_or_else(|| ExifToolError::parse_error("missing generated PhotoCD::Main table"))?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let block = Self::read_ipi(reader).ok_or_else(|| {
+                ExifToolError::parse_error("not a Kodak Photo CD Image Pac (no PCD_IPI at 2048)")
+            })?;
+            let table = find_table("PhotoCD", "Main").ok_or_else(|| {
+                ExifToolError::parse_error("missing generated PhotoCD::Main table")
+            })?;
 
-        // SetByteOrder('MM') -- PhotoCD.pm:457.
-        let decode = decode_binary_table(table, block, ByteOrder::Big);
-        let find = |name: &str| -> Option<&DecodedField> {
-            decode
-                .fields()
-                .iter()
-                .find(|field| field.field.name == name)
-        };
-        // `Orientation` (`RawConv => '$$self{Orient} = $val'`, PhotoCD.pm:402)
-        // and `CopyrightStatus` (`RawConv => '$$self{CopyrightStatus} = $val'`
-        // + `Condition => '$$self{HasSBA}'`, PhotoCD.pm:386-387) are both
-        // withheld from `emit` -- these `RawAccess`es are how `DataMembers`
-        // reaches their raw integers, exactly as ExifTool's `RawConv` does
-        // when it populates `$$self{...}` before any later tag is read.
-        let orient = find("Orientation")
-            .and_then(|field| RawAccess::new(field, Acknowledged::RAW_CONV, &ORIENTATION))
-            .and_then(|access| match access.raw() {
-                DecodedValue::Integer(v) => Some(*v),
-                _ => None,
-            });
-        let copyright_status = find("CopyrightStatus")
-            .and_then(|field| {
-                RawAccess::new(
-                    field,
-                    Acknowledged::RAW_CONV | Acknowledged::CONDITION,
-                    &COPYRIGHT_STATUS,
-                )
-            })
-            .and_then(|access| match access.raw() {
-                DecodedValue::Integer(v) => Some(*v),
-                _ => None,
-            });
-
-        let members = DataMembers {
-            has_sba: block.get(HAS_SBA_RANGE) == Some(b"SBA"),
-            orient: orient.unwrap_or(0),
-            copyright_status,
-        };
-
-        let mut metadata = MetadataMap::new();
-        // `crate::filetype` identifies PCD from the extension alone -- its
-        // magic-number pass only sees the first 1 KiB, and the marker is at
-        // 2048 -- so a correctly-named file already reports `File:FileType`
-        // and this bare key is dropped by `normalize_identity_tags`. On a PCD
-        // that arrives as `.dat`, which the pinned ExifTool still calls PCD,
-        // it fills the `Unknown` the tables produced. That fill is the one
-        // identity contribution a parser is allowed to make.
-        metadata.insert("FileType", TagValue::new_string("PCD"));
-
-        for field in decode.fields() {
-            let name = field.field.name;
-            // Every scene-balance tag is `Condition => '$$self{HasSBA}'`
-            // (PhotoCD.pm:229, :232, :327, :333). ExifTool does not report
-            // them at all on a file without the marker. This external gate is
-            // the `condition` acknowledgment every `RawAccess` below that
-            // covers `Acknowledged::CONDITION` is justified by.
-            let gated_on_sba = matches!(
-                name,
-                "SceneBalanceAlgorithmRevision"
-                    | "SceneBalanceAlgorithmCommand"
-                    | "SceneBalanceAlgorithmFilmID"
-                    | "CopyrightStatus"
-                    | "CopyrightFileName"
-            );
-            if gated_on_sba && !members.has_sba {
-                continue;
-            }
-
-            let value = match name {
-                // Hidden, and its RawConv returns undef: it exists only to set
-                // `HasSBA`, which was read from the block above.
-                "HasSBA" => continue,
-
-                "SpecificationVersion" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                    &SPECIFICATION_VERSION,
-                )
-                .and_then(|access| dotted_pair_or_na(access.raw())),
-                "AuthoringSoftwareRelease" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                    &AUTHORING_SOFTWARE_RELEASE,
-                )
-                .and_then(|access| dotted_pair_or_na(access.raw())),
-                "ImageMagnificationDescriptor" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV,
-                    &IMAGE_MAGNIFICATION_DESCRIPTOR,
-                )
-                .and_then(|access| dotted_pair(access.raw())),
-                "SceneBalanceAlgorithmRevision" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
-                    &SCENE_BALANCE_ALGORITHM_REVISION,
-                )
-                .and_then(|access| dotted_pair(access.raw())),
-                "CreateDate" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                    &CREATE_DATE,
-                )
-                .and_then(|access| unix_date(access.raw())),
-                "ModifyDate" => raw_access(
-                    field,
-                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                    &MODIFY_DATE,
-                )
-                .and_then(|access| unix_date(access.raw())),
-                "ScannerPixelSize" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_PIXEL_SIZE)
-                        .and_then(|access| scanner_pixel_size(access.raw()))
-                }
-
-                "ProductType" => raw_access(field, Acknowledged::VALUE_CONV, &PRODUCT_TYPE)
-                    .and_then(|access| trimmed_string(access.raw())),
-                "ScannerVendorID" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_VENDOR_ID)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "ScannerProductID" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_PRODUCT_ID)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "ScannerFirmwareVersion" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_FIRMWARE_VERSION)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "ScannerFirmwareDate" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_FIRMWARE_DATE)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "ScannerSerialNumber" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_SERIAL_NUMBER)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "ImageWorkstationMake" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &IMAGE_WORKSTATION_MAKE)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-                "PhotoFinisherName" => {
-                    raw_access(field, Acknowledged::VALUE_CONV, &PHOTO_FINISHER_NAME)
-                        .and_then(|access| trimmed_string(access.raw()))
-                }
-
-                "CopyrightFileName" => {
-                    if members.copyright_status != Some(COPYRIGHT_RESTRICTED) {
-                        continue;
-                    }
-                    raw_access(
-                        field,
-                        Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
-                        &COPYRIGHT_FILE_NAME,
-                    )
-                    .and_then(|access| trimmed_string(access.raw()))
-                }
-
-                "ImageWidth" | "ImageHeight" => {
-                    let citation = if name == "ImageWidth" {
-                        &IMAGE_WIDTH
-                    } else {
-                        &IMAGE_HEIGHT
-                    };
-                    let Some(access) = raw_access(field, Acknowledged::VALUE_CONV, citation) else {
-                        continue;
-                    };
-                    let DecodedValue::Integer(code) = access.raw() else {
-                        continue;
-                    };
-                    let size = if name == "ImageWidth" {
-                        base_dimension(members.orient, *code, 512, 768)
-                    } else {
-                        base_dimension(members.orient, *code, 768, 512)
-                    };
-                    metadata.insert(format!("PhotoCD:{name}"), TagValue::Integer(size));
-                    continue;
-                }
-
-                // `SceneBalanceAlgorithmCommand`/`FilmID` are `Condition`-gated
-                // exactly like `SceneBalanceAlgorithmRevision` above; every
-                // other name reaching here (`ImageMedium`, `CharacterSet`) is
-                // `Omitted::NONE`. Both cases are an enum the generator
-                // transcribed whole, with no ValueConv between the bytes and
-                // its keys, so `emit`/`emit_raw` render it directly.
-                "SceneBalanceAlgorithmCommand" => render_or_unknown(
-                    raw_access(
-                        field,
-                        Acknowledged::CONDITION,
-                        &SCENE_BALANCE_ALGORITHM_COMMAND,
-                    )
-                    .map(|access| access.emit_raw()),
-                ),
-                "SceneBalanceAlgorithmFilmID" => render_or_unknown(
-                    raw_access(
-                        field,
-                        Acknowledged::CONDITION,
-                        &SCENE_BALANCE_ALGORITHM_FILM_ID,
-                    )
-                    .map(|access| access.emit_raw()),
-                ),
-                // `RawConv => '$$self{CopyrightStatus} = $val'` sets
-                // `raw_conv`, and the `Condition => '$$self{HasSBA}'` gate
-                // (already applied above via `gated_on_sba`) sets
-                // `condition`; `emit` would otherwise refuse this field even
-                // though its two-entry `PrintConv` needs nothing else.
-                "CopyrightStatus" => render_or_unknown(
-                    raw_access(
+            // SetByteOrder('MM') -- PhotoCD.pm:457.
+            let decode = decode_binary_table(table, block, ByteOrder::Big);
+            let find = |name: &str| -> Option<&DecodedField> {
+                decode
+                    .fields()
+                    .iter()
+                    .find(|field| field.field.name == name)
+            };
+            // `Orientation` (`RawConv => '$$self{Orient} = $val'`, PhotoCD.pm:402)
+            // and `CopyrightStatus` (`RawConv => '$$self{CopyrightStatus} = $val'`
+            // + `Condition => '$$self{HasSBA}'`, PhotoCD.pm:386-387) are both
+            // withheld from `emit` -- these `RawAccess`es are how `DataMembers`
+            // reaches their raw integers, exactly as ExifTool's `RawConv` does
+            // when it populates `$$self{...}` before any later tag is read.
+            let orient = find("Orientation")
+                .and_then(|field| RawAccess::new(field, Acknowledged::RAW_CONV, &ORIENTATION))
+                .and_then(|access| match access.raw() {
+                    DecodedValue::Integer(v) => Some(*v),
+                    _ => None,
+                });
+            let copyright_status = find("CopyrightStatus")
+                .and_then(|field| {
+                    RawAccess::new(
                         field,
                         Acknowledged::RAW_CONV | Acknowledged::CONDITION,
                         &COPYRIGHT_STATUS,
                     )
-                    .map(|access| access.emit_raw()),
-                ),
-                // `RawConv => '$$self{Orient} = $val'` sets `raw_conv`; the
-                // `PrintConv` itself needs nothing else. `members.orient`
-                // above reads the same field through its own `RawAccess`.
-                "Orientation" => render_or_unknown(
-                    raw_access(field, Acknowledged::RAW_CONV, &ORIENTATION)
-                        .map(|access| access.emit_raw()),
-                ),
-                _ => render_or_unknown(field.emit()),
+                })
+                .and_then(|access| match access.raw() {
+                    DecodedValue::Integer(v) => Some(*v),
+                    _ => None,
+                });
+
+            let members = DataMembers {
+                has_sba: block.get(HAS_SBA_RANGE) == Some(b"SBA"),
+                orient: orient.unwrap_or(0),
+                copyright_status,
             };
 
-            if let Some(value) = value {
-                metadata.insert(format!("PhotoCD:{name}"), TagValue::new_string(value));
-            }
-        }
+            let mut metadata = MetadataMap::new();
+            // `crate::filetype` identifies PCD from the extension alone -- its
+            // magic-number pass only sees the first 1 KiB, and the marker is at
+            // 2048 -- so a correctly-named file already reports `File:FileType`
+            // and this bare key is dropped by `normalize_identity_tags`. On a PCD
+            // that arrives as `.dat`, which the pinned ExifTool still calls PCD,
+            // it fills the `Unknown` the tables produced. That fill is the one
+            // identity contribution a parser is allowed to make.
+            metadata.insert("FileType", TagValue::new_string("PCD"));
 
-        Ok(metadata)
+            for field in decode.fields() {
+                let name = field.field.name;
+                // Every scene-balance tag is `Condition => '$$self{HasSBA}'`
+                // (PhotoCD.pm:229, :232, :327, :333). ExifTool does not report
+                // them at all on a file without the marker. This external gate is
+                // the `condition` acknowledgment every `RawAccess` below that
+                // covers `Acknowledged::CONDITION` is justified by.
+                let gated_on_sba = matches!(
+                    name,
+                    "SceneBalanceAlgorithmRevision"
+                        | "SceneBalanceAlgorithmCommand"
+                        | "SceneBalanceAlgorithmFilmID"
+                        | "CopyrightStatus"
+                        | "CopyrightFileName"
+                );
+                if gated_on_sba && !members.has_sba {
+                    continue;
+                }
+
+                let value = match name {
+                    // Hidden, and its RawConv returns undef: it exists only to set
+                    // `HasSBA`, which was read from the block above.
+                    "HasSBA" => continue,
+
+                    "SpecificationVersion" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                        &SPECIFICATION_VERSION,
+                    )
+                    .and_then(|access| dotted_pair_or_na(access.raw())),
+                    "AuthoringSoftwareRelease" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                        &AUTHORING_SOFTWARE_RELEASE,
+                    )
+                    .and_then(|access| dotted_pair_or_na(access.raw())),
+                    "ImageMagnificationDescriptor" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV,
+                        &IMAGE_MAGNIFICATION_DESCRIPTOR,
+                    )
+                    .and_then(|access| dotted_pair(access.raw())),
+                    "SceneBalanceAlgorithmRevision" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
+                        &SCENE_BALANCE_ALGORITHM_REVISION,
+                    )
+                    .and_then(|access| dotted_pair(access.raw())),
+                    "CreateDate" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                        &CREATE_DATE,
+                    )
+                    .and_then(|access| unix_date(access.raw())),
+                    "ModifyDate" => raw_access(
+                        field,
+                        Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                        &MODIFY_DATE,
+                    )
+                    .and_then(|access| unix_date(access.raw())),
+                    "ScannerPixelSize" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_PIXEL_SIZE)
+                            .and_then(|access| scanner_pixel_size(access.raw()))
+                    }
+
+                    "ProductType" => raw_access(field, Acknowledged::VALUE_CONV, &PRODUCT_TYPE)
+                        .and_then(|access| trimmed_string(access.raw())),
+                    "ScannerVendorID" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_VENDOR_ID)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "ScannerProductID" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_PRODUCT_ID)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "ScannerFirmwareVersion" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_FIRMWARE_VERSION)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "ScannerFirmwareDate" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_FIRMWARE_DATE)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "ScannerSerialNumber" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &SCANNER_SERIAL_NUMBER)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "ImageWorkstationMake" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &IMAGE_WORKSTATION_MAKE)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+                    "PhotoFinisherName" => {
+                        raw_access(field, Acknowledged::VALUE_CONV, &PHOTO_FINISHER_NAME)
+                            .and_then(|access| trimmed_string(access.raw()))
+                    }
+
+                    "CopyrightFileName" => {
+                        if members.copyright_status != Some(COPYRIGHT_RESTRICTED) {
+                            continue;
+                        }
+                        raw_access(
+                            field,
+                            Acknowledged::VALUE_CONV | Acknowledged::CONDITION,
+                            &COPYRIGHT_FILE_NAME,
+                        )
+                        .and_then(|access| trimmed_string(access.raw()))
+                    }
+
+                    "ImageWidth" | "ImageHeight" => {
+                        let citation = if name == "ImageWidth" {
+                            &IMAGE_WIDTH
+                        } else {
+                            &IMAGE_HEIGHT
+                        };
+                        let Some(access) = raw_access(field, Acknowledged::VALUE_CONV, citation)
+                        else {
+                            continue;
+                        };
+                        let DecodedValue::Integer(code) = access.raw() else {
+                            continue;
+                        };
+                        let size = if name == "ImageWidth" {
+                            base_dimension(members.orient, *code, 512, 768)
+                        } else {
+                            base_dimension(members.orient, *code, 768, 512)
+                        };
+                        metadata.insert(format!("PhotoCD:{name}"), TagValue::Integer(size));
+                        continue;
+                    }
+
+                    // `SceneBalanceAlgorithmCommand`/`FilmID` are `Condition`-gated
+                    // exactly like `SceneBalanceAlgorithmRevision` above; every
+                    // other name reaching here (`ImageMedium`, `CharacterSet`) is
+                    // `Omitted::NONE`. Both cases are an enum the generator
+                    // transcribed whole, with no ValueConv between the bytes and
+                    // its keys, so `emit`/`emit_raw` render it directly.
+                    "SceneBalanceAlgorithmCommand" => render_or_unknown(
+                        raw_access(
+                            field,
+                            Acknowledged::CONDITION,
+                            &SCENE_BALANCE_ALGORITHM_COMMAND,
+                        )
+                        .map(|access| access.emit_raw()),
+                    ),
+                    "SceneBalanceAlgorithmFilmID" => render_or_unknown(
+                        raw_access(
+                            field,
+                            Acknowledged::CONDITION,
+                            &SCENE_BALANCE_ALGORITHM_FILM_ID,
+                        )
+                        .map(|access| access.emit_raw()),
+                    ),
+                    // `RawConv => '$$self{CopyrightStatus} = $val'` sets
+                    // `raw_conv`, and the `Condition => '$$self{HasSBA}'` gate
+                    // (already applied above via `gated_on_sba`) sets
+                    // `condition`; `emit` would otherwise refuse this field even
+                    // though its two-entry `PrintConv` needs nothing else.
+                    "CopyrightStatus" => render_or_unknown(
+                        raw_access(
+                            field,
+                            Acknowledged::RAW_CONV | Acknowledged::CONDITION,
+                            &COPYRIGHT_STATUS,
+                        )
+                        .map(|access| access.emit_raw()),
+                    ),
+                    // `RawConv => '$$self{Orient} = $val'` sets `raw_conv`; the
+                    // `PrintConv` itself needs nothing else. `members.orient`
+                    // above reads the same field through its own `RawAccess`.
+                    "Orientation" => render_or_unknown(
+                        raw_access(field, Acknowledged::RAW_CONV, &ORIENTATION)
+                            .map(|access| access.emit_raw()),
+                    ),
+                    _ => render_or_unknown(field.emit()),
+                };
+
+                if let Some(value) = value {
+                    metadata.insert(format!("PhotoCD:{name}"), TagValue::new_string(value));
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -490,9 +496,13 @@ impl FormatParser for PhotoCDParser {
 
 /// Parses metadata from a Kodak Photo CD file.
 pub fn parse_pcd_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    PhotoCDParser
-        .parse(reader)
-        .map_err(|error| error.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        PhotoCDParser
+            .parse(reader)
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[cfg(test)]

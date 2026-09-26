@@ -64,91 +64,95 @@ const SUB_BLOCK_HEADER_LEN: usize = 10;
 
 /// Extract Paint Shop Pro metadata (`Image::ExifTool::PSP::ProcessPSP`).
 pub fn parse_psp_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let file_size = reader.size();
-    let header_len = PSP_SIGNATURE.len() + 4;
-    if file_size < header_len as u64 {
-        return Err("PSP file is too short for its 36-byte header".to_string());
-    }
-    let header = reader.read(0, header_len).map_err(|e| e.to_string())?;
-    if &header[..PSP_SIGNATURE.len()] != PSP_SIGNATURE {
-        return Err("invalid PSP signature".to_string());
-    }
-
-    // PSP.pm:237-241: `unpack('v*', $buff)` over the four version bytes --
-    // PSP is little-endian throughout (`SetByteOrder('II')`, PSP.pm:236).
-    let major = u16::from_le_bytes([header[32], header[33]]);
-    let minor = u16::from_le_bytes([header[34], header[35]]);
-
-    let mut metadata = MetadataMap::new();
-    // PSP.pm:242: `HandleTag($tagTablePtr, FileVersion => "@a")` with
-    // PSP.pm:39's `PrintConv => '$val=~tr/ /./; $val'` -- i.e. the two
-    // version numbers joined by a dot.
-    metadata.insert(
-        "PSP:FileVersion".to_string(),
-        TagValue::new_string(format!("{major}.{minor}")),
-    );
-
-    // PSP.pm:240: block headers are 10 bytes for file version > 3, else 14.
-    let header_size: u64 = if major > 3 { 10 } else { 14 };
-
-    let mut pos = FIRST_BLOCK_OFFSET;
-    loop {
-        // PSP.pm:247: the loop simply stops when a full block header cannot
-        // be read -- a short tail is normal end-of-file, not an error.
-        if pos + header_size > file_size {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let file_size = reader.size();
+        let header_len = PSP_SIGNATURE.len() + 4;
+        if file_size < header_len as u64 {
+            return Err("PSP file is too short for its 36-byte header".to_string());
         }
-        let block = reader
-            .read(pos, header_size as usize)
-            .map_err(|e| e.to_string())?;
-        if &block[..4] != BLOCK_MAGIC {
-            // PSP.pm:249: "Lost synchronization while reading main PSP
-            // blocks" -- ExifTool warns and stops.
-            break;
+        let header = reader.read(0, header_len).map_err(|e| e.to_string())?;
+        if &header[..PSP_SIGNATURE.len()] != PSP_SIGNATURE {
+            return Err("invalid PSP signature".to_string());
         }
-        let tag = u16::from_le_bytes([block[4], block[5]]);
-        // PSP.pm:253, `Get32u(\$buff, $hlen - 4)`.
-        let len_off = (header_size - 4) as usize;
-        let len = u32::from_le_bytes([
-            block[len_off],
-            block[len_off + 1],
-            block[len_off + 2],
-            block[len_off + 3],
-        ]) as u64;
 
-        let body_start = pos + header_size;
-        // PSP.pm:254: `$pos += $hlen + $len`.
-        let next = body_start + len;
+        // PSP.pm:237-241: `unpack('v*', $buff)` over the four version bytes --
+        // PSP is little-endian throughout (`SetByteOrder('II')`, PSP.pm:236).
+        let major = u16::from_le_bytes([header[32], header[33]]);
+        let minor = u16::from_le_bytes([header[34], header[35]]);
 
-        // PSP.pm:255-258: an unrecognised block ID is skipped wholesale.
-        if matches!(tag, 0 | 1 | 10) {
-            if body_start + len > file_size {
-                // PSP.pm:262, "Truncated main block".
+        let mut metadata = MetadataMap::new();
+        // PSP.pm:242: `HandleTag($tagTablePtr, FileVersion => "@a")` with
+        // PSP.pm:39's `PrintConv => '$val=~tr/ /./; $val'` -- i.e. the two
+        // version numbers joined by a dot.
+        metadata.insert(
+            "PSP:FileVersion".to_string(),
+            TagValue::new_string(format!("{major}.{minor}")),
+        );
+
+        // PSP.pm:240: block headers are 10 bytes for file version > 3, else 14.
+        let header_size: u64 = if major > 3 { 10 } else { 14 };
+
+        let mut pos = FIRST_BLOCK_OFFSET;
+        loop {
+            // PSP.pm:247: the loop simply stops when a full block header cannot
+            // be read -- a short tail is normal end-of-file, not an error.
+            if pos + header_size > file_size {
                 break;
             }
-            let body = reader
-                .read(body_start, len as usize)
+            let block = reader
+                .read(pos, header_size as usize)
                 .map_err(|e| e.to_string())?;
-            match tag {
-                0 => read_image_block(&body, major, &mut metadata),
-                1 => read_creator_block(&body, &mut metadata),
-                // PSP.pm:154-157: the only tag in `PSP::Ext` is `EXIFInfo`,
-                // which this parser deliberately does not read (see the
-                // module docs). Walking the sub-blocks would find nothing
-                // else to emit, so the block is skipped entirely.
-                _ => {}
+            if &block[..4] != BLOCK_MAGIC {
+                // PSP.pm:249: "Lost synchronization while reading main PSP
+                // blocks" -- ExifTool warns and stops.
+                break;
             }
+            let tag = u16::from_le_bytes([block[4], block[5]]);
+            // PSP.pm:253, `Get32u(\$buff, $hlen - 4)`.
+            let len_off = (header_size - 4) as usize;
+            let len = u32::from_le_bytes([
+                block[len_off],
+                block[len_off + 1],
+                block[len_off + 2],
+                block[len_off + 3],
+            ]) as u64;
+
+            let body_start = pos + header_size;
+            // PSP.pm:254: `$pos += $hlen + $len`.
+            let next = body_start + len;
+
+            // PSP.pm:255-258: an unrecognised block ID is skipped wholesale.
+            if matches!(tag, 0 | 1 | 10) {
+                if body_start + len > file_size {
+                    // PSP.pm:262, "Truncated main block".
+                    break;
+                }
+                let body = reader
+                    .read(body_start, len as usize)
+                    .map_err(|e| e.to_string())?;
+                match tag {
+                    0 => read_image_block(&body, major, &mut metadata),
+                    1 => read_creator_block(&body, &mut metadata),
+                    // PSP.pm:154-157: the only tag in `PSP::Ext` is `EXIFInfo`,
+                    // which this parser deliberately does not read (see the
+                    // module docs). Walking the sub-blocks would find nothing
+                    // else to emit, so the block is skipped entirely.
+                    _ => {}
+                }
+            }
+
+            if next <= pos {
+                // A zero-length block with a zero-length header would spin
+                // forever; ExifTool's RAF cannot rewind, so neither do we.
+                break;
+            }
+            pos = next;
         }
 
-        if next <= pos {
-            // A zero-length block with a zero-length header would spin
-            // forever; ExifTool's RAF cannot rewind, so neither do we.
-            break;
-        }
-        pos = next;
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// PSP.pm:40-55, block 0 (`ImageInfo`): a `PSP::Image` subdirectory whose

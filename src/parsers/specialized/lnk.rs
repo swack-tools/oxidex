@@ -923,109 +923,113 @@ impl FormatParser for LNKParser {
     /// Follows `ProcessLNK` (LNK.pm:1721): header, ItemID list, LinkInfo,
     /// string data, extra data blocks.
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid LNK signature"));
-        }
-
-        let file_size = usize::try_from(reader.size())
-            .map_err(|_| ExifToolError::parse_error("LNK file too large"))?;
-        let data = reader.read(0, file_size)?;
-
-        let header_len = u32le(data, 0).unwrap_or(0) as usize;
-        if header_len < LNK_HEADER_SIZE {
-            return Err(ExifToolError::parse_error("Invalid LNK header size"));
-        }
-        let header = data
-            .get(..header_len)
-            .ok_or_else(|| ExifToolError::parse_error("Truncated LNK header"))?;
-
-        let mut metadata = MetadataMap::new();
-        Self::read_header(header, &mut metadata);
-
-        let flags = u32le(header, 0x14).unwrap_or(0);
-        let is_unicode = flags & 0x80 != 0;
-        let mut pos = header_len;
-
-        // Link target ID list (LNK.pm:1760)
-        if flags & 0x01 != 0 {
-            let Some(len) = u16le(data, pos).map(|v| v as usize) else {
-                return Ok(metadata);
-            };
-            pos += 2;
-            let end = pos.saturating_add(len).min(data.len());
-            Self::read_item_id(&data[pos.min(end)..end], &mut metadata);
-            pos = end;
-        }
-
-        // Link information (LNK.pm:1772)
-        if flags & 0x02 != 0 {
-            let Some(len) = u32le(data, pos).map(|v| v as usize) else {
-                return Ok(metadata);
-            };
-            if len < 4 {
-                return Ok(metadata);
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid LNK signature"));
             }
-            let end = pos.saturating_add(len).min(data.len());
-            Self::read_link_info(&data[pos.min(end)..end], &mut metadata);
-            pos = end;
-        }
 
-        // String data (LNK.pm:1786)
-        const STRINGS: [&str; 5] = [
-            "Description",
-            "RelativePath",
-            "WorkingDirectory",
-            "CommandLineArguments",
-            "IconFileName",
-        ];
-        for (i, name) in STRINGS.iter().enumerate() {
-            if flags & (0x04 << i) == 0 {
-                continue;
-            }
-            let Some(chars) = u16le(data, pos).map(|v| v as usize) else {
-                return Ok(metadata);
-            };
-            pos += 2;
-            if chars == 0 {
-                continue;
-            }
-            // Windows limits most of these strings to 259 characters despite
-            // its own specification (LNK.pm:1797).
-            let mut chars = chars;
-            let limited = i != 3 && chars >= 260;
-            if limited && chars > 260 {
-                chars = 260;
-            }
-            let len = if is_unicode { chars * 2 } else { chars };
-            // LNK.pm:1806 tests `$raf->Read(...)` for truth, not for the full
-            // count: a short read still yields whatever was available and the
-            // walk continues. Only a read of nothing ends it.
-            let available = data.len().saturating_sub(pos);
-            if available == 0 {
-                return Ok(metadata);
-            }
-            let read = len.min(available);
-            // The length limit drops the last character, which Perl's substr
-            // silently ignores when the buffer is already shorter.
-            let keep = if limited {
-                len.saturating_sub(if is_unicode { 2 } else { 1 })
-            } else {
-                len
-            };
-            let raw = &data[pos..pos + read.min(keep)];
-            let value = if is_unicode {
-                decode_utf16le(raw)
-            } else {
-                plain_string(raw)
-            };
-            put_str(&mut metadata, name, value);
-            pos += read;
-        }
+            let file_size = usize::try_from(reader.size())
+                .map_err(|_| ExifToolError::parse_error("LNK file too large"))?;
+            let data = reader.read(0, file_size)?;
 
-        // Extra data blocks (LNK.pm:1821)
-        Self::read_extra_data(data, pos, &mut metadata);
+            let header_len = u32le(data, 0).unwrap_or(0) as usize;
+            if header_len < LNK_HEADER_SIZE {
+                return Err(ExifToolError::parse_error("Invalid LNK header size"));
+            }
+            let header = data
+                .get(..header_len)
+                .ok_or_else(|| ExifToolError::parse_error("Truncated LNK header"))?;
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+            Self::read_header(header, &mut metadata);
+
+            let flags = u32le(header, 0x14).unwrap_or(0);
+            let is_unicode = flags & 0x80 != 0;
+            let mut pos = header_len;
+
+            // Link target ID list (LNK.pm:1760)
+            if flags & 0x01 != 0 {
+                let Some(len) = u16le(data, pos).map(|v| v as usize) else {
+                    return Ok(metadata);
+                };
+                pos += 2;
+                let end = pos.saturating_add(len).min(data.len());
+                Self::read_item_id(&data[pos.min(end)..end], &mut metadata);
+                pos = end;
+            }
+
+            // Link information (LNK.pm:1772)
+            if flags & 0x02 != 0 {
+                let Some(len) = u32le(data, pos).map(|v| v as usize) else {
+                    return Ok(metadata);
+                };
+                if len < 4 {
+                    return Ok(metadata);
+                }
+                let end = pos.saturating_add(len).min(data.len());
+                Self::read_link_info(&data[pos.min(end)..end], &mut metadata);
+                pos = end;
+            }
+
+            // String data (LNK.pm:1786)
+            const STRINGS: [&str; 5] = [
+                "Description",
+                "RelativePath",
+                "WorkingDirectory",
+                "CommandLineArguments",
+                "IconFileName",
+            ];
+            for (i, name) in STRINGS.iter().enumerate() {
+                if flags & (0x04 << i) == 0 {
+                    continue;
+                }
+                let Some(chars) = u16le(data, pos).map(|v| v as usize) else {
+                    return Ok(metadata);
+                };
+                pos += 2;
+                if chars == 0 {
+                    continue;
+                }
+                // Windows limits most of these strings to 259 characters despite
+                // its own specification (LNK.pm:1797).
+                let mut chars = chars;
+                let limited = i != 3 && chars >= 260;
+                if limited && chars > 260 {
+                    chars = 260;
+                }
+                let len = if is_unicode { chars * 2 } else { chars };
+                // LNK.pm:1806 tests `$raf->Read(...)` for truth, not for the full
+                // count: a short read still yields whatever was available and the
+                // walk continues. Only a read of nothing ends it.
+                let available = data.len().saturating_sub(pos);
+                if available == 0 {
+                    return Ok(metadata);
+                }
+                let read = len.min(available);
+                // The length limit drops the last character, which Perl's substr
+                // silently ignores when the buffer is already shorter.
+                let keep = if limited {
+                    len.saturating_sub(if is_unicode { 2 } else { 1 })
+                } else {
+                    len
+                };
+                let raw = &data[pos..pos + read.min(keep)];
+                let value = if is_unicode {
+                    decode_utf16le(raw)
+                } else {
+                    plain_string(raw)
+                };
+                put_str(&mut metadata, name, value);
+                pos += read;
+            }
+
+            // Extra data blocks (LNK.pm:1821)
+            Self::read_extra_data(data, pos, &mut metadata);
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -1062,8 +1066,12 @@ impl FormatParser for LNKParser {
 /// # }
 /// ```
 pub fn parse_lnk_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = LNKParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = LNKParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

@@ -459,11 +459,38 @@ takes one large conflict at the end.
   explicit readiness filter (CI green, approved, no unresolved threads,
   parent landed). Until then, withdraw every not-yet-approved branch from the
   queue.
-- **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
-  review round, one defect blocking all of it, and no way to verify each
-  change's central claim on its own.
+- **Review as a stack, not a roll-up.** One combined PR under review means a
+  larger diff every round, one defect blocking all of it, and no way to verify
+  each change's central claim on its own. Rolling PRs up is for *landing* them
+  once reviewed; see "Roll-up landing".
 - **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
   child's PR body, so a successor knows the retarget order.
+
+## Roll-up landing
+
+When several PRs are ready at once, land them through one roll-up branch
+instead of one squash-merge each. The one-by-one route re-syncs every PR with
+the moving tip and re-runs CI after each merge, and resolves the same
+conflicts again each time.
+
+1. **Each PR clears on its own first.** Its CI is green, no review thread is
+   unresolved, and its central claim has been verified independently (see
+   "How work lands"). A PR that has not cleared stays out of the roll-up.
+2. **Assemble.** Create `staging/<slug>-rollup` off the current
+   `refactor/tag-machinery` tip. Merge each cleared PR's head into it with a
+   signed merge (`git merge -S --no-ff`), in landing order: a parent before its
+   stacked children. Resolve each conflict once, there, and record the
+   resolution in the merge commit.
+3. **Verify the combination once.** Open a PR for the roll-up against
+   `refactor/tag-machinery`. Let CI run on it, and re-run the named
+   instruments on the combined tree: the gates, the corpus read gate, and any
+   write sweep the children used. A finding that only the combination shows is
+   fixed in the roll-up branch, or in the child whose change causes it, which
+   is then merged into the roll-up again.
+4. **Land it.** Squash-merge the roll-up once CI is green and it has no
+   unresolved thread. Its body lists every child PR, with the instrument named
+   beside every number. Then close each child PR with a link to the roll-up.
+   The per-PR history stays on the roll-up branch and in the closed PRs.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:

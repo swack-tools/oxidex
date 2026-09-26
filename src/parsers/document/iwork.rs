@@ -10,7 +10,11 @@ pub struct PagesParser;
 
 impl FormatParser for PagesParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        parse_iwork(reader, "Pages", "Index/Document.iwa")
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            parse_iwork(reader, "Pages", "Index/Document.iwa")
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -23,7 +27,11 @@ pub struct NumbersParser;
 
 impl FormatParser for NumbersParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        parse_iwork(reader, "Numbers", "Index/Document.iwa")
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            parse_iwork(reader, "Numbers", "Index/Document.iwa")
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -36,7 +44,11 @@ pub struct KeynoteParser;
 
 impl FormatParser for KeynoteParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        parse_iwork(reader, "Keynote", "Index/Presentation.iwa")
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            parse_iwork(reader, "Keynote", "Index/Presentation.iwa")
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -45,18 +57,30 @@ impl FormatParser for KeynoteParser {
 }
 
 pub fn parse_pages_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = PagesParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PagesParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 pub fn parse_numbers_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = NumbersParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = NumbersParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 pub fn parse_keynote_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = KeynoteParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = KeynoteParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Common iWork parsing logic

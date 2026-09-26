@@ -84,11 +84,15 @@ impl EmlParser {
     /// * `Ok(MetadataMap)` - Extracted email metadata
     /// * `Err(ExifToolError)` - Parse error
     pub fn parse_email_content(reader: &dyn FileReader) -> Result<MetadataMap> {
-        let mut metadata = MetadataMap::new();
-        let headers_text = Self::read_header_text(reader)?;
-        Self::parse_headers(&headers_text, &mut metadata)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let mut metadata = MetadataMap::new();
+            let headers_text = Self::read_header_text(reader)?;
+            Self::parse_headers(&headers_text, &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Parse email headers and populate metadata map
@@ -375,20 +379,24 @@ impl FormatParser for EmlParser {
     /// * `Ok(MetadataMap)` - Successfully extracted metadata
     /// * `Err(ExifToolError)` - Invalid format or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid EML format"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid EML format"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("EML".to_string()));
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("EML".to_string()));
 
-        // Parse email content and merge with basic metadata
-        let email_metadata = Self::parse_email_content(reader)?;
-        for (key, value) in email_metadata {
-            metadata.insert(key, value);
-        }
+            // Parse email content and merge with basic metadata
+            let email_metadata = Self::parse_email_content(reader)?;
+            for (key, value) in email_metadata {
+                metadata.insert(key, value);
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Indicates whether this parser supports the given file format
@@ -419,8 +427,12 @@ impl FormatParser for EmlParser {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_eml_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = EmlParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = EmlParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

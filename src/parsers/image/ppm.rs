@@ -197,38 +197,42 @@ fn parse_header(data: &[u8]) -> Option<Header> {
 
 /// Extract PPM/PGM/PBM metadata from a NetPBM image.
 pub fn parse_ppm_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size() as usize;
-    let want = size.min(MAX_HEADER_SCAN);
-    let data = reader.read(0, want).map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size() as usize;
+        let want = size.min(MAX_HEADER_SCAN);
+        let data = reader.read(0, want).map_err(|error| error.to_string())?;
 
-    let header = parse_header(data).ok_or_else(|| "invalid PPM/PGM/PBM header".to_string())?;
+        let header = parse_header(data).ok_or_else(|| "invalid PPM/PGM/PBM header".to_string())?;
 
-    let mut metadata = MetadataMap::new();
-    // PPM.pm:82, `$et->SetFileType($type)` -- content-derived, not the
-    // extension `add_identity_tags` would otherwise guess.
-    metadata.insert("File:FileType", TagValue::new_string(header.file_type));
-    metadata.insert(
-        "File:FileTypeExtension",
-        TagValue::new_string(header.file_type.to_ascii_lowercase()),
-    );
-    let mime = match header.file_type {
-        "PBM" => "image/x-portable-bitmap",
-        "PGM" => "image/x-portable-graymap",
-        _ => "image/x-portable-pixmap",
-    };
-    metadata.insert("File:MIMEType", TagValue::new_string(mime));
+        let mut metadata = MetadataMap::new();
+        // PPM.pm:82, `$et->SetFileType($type)` -- content-derived, not the
+        // extension `add_identity_tags` would otherwise guess.
+        metadata.insert("File:FileType", TagValue::new_string(header.file_type));
+        metadata.insert(
+            "File:FileTypeExtension",
+            TagValue::new_string(header.file_type.to_ascii_lowercase()),
+        );
+        let mime = match header.file_type {
+            "PBM" => "image/x-portable-bitmap",
+            "PGM" => "image/x-portable-graymap",
+            _ => "image/x-portable-pixmap",
+        };
+        metadata.insert("File:MIMEType", TagValue::new_string(mime));
 
-    // PPM.pm:129: `foreach $tag (qw{Comment ImageWidth ImageHeight MaxVal})`.
-    if let Some(comment) = header.comment {
-        metadata.insert("File:Comment", TagValue::new_string(comment));
-    }
-    metadata.insert("File:ImageWidth", TagValue::Integer(header.width as i64));
-    metadata.insert("File:ImageHeight", TagValue::Integer(header.height as i64));
-    if let Some(max_val) = header.max_val {
-        metadata.insert("File:MaxVal", TagValue::Integer(max_val as i64));
-    }
+        // PPM.pm:129: `foreach $tag (qw{Comment ImageWidth ImageHeight MaxVal})`.
+        if let Some(comment) = header.comment {
+            metadata.insert("File:Comment", TagValue::new_string(comment));
+        }
+        metadata.insert("File:ImageWidth", TagValue::Integer(header.width as i64));
+        metadata.insert("File:ImageHeight", TagValue::Integer(header.height as i64));
+        if let Some(max_val) = header.max_val {
+            metadata.insert("File:MaxVal", TagValue::Integer(max_val as i64));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

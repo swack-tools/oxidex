@@ -252,7 +252,11 @@ pub(crate) fn plan_public_write(
         generated,
         legacy_metadata,
         legacy_removed,
-        has_legacy_changes: !plan.outside.is_empty(),
+        // An XP string the caller assigned is a write even when its text
+        // equals the file's: the delta above compares values, and the same
+        // text can stand for other bytes (`xp_strings::is_explicit_xp_set`).
+        has_legacy_changes: !plan.outside.is_empty()
+            || crate::writers::xp_strings::has_explicit_xp_set(desired),
         whole_exif_clear,
     })
 }

@@ -78,44 +78,48 @@ use std::str;
 /// - CreationDate
 /// - ModDate
 pub fn parse_info_dict(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF navigation context (xref table and trailer)
-    let context = PdfContext::load(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF navigation context (xref table and trailer)
+        let context = PdfContext::load(reader)?;
 
-    // The Info dictionary is optional. Its absence is normal and should not
-    // surface as a parser warning for otherwise valid PDFs.
-    if !context
-        .xref_data
-        .windows(b"/Info".len())
-        .any(|window| window == b"/Info")
-    {
-        return Ok(MetadataMap::new());
-    }
+        // The Info dictionary is optional. Its absence is normal and should not
+        // surface as a parser warning for otherwise valid PDFs.
+        if !context
+            .xref_data
+            .windows(b"/Info".len())
+            .any(|window| window == b"/Info")
+        {
+            return Ok(MetadataMap::new());
+        }
 
-    // Find and parse the Info dictionary
-    let info_ref = find_dict_reference(&context.xref_data, "/Info")?;
-    let info_offset = context.get_object_offset(info_ref.object_num, "Info")?;
-    let info_data = reader.read(
-        info_offset,
-        std::cmp::min(4096, reader.size().saturating_sub(info_offset) as usize),
-    )?;
-    let info_dict = parse_info_object(info_data)?;
+        // Find and parse the Info dictionary
+        let info_ref = find_dict_reference(&context.xref_data, "/Info")?;
+        let info_offset = context.get_object_offset(info_ref.object_num, "Info")?;
+        let info_data = reader.read(
+            info_offset,
+            std::cmp::min(4096, reader.size().saturating_sub(info_offset) as usize),
+        )?;
+        let info_dict = parse_info_object(info_data)?;
 
-    // Convert dictionary to metadata map with proper formatting
-    let mut metadata = convert_info_dict_to_metadata(info_dict);
+        // Convert dictionary to metadata map with proper formatting
+        let mut metadata = convert_info_dict_to_metadata(info_dict);
 
-    // Add additional document properties
-    if let Ok(page_count) = extract_page_count_from_context(reader, &context) {
-        metadata.insert(
-            "PDF:PageCount".to_string(),
-            TagValue::new_integer(page_count as i64),
-        );
-    }
+        // Add additional document properties
+        if let Ok(page_count) = extract_page_count_from_context(reader, &context) {
+            metadata.insert(
+                "PDF:PageCount".to_string(),
+                TagValue::new_integer(page_count as i64),
+            );
+        }
 
-    if let Ok(media_box) = extract_media_box_from_context(reader, &context) {
-        metadata.insert("PDF:MediaBox".to_string(), TagValue::new_string(media_box));
-    }
+        if let Ok(media_box) = extract_media_box_from_context(reader, &context) {
+            metadata.insert("PDF:MediaBox".to_string(), TagValue::new_string(media_box));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 //

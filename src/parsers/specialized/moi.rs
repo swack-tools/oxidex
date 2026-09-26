@@ -54,95 +54,102 @@ const VIDEO_BITRATE: PerlCitation = citation("VideoBitrate", "MOI.pm:82-89");
 
 /// Extract MOI metadata using ExifTool's declared `MOI::Main` binary layout.
 pub fn parse_moi_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("MOI file is too short for the 256-byte header".to_string());
-    }
-    let header = reader
-        .read(0, HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !header.starts_with(MOI_SIGNATURE) {
-        return Err("invalid MOI signature".to_string());
-    }
-    // MOI.pm:113-115: when the caller already knows the real file size,
-    // require the header's own record of it to match before accepting the
-    // file. `unpack('x2N', $buff)` reads a big-endian u32 at offset 2.
-    if header.len() >= EMBEDDED_SIZE_OFFSET + 4 {
-        let embedded_size = u32::from_be_bytes([
-            header[EMBEDDED_SIZE_OFFSET],
-            header[EMBEDDED_SIZE_OFFSET + 1],
-            header[EMBEDDED_SIZE_OFFSET + 2],
-            header[EMBEDDED_SIZE_OFFSET + 3],
-        ]);
-        if u64::from(embedded_size) != reader.size() {
-            return Err("MOI header file-size field does not match the real file size".to_string());
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("MOI file is too short for the 256-byte header".to_string());
         }
-    }
-
-    let table = find_table("MOI", "Main").ok_or("missing MOI::Main table")?;
-    let decode = decode_binary_table(table, &header, ByteOrder::Big);
-
-    let mut metadata = MetadataMap::new();
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("MOI:{name}");
-        match name {
-            "DateTimeOriginal" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DATE_TIME_ORIGINAL)
-                    && let DecodedValue::Undefined(bytes) = access.raw()
-                    && let Some(rendered) = format_date_time_original(bytes)
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
-                }
-            }
-            "Duration" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DURATION)
-                    && let Some(ms) = access.raw().as_integer()
-                {
-                    metadata.insert(
-                        key,
-                        TagValue::new_string(convert_duration(ms as f64 / 1000.0)),
-                    );
-                }
-            }
-            "AudioBitrate" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &AUDIO_BITRATE)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    // MOI.pm:79: `ValueConv => '$val * 16000 + 48000'`.
-                    let bps = (raw as f64) * 16000.0 + 48000.0;
-                    metadata.insert(key, TagValue::new_string(convert_bitrate(bps)));
-                }
-            }
-            "VideoBitrate" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &VIDEO_BITRATE)
-                    && let Some(raw) = access.raw().as_integer()
-                    && let Some(bps) = video_bitrate_value(raw)
-                {
-                    metadata.insert(key, TagValue::new_string(convert_bitrate(bps)));
-                }
-            }
-            "AspectRatio" => {
-                // MOI.pm:44-63: not flagged `omitted` by the generator (the
-                // block is a `PrintConv => q{...}` Perl sub, not a
-                // `ValueConv`/`RawConv`/`Condition`/`Hook`/`SubDirectory`),
-                // so the raw byte reaches here through the ordinary `.emit()`
-                // path with `PrintConv::None` -- hand-implemented against the
-                // cited Perl rather than left as an unconverted integer.
-                if let Some(TagValue::Integer(raw)) = decoded.emit() {
-                    metadata.insert(key, TagValue::new_string(format_aspect_ratio(raw as u8)));
-                }
-            }
-            _ => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(key, value);
-                }
+        let header = reader
+            .read(0, HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !header.starts_with(MOI_SIGNATURE) {
+            return Err("invalid MOI signature".to_string());
+        }
+        // MOI.pm:113-115: when the caller already knows the real file size,
+        // require the header's own record of it to match before accepting the
+        // file. `unpack('x2N', $buff)` reads a big-endian u32 at offset 2.
+        if header.len() >= EMBEDDED_SIZE_OFFSET + 4 {
+            let embedded_size = u32::from_be_bytes([
+                header[EMBEDDED_SIZE_OFFSET],
+                header[EMBEDDED_SIZE_OFFSET + 1],
+                header[EMBEDDED_SIZE_OFFSET + 2],
+                header[EMBEDDED_SIZE_OFFSET + 3],
+            ]);
+            if u64::from(embedded_size) != reader.size() {
+                return Err(
+                    "MOI header file-size field does not match the real file size".to_string(),
+                );
             }
         }
-    }
-    Ok(metadata)
+
+        let table = find_table("MOI", "Main").ok_or("missing MOI::Main table")?;
+        let decode = decode_binary_table(table, &header, ByteOrder::Big);
+
+        let mut metadata = MetadataMap::new();
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("MOI:{name}");
+            match name {
+                "DateTimeOriginal" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DATE_TIME_ORIGINAL)
+                        && let DecodedValue::Undefined(bytes) = access.raw()
+                        && let Some(rendered) = format_date_time_original(bytes)
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
+                }
+                "Duration" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DURATION)
+                        && let Some(ms) = access.raw().as_integer()
+                    {
+                        metadata.insert(
+                            key,
+                            TagValue::new_string(convert_duration(ms as f64 / 1000.0)),
+                        );
+                    }
+                }
+                "AudioBitrate" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &AUDIO_BITRATE)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        // MOI.pm:79: `ValueConv => '$val * 16000 + 48000'`.
+                        let bps = (raw as f64) * 16000.0 + 48000.0;
+                        metadata.insert(key, TagValue::new_string(convert_bitrate(bps)));
+                    }
+                }
+                "VideoBitrate" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &VIDEO_BITRATE)
+                        && let Some(raw) = access.raw().as_integer()
+                        && let Some(bps) = video_bitrate_value(raw)
+                    {
+                        metadata.insert(key, TagValue::new_string(convert_bitrate(bps)));
+                    }
+                }
+                "AspectRatio" => {
+                    // MOI.pm:44-63: not flagged `omitted` by the generator (the
+                    // block is a `PrintConv => q{...}` Perl sub, not a
+                    // `ValueConv`/`RawConv`/`Condition`/`Hook`/`SubDirectory`),
+                    // so the raw byte reaches here through the ordinary `.emit()`
+                    // path with `PrintConv::None` -- hand-implemented against the
+                    // cited Perl rather than left as an unconverted integer.
+                    if let Some(TagValue::Integer(raw)) = decoded.emit() {
+                        metadata.insert(key, TagValue::new_string(format_aspect_ratio(raw as u8)));
+                    }
+                }
+                _ => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(key, value);
+                    }
+                }
+            }
+        }
+        Ok(metadata)
+    })
 }
 
 /// MOI.pm:31-37: `unpack('nCCCCn', $val)` (year u16, month/day/hour/min u8,

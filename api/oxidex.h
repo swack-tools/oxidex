@@ -44,9 +44,29 @@
 #define EXIFTOOL_ERR_NULL_POINTER 6
 
 /*
+ A write named tags that would not be written, so nothing was written (the
+ file is byte-identical). `exiftool_get_last_error_tag_count()` and
+ `exiftool_get_last_error_tag()` name each one.
+ */
+#define EXIFTOOL_ERR_TAG_NOT_WRITTEN 7
+
+/*
  Internal error (panic caught)
  */
 #define EXIFTOOL_ERR_INTERNAL 99
+
+/*
+ The outcome of a write that changed the file (ExifTool `WriteInfo`'s 1,
+ "file written OK"), reported by the file writer's `_with_outcome` variant.
+ */
+#define EXIFTOOL_WRITE_UPDATED 1
+
+/*
+ The outcome of a write whose every change was already in effect, the file
+ left byte-identical (ExifTool `WriteInfo`'s 2, "file written but no
+ changes made"), reported by the file writer's `_with_outcome` variant.
+ */
+#define EXIFTOOL_WRITE_UNCHANGED 2
 
 /*
  Significant digits ExifTool keeps when it reads a 64-bit rational.
@@ -4201,6 +4221,56 @@ typedef int ExifToolValueChannel;
 
 
 /*
+ Number of tags the last error on this thread named as not written.
+
+ # Returns
+ The count for an `EXIFTOOL_ERR_TAG_NOT_WRITTEN` (at least 1); 0 after any
+ other error, or when no error occurred.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+uintptr_t exiftool_get_last_error_tag_count(void);
+
+/*
+ A tag the last error on this thread named as not written, spelled as the
+ write request spelled it (`XPTitle`, `XMP:Title`).
+
+ # Arguments
+ - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+
+ # Returns
+ Pointer to a null-terminated tag name, or NULL if `index` is out of range.
+
+ # String Lifetime
+ The returned string is valid until the next API call that sets an error
+ on the same thread, or thread termination.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+const char *exiftool_get_last_error_tag(uintptr_t index);
+
+/*
+ Why the tag at `index` of the last error on this thread would not be
+ written.
+
+ # Arguments
+ - `index`: Zero-based, below `exiftool_get_last_error_tag_count()`
+
+ # Returns
+ Pointer to a null-terminated reason, or NULL if `index` is out of range.
+
+ # String Lifetime
+ The returned string is valid until the next API call that sets an error
+ on the same thread, or thread termination.
+
+ # Thread Safety
+ Thread-safe. Each thread has its own error state.
+ */
+const char *exiftool_get_last_error_tag_reason(uintptr_t index);
+
+/*
  Retrieves the last error message.
 
  # Returns
@@ -4459,6 +4529,25 @@ int exiftool_set_tag_float(struct ExifToolHandle *handle, const char *tag_name, 
  - `handle`: Handle to modify (must not be NULL)
  - `tag_name`: Tag name to remove (must not be NULL)
 
+ A group deletion (`GROUP:All`, such as `EXIF:All` or `GPS:All`) removes
+ no row of the handle: it is recorded and applied when the handle is next
+ written to a file (ExifTool's `-GROUP:All=`), which refuses it with
+ `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when oxidex cannot delete that group from
+ the file. It takes its place in the call order: it deletes what the group
+ held and what was set in it before this call, never a tag set by a later
+ call (`exiftool_remove_tag(h, "EXIF:All")` then
+ `exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose
+ only EXIF is that Artist, as ExifTool's `-EXIF:All= -IFD0:Artist=x`
+ does). `exiftool_read_file` discards recorded group deletions.
+
+ On a handle read from the file it is written to, removing a tag the
+ handle does not hold under that name (`XMP-dc:Title` where the reader
+ keys it `XMP:Title`, or a tag the file lacks) is ExifTool's `-TAG=`: the
+ write deletes it by name, leaves the file unchanged when the file holds
+ no such tag, or refuses it with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`. A PDF
+ date's two spellings (`PDF:CreateDate`, `PDF:CreationDate`) are one
+ field, which the last call naming either decides.
+
  # Returns
  - `EXIFTOOL_OK` (always succeeds, even if tag didn't exist)
  - `EXIFTOOL_ERR_NULL_POINTER` if handle or tag_name is NULL
@@ -4484,6 +4573,24 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  - `EXIFTOOL_ERR_IO`: File not writable, disk full, permission denied
  - `EXIFTOOL_ERR_UNSUPPORTED_FORMAT`: File format doesn't support writing
  - `EXIFTOOL_ERR_INVALID_TAG_VALUE`: Metadata validation failed
+ - `EXIFTOOL_ERR_TAG_NOT_WRITTEN`: A requested change would not be written
+   (a group the file's writer cannot write, such as XMP in a JPEG, an
+   ungrouped name that does not resolve, or a change the read-back after
+   writing does not find). `exiftool_get_last_error_tag_count()` and
+   `exiftool_get_last_error_tag()` name every such tag.
+
+ # Requests and the guarantee
+ A tag of the handle that is new or differs from the file is set. A tag
+ the file carries that the handle lacks is deleted only when the handle
+ was read from this same file (`exiftool_read_file`) and the caller removed
+ it; a handle read from another file, or never read, only sets (derived
+ `File:`, `Composite:` and file-system rows are never deleted). A recorded
+ `GROUP:All` removal deletes that group. The changes are applied in the
+ order of the calls that made them, so a group removal deletes a tag set
+ before it and keeps one set after it. `EXIFTOOL_OK` means every such
+ change is in the file, proven by reading it back; on any error nothing
+ was written and the file is byte-identical. The `_with_outcome` variant
+ below also reports whether the file changed.
 
  # Thread Safety
  Not thread-safe with respect to the handle. Do not call concurrently with
@@ -4491,5 +4598,28 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  destruction.
  */
 int exiftool_write_file(const struct ExifToolHandle *handle, const char *filepath);
+
+/*
+ Writes metadata to a file, as `exiftool_write_file`, and reports what the
+ write did to it.
+
+ # Arguments
+ - `handle`: Handle containing metadata to write (must not be NULL)
+ - `filepath`: Path to file to write (null-terminated UTF-8, must not be NULL)
+ - `outcome`: Receives `EXIFTOOL_WRITE_UPDATED` (the file changed) or
+   `EXIFTOOL_WRITE_UNCHANGED` (every change was already in effect; the file
+   is byte-identical) on success; untouched on failure (must not be NULL)
+
+ # Returns
+ - `EXIFTOOL_OK` on success
+ - `EXIFTOOL_ERR_NULL_POINTER` if any parameter is NULL
+ - Every other code exactly as `exiftool_write_file` returns it
+
+ # Thread Safety
+ As `exiftool_write_file`.
+ */
+int exiftool_write_file_with_outcome(const struct ExifToolHandle *handle,
+                                     const char *filepath,
+                                     int *outcome);
 
 #endif  /* OXIDEX_H */

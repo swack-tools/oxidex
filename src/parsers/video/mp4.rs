@@ -71,16 +71,20 @@ pub struct Mp4Parser;
 
 impl FormatParser for Mp4Parser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if reader.size() < 8 {
-            return Err(ExifToolError::parse_error("File too small to be MP4"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if reader.size() < 8 {
+                return Err(ExifToolError::parse_error("File too small to be MP4"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Parse boxes starting from the beginning
-        parse_boxes(reader, 0, reader.size(), &mut metadata)?;
+            // Parse boxes starting from the beginning
+            parse_boxes(reader, 0, reader.size(), &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -683,8 +687,12 @@ fn convert_mp4_codec_id_to_name(codec_id: &str, is_video: bool) -> String {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_mp4_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = Mp4Parser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = Mp4Parser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

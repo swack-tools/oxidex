@@ -212,42 +212,46 @@ impl Default for MachOParser {
 
 impl FormatParser for MachOParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be a Mach-O"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be a Mach-O"));
+            }
 
-        // Check magic number
-        let magic_bytes = reader.read(0, 4)?;
-        if !is_macho_magic(magic_bytes) {
-            return Err(ExifToolError::parse_error("Invalid Mach-O signature"));
-        }
+            // Check magic number
+            let magic_bytes = reader.read(0, 4)?;
+            if !is_macho_magic(magic_bytes) {
+                return Err(ExifToolError::parse_error("Invalid Mach-O signature"));
+            }
 
-        // Parse based on whether this is a FAT binary
-        let info = if is_fat_magic(magic_bytes) {
-            self.parse_fat_binary(reader)?
-        } else {
-            self.parse_single_macho(reader, 0, reader.size())?
-        };
+            // Parse based on whether this is a FAT binary
+            let info = if is_fat_magic(magic_bytes) {
+                self.parse_fat_binary(reader)?
+            } else {
+                self.parse_single_macho(reader, 0, reader.size())?
+            };
 
-        // Extract metadata
-        let mut metadata = extract_macho_metadata(&info);
+            // Extract metadata
+            let mut metadata = extract_macho_metadata(&info);
 
-        // Match ExifTool's CPUArchitecture tag, which describes the Mach-O
-        // object class rather than the specific CPU type.
-        if let Some(header) = &info.header {
-            metadata.insert(
-                "EXE:CPUArchitecture".to_string(),
-                TagValue::String(if header.is_64bit { "64 bit" } else { "32 bit" }.to_string()),
-            );
-        }
+            // Match ExifTool's CPUArchitecture tag, which describes the Mach-O
+            // object class rather than the specific CPU type.
+            if let Some(header) = &info.header {
+                metadata.insert(
+                    "EXE:CPUArchitecture".to_string(),
+                    TagValue::String(if header.is_64bit { "64 bit" } else { "32 bit" }.to_string()),
+                );
+            }
 
-        // No file size here. `extract_file_metadata` already reports the file's
-        // length as `File:FileSize`, and ExifTool 13.59 emits no `EXE:FileSize`
-        // for a Mach-O -- on EXE.dylib and EXE.macho the oracle reports only
-        // `File:FileSize`. This was the same duplicate the ungrouped `FileSize`
-        // inserts were, hidden from that grep by an `EXE:` prefix.
+            // No file size here. `extract_file_metadata` already reports the file's
+            // length as `File:FileSize`, and ExifTool 13.59 emits no `EXE:FileSize`
+            // for a Mach-O -- on EXE.dylib and EXE.macho the oracle reports only
+            // `File:FileSize`. This was the same duplicate the ungrouped `FileSize`
+            // inserts were, hidden from that grep by an `EXE:` prefix.
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -293,8 +297,12 @@ fn find_preferred_architecture(archs: &[structures::FatArch]) -> usize {
 
 /// Convenience function to parse Mach-O metadata
 pub fn parse_macho_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MachOParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MachOParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 // =============================================================================

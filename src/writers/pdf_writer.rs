@@ -172,6 +172,13 @@ fn canonicalize_pdf_field(field: &str) -> Option<(String, FieldSource)> {
     }
 }
 
+/// Whether `field` (the part of a `PDF:` key after the group) is an Info
+/// dictionary field this writer serializes -- the set `write_info_object`
+/// keeps; any other `PDF:` key would be dropped.
+pub(crate) fn is_info_field(field: &str) -> bool {
+    canonicalize_pdf_field(field).is_some()
+}
+
 /// Parses PDF structure to extract xref table and Info object location
 fn parse_pdf_structure(reader: &dyn FileReader) -> Result<PdfStructure> {
     let file_size = reader.size();
@@ -561,6 +568,9 @@ fn format_pdf_datetime(dt: &DateTime<Utc>) -> String {
 
 /// Converts an EXIF-style string (YYYY:MM:DD HH:MM:SS[+HH:MM]) to PDF date format
 fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
+    if let Some(pdf_date) = inverse_date_time_to_pdf(value) {
+        return Some(pdf_date);
+    }
     if let Ok(dt) = DateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S%:z") {
         return Some(format_fixed_offset_pdf_date(dt));
     }
@@ -569,10 +579,12 @@ fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
         return Some(format_fixed_offset_pdf_date(dt));
     }
 
+    // A value without a zone is stored without one, as pinned ExifTool 13.59
+    // stores it (`-PDF:CreateDate='2020:01:02 03:04:05'` writes
+    // `(D:20200102030405)`); appending `+00'00'` invented a UTC offset the
+    // caller never gave, and the date then read back as `...+00:00`.
     if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S") {
-        let utc_dt = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
-        let fixed = utc_dt.with_timezone(&FixedOffset::east_opt(0).unwrap());
-        return Some(format_fixed_offset_pdf_date(fixed));
+        return Some(naive.format("%Y%m%d%H%M%S").to_string());
     }
 
     if let Ok(date_only) = NaiveDate::parse_from_str(value, "%Y:%m:%d") {
@@ -583,6 +595,82 @@ fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
     }
 
     None
+}
+
+/// WritePDF.pl's `WritePDFValue` for a `date` (13.59): the text
+/// `InverseDateTime` produced (`YYYY:mm:dd HH:MM:SS[.ss][Z|+HH:MM]`, see
+/// `cli::value_parser::parse_pdf_date`) loses its sub-seconds
+/// (`s/(:\d{2})\.\d*/$1/`), its zone delimiter becomes `'`
+/// (`s/([-+]\d{2}):(\d{2})/${1}'${2}'/`), and its spaces and colons go
+/// (`tr/ ://d`). A `Z` stays: pinned 13.59 writes `...05Z` as
+/// `(D:20200102030405Z)`. Anything not in that exact shape is `None`.
+fn inverse_date_time_to_pdf(value: &str) -> Option<String> {
+    let b = value.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        b.get(range)
+            .is_some_and(|run| run.iter().all(u8::is_ascii_digit))
+    };
+    let shape = digits(0..4)
+        && b.get(4) == Some(&b':')
+        && digits(5..7)
+        && b.get(7) == Some(&b':')
+        && digits(8..10)
+        && b.get(10) == Some(&b' ')
+        && digits(11..13)
+        && b.get(13) == Some(&b':')
+        && digits(14..16)
+        && b.get(16) == Some(&b':')
+        && digits(17..19);
+    if !shape {
+        return None;
+    }
+    let mut rest = &value[19..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let run = fraction.len()
+            - fraction
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .len();
+        if run == 0 {
+            return None;
+        }
+        rest = &fraction[run..];
+    }
+    let zone = match rest.as_bytes() {
+        [] => String::new(),
+        [b'Z'] => "Z".to_string(),
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2]
+            if [h1, h2, m1, m2].iter().all(|d| d.is_ascii_digit()) =>
+        {
+            format!(
+                "{}{}{}'{}{}'",
+                *sign as char, *h1 as char, *h2 as char, *m1 as char, *m2 as char
+            )
+        }
+        _ => return None,
+    };
+    let clock: String = value[..19]
+        .chars()
+        .filter(|c| *c != ' ' && *c != ':')
+        .collect();
+    Some(format!("{clock}{zone}"))
+}
+
+/// The Info date body (`YYYYMMDDHHmmSS[Z|+HH'mm']`) this writer stores for
+/// `value` under the `PDF:` key `key` -- `PDF:CreateDate` / `PDF:CreationDate`
+/// / `PDF:ModifyDate` / `PDF:ModDate` -- or `None` for any other key or a
+/// value it does not store as a date. A read-back proof compares this, not
+/// the text: `WritePDFValue` drops sub-seconds, so a requested
+/// `2020:01:02 03:04:05.25+02:00` is stored, and reads back, without them.
+pub(crate) fn stored_pdf_date(key: &str, value: &TagValue) -> Option<String> {
+    let (field, _) = canonicalize_pdf_field(key.strip_prefix("PDF:")?)?;
+    if !matches!(field.as_str(), "CreationDate" | "ModDate") {
+        return None;
+    }
+    match value {
+        TagValue::String(text) => convert_exif_string_to_pdf_date(text),
+        TagValue::DateTime(dt) => Some(format_pdf_datetime(dt)),
+        _ => None,
+    }
 }
 
 /// Formats a fixed-offset DateTime into PDF Info date string body (without leading "D:")

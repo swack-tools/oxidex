@@ -184,78 +184,82 @@ impl GLTFParser {
 
 impl FormatParser for GLTFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid GLTF signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("GLTF".to_string()));
-
-        // Detect and add format
-        let format = Self::detect_format(reader)?;
-        metadata.insert("Format".to_string(), TagValue::String(format.to_string()));
-
-        // Extract JSON content
-        let json_content = match Self::extract_json_content(reader) {
-            Ok(content) => content,
-            Err(_) => return Ok(metadata), // Return basic metadata if JSON extraction fails
-        };
-
-        // Extract asset information
-        // Version is required in glTF asset, so try both locations
-        if let Some(version) = Self::extract_json_string(&json_content, "version") {
-            metadata.insert(
-                "AssetVersion".to_string(),
-                TagValue::String(version.clone()),
-            );
-            // Add GLTF:Version for Worker 25 compatibility
-            metadata.insert("GLTF:Version".to_string(), TagValue::new_string(version));
-        }
-
-        if let Some(generator) = Self::extract_json_string(&json_content, "generator") {
-            metadata.insert(
-                "AssetGenerator".to_string(),
-                TagValue::String(generator.clone()),
-            );
-            // Add GLTF:Generator for Worker 25 compatibility
-            metadata.insert(
-                "GLTF:Generator".to_string(),
-                TagValue::new_string(generator),
-            );
-        }
-
-        if let Some(copyright) = Self::extract_json_string(&json_content, "copyright") {
-            metadata.insert(
-                "AssetCopyright".to_string(),
-                TagValue::String(copyright.clone()),
-            );
-            // Add GLTF:Copyright for Worker 25 compatibility
-            metadata.insert(
-                "GLTF:Copyright".to_string(),
-                TagValue::new_string(copyright),
-            );
-        }
-
-        // Count array elements for both old and new tag names
-        let arrays = [
-            ("scenes", "SceneCount", "GLTF:SceneCount"),
-            ("nodes", "NodeCount", "GLTF:NodeCount"),
-            ("meshes", "MeshCount", "GLTF:MeshCount"),
-            ("materials", "MaterialCount", "GLTF:MaterialCount"),
-            ("textures", "TextureCount", "GLTF:TextureCount"),
-            ("animations", "AnimationCount", "GLTF:AnimationCount"),
-        ];
-
-        for (json_key, meta_key, gltf_key) in &arrays {
-            if let Some(count) = Self::count_json_array(&json_content, json_key) {
-                let count_i64 = count as i64;
-                // Add both old and new tag names for compatibility
-                metadata.insert(meta_key.to_string(), TagValue::Integer(count_i64));
-                metadata.insert(gltf_key.to_string(), TagValue::new_integer(count_i64));
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid GLTF signature"));
             }
-        }
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("GLTF".to_string()));
+
+            // Detect and add format
+            let format = Self::detect_format(reader)?;
+            metadata.insert("Format".to_string(), TagValue::String(format.to_string()));
+
+            // Extract JSON content
+            let json_content = match Self::extract_json_content(reader) {
+                Ok(content) => content,
+                Err(_) => return Ok(metadata), // Return basic metadata if JSON extraction fails
+            };
+
+            // Extract asset information
+            // Version is required in glTF asset, so try both locations
+            if let Some(version) = Self::extract_json_string(&json_content, "version") {
+                metadata.insert(
+                    "AssetVersion".to_string(),
+                    TagValue::String(version.clone()),
+                );
+                // Add GLTF:Version for Worker 25 compatibility
+                metadata.insert("GLTF:Version".to_string(), TagValue::new_string(version));
+            }
+
+            if let Some(generator) = Self::extract_json_string(&json_content, "generator") {
+                metadata.insert(
+                    "AssetGenerator".to_string(),
+                    TagValue::String(generator.clone()),
+                );
+                // Add GLTF:Generator for Worker 25 compatibility
+                metadata.insert(
+                    "GLTF:Generator".to_string(),
+                    TagValue::new_string(generator),
+                );
+            }
+
+            if let Some(copyright) = Self::extract_json_string(&json_content, "copyright") {
+                metadata.insert(
+                    "AssetCopyright".to_string(),
+                    TagValue::String(copyright.clone()),
+                );
+                // Add GLTF:Copyright for Worker 25 compatibility
+                metadata.insert(
+                    "GLTF:Copyright".to_string(),
+                    TagValue::new_string(copyright),
+                );
+            }
+
+            // Count array elements for both old and new tag names
+            let arrays = [
+                ("scenes", "SceneCount", "GLTF:SceneCount"),
+                ("nodes", "NodeCount", "GLTF:NodeCount"),
+                ("meshes", "MeshCount", "GLTF:MeshCount"),
+                ("materials", "MaterialCount", "GLTF:MaterialCount"),
+                ("textures", "TextureCount", "GLTF:TextureCount"),
+                ("animations", "AnimationCount", "GLTF:AnimationCount"),
+            ];
+
+            for (json_key, meta_key, gltf_key) in &arrays {
+                if let Some(count) = Self::count_json_array(&json_content, json_key) {
+                    let count_i64 = count as i64;
+                    // Add both old and new tag names for compatibility
+                    metadata.insert(meta_key.to_string(), TagValue::Integer(count_i64));
+                    metadata.insert(gltf_key.to_string(), TagValue::new_integer(count_i64));
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -267,8 +271,12 @@ impl FormatParser for GLTFParser {
 ///
 /// This is a convenience wrapper around GLTFParser that provides a functional API.
 pub fn parse_gltf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = GLTFParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = GLTFParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

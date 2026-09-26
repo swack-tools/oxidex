@@ -657,7 +657,9 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             "EXIF:FlashpixVersion".to_string(),
             FormatFamily::EXIF,
             false,
-            ValueType::String,
+            // Exif.pm 0xa000: `Writable => 'undef'`, like ExifVersion; the
+            // CLI's PrintConvInv yields its four ASCII bytes.
+            ValueType::Binary,
             "FlashPix version number".to_string(),
             vec!["0100".to_string()],
         ),
@@ -1455,10 +1457,13 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
         ),
     );
 
+    // Exif.pm: 0x828e is CFAPattern2 (TIFF/EP) and 0xa302 CFAPattern
+    // (EXIF); the two ids were swapped here, so `-EXIF:CFAPattern=` wrote
+    // 0x828e.
     registry.insert(
         "EXIF:CFAPattern",
         TagDescriptor::new(
-            TagId::new_numeric(0x828e),
+            TagId::new_numeric(0xa302),
             "EXIF:CFAPattern".to_string(),
             FormatFamily::EXIF,
             true,
@@ -1874,7 +1879,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry.insert(
         "EXIF:CFAPattern2",
         TagDescriptor::new(
-            TagId::new_numeric(0xa302),
+            TagId::new_numeric(0x828e),
             "EXIF:CFAPattern2".to_string(),
             FormatFamily::EXIF,
             true,
@@ -7088,6 +7093,32 @@ pub(crate) fn declared_ieee_field_type(name: &str) -> Option<u16> {
     normalized_name
         .and_then(|normalized_name| YAML_TAG_ENTRIES.get(normalized_name.as_str()))
         .and_then(field_type_of)
+}
+
+/// Whether a tag key names one of the EXIF text tags whose value is text
+/// that ExifTool stores through `EncodeExifText` (`RawConvInv`): ExifIFD
+/// `0x9286` UserComment (Exif.pm 13.59:2497-2506) and GPS `0x001b`
+/// GPSProcessingMethod / `0x001c` GPSAreaInformation (GPS.pm 13.59:294-307).
+/// Their value is the caller's text whatever `TagValue` shape the registry
+/// records for the stored bytes; the EXIF serializer encodes it with the
+/// block's byte order. Matched spellings: the tag's own directory, the
+/// `EXIF` family, or no group -- never XMP, IFD0/IFD1 or another table's
+/// same-named tag.
+///
+/// Tag metadata, so it lives here and not in a writer: domain validation and
+/// the EXIF write adapter both ask it.
+pub fn is_encode_exif_text_tag(key: &str) -> bool {
+    let (group, name) = match key.split_once(':') {
+        Some((group, name)) => (Some(group), name),
+        None => (None, key),
+    };
+    match name {
+        "UserComment" => matches!(group, None | Some("ExifIFD" | "EXIF")),
+        "GPSProcessingMethod" | "GPSAreaInformation" => {
+            matches!(group, None | Some("GPS" | "EXIF"))
+        }
+        _ => false,
+    }
 }
 
 /// Reports whether `descriptor`'s value type came from reliable metadata.

@@ -12,7 +12,7 @@
 //! |-------------------|-------------|----------------------------------|
 //! | `ASCII\0\0\0`     | ASCII       | Standard ASCII text              |
 //! | `JIS\0\0\0\0\0`   | JIS X 0208  | Japanese Industrial Standard     |
-//! | `UNICODE\0`       | UTF-16      | Unicode; a leading BOM selects byte order, else little-endian|
+//! | `UNICODE\0`       | UTF-16      | Unicode; a leading BOM selects byte order, else the EXIF block's order, checked as ExifTool checks it|
 //! | `\0\0\0\0\0\0\0\0`| Undefined   | Encoding not specified           |
 //!
 //! # Common Processing Method Values
@@ -26,6 +26,8 @@
 //!
 //! - EXIF 2.32 Specification, Section 4.6.6 (GPS Attribute Information)
 //! - ExifTool GPSProcessingMethod documentation
+
+use crate::exiftool_tables::session::{ByteOrder, MemberVal, Session};
 
 /// Decode GPSProcessingMethod binary data to a human-readable string.
 ///
@@ -48,7 +50,8 @@
 ///
 /// - **ASCII**: Decoded as UTF-8 (ASCII is a subset of UTF-8)
 /// - **UNICODE**: Decoded as UTF-16, honoring a leading byte-order mark and
-///   otherwise defaulting to little-endian (see [`decode_unicode_gps_text`])
+///   otherwise starting little-endian ([`decode_gps_text`] takes the block's
+///   order; see [`decode_unicode_gps_text`])
 /// - **JIS**: Decoded as lossy UTF-8 (proper JIS would require external crate)
 /// - **Undefined/Unknown**: Decoded as lossy UTF-8
 ///
@@ -69,6 +72,16 @@
 /// assert_eq!(decode_gps_processing_method(b"SHORT"), "");
 /// ```
 pub fn decode_gps_processing_method(data: &[u8]) -> String {
+    decode_gps_text(data, ByteOrder::LittleEndian)
+}
+
+/// [`decode_gps_processing_method`] for a value read from an EXIF block of
+/// byte order `order` (`GetByteOrder()` while ExifTool processes the GPS
+/// IFD). That order is where a `UNICODE` value with no byte-order mark
+/// starts; see [`decode_unicode_gps_text`]. Readers that know the block's
+/// order must use this: a big-endian block's UTF-16 read as little-endian
+/// comes back byte-swapped (`café` as `挀愀昀`).
+pub fn decode_gps_text(data: &[u8], order: ByteOrder) -> String {
     // The minimum valid data is 8 bytes for the character code identifier.
     // If data is shorter, we cannot determine the encoding, so return empty.
     if data.len() < 8 {
@@ -97,7 +110,7 @@ pub fn decode_gps_processing_method(data: &[u8]) -> String {
         }
         b"UNICODE\0" => {
             // Unicode (UTF-16) encoding.
-            decode_unicode_gps_text(text_data)
+            decode_unicode_gps_text(text_data, order)
         }
         b"JIS\0\0\0\0\0" => {
             // JIS X 0208 encoding: Japanese character set.
@@ -121,62 +134,46 @@ pub fn decode_gps_processing_method(data: &[u8]) -> String {
 /// (GPS.pm 0x001b) and GPSAreaInformation (GPS.pm 0x001c). Both declare
 /// `RawConv => 'Image::ExifTool::Exif::ConvertExifText($self,$val,1,$tag)'`
 /// (GPS.pm 13.59:299, :305). For the `UNICODE` id, `ConvertExifText`
-/// (Exif.pm:5586) calls `$et->Decode($str, 'UTF16', 'Unknown')`.
+/// (Exif.pm:5586) calls `$et->Decode($str, 'UTF16', 'Unknown')`, and this
+/// runs that call through the ported `Charset::Decompose`
+/// ([`crate::exiftool_tables::charset::decompose`]) with `order` as
+/// `GetByteOrder()`:
 ///
-/// `Decode` -> `Decompose` (Charset.pm) runs the 2-byte fixed-width branch:
-/// a leading byte-order mark overrides the declared/guessed order
-/// (`Charset.pm:203`, `$val =~ s/^(\xfe\xff|\xff\xfe)//`; `\xfe\xff` selects
-/// big-endian, `\xff\xfe` selects little-endian). `Charset.pm:147` states the
-/// rule outright -- "byte order mark observed and then removed with UCS2 and
-/// UCS4".
+/// - a leading byte-order mark selects the order and is removed
+///   (`Charset.pm:203`);
+/// - with no BOM, decoding starts in the EXIF block's byte order, and the
+///   `'Unknown'` check then swaps it when the other order fits the units
+///   better (`Charset.pm:212-232`: the byte with more distinct values is the
+///   low byte, else the byte that is zero more often is the high byte). That
+///   is how ExifTool reads MicrosoftPhoto's little-endian text in a
+///   big-endian block, and a big-endian block's own big-endian text;
+/// - `UTF16` combines surrogate pairs (`Charset.pm:235`); a lone surrogate
+///   has no Rust `char` and becomes U+FFFD.
 ///
-/// With no BOM, the order is genuinely unknown and ExifTool *guesses* it
-/// (`Charset.pm:213-228`: count distinct high vs. low bytes across the code
-/// units, then prefer whichever byte is zero more often). That heuristic is
-/// deliberately not reproduced here -- guessing wrong would silently swap
-/// every byte pair and produce plausible-looking mojibake under the real tag
-/// name, which is worse than the honest default below. Bytes with no BOM
-/// fall back to little-endian, which is what Windows/EXIF cameras write in
-/// practice; every no-BOM `UNICODE` value in the sample corpus already
-/// matches this default (e.g. OlympusSH-25MR.jpg, PanasonicDMC-TZ20.jpg,
-/// PanasonicDMC-ZS10.jpg GPSAreaInformation).
-///
-/// Unlike the XP* tags (`UCS2`, no surrogate combination), this path uses
-/// charset `UTF16`, which Charset.pm:80 documents as "UCS2 with surrogate
-/// pairs added" and combines at Charset.pm:235 -- exactly what
-/// [`String::from_utf16_lossy`] already does.
-fn decode_unicode_gps_text(data: &[u8]) -> String {
-    // Honour a leading BOM over the little-endian default, as Charset.pm does.
-    let (data, big_endian) = match data {
-        [0xFE, 0xFF, rest @ ..] => (rest, true),
-        [0xFF, 0xFE, rest @ ..] => (rest, false),
-        _ => (data, false),
+/// Before, every no-BOM value was read little-endian whatever the block's
+/// order, so the `UNICODE` text ExifTool (and now oxidex) writes into a
+/// big-endian block came back byte-swapped.
+fn decode_unicode_gps_text(data: &[u8], order: ByteOrder) -> String {
+    let mut session = Session::new();
+    session.byte_order = Some(order);
+    let Ok(units) = crate::exiftool_tables::charset::decompose(
+        &mut session,
+        data,
+        "UTF16",
+        &MemberVal::Str("Unknown".into()),
+    ) else {
+        return String::new();
     };
-
-    // Convert pairs of bytes to UTF-16 code units.
-    // Filter out incomplete pairs at the end (odd byte count).
-    let u16_data: Vec<u16> = data
-        .chunks(2)
-        .filter_map(|chunk| {
-            if chunk.len() == 2 {
-                let unit = if big_endian {
-                    u16::from_be_bytes([chunk[0], chunk[1]])
-                } else {
-                    u16::from_le_bytes([chunk[0], chunk[1]])
-                };
-                Some(unit)
-            } else {
-                // Skip incomplete byte pair (odd-length data).
-                None
-            }
+    let text: String = units
+        .iter()
+        .map(|&unit| {
+            u32::try_from(unit)
+                .ok()
+                .and_then(char::from_u32)
+                .unwrap_or('\u{FFFD}')
         })
         .collect();
-
-    // Decode UTF-16 to UTF-8, using replacement characters for invalid sequences.
-    String::from_utf16_lossy(&u16_data)
-        .trim_end_matches('\0')
-        .trim()
-        .to_string()
+    text.trim_end_matches('\0').trim().to_string()
 }
 
 #[cfg(test)]
@@ -371,25 +368,31 @@ mod tests {
     fn test_decode_utf16_le_simple() {
         // "Hi" in UTF-16LE
         let data = [0x48, 0x00, 0x69, 0x00, 0x00, 0x00];
-        assert_eq!(decode_unicode_gps_text(&data), "Hi");
+        assert_eq!(
+            decode_unicode_gps_text(&data, ByteOrder::LittleEndian),
+            "Hi"
+        );
     }
 
     #[test]
     fn test_decode_utf16_le_odd_length() {
         // Odd number of bytes (last byte should be ignored)
         let data = [0x48, 0x00, 0x69, 0x00, 0xFF];
-        assert_eq!(decode_unicode_gps_text(&data), "Hi");
+        assert_eq!(
+            decode_unicode_gps_text(&data, ByteOrder::LittleEndian),
+            "Hi"
+        );
     }
 
     #[test]
     fn test_decode_utf16_le_empty() {
-        assert_eq!(decode_unicode_gps_text(&[]), "");
+        assert_eq!(decode_unicode_gps_text(&[], ByteOrder::LittleEndian), "");
     }
 
     #[test]
     fn test_decode_utf16_le_only_null() {
         let data = [0x00, 0x00];
-        assert_eq!(decode_unicode_gps_text(&data), "");
+        assert_eq!(decode_unicode_gps_text(&data, ByteOrder::LittleEndian), "");
     }
 
     // ==================== Byte-Order-Mark Tests ====================
@@ -412,7 +415,10 @@ mod tests {
         let mut data = vec![0xFF, 0xFE, 0xCC, 0x5D, 0x39, 0x68, 0xC5, 0x99];
         data.extend(std::iter::repeat_n(0u8, 256 - data.len()));
 
-        assert_eq!(decode_unicode_gps_text(&data), "巌根駅");
+        assert_eq!(
+            decode_unicode_gps_text(&data, ByteOrder::LittleEndian),
+            "巌根駅"
+        );
 
         let mut full = b"UNICODE\0".to_vec();
         full.extend_from_slice(&data);
@@ -424,26 +430,73 @@ mod tests {
         // `\xfe\xff` (big-endian BOM) both removes the mark and switches the
         // rest of the value to big-endian (Charset.pm:203).
         let data = [0xFE, 0xFF, 0x00, 0x48, 0x00, 0x69, 0x00, 0x00];
-        assert_eq!(decode_unicode_gps_text(&data), "Hi");
+        assert_eq!(
+            decode_unicode_gps_text(&data, ByteOrder::LittleEndian),
+            "Hi"
+        );
     }
 
     #[test]
-    fn decode_unicode_gps_text_no_bom_defaults_to_little_endian() {
-        // No BOM: every no-BOM UNICODE value in the sample corpus
-        // (OlympusSH-25MR.jpg, PanasonicDMC-TZ20.jpg, PanasonicDMC-ZS10.jpg
-        // GPSAreaInformation) is little-endian, so that is the fallback.
-        // ExifTool's real behavior guesses the order per-value
-        // (Charset.pm:213-228); that heuristic is intentionally not
-        // reproduced -- see decode_unicode_gps_text's doc comment.
-        let data = [0x48, 0x00, 0x69, 0x00, 0x00, 0x00];
-        assert_eq!(decode_unicode_gps_text(&data), "Hi");
+    fn decode_unicode_gps_text_no_bom_starts_in_the_block_order() {
+        // No BOM: `Decode($str,'UTF16','Unknown')` starts in GetByteOrder(),
+        // the EXIF block's order. `café` / `中文` as pinned ExifTool 13.59
+        // writes them into an II and an MM block (`EncodeExifText`).
+        for (order, bytes, text) in [
+            (
+                ByteOrder::LittleEndian,
+                &[0x63, 0x00, 0x61, 0x00, 0x66, 0x00, 0xe9, 0x00][..],
+                "café",
+            ),
+            (
+                ByteOrder::BigEndian,
+                &[0x00, 0x63, 0x00, 0x61, 0x00, 0x66, 0x00, 0xe9][..],
+                "café",
+            ),
+            (
+                ByteOrder::LittleEndian,
+                &[0x2d, 0x4e, 0x87, 0x65][..],
+                "中文",
+            ),
+            (ByteOrder::BigEndian, &[0x4e, 0x2d, 0x65, 0x87][..], "中文"),
+            (
+                ByteOrder::BigEndian,
+                &[0x00, 0x41, 0xd8, 0x3d, 0xde, 0x00, 0x00, 0x42][..],
+                "A😀B",
+            ),
+        ] {
+            assert_eq!(
+                decode_unicode_gps_text(bytes, order),
+                text,
+                "{order:?} {bytes:02x?}"
+            );
+            let mut full = b"UNICODE\0".to_vec();
+            full.extend_from_slice(bytes);
+            assert_eq!(decode_gps_text(&full, order), text, "{order:?}");
+        }
+    }
+
+    #[test]
+    fn decode_unicode_gps_text_swaps_when_the_other_order_fits() {
+        // Charset.pm:212-232 ('Unknown'): the byte with more distinct values
+        // is the low byte. Little-endian `Hi` in a big-endian block reads
+        // `Hi` (MicrosoftPhoto writes little-endian even in MM EXIF), and
+        // big-endian `Hi` in a little-endian block reads `Hi` too.
+        let le = [0x48, 0x00, 0x69, 0x00, 0x00, 0x00];
+        let be = [0x00, 0x48, 0x00, 0x69, 0x00, 0x00];
+        assert_eq!(decode_unicode_gps_text(&le, ByteOrder::BigEndian), "Hi");
+        assert_eq!(decode_unicode_gps_text(&be, ByteOrder::LittleEndian), "Hi");
+        assert_eq!(decode_unicode_gps_text(&le, ByteOrder::LittleEndian), "Hi");
+        assert_eq!(decode_unicode_gps_text(&be, ByteOrder::BigEndian), "Hi");
     }
 
     #[test]
     fn decode_unicode_gps_text_bom_only_honoured_at_start() {
         // A BOM sequence appearing mid-string is ordinary text, not a marker.
         let data = [0x48, 0x00, 0xFF, 0xFE, 0x69, 0x00, 0x00, 0x00];
-        assert_eq!(decode_unicode_gps_text(&data), "H\u{FEFF}i");
+        assert_eq!(
+            decode_unicode_gps_text(&data, ByteOrder::LittleEndian),
+            "H\u{FEFF}i"
+        );
     }
 
     // ==================== Real-World Data Simulation ====================

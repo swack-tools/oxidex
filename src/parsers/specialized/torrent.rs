@@ -655,25 +655,29 @@ fn insert_tag(metadata: &mut MetadataMap, name: &str, value: ScalarValue, conv: 
 /// Extract BitTorrent metadata by bencode-decoding the file and walking it
 /// the way `Torrent::ExtractTags` does.
 pub fn parse_torrent_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = usize::try_from(reader.size()).map_err(|_| "torrent file is too large")?;
-    let data = reader.read(0, size).map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = usize::try_from(reader.size()).map_err(|_| "torrent file is too large")?;
+        let data = reader.read(0, size).map_err(|error| error.to_string())?;
 
-    let mut bencode = BencodeReader::new(&data);
-    let root = bencode.read();
+        let mut bencode = BencodeReader::new(&data);
+        let root = bencode.read();
 
-    // Torrent.pm:286: the file is only accepted as a torrent when the root is
-    // a dictionary carrying at least one of these three keys.
-    let Some(Bencode::Dict(dict)) = root else {
-        return Err("not a bencoded dictionary".to_string());
-    };
-    if !dict.contains_key(b"announce".as_slice())
-        && !dict.contains_key(b"created by".as_slice())
-        && !dict.contains_key(b"info".as_slice())
-    {
-        return Err("bencoded dictionary is not a torrent".to_string());
-    }
+        // Torrent.pm:286: the file is only accepted as a torrent when the root is
+        // a dictionary carrying at least one of these three keys.
+        let Some(Bencode::Dict(dict)) = root else {
+            return Err("not a bencoded dictionary".to_string());
+        };
+        if !dict.contains_key(b"announce".as_slice())
+            && !dict.contains_key(b"created by".as_slice())
+            && !dict.contains_key(b"info".as_slice())
+        {
+            return Err("bencoded dictionary is not a torrent".to_string());
+        }
 
-    let mut metadata = MetadataMap::new();
-    extract_tags(&dict, MAIN, None, None, &[], &mut metadata);
-    Ok(metadata)
+        let mut metadata = MetadataMap::new();
+        extract_tags(&dict, MAIN, None, None, &[], &mut metadata);
+        Ok(metadata)
+    })
 }

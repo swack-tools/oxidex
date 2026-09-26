@@ -141,31 +141,35 @@ fn try_header(all: &[u8], offset: usize) -> Option<Header> {
 /// Extract PICT metadata (header-only, matching ExifTool's non-verbose
 /// default -- image opcodes are only walked under `-v`/`-U`).
 pub fn parse_pict_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size() as usize;
-    let want = size.min(FILE_HEADER_PAD + HEADER_LEN + V2_EXTRA_LEN);
-    let all = reader.read(0, want).map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size() as usize;
+        let want = size.min(FILE_HEADER_PAD + HEADER_LEN + V2_EXTRA_LEN);
+        let all = reader.read(0, want).map_err(|error| error.to_string())?;
 
-    let header = try_header(all, 0)
-        .or_else(|| try_header(all, FILE_HEADER_PAD))
-        .ok_or_else(|| "invalid PICT header".to_string())?;
+        let header = try_header(all, 0)
+            .or_else(|| try_header(all, FILE_HEADER_PAD))
+            .ok_or_else(|| "invalid PICT header".to_string())?;
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("File:ImageWidth", TagValue::Integer(header.width as i64));
-    metadata.insert("File:ImageHeight", TagValue::Integer(header.height as i64));
-    if let Some(h_res) = header.h_res {
-        metadata.insert(
-            "File:XResolution",
-            TagValue::new_string(format_whole_or_decimal(h_res)),
-        );
-    }
-    if let Some(v_res) = header.v_res {
-        metadata.insert(
-            "File:YResolution",
-            TagValue::new_string(format_whole_or_decimal(v_res)),
-        );
-    }
+        let mut metadata = MetadataMap::new();
+        metadata.insert("File:ImageWidth", TagValue::Integer(header.width as i64));
+        metadata.insert("File:ImageHeight", TagValue::Integer(header.height as i64));
+        if let Some(h_res) = header.h_res {
+            metadata.insert(
+                "File:XResolution",
+                TagValue::new_string(format_whole_or_decimal(h_res)),
+            );
+        }
+        if let Some(v_res) = header.v_res {
+            metadata.insert(
+                "File:YResolution",
+                TagValue::new_string(format_whole_or_decimal(v_res)),
+            );
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

@@ -22,69 +22,73 @@ use super::version_parser::format_version_with_name;
 
 /// Extract metadata from a parsed MachOInfo structure
 pub fn extract_macho_metadata(info: &MachOInfo) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
 
-    // Basic file type indicator
-    metadata.insert(
-        "EXE:FileFormat".to_string(),
-        TagValue::String("Mach-O".to_string()),
-    );
+        // Basic file type indicator
+        metadata.insert(
+            "EXE:FileFormat".to_string(),
+            TagValue::String("Mach-O".to_string()),
+        );
 
-    // Extract header metadata
-    if let Some(ref header) = info.header {
-        set_macho_file_type(header, info.is_from_fat, &mut metadata);
-        extract_header_metadata(header, &mut metadata);
-    }
+        // Extract header metadata
+        if let Some(ref header) = info.header {
+            set_macho_file_type(header, info.is_from_fat, &mut metadata);
+            extract_header_metadata(header, &mut metadata);
+        }
 
-    // Extract segment metadata
-    if !info.segments.is_empty() {
-        extract_segment_metadata(&info.segments, &mut metadata);
-    }
+        // Extract segment metadata
+        if !info.segments.is_empty() {
+            extract_segment_metadata(&info.segments, &mut metadata);
+        }
 
-    // Extract dylib metadata
-    if !info.dylibs.is_empty() {
-        extract_dylib_metadata(&info.dylibs, &mut metadata);
-    }
+        // Extract dylib metadata
+        if !info.dylibs.is_empty() {
+            extract_dylib_metadata(&info.dylibs, &mut metadata);
+        }
 
-    // Extract UUID
-    if let Some(ref uuid) = info.uuid {
-        extract_uuid_metadata(uuid, &mut metadata);
-    }
+        // Extract UUID
+        if let Some(ref uuid) = info.uuid {
+            extract_uuid_metadata(uuid, &mut metadata);
+        }
 
-    // Extract version info
-    extract_version_metadata(info, &mut metadata);
+        // Extract version info
+        extract_version_metadata(info, &mut metadata);
 
-    // Extract entry point
-    if let Some(ref entry) = info.entry_point {
-        extract_entry_point_metadata(entry, &mut metadata);
-    }
+        // Extract entry point
+        if let Some(ref entry) = info.entry_point {
+            extract_entry_point_metadata(entry, &mut metadata);
+        }
 
-    // Extract symbol table info
-    if let Some(ref symtab) = info.symtab {
-        extract_symbol_metadata(symtab, info.dysymtab.as_ref(), &mut metadata);
-    }
+        // Extract symbol table info
+        if let Some(ref symtab) = info.symtab {
+            extract_symbol_metadata(symtab, info.dysymtab.as_ref(), &mut metadata);
+        }
 
-    // Extract rpath info
-    if !info.rpaths.is_empty() {
-        extract_rpath_metadata(&info.rpaths, &mut metadata);
-    }
+        // Extract rpath info
+        if !info.rpaths.is_empty() {
+            extract_rpath_metadata(&info.rpaths, &mut metadata);
+        }
 
-    // Extract encryption info
-    if let Some(ref enc) = info.encryption_info {
-        extract_encryption_metadata(enc, &mut metadata);
-    }
+        // Extract encryption info
+        if let Some(ref enc) = info.encryption_info {
+            extract_encryption_metadata(enc, &mut metadata);
+        }
 
-    // Extract code signature info
-    if let Some(ref cs_info) = info.code_signature_info {
-        extract_code_signature_metadata(cs_info, &mut metadata);
-    }
+        // Extract code signature info
+        if let Some(ref cs_info) = info.code_signature_info {
+            extract_code_signature_metadata(cs_info, &mut metadata);
+        }
 
-    // Extract FAT binary info
-    if info.is_from_fat {
-        extract_fat_metadata(info, &mut metadata);
-    }
+        // Extract FAT binary info
+        if info.is_from_fat {
+            extract_fat_metadata(info, &mut metadata);
+        }
 
-    metadata
+        metadata
+    })
 }
 
 /// Name the file the way `EXE.pm` names it, in the group ExifTool reports.

@@ -121,6 +121,7 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     let declared_tag_name = match tag_name {
         "GPSDestBearing" => "GPS:GPSDestBearing",
         "DateTimeOriginal" => "EXIF:DateTimeOriginal",
+        "ModifyDate" => "EXIF:ModifyDate",
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",
@@ -248,13 +249,13 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         };
     }
 
-    // GPS.pm 0x001c applies EncodeExifText as its RawConvInv. With the default
-    // CharsetEXIF this is the eight-byte ASCII identifier followed by the
-    // caller's text; the TIFF field itself remains UNDEFINED.
-    if tag_name == "GPS:GPSAreaInformation" {
-        let mut encoded = b"ASCII\0\0\0".to_vec();
-        encoded.extend_from_slice(raw.as_bytes());
-        return Ok(TagValue::Binary(encoded));
+    // UserComment (Exif.pm 0x9286) and GPSProcessingMethod /
+    // GPSAreaInformation (GPS.pm 0x001b / 0x001c) apply `EncodeExifText` as
+    // their RawConvInv, which needs the byte order of the EXIF block being
+    // written (UTF-16 for non-ASCII text). The value stays the caller's text
+    // here; the EXIF serializers encode it (`writers::exif_text`).
+    if crate::tag_db::tag_registry::is_encode_exif_text_tag(tag_name) {
+        return Ok(TagValue::String(raw.to_string()));
     }
 
     // Exif.pm 13.59 0x9000 writes ExifVersion as four UNDEFINED ASCII bytes.
@@ -325,6 +326,66 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::Binary(vec![
             raw.parse::<u8>().expect("known byte"),
         ]));
+    }
+
+    // GPS.pm 0x001d GPSDateStamp PrintConvInv: the date part of any date or
+    // date/time -- `$val =~ /(\d{4}).*?(\d{2}).*?(\d{2})/ ? "$1:$2:$3" :
+    // undef` -- after adjusting a zoned date/time to UTC. No date is no
+    // value (13.59 does not copy t/images/InfiRay.jpg's empty stamp); the
+    // UTC adjustment and `now` are refused rather than approximated.
+    if declared_tag_name.rsplit(':').next() == Some("GPSDateStamp") {
+        if raw.eq_ignore_ascii_case("now") || raw.contains(['-', '+']) {
+            return Err(invalid(
+                tag_name,
+                "oxidex does not adjust a zoned GPSDateStamp to UTC; give the date",
+            ));
+        }
+        let digits: Vec<(usize, char)> = raw.char_indices().collect();
+        let run = |from: usize, len: usize| -> Option<(usize, String)> {
+            (from..digits.len()).find_map(|start| {
+                let text: String = digits
+                    .get(start..start + len)?
+                    .iter()
+                    .map(|(_, c)| *c)
+                    .collect();
+                text.chars()
+                    .all(|c| c.is_ascii_digit())
+                    .then_some((start + len, text))
+            })
+        };
+        let date = run(0, 4).and_then(|(after, year)| {
+            let (after, month) = run(after, 2)?;
+            let (_, day) = run(after, 2)?;
+            Some(format!("{year}:{month}:{day}"))
+        });
+        return date
+            .map(TagValue::String)
+            .ok_or_else(|| invalid(tag_name, "GPSDateStamp needs a date (YYYY:mm:dd)"));
+    }
+
+    // Exif.pm 0xa302 CFAPattern: PrintConvInv `GetCFAPattern` turns the
+    // printed `[Blue,Green][Green,Red]` into the dimensions and colours, and
+    // RawConvInv packs them in the file's byte order. oxidex does neither;
+    // refuse the text rather than store it as the tag's bytes.
+    if declared_tag_name.rsplit(':').next() == Some("CFAPattern") {
+        return Err(invalid(
+            tag_name,
+            "oxidex does not convert a CFAPattern value (GetCFAPattern)",
+        ));
+    }
+
+    // Exif.pm 0xa301 SceneType is writable undef too: PrintConv {1 =>
+    // 'Directly photographed'} inverted, then ValueConvInv 'chr($val &
+    // 0xff)'. The label reached the writer as text and was stored as its
+    // bytes, which ExifTool reads back as `Unknown (Directly photographed)`.
+    if declared_tag_name.rsplit(':').next() == Some("SceneType") {
+        if raw != "Directly photographed" {
+            return Err(invalid(
+                tag_name,
+                "Can't convert SceneType value (not in PrintConv)",
+            ));
+        }
+        return Ok(TagValue::Binary(vec![1]));
     }
 
     // GPS.pm 13.59 converts GPSDestLatitude's decimal input into a three-part
@@ -443,6 +504,17 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::new_array(values));
     }
 
+    // Writer.pl `ReverseLookup` (13.59:3614-3620): a printed `Unknown (X)`
+    // of a PrintConv hash is its raw value X. ExifTool prints a GPS
+    // reference it has no label for that way (t/images/Ricoh2.jpg:
+    // `GPSDestDistanceRef: Unknown ()`), and a copy hands it back.
+    let raw = match raw
+        .strip_prefix("Unknown (")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(inner) if is_gps_enum_reference(tag_name) => inner,
+        _ => raw,
+    };
     let raw = if matches!(
         tag_name,
         "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
@@ -678,6 +750,9 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             parse_shutter_speed_value(tag_name, raw)
         }
         Some(ValueType::Rational) => parse_rational(declared_tag_name, raw),
+        Some(ValueType::DateTime) if declared_tag_name.starts_with("PDF:") => {
+            parse_pdf_date(tag_name, raw)
+        }
         Some(ValueType::DateTime) => parse_datetime(tag_name, raw),
         // ExifTool's `undef` format imposes no shape on the value and stores
         // the argument's bytes verbatim (`Writer.pl:6847-6858`).
@@ -1035,11 +1110,22 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
     } else {
         raw
     };
-    // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
-    // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
-    // the generic rational cases because ExifTool rejects fractions, `inf`
-    // and `undef` here rather than storing them directly.
-    if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "ApertureValue" {
+    // Exif.pm 13.59 0x920a FocalLength: PrintConvInv => '$val=~s/\s*mm$//;$val',
+    // so the printed `34.0 mm` is accepted as well as `34`.
+    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "FocalLength" {
+        raw.strip_suffix("mm").map(str::trim_end).unwrap_or(raw)
+    } else {
+        raw
+    };
+    // Exif.pm 13.59 0x9202 ApertureValue and 0x9205 MaxApertureValue store
+    // APEX but accept the displayed F-number: ValueConvInv => '$val>0 ?
+    // 2*log($val)/log(2) : 0' on both. Apply this before the generic
+    // rational cases because ExifTool rejects fractions, `inf` and `undef`
+    // here rather than storing them directly.
+    if matches!(
+        tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name),
+        "ApertureValue" | "MaxApertureValue"
+    ) {
         let text =
             as_float_text(raw).ok_or_else(|| invalid(tag_name, "Not a floating point number"))?;
         let f_number: f64 = text
@@ -1107,6 +1193,18 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
         .parse()
         .map_err(|_| invalid(tag_name, "Not a floating point number"))?;
     let (numerator, denominator) = rationalize(value, RATIONAL_MAX);
+    // An unsigned rational64u is rationalized up to 0xffffffff (Writer.pl
+    // `SetRational64u`: `Rationalize($_[0],0xffffffff)`); a value that
+    // needs more than 0x7fffffff (3.614421976e-10 is 1/2766695617) comes
+    // out differently there, and a `TagValue::Rational` cannot hold it.
+    // Refuse it rather than store the signed-range approximation (0/1).
+    if rationalize(value, 0xffff_ffff) != (numerator, denominator) {
+        return Err(invalid(
+            tag_name,
+            "the value needs a rational beyond the signed 32-bit range, which oxidex \
+             cannot represent",
+        ));
+    }
     Ok(TagValue::Rational {
         numerator: numerator as i32,
         denominator: denominator as i32,
@@ -1192,6 +1290,26 @@ fn assemble_rational(num: f64, denom: f64, fracs: &[f64]) -> (f64, f64) {
     }
 }
 
+/// The GPS.pm string tags whose PrintConv is a hash of letter codes.
+fn is_gps_enum_reference(tag_name: &str) -> bool {
+    matches!(
+        tag_name.rsplit(':').next(),
+        Some(
+            "GPSLatitudeRef"
+                | "GPSLongitudeRef"
+                | "GPSStatus"
+                | "GPSMeasureMode"
+                | "GPSSpeedRef"
+                | "GPSTrackRef"
+                | "GPSImgDirectionRef"
+                | "GPSDestLatitudeRef"
+                | "GPSDestLongitudeRef"
+                | "GPSDestBearingRef"
+                | "GPSDestDistanceRef"
+        )
+    )
+}
+
 /// `Rationalize` — `Writer.pl:5200-5228`. The `inf` / `undef` / `N/D` cases
 /// (`:5203-5205`) are handled by [`parse_rational`] before this is reached.
 fn rationalize(value: f64, max_int: i64) -> (i64, i64) {
@@ -1236,6 +1354,119 @@ fn rationalize(value: f64, max_int: i64) -> (i64, i64) {
     (num as i64 * sign, denom as i64)
 }
 
+/// A PDF Info date: ExifTool's `InverseDateTime` for PDF.pm's
+/// `PrintConvInv => '$self->InverseDateTime($val)'` (Writer.pl:5012-5151
+/// with `$tzFlag` undefined and no `DateFormat`), which keeps the zone and
+/// the sub-seconds as given (the EXIF path, [`parse_datetime`], drops both),
+/// returned as the text it produces. The PDF writer then encodes that text
+/// as WritePDF.pl's `WritePDFValue` does (`pdf_writer`: sub-seconds dropped,
+/// `+HH:MM` as `+HH'MM'`, `Z` kept).
+///
+/// Pinned 13.59 on tests/fixtures/pdf/sample.pdf, `-PDF:CreateDate=V`
+/// writes `/CreationDate (D:...)`:
+///
+/// | V | written |
+/// |---|---|
+/// | `2020:01:02 03:04:05` | `D:20200102030405` |
+/// | `2020:01:02 03:04:05Z` (or `z`) | `D:20200102030405Z` |
+/// | `2020:01:02 03:04:05.25+02:00` | `D:20200102030405+02'00'` |
+/// | `2020:01:02 03:04:05-0530` | `D:20200102030405-05'30'` |
+/// | `2020-01-02T03:04:05`, `20200102030405` | `D:20200102030405` |
+/// | `2020:01:02 03:04` | `D:20200102030400` |
+/// | `2020:01:02 03:04:0é` | `D:20200102030400` |
+/// | `2020:01:02`, `junk` | refused: `Invalid date/time (use ...)` |
+///
+/// Char-safe throughout: a multibyte character anywhere is only a
+/// non-digit, never a place to split the text.
+fn parse_pdf_date(tag_name: &str, raw: &str) -> Result<TagValue> {
+    const USAGE: &str = "Invalid date/time (use YYYY:mm:dd HH:MM:SS[.ss][+/-HH:MM|Z])";
+    let mut val = raw.to_string();
+    // :5018-5026 -- a trailing zone, else a trailing `Z`, else `now`.
+    let tz = match strip_timezone_suffix(&mut val) {
+        Some(tz) => tz,
+        None => match val.strip_suffix(['Z', 'z']) {
+            Some(rest) => {
+                val = rest.to_string();
+                "Z".to_string()
+            }
+            // :5025 -- TimeNow with the local zone.
+            None if val.eq_ignore_ascii_case("now") => {
+                let now = chrono::Local::now();
+                return Ok(TagValue::String(
+                    now.format("%Y:%m:%d %H:%M:%S%:z").to_string(),
+                ));
+            }
+            None => String::new(),
+        },
+    };
+    // :5100-5103 -- the year, then every one-or-two digit run, padded.
+    let (year, mut parts) = scan_date_numbers(&val).ok_or_else(|| invalid(tag_name, USAGE))?;
+    for part in &mut parts {
+        if part.len() < 2 {
+            part.insert(0, '0');
+        }
+    }
+    // :5104 -- fewer than mm/dd/HH is no date/time.
+    if parts.len() < 3 {
+        return Err(invalid(tag_name, USAGE));
+    }
+    let given = parts.len();
+    let seconds = parts.get(4).cloned(); // :5105
+    while parts.len() < 5 {
+        parts.push("00".to_string()); // :5106
+    }
+    // :5108-5110 -- sub-seconds only after SS, with a leading `.`.
+    let fraction = if given > 5 {
+        trailing_fraction(&val).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let number =
+        |s: &str| -> Result<u32> { s.parse::<u32>().map_err(|_| invalid(tag_name, USAGE)) };
+    // :5134-5143 -- ExifTool's own range checks, with its own wording.
+    if !(1..=12).contains(&number(&parts[0])?) {
+        return Err(invalid(
+            tag_name,
+            format!("Month '{}' out of range 1..12", parts[0]),
+        ));
+    }
+    if !(1..=31).contains(&number(&parts[1])?) {
+        return Err(invalid(
+            tag_name,
+            format!("Day '{}' out of range 1..31", parts[1]),
+        ));
+    }
+    if number(&parts[2])? > 24 {
+        return Err(invalid(
+            tag_name,
+            format!("Hour '{}' out of range 0..24", parts[2]),
+        ));
+    }
+    if number(&parts[3])? > 59 {
+        return Err(invalid(
+            tag_name,
+            format!("Minutes '{}' out of range 0..59", parts[3]),
+        ));
+    }
+    // :5126-5132 -- seconds only when given and below 60.
+    let seconds = match seconds {
+        Some(ss) if number(&ss)? < 60 => ss,
+        _ => "00".to_string(),
+    };
+    Ok(TagValue::String(format!(
+        "{year:04}:{}:{} {}:{}:{seconds}{fraction}{tz}",
+        parts[0], parts[1], parts[2], parts[3]
+    )))
+}
+
+/// `$val =~ /(\.\d+)\s*$/` -- `Writer.pl:5109`.
+fn trailing_fraction(val: &str) -> Option<String> {
+    let trimmed = val.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let digits = trimmed.len() - trimmed.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let head = &trimmed[..trimmed.len() - digits];
+    (digits > 0 && head.ends_with('.')).then(|| format!(".{}", &trimmed[trimmed.len() - digits..]))
+}
+
 /// `InverseDateTime` — `Writer.pl:5012-5151`, for the case this CLI is in:
 /// no `DateFormat` option set, and `$tzFlag = 0` as EXIF's date tags pass it
 /// — which discards both the timezone and the sub-seconds (`:5123-5124`).
@@ -1247,7 +1478,7 @@ fn parse_datetime(tag_name: &str, raw: &str) -> Result<TagValue> {
     let mut val = raw.to_string();
     // :5018-5026 — strip a trailing timezone, else a trailing 'Z', else allow
     // the special value 'now'.
-    if !strip_timezone_suffix(&mut val) {
+    if strip_timezone_suffix(&mut val).is_none() {
         let stripped = val.strip_suffix(['Z', 'z']).map(str::to_string);
         match stripped {
             Some(rest) => val = rest,
@@ -1337,12 +1568,15 @@ fn parse_datetime(tag_name: &str, raw: &str) -> Result<TagValue> {
     Ok(TagValue::DateTime(Utc.from_utc_datetime(&naive)))
 }
 
-/// Strips a trailing timezone, reporting whether one was found:
+/// Strips a trailing timezone and returns it as ExifTool spells it
+/// (`sprintf("$1%.2d:$3", $2)`), or `None` when there is none:
 /// `s/([-+])(\d{1,2}):?(\d{2})\s*(DST)?$//i` — `Writer.pl:5018`.
-fn strip_timezone_suffix(s: &mut String) -> bool {
+fn strip_timezone_suffix(s: &mut String) -> Option<String> {
     let b = s.as_bytes();
     let mut end = b.len();
-    if end >= 3 && s[end - 3..].eq_ignore_ascii_case("DST") {
+    // Bytes, not `str` slices: `end - 3` need not be a char boundary
+    // (`-DateTimeOriginal=€b` panicked here).
+    if end >= 3 && b[end - 3..end].eq_ignore_ascii_case(b"DST") {
         end -= 3;
     }
     while end > 0 && b[end - 1].is_ascii_whitespace() {
@@ -1350,8 +1584,9 @@ fn strip_timezone_suffix(s: &mut String) -> bool {
     }
     // (\d{2})
     if end < 2 || !b[end - 1].is_ascii_digit() || !b[end - 2].is_ascii_digit() {
-        return false;
+        return None;
     }
+    let minutes_at = end - 2;
     end -= 2;
     // :?
     if end > 0 && b[end - 1] == b':' {
@@ -1364,14 +1599,21 @@ fn strip_timezone_suffix(s: &mut String) -> bool {
         seen += 1;
     }
     if seen == 0 {
-        return false;
+        return None;
     }
     // ([-+])
     if end == 0 || (b[end - 1] != b'-' && b[end - 1] != b'+') {
-        return false;
+        return None;
     }
+    let hours: u32 = std::str::from_utf8(&b[end..end + seen])
+        .ok()?
+        .parse()
+        .ok()?;
+    let minutes = std::str::from_utf8(&b[minutes_at..minutes_at + 2]).ok()?;
+    // sprintf("$1%.2d:$3", $2)
+    let tz = format!("{}{hours:02}:{minutes}", b[end - 1] as char);
     s.truncate(end - 1);
-    true
+    Some(tz)
 }
 
 /// `($val =~ /(\d{4})/g)` then `($val =~ /\d{1,2}/g)` — `Writer.pl:5100-5102`.
@@ -1928,12 +2170,26 @@ mod tests {
         }
     }
 
+    /// The `EncodeExifText` tags keep the caller's text: its header and
+    /// UTF-16 byte order depend on the EXIF block the writer lands it in
+    /// (`writers::exif_text`), so a `Binary` built here -- the old
+    /// `ASCII\0\0\0` + UTF-8 over any text -- was wrong for non-ASCII.
     #[test]
-    fn gps_area_information_is_encoded_as_exif_text() {
-        assert_eq!(
-            parse("GPS:GPSAreaInformation", "San Francisco").unwrap(),
-            TagValue::Binary(b"ASCII\0\0\0San Francisco".to_vec())
-        );
+    fn exif_text_tags_are_parsed_as_the_callers_text() {
+        for tag in [
+            "GPS:GPSAreaInformation",
+            "GPS:GPSProcessingMethod",
+            "ExifIFD:UserComment",
+            "UserComment",
+        ] {
+            for value in ["San Francisco", "café", ""] {
+                assert_eq!(
+                    parse(tag, value).unwrap(),
+                    TagValue::new_string(value),
+                    "{tag}={value}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1952,6 +2208,67 @@ mod tests {
             TagValue::Binary(vec![3])
         );
         assert!(parse("FileSource", "3").is_err());
+    }
+
+    /// Exif.pm 0xa301: pinned 13.59 `-ExifIFD:SceneType="Directly
+    /// photographed"` stores the byte 1.
+    #[test]
+    fn scene_type_printed_value_is_inverted_to_its_undef_byte() {
+        for tag in ["SceneType", "EXIF:SceneType", "ExifIFD:SceneType"] {
+            assert_eq!(
+                parse(tag, "Directly photographed").unwrap(),
+                TagValue::Binary(vec![1])
+            );
+        }
+        assert!(parse("ExifIFD:SceneType", "Unknown").is_err());
+    }
+
+    /// Writer.pl `ReverseLookup`: `Unknown (X)` is X (pinned 13.59 copies
+    /// Ricoh2.jpg's `GPSDestDistanceRef: Unknown ()` as the empty string).
+    #[test]
+    fn an_unknown_gps_reference_label_is_its_raw_value() {
+        assert_eq!(
+            parse("GPS:GPSDestDistanceRef", "Unknown ()").unwrap(),
+            TagValue::String(String::new())
+        );
+        assert_eq!(
+            parse("GPS:GPSLongitudeRef", "Unknown (Q)").unwrap(),
+            TagValue::String("Q".into())
+        );
+    }
+
+    /// 3.614421976e-10 needs the unsigned range (t/images/GoPro.jpg's
+    /// ExposureIndex, which pinned 13.59 copies as 1/2766695617).
+    /// GPS.pm 0x001d PrintConvInv keeps the date part; no date is no value.
+    #[test]
+    fn gps_date_stamp_keeps_the_date_part() {
+        assert_eq!(
+            parse("GPS:GPSDateStamp", "2024:01:02 10:11:12").unwrap(),
+            TagValue::String("2024:01:02".into())
+        );
+        assert_eq!(
+            parse("GPS:GPSDateStamp", "2024:01:02").unwrap(),
+            TagValue::String("2024:01:02".into())
+        );
+        assert!(parse("GPS:GPSDateStamp", "").is_err());
+        assert!(parse("GPS:GPSDateStamp", "2024:01:02 10:11:12+02:00").is_err());
+    }
+
+    #[test]
+    fn a_cfa_pattern_text_is_refused() {
+        assert!(parse("ExifIFD:CFAPattern", "[Blue,Green][Green,Red]").is_err());
+    }
+
+    #[test]
+    fn a_rational_beyond_the_signed_range_is_refused() {
+        assert!(parse("ExifIFD:ExposureIndex", "3.614421976e-10").is_err());
+        assert_eq!(
+            parse("ExifIFD:ExposureIndex", "100").unwrap(),
+            TagValue::Rational {
+                numerator: 100,
+                denominator: 1
+            }
+        );
     }
 
     #[test]
@@ -2446,6 +2763,76 @@ mod tests {
                     denominator: 2,
                 }
             );
+        }
+    }
+
+    /// No date input panics, whatever multibyte character it carries or
+    /// wherever: 1fdfbeab split a PDF date at byte 19 (`split_at(19)`) and
+    /// the EXIF zone strip sliced `s[end - 3..]`, so `2020:01:02 03:04:0é`
+    /// and `€b` aborted the CLI. Every insertion point of each character,
+    /// into each base, for a PDF and an EXIF date tag.
+    #[test]
+    fn no_date_input_panics_on_multibyte_text() {
+        let bases = [
+            "2020:01:02 03:04:05",
+            "2020:01:02 03:04:05+02:00",
+            "2020:01:02 03:04:05.25Z",
+            "2020:01:02 03:04:05 DST",
+            "b",
+            "",
+        ];
+        for base in bases {
+            for extra in ["é", "€", "😀", "\u{301}", "ß€"] {
+                let boundaries: Vec<usize> = (0..=base.len())
+                    .filter(|&i| base.is_char_boundary(i))
+                    .collect();
+                for at in boundaries {
+                    let text = format!("{}{extra}{}", &base[..at], &base[at..]);
+                    for tag in ["PDF:CreateDate", "PDF:ModifyDate", "EXIF:DateTimeOriginal"] {
+                        let _ = parse(tag, &text);
+                    }
+                }
+            }
+        }
+        // A multibyte character is a non-digit, as it is to ExifTool's
+        // `\d{1,2}` scan: pinned 13.59 writes `2020:01:02 03:04:0é` as
+        // `(D:20200102030400)`.
+        assert_eq!(
+            parse("PDF:CreateDate", "2020:01:02 03:04:0é").unwrap(),
+            TagValue::String("2020:01:02 03:04:00".to_string())
+        );
+    }
+
+    /// `InverseDateTime` keeps a PDF date's zone and sub-seconds: the forms
+    /// pinned 13.59 accepts for `-PDF:CreateDate=` on sample.pdf, and the
+    /// text they become (the writer then drops the sub-seconds). 1fdfbeab
+    /// refused `Z` and `.25+02:00` and every other form but two.
+    #[test]
+    fn pdf_dates_accept_exiftools_forms() {
+        for (raw, text) in [
+            ("2020:01:02 03:04:05", "2020:01:02 03:04:05"),
+            ("2020:01:02 03:04:05Z", "2020:01:02 03:04:05Z"),
+            ("2020:01:02 03:04:05z", "2020:01:02 03:04:05Z"),
+            ("2020:01:02 03:04:05.25", "2020:01:02 03:04:05.25"),
+            (
+                "2020:01:02 03:04:05.25+02:00",
+                "2020:01:02 03:04:05.25+02:00",
+            ),
+            ("2020:01:02 03:04:05.25Z", "2020:01:02 03:04:05.25Z"),
+            ("2020:01:02 03:04:05-0530", "2020:01:02 03:04:05-05:30"),
+            ("2020:01:02 03:04:05+2", "2020:01:02 03:04:05"),
+            ("2020:01:02 03:04", "2020:01:02 03:04:00"),
+            ("2020-01-02T03:04:05", "2020:01:02 03:04:05"),
+            ("20200102030405", "2020:01:02 03:04:05"),
+        ] {
+            assert_eq!(
+                parse("PDF:CreateDate", raw).unwrap(),
+                TagValue::String(text.to_string()),
+                "{raw}"
+            );
+        }
+        for raw in ["2020:01:02", "junk", "2020:13:02 03:04:05"] {
+            assert!(parse("PDF:CreateDate", raw).is_err(), "{raw}");
         }
     }
 }

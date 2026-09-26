@@ -131,106 +131,110 @@ fn value_conv_only(decoded: &DecodedField, cite: &'static PerlCitation) -> Optio
 /// `KyoceraRaw::Main` binary layout, hand-porting the four `ReverseString`
 /// fields the generator declines to convert.
 pub fn parse_kyocera_raw_metadata(data: &[u8]) -> Result<MetadataMap> {
-    if !looks_like_kyocera_raw(data) {
-        return Err(ExifToolError::parse_error(
-            "missing Kyocera Contax N Digital RAW signature",
-        ));
-    }
-    let header = &data[..HEADER_LEN];
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        if !looks_like_kyocera_raw(data) {
+            return Err(ExifToolError::parse_error(
+                "missing Kyocera Contax N Digital RAW signature",
+            ));
+        }
+        let header = &data[..HEADER_LEN];
 
-    let table = find_table("KyoceraRaw", "Main")
-        .ok_or_else(|| ExifToolError::parse_error("missing KyoceraRaw::Main table"))?;
-    let decode = decode_binary_table(table, header, ByteOrder::Big);
+        let table = find_table("KyoceraRaw", "Main")
+            .ok_or_else(|| ExifToolError::parse_error("missing KyoceraRaw::Main table"))?;
+        let decode = decode_binary_table(table, header, ByteOrder::Big);
 
-    // `File:FileType`/`File:MIMEType`/`File:FileTypeExtension` are filled in
-    // by `add_identity_tags` from ExifTool's own tables after this parser
-    // returns (`core::operations`'s Step 5a); this parser only needs to
-    // supply the `KyoceraRaw:*` tags.
-    let mut metadata = MetadataMap::new();
+        // `File:FileType`/`File:MIMEType`/`File:FileTypeExtension` are filled in
+        // by `add_identity_tags` from ExifTool's own tables after this parser
+        // returns (`core::operations`'s Step 5a); this parser only needs to
+        // supply the `KyoceraRaw:*` tags.
+        let mut metadata = MetadataMap::new();
 
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("KyoceraRaw:{name}");
-        match name {
-            "FirmwareVersion" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &FIRMWARE_VERSION)
-                    && let DecodedValue::String(raw) = access.raw()
-                    && let Some(rendered) = reverse_string(raw)
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("KyoceraRaw:{name}");
+            match name {
+                "FirmwareVersion" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &FIRMWARE_VERSION)
+                        && let DecodedValue::String(raw) = access.raw()
+                        && let Some(rendered) = reverse_string(raw)
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
                 }
-            }
-            "Model" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &MODEL)
-                    && let DecodedValue::String(raw) = access.raw()
-                    && let Some(rendered) = reverse_string(raw)
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
+                "Model" => {
+                    if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &MODEL)
+                        && let DecodedValue::String(raw) = access.raw()
+                        && let Some(rendered) = reverse_string(raw)
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
                 }
-            }
-            "Make" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &MAKE)
-                    && let DecodedValue::String(raw) = access.raw()
-                    && let Some(rendered) = reverse_string(raw)
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
+                "Make" => {
+                    if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &MAKE)
+                        && let DecodedValue::String(raw) = access.raw()
+                        && let Some(rendered) = reverse_string(raw)
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
                 }
-            }
-            "DateTimeOriginal" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DATE_TIME_ORIGINAL)
-                    && let DecodedValue::String(raw) = access.raw()
-                    && let Some(rendered) = reverse_string(raw)
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
+                "DateTimeOriginal" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DATE_TIME_ORIGINAL)
+                        && let DecodedValue::String(raw) = access.raw()
+                        && let Some(rendered) = reverse_string(raw)
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
                 }
-            }
-            // `WB_RGGBLevels` (`Format => 'int32u[4]'`, no `List`, no
-            // `PrintConv`) prints as a plain space-joined string in
-            // ExifTool ("84 64 64 86"), not a comma list -- `TagValue::Array`
-            // is List-shaped, and `join_list` in `cli::output_formatter`
-            // joins every array with `", "`, the right convention for an
-            // actual List tag (Keywords) but not for this fixed-count scalar
-            // array. Composite `BlueBalance`/`RedBalance` also parse this
-            // tag's *string* value with `split_whitespace()`
-            // (`composite/compute.rs`'s `red_blue_balance`), so the comma
-            // form silently dropped both composites too. Rendered as a
-            // string here rather than changing the shared array formatter,
-            // which backs every other List-shaped tag in the codebase.
-            "WB_RGGBLevels" => {
-                if let Some(TagValue::Array(values)) = decoded.emit() {
-                    let joined = values
-                        .iter()
-                        .filter_map(TagValue::as_integer)
-                        .map(|value| value.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    metadata.insert(key, TagValue::new_string(joined));
+                // `WB_RGGBLevels` (`Format => 'int32u[4]'`, no `List`, no
+                // `PrintConv`) prints as a plain space-joined string in
+                // ExifTool ("84 64 64 86"), not a comma list -- `TagValue::Array`
+                // is List-shaped, and `join_list` in `cli::output_formatter`
+                // joins every array with `", "`, the right convention for an
+                // actual List tag (Keywords) but not for this fixed-count scalar
+                // array. Composite `BlueBalance`/`RedBalance` also parse this
+                // tag's *string* value with `split_whitespace()`
+                // (`composite/compute.rs`'s `red_blue_balance`), so the comma
+                // form silently dropped both composites too. Rendered as a
+                // string here rather than changing the shared array formatter,
+                // which backs every other List-shaped tag in the codebase.
+                "WB_RGGBLevels" => {
+                    if let Some(TagValue::Array(values)) = decoded.emit() {
+                        let joined = values
+                            .iter()
+                            .filter_map(TagValue::as_integer)
+                            .map(|value| value.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        metadata.insert(key, TagValue::new_string(joined));
+                    }
                 }
-            }
-            // Full-precision ValueConv, generated `%.2g` PrintConv withheld:
-            // the composite engine parses this tag's display string (module
-            // doc, "Why the table alone is not enough").
-            "FNumber" => {
-                if let Some(value) = value_conv_only(decoded, &F_NUMBER) {
-                    metadata.insert(key, value);
+                // Full-precision ValueConv, generated `%.2g` PrintConv withheld:
+                // the composite engine parses this tag's display string (module
+                // doc, "Why the table alone is not enough").
+                "FNumber" => {
+                    if let Some(value) = value_conv_only(decoded, &F_NUMBER) {
+                        metadata.insert(key, value);
+                    }
                 }
-            }
-            "MaxAperture" => {
-                if let Some(value) = value_conv_only(decoded, &MAX_APERTURE) {
-                    metadata.insert(key, value);
+                "MaxAperture" => {
+                    if let Some(value) = value_conv_only(decoded, &MAX_APERTURE) {
+                        metadata.insert(key, value);
+                    }
                 }
-            }
-            _ => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(key, value);
+                _ => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(key, value);
+                    }
                 }
             }
         }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

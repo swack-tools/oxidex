@@ -74,45 +74,49 @@ pub fn parse_mp3_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for Mp3Parser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let file_size = reader.size();
-        let mut metadata = MetadataMap::with_capacity(32);
-        let mut audio_start = 0u64;
-        let mut id3_size = 0u64;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let file_size = reader.size();
+            let mut metadata = MetadataMap::with_capacity(32);
+            let mut audio_start = 0u64;
+            let mut id3_size = 0u64;
 
-        // Try to parse ID3v2 tag (at start of file)
-        if file_size >= 10 {
-            let header = reader.read(0, 10)?;
-            if &header[0..3] == ID3V2_SIGNATURE {
-                let id3v2_size = parse_id3v2(reader, &mut metadata)?;
-                let id3v2_block_size = 10 + id3v2_size as u64;
-                audio_start = id3v2_block_size;
-                id3_size += id3v2_block_size;
+            // Try to parse ID3v2 tag (at start of file)
+            if file_size >= 10 {
+                let header = reader.read(0, 10)?;
+                if &header[0..3] == ID3V2_SIGNATURE {
+                    let id3v2_size = parse_id3v2(reader, &mut metadata)?;
+                    let id3v2_block_size = 10 + id3v2_size as u64;
+                    audio_start = id3v2_block_size;
+                    id3_size += id3v2_block_size;
+                }
             }
-        }
 
-        // Parse MPEG audio frame header
-        if audio_start < file_size {
-            parse_mpeg_audio_frame(reader, audio_start, &mut metadata)?;
-        }
-
-        // Try to parse ID3v1 tag (last 128 bytes)
-        if file_size >= 128 {
-            let id3v1_offset = file_size - 128;
-            let id3v1_data = reader.read(id3v1_offset, 128)?;
-            if &id3v1_data[0..3] == ID3V1_SIGNATURE {
-                parse_id3v1(id3v1_data, &mut metadata)?;
-                id3_size += 128;
+            // Parse MPEG audio frame header
+            if audio_start < file_size {
+                parse_mpeg_audio_frame(reader, audio_start, &mut metadata)?;
             }
-        }
 
-        if id3_size > 0 {
-            metadata.insert(
-                "File:ID3Size".to_string(),
-                TagValue::new_integer(id3_size as i64),
-            );
-        }
+            // Try to parse ID3v1 tag (last 128 bytes)
+            if file_size >= 128 {
+                let id3v1_offset = file_size - 128;
+                let id3v1_data = reader.read(id3v1_offset, 128)?;
+                if &id3v1_data[0..3] == ID3V1_SIGNATURE {
+                    parse_id3v1(id3v1_data, &mut metadata)?;
+                    id3_size += 128;
+                }
+            }
 
-        Ok(metadata)
+            if id3_size > 0 {
+                metadata.insert(
+                    "File:ID3Size".to_string(),
+                    TagValue::new_integer(id3_size as i64),
+                );
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

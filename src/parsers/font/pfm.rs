@@ -161,37 +161,41 @@ impl PrinterFontMetricsParser {
 
 impl FormatParser for PrinterFontMetricsParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let header = read_validated_header(reader).ok_or_else(|| {
-            ExifToolError::parse_error("not a Windows Printer Font Metrics header")
-        })?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let header = read_validated_header(reader).ok_or_else(|| {
+                ExifToolError::parse_error("not a Windows Printer Font Metrics header")
+            })?;
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Font.pm:857-860 -- `SetByteOrder('II')`, then the 117-byte header
-        // through `%Image::ExifTool::Font::PFM`.
-        let table = find_table("Font", "PFM")
-            .ok_or_else(|| ExifToolError::parse_error("missing generated Font::PFM table"))?;
-        if table.enabled() {
-            for decoded in decode_binary_table(table, &header, ByteOrder::Little).fields() {
-                // Every `Font::PFM` field is `Omitted::NONE` (no ValueConv,
-                // RawConv, Condition, Hook or SubDirectory), so `emit` is the
-                // whole conversion -- there is no field here that needs a
-                // hand-written `RawAccess` acknowledgment.
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(format!("Font:{}", decoded.field.name), value);
+            // Font.pm:857-860 -- `SetByteOrder('II')`, then the 117-byte header
+            // through `%Image::ExifTool::Font::PFM`.
+            let table = find_table("Font", "PFM")
+                .ok_or_else(|| ExifToolError::parse_error("missing generated Font::PFM table"))?;
+            if table.enabled() {
+                for decoded in decode_binary_table(table, &header, ByteOrder::Little).fields() {
+                    // Every `Font::PFM` field is `Omitted::NONE` (no ValueConv,
+                    // RawConv, Condition, Hook or SubDirectory), so `emit` is the
+                    // whole conversion -- there is no field here that needs a
+                    // hand-written `RawAccess` acknowledgment.
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(format!("Font:{}", decoded.field.name), value);
+                    }
                 }
             }
-        }
 
-        if let Some((font_name, post_name)) = read_font_names(reader, &header) {
-            metadata.insert("Font:FontName".to_string(), TagValue::String(font_name));
-            metadata.insert(
-                "Font:PostScriptFontName".to_string(),
-                TagValue::String(post_name),
-            );
-        }
+            if let Some((font_name, post_name)) = read_font_names(reader, &header) {
+                metadata.insert("Font:FontName".to_string(), TagValue::String(font_name));
+                metadata.insert(
+                    "Font:PostScriptFontName".to_string(),
+                    TagValue::String(post_name),
+                );
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -203,9 +207,13 @@ impl FormatParser for PrinterFontMetricsParser {
 pub fn parse_printer_font_metrics(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    PrinterFontMetricsParser
-        .parse(reader)
-        .map_err(|error| error.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        PrinterFontMetricsParser
+            .parse(reader)
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[cfg(test)]

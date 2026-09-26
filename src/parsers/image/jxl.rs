@@ -318,47 +318,51 @@ impl JXLParser {
 
 impl FormatParser for JXLParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid JXL signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid JXL signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("JXL".to_string()));
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("JXL".to_string()));
 
-        if Self::is_container_format(reader)? {
-            // Container format (ISOBMFF-based)
-            metadata.insert(
-                "JXLFormat".to_string(),
-                TagValue::String("Container".to_string()),
-            );
-            Self::parse_container_boxes(reader, &mut metadata)?;
-        } else {
-            // Bare codestream
-            metadata.insert(
-                "JXLFormat".to_string(),
-                TagValue::String("Codestream".to_string()),
-            );
-            // ExifTool names the two encodings differently. Only the ISO BMFF
-            // container is plain `JXL`; a bare codestream gets its own type
-            // (Jpeg2000.pm:1628):
-            //
-            //     $et->SetFileType('JXL Codestream','image/jxl', 'jxl');
-            //
-            // Into the `File` group because it has to outrank
-            // `%fileTypeLookup`, which answers `JXL` for the `.jxl` extension
-            // whichever encoding is inside. The MIME type and extension are
-            // the same either way, so only the type is set here.
-            metadata.insert(
-                "File:FileType".to_string(),
-                TagValue::String("JXL Codestream".to_string()),
-            );
-            // Read codestream header (first 64 bytes should be enough)
-            let header_size = (reader.size() as usize).min(64);
-            let header = reader.read(0, header_size)?;
-            let _ = Self::parse_codestream_header(header, &mut metadata);
-        }
+            if Self::is_container_format(reader)? {
+                // Container format (ISOBMFF-based)
+                metadata.insert(
+                    "JXLFormat".to_string(),
+                    TagValue::String("Container".to_string()),
+                );
+                Self::parse_container_boxes(reader, &mut metadata)?;
+            } else {
+                // Bare codestream
+                metadata.insert(
+                    "JXLFormat".to_string(),
+                    TagValue::String("Codestream".to_string()),
+                );
+                // ExifTool names the two encodings differently. Only the ISO BMFF
+                // container is plain `JXL`; a bare codestream gets its own type
+                // (Jpeg2000.pm:1628):
+                //
+                //     $et->SetFileType('JXL Codestream','image/jxl', 'jxl');
+                //
+                // Into the `File` group because it has to outrank
+                // `%fileTypeLookup`, which answers `JXL` for the `.jxl` extension
+                // whichever encoding is inside. The MIME type and extension are
+                // the same either way, so only the type is set here.
+                metadata.insert(
+                    "File:FileType".to_string(),
+                    TagValue::String("JXL Codestream".to_string()),
+                );
+                // Read codestream header (first 64 bytes should be enough)
+                let header_size = (reader.size() as usize).min(64);
+                let header = reader.read(0, header_size)?;
+                let _ = Self::parse_codestream_header(header, &mut metadata);
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -370,8 +374,12 @@ impl FormatParser for JXLParser {
 ///
 /// This is a convenience wrapper around JXLParser that provides a functional API.
 pub fn parse_jxl_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = JXLParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = JXLParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

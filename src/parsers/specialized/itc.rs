@@ -77,129 +77,138 @@ const DATA_LOCATION: PerlCitation = item_citation("DataLocation", "ITC.pm:61-65"
 /// Extract ITC metadata by walking ExifTool's declared block structure and
 /// the `ITC::Header`/`ITC::Item` binary layouts.
 pub fn parse_itc_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let mut metadata = MetadataMap::new();
-    let size = reader.size();
-    let mut pos: u64 = 0;
-    let mut seen_itch = false;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let mut metadata = MetadataMap::new();
+        let size = reader.size();
+        let mut pos: u64 = 0;
+        let mut seen_itch = false;
 
-    loop {
-        if pos + 8 > size {
-            break;
-        }
-        let block_header = reader.read(pos, 8).map_err(|e| e.to_string())?;
-        let block_size = u32::from_be_bytes([
-            block_header[0],
-            block_header[1],
-            block_header[2],
-            block_header[3],
-        ]);
-        let tag = &block_header[4..8];
-        pos += 8;
-
-        if !seen_itch {
-            if tag != b"itch" || !(ITCH_MIN_SIZE..ITCH_MAX_SIZE).contains(&block_size) {
-                return Err("not a valid ITC file (first block is not itch)".to_string());
+        loop {
+            if pos + 8 > size {
+                break;
             }
-            seen_itch = true;
-        } else if block_size < 8 || block_size >= BLOCK_MAX_SIZE {
-            break;
-        }
+            let block_header = reader.read(pos, 8).map_err(|e| e.to_string())?;
+            let block_size = u32::from_be_bytes([
+                block_header[0],
+                block_header[1],
+                block_header[2],
+                block_header[3],
+            ]);
+            let tag = &block_header[4..8];
+            pos += 8;
 
-        match tag {
-            b"itch" => {
-                let data_len = (block_size - 8) as u64;
-                if pos + data_len > size {
-                    break;
+            if !seen_itch {
+                if tag != b"itch" || !(ITCH_MIN_SIZE..ITCH_MAX_SIZE).contains(&block_size) {
+                    return Err("not a valid ITC file (first block is not itch)".to_string());
                 }
-                let data = reader
-                    .read(pos, data_len as usize)
-                    .map_err(|e| e.to_string())?;
-                parse_itc_header(data, &mut metadata);
-                pos += data_len;
+                seen_itch = true;
+            } else if block_size < 8 || block_size >= BLOCK_MAX_SIZE {
+                break;
             }
-            b"item" => {
-                if block_size <= 12 {
-                    break;
-                }
-                if pos + 4 > size {
-                    break;
-                }
-                let len_bytes = reader.read(pos, 4).map_err(|e| e.to_string())?;
-                let mut item_len =
-                    u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
-                pos += 4;
-                if item_len < ITEM_HEADER_MIN_LEN || item_len > block_size {
-                    break;
-                }
-                // ITC.pm:136-137: `$size -= $len; $len -= 12;` -- `$size` is
-                // the trailing image-data length, `$len` the remaining item
-                // header length after the 12 bytes already consumed (8-byte
-                // block header + the 4-byte length field just read).
-                let mut trailing_size = (block_size - item_len) as u64;
-                item_len -= 12;
 
-                // ITC.pm:139-143: consume 4-byte words until a run of four
-                // NUL bytes, ExifTool's own "just a guess" heuristic.
-                let mut found_terminator = false;
-                while item_len >= 4 {
-                    if pos + 4 > size {
-                        return Ok(metadata);
-                    }
-                    let word = reader.read(pos, 4).map_err(|e| e.to_string())?;
-                    pos += 4;
-                    item_len -= 4;
-                    if word == [0, 0, 0, 0] {
-                        found_terminator = true;
+            match tag {
+                b"itch" => {
+                    let data_len = (block_size - 8) as u64;
+                    if pos + data_len > size {
                         break;
                     }
+                    let data = reader
+                        .read(pos, data_len as usize)
+                        .map_err(|e| e.to_string())?;
+                    parse_itc_header(data, &mut metadata);
+                    pos += data_len;
                 }
-                if !found_terminator || item_len < 4 {
-                    break;
-                }
-
-                if pos + u64::from(item_len) > size {
-                    break;
-                }
-                let item_info = reader
-                    .read(pos, item_len as usize)
-                    .map_err(|e| e.to_string())?;
-                let item_info_pos = pos;
-
-                if item_info.len() < ITEM_INFO_MIN_LEN
-                    || &item_info[ITEM_INFO_MARKER_OFFSET..ITEM_INFO_MARKER_OFFSET + 4] != b"data"
-                {
-                    // ITC.pm:150-153: a parsing error here aborts the whole
-                    // walk, not just this block.
-                    break;
-                }
-                parse_itc_item(item_info, &mut metadata);
-
-                // ITC.pm:161-167: the embedded image follows immediately.
-                if trailing_size > 0 {
-                    let image_pos = item_info_pos + u64::from(item_len);
-                    trailing_size = trailing_size.min(size.saturating_sub(image_pos));
-                    if trailing_size > 0
-                        && let Ok(image) = reader.read(image_pos, trailing_size as usize)
-                    {
-                        metadata.insert("ITC:ImageData", TagValue::Binary(image.to_vec()));
+                b"item" => {
+                    if block_size <= 12 {
+                        break;
                     }
-                    pos = image_pos + trailing_size;
-                } else {
-                    pos = item_info_pos + u64::from(item_len);
+                    if pos + 4 > size {
+                        break;
+                    }
+                    let len_bytes = reader.read(pos, 4).map_err(|e| e.to_string())?;
+                    let mut item_len = u32::from_be_bytes([
+                        len_bytes[0],
+                        len_bytes[1],
+                        len_bytes[2],
+                        len_bytes[3],
+                    ]);
+                    pos += 4;
+                    if item_len < ITEM_HEADER_MIN_LEN || item_len > block_size {
+                        break;
+                    }
+                    // ITC.pm:136-137: `$size -= $len; $len -= 12;` -- `$size` is
+                    // the trailing image-data length, `$len` the remaining item
+                    // header length after the 12 bytes already consumed (8-byte
+                    // block header + the 4-byte length field just read).
+                    let mut trailing_size = (block_size - item_len) as u64;
+                    item_len -= 12;
+
+                    // ITC.pm:139-143: consume 4-byte words until a run of four
+                    // NUL bytes, ExifTool's own "just a guess" heuristic.
+                    let mut found_terminator = false;
+                    while item_len >= 4 {
+                        if pos + 4 > size {
+                            return Ok(metadata);
+                        }
+                        let word = reader.read(pos, 4).map_err(|e| e.to_string())?;
+                        pos += 4;
+                        item_len -= 4;
+                        if word == [0, 0, 0, 0] {
+                            found_terminator = true;
+                            break;
+                        }
+                    }
+                    if !found_terminator || item_len < 4 {
+                        break;
+                    }
+
+                    if pos + u64::from(item_len) > size {
+                        break;
+                    }
+                    let item_info = reader
+                        .read(pos, item_len as usize)
+                        .map_err(|e| e.to_string())?;
+                    let item_info_pos = pos;
+
+                    if item_info.len() < ITEM_INFO_MIN_LEN
+                        || &item_info[ITEM_INFO_MARKER_OFFSET..ITEM_INFO_MARKER_OFFSET + 4]
+                            != b"data"
+                    {
+                        // ITC.pm:150-153: a parsing error here aborts the whole
+                        // walk, not just this block.
+                        break;
+                    }
+                    parse_itc_item(item_info, &mut metadata);
+
+                    // ITC.pm:161-167: the embedded image follows immediately.
+                    if trailing_size > 0 {
+                        let image_pos = item_info_pos + u64::from(item_len);
+                        trailing_size = trailing_size.min(size.saturating_sub(image_pos));
+                        if trailing_size > 0
+                            && let Ok(image) = reader.read(image_pos, trailing_size as usize)
+                        {
+                            metadata.insert("ITC:ImageData", TagValue::Binary(image.to_vec()));
+                        }
+                        pos = image_pos + trailing_size;
+                    } else {
+                        pos = item_info_pos + u64::from(item_len);
+                    }
                 }
-            }
-            _ => {
-                // ITC.pm:163-165: skip unknown blocks entirely.
-                let remaining = (block_size as u64).saturating_sub(8);
-                pos += remaining;
+                _ => {
+                    // ITC.pm:163-165: skip unknown blocks entirely.
+                    let remaining = (block_size as u64).saturating_sub(8);
+                    pos += remaining;
+                }
             }
         }
-    }
 
-    if !seen_itch {
-        return Err("not a valid ITC file".to_string());
-    }
-    Ok(metadata)
+        if !seen_itch {
+            return Err("not a valid ITC file".to_string());
+        }
+        Ok(metadata)
+    })
 }
 
 /// `ITC::Header` (ITC.pm:33-40): a single `DataType` field at offset 0x10.

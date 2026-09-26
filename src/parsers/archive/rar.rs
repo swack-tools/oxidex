@@ -305,109 +305,113 @@ impl RARParser {
 
 impl FormatParser for RARParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify signature
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid RAR signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Detect version
-        let version = Self::detect_version(reader)?;
-        metadata.insert("FileType".to_string(), TagValue::String("RAR".to_string()));
-        metadata.insert(
-            "RARVersion".to_string(),
-            TagValue::String(version.to_string()),
-        );
-
-        // Parse format-specific metadata
-        match version {
-            "5.0" => {
-                Self::parse_rar5_metadata(reader, &mut metadata)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify signature
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid RAR signature"));
             }
-            "4.x" => {
-                Self::parse_rar4_metadata(reader, &mut metadata)?;
-            }
-            _ => {
-                // Unknown version, skip detailed parsing
-            }
-        }
 
-        // Extract additional Worker 3 specification tags
-        // These may already be present but ensure they follow the RAR: naming convention
+            let mut metadata = MetadataMap::new();
 
-        // RAR:FileCount - extract file count if not already set
-        if !metadata.contains_key("RAR:FileCount") {
-            if let Some(TagValue::String(count_str)) = metadata.get("FileCount") {
-                if let Ok(count) = count_str.parse::<i64>() {
-                    metadata.insert("RAR:FileCount".to_string(), TagValue::new_integer(count));
+            // Detect version
+            let version = Self::detect_version(reader)?;
+            metadata.insert("FileType".to_string(), TagValue::String("RAR".to_string()));
+            metadata.insert(
+                "RARVersion".to_string(),
+                TagValue::String(version.to_string()),
+            );
+
+            // Parse format-specific metadata
+            match version {
+                "5.0" => {
+                    Self::parse_rar5_metadata(reader, &mut metadata)?;
+                }
+                "4.x" => {
+                    Self::parse_rar4_metadata(reader, &mut metadata)?;
+                }
+                _ => {
+                    // Unknown version, skip detailed parsing
                 }
             }
-        }
 
-        // RAR:SolidArchive - extract from IsSolid tag and standardize
-        if let Some(TagValue::String(is_solid)) = metadata.get("IsSolid") {
-            metadata.insert(
-                "RAR:SolidArchive".to_string(),
-                TagValue::new_string(is_solid.clone()),
-            );
-        }
+            // Extract additional Worker 3 specification tags
+            // These may already be present but ensure they follow the RAR: naming convention
 
-        // RAR:CompressionMethod - set to default for RAR
-        // RAR uses various compression algorithms; we report as "RAR" for now
-        if !metadata.contains_key("RAR:CompressionMethod") {
-            metadata.insert(
-                "RAR:CompressionMethod".to_string(),
-                TagValue::new_string("RAR".to_string()),
-            );
-        }
+            // RAR:FileCount - extract file count if not already set
+            if !metadata.contains_key("RAR:FileCount") {
+                if let Some(TagValue::String(count_str)) = metadata.get("FileCount") {
+                    if let Ok(count) = count_str.parse::<i64>() {
+                        metadata.insert("RAR:FileCount".to_string(), TagValue::new_integer(count));
+                    }
+                }
+            }
 
-        // RAR:EncryptionMethod - extract from IsEncrypted
-        if let Some(TagValue::String(is_encrypted)) = metadata.get("IsEncrypted") {
-            if is_encrypted == "true" {
+            // RAR:SolidArchive - extract from IsSolid tag and standardize
+            if let Some(TagValue::String(is_solid)) = metadata.get("IsSolid") {
                 metadata.insert(
-                    "RAR:EncryptionMethod".to_string(),
-                    TagValue::new_string("AES-256".to_string()),
+                    "RAR:SolidArchive".to_string(),
+                    TagValue::new_string(is_solid.clone()),
                 );
             }
-        }
 
-        // RAR:CreateDate - we'll use a placeholder for now
-        // RAR archives don't typically store a creation date in headers
-        metadata.insert(
-            "RAR:CreateDate".to_string(),
-            TagValue::new_string("Unknown".to_string()),
-        );
+            // RAR:CompressionMethod - set to default for RAR
+            // RAR uses various compression algorithms; we report as "RAR" for now
+            if !metadata.contains_key("RAR:CompressionMethod") {
+                metadata.insert(
+                    "RAR:CompressionMethod".to_string(),
+                    TagValue::new_string("RAR".to_string()),
+                );
+            }
 
-        // RAR:ModifyDate - same placeholder
-        metadata.insert(
-            "RAR:ModifyDate".to_string(),
-            TagValue::new_string("Unknown".to_string()),
-        );
+            // RAR:EncryptionMethod - extract from IsEncrypted
+            if let Some(TagValue::String(is_encrypted)) = metadata.get("IsEncrypted") {
+                if is_encrypted == "true" {
+                    metadata.insert(
+                        "RAR:EncryptionMethod".to_string(),
+                        TagValue::new_string("AES-256".to_string()),
+                    );
+                }
+            }
 
-        // No RAR:CompressedSize / RAR:UncompressedSize here.
-        //
-        // Until 2026-07-26 this emitted a hardcoded 0 for both, which collided
-        // with the real values parse_rar_metadata() puts under the ZIP: keys:
-        //   $ oxidex ZIP.rar | rg -i compressedsize
-        //   RAR:CompressedSize: 0        <- fabricated placeholder
-        //   ZIP:CompressedSize: 5        <- parsed from the RAR5 file header
-        //   $ exiftool -G1 ZIP.rar
-        //   [ZIP]  Compressed Size  : 5
-        // ExifTool 13.55 reports RAR-family archives in the ZIP group (there is
-        // no RAR group), so the ZIP: keys are the ExifTool-correct ones and the
-        // RAR: placeholders were both wrong and a source of prefix-stripped
-        // duplicate tags that make the comparison harness non-deterministic.
-        // Emitting nothing when the size is unknown is an honest gap; emitting 0
-        // is a fabrication that reads as a real value.
+            // RAR:CreateDate - we'll use a placeholder for now
+            // RAR archives don't typically store a creation date in headers
+            metadata.insert(
+                "RAR:CreateDate".to_string(),
+                TagValue::new_string("Unknown".to_string()),
+            );
 
-        // RAR:HeaderCRC - placeholder
-        metadata.insert(
-            "RAR:HeaderCRC".to_string(),
-            TagValue::new_string("Unknown".to_string()),
-        );
+            // RAR:ModifyDate - same placeholder
+            metadata.insert(
+                "RAR:ModifyDate".to_string(),
+                TagValue::new_string("Unknown".to_string()),
+            );
 
-        Ok(metadata)
+            // No RAR:CompressedSize / RAR:UncompressedSize here.
+            //
+            // Until 2026-07-26 this emitted a hardcoded 0 for both, which collided
+            // with the real values parse_rar_metadata() puts under the ZIP: keys:
+            //   $ oxidex ZIP.rar | rg -i compressedsize
+            //   RAR:CompressedSize: 0        <- fabricated placeholder
+            //   ZIP:CompressedSize: 5        <- parsed from the RAR5 file header
+            //   $ exiftool -G1 ZIP.rar
+            //   [ZIP]  Compressed Size  : 5
+            // ExifTool 13.55 reports RAR-family archives in the ZIP group (there is
+            // no RAR group), so the ZIP: keys are the ExifTool-correct ones and the
+            // RAR: placeholders were both wrong and a source of prefix-stripped
+            // duplicate tags that make the comparison harness non-deterministic.
+            // Emitting nothing when the size is unknown is an honest gap; emitting 0
+            // is a fabrication that reads as a real value.
+
+            // RAR:HeaderCRC - placeholder
+            metadata.insert(
+                "RAR:HeaderCRC".to_string(),
+                TagValue::new_string("Unknown".to_string()),
+            );
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -431,57 +435,61 @@ impl FormatParser for RARParser {
 pub fn parse_rar_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = RARParser;
-    let mut metadata = parser
-        .parse(reader)
-        .map_err(|e| format!("RAR parse error: {}", e))?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = RARParser;
+        let mut metadata = parser
+            .parse(reader)
+            .map_err(|e| format!("RAR parse error: {}", e))?;
 
-    // ExifTool emits FileVersion from the signature alone, before it walks a
-    // single block, so an archive with no file entries still reports it
-    // (ZIP.pm, ProcessRAR):
-    //
-    // ```text
-    //     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
-    //         ...
-    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
-    //     ...
-    //     } else { # RARv5 (ref 7, github#203)
-    //         ...
-    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v5');
-    // ```
-    let version =
-        RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
-    if let Some(file_version) = rar_file_version(version) {
-        metadata.insert(
-            "ZIP:FileVersion".to_string(),
-            TagValue::String(file_version.to_string()),
-        );
-    }
+        // ExifTool emits FileVersion from the signature alone, before it walks a
+        // single block, so an archive with no file entries still reports it
+        // (ZIP.pm, ProcessRAR):
+        //
+        // ```text
+        //     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
+        //         ...
+        //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
+        //     ...
+        //     } else { # RARv5 (ref 7, github#203)
+        //         ...
+        //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v5');
+        // ```
+        let version =
+            RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
+        if let Some(file_version) = rar_file_version(version) {
+            metadata.insert(
+                "ZIP:FileVersion".to_string(),
+                TagValue::String(file_version.to_string()),
+            );
+        }
 
-    if let Some(entry) =
-        rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
-    {
-        if let Some(size) = entry.compressed_size {
-            metadata.insert("ZIP:CompressedSize".to_string(), TagValue::Integer(size));
+        if let Some(entry) =
+            rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
+        {
+            if let Some(size) = entry.compressed_size {
+                metadata.insert("ZIP:CompressedSize".to_string(), TagValue::Integer(size));
+            }
+            if let Some(size) = entry.uncompressed_size {
+                metadata.insert("ZIP:UncompressedSize".to_string(), TagValue::Integer(size));
+            }
+            if let Some(name) = entry.file_name {
+                metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
+            }
+            if let Some(os_byte) = entry.host_os {
+                // No PrintConv match in ExifTool means it prints the raw value,
+                // so an unmapped byte becomes its own number rather than a
+                // stand-in string -- see rar5_host_os.
+                let os = rar5_host_os(os_byte)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| os_byte.to_string());
+                metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
+            }
         }
-        if let Some(size) = entry.uncompressed_size {
-            metadata.insert("ZIP:UncompressedSize".to_string(), TagValue::Integer(size));
-        }
-        if let Some(name) = entry.file_name {
-            metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
-        }
-        if let Some(os_byte) = entry.host_os {
-            // No PrintConv match in ExifTool means it prints the raw value,
-            // so an unmapped byte becomes its own number rather than a
-            // stand-in string -- see rar5_host_os.
-            let os = rar5_host_os(os_byte)
-                .map(str::to_string)
-                .unwrap_or_else(|| os_byte.to_string());
-            metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
-        }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Maps the detected RAR generation to ExifTool's `FileVersion` string.

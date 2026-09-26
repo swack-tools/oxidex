@@ -85,83 +85,87 @@ use std::str;
 /// - `PDF:EmbeddedFileCount`: Total number of embedded files
 /// - `PDF:EmbeddedFileNames`: Array of embedded file names
 pub fn parse_embedded_files_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF context (xref table and trailer)
-    let context = PdfContext::load(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF context (xref table and trailer)
+        let context = PdfContext::load(reader)?;
 
-    // Navigate to Root/Catalog object
-    let root_offset = find_root_offset(reader, &context)?;
+        // Navigate to Root/Catalog object
+        let root_offset = find_root_offset(reader, &context)?;
 
-    // Read Root object data
-    let root_data = reader.read(
-        root_offset,
-        std::cmp::min(8192, reader.size().saturating_sub(root_offset) as usize),
-    )?;
+        // Read Root object data
+        let root_data = reader.read(
+            root_offset,
+            std::cmp::min(8192, reader.size().saturating_sub(root_offset) as usize),
+        )?;
 
-    // Check if /Names dictionary exists
-    let names_ref = match find_object_reference(root_data, "/Names") {
-        Ok(r) => r,
-        Err(_) => {
-            return Err(ExifToolError::parse_error(
-                "No /Names dictionary found in Root",
-            ));
-        }
-    };
+        // Check if /Names dictionary exists
+        let names_ref = match find_object_reference(root_data, "/Names") {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(ExifToolError::parse_error(
+                    "No /Names dictionary found in Root",
+                ));
+            }
+        };
 
-    // Read Names object
-    let names_offset = context
-        .xref_map
-        .get(&names_ref.object_num)
-        .copied()
-        .ok_or_else(|| ExifToolError::parse_error("Names object not found in xref table"))?;
+        // Read Names object
+        let names_offset = context
+            .xref_map
+            .get(&names_ref.object_num)
+            .copied()
+            .ok_or_else(|| ExifToolError::parse_error("Names object not found in xref table"))?;
 
-    let names_data = reader.read(
-        names_offset,
-        std::cmp::min(4096, reader.size().saturating_sub(names_offset) as usize),
-    )?;
+        let names_data = reader.read(
+            names_offset,
+            std::cmp::min(4096, reader.size().saturating_sub(names_offset) as usize),
+        )?;
 
-    // Check if /EmbeddedFiles exists in Names dictionary
-    let embedded_files_ref = match find_object_reference(names_data, "/EmbeddedFiles") {
-        Ok(r) => r,
-        Err(_) => {
-            return Err(ExifToolError::parse_error(
-                "No /EmbeddedFiles found in Names dictionary",
-            ));
-        }
-    };
+        // Check if /EmbeddedFiles exists in Names dictionary
+        let embedded_files_ref = match find_object_reference(names_data, "/EmbeddedFiles") {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(ExifToolError::parse_error(
+                    "No /EmbeddedFiles found in Names dictionary",
+                ));
+            }
+        };
 
-    // Read EmbeddedFiles object
-    let ef_offset = context
-        .xref_map
-        .get(&embedded_files_ref.object_num)
-        .copied()
-        .ok_or_else(|| {
-            ExifToolError::parse_error("EmbeddedFiles object not found in xref table")
-        })?;
+        // Read EmbeddedFiles object
+        let ef_offset = context
+            .xref_map
+            .get(&embedded_files_ref.object_num)
+            .copied()
+            .ok_or_else(|| {
+                ExifToolError::parse_error("EmbeddedFiles object not found in xref table")
+            })?;
 
-    let ef_data = reader.read(
-        ef_offset,
-        std::cmp::min(4096, reader.size().saturating_sub(ef_offset) as usize),
-    )?;
+        let ef_data = reader.read(
+            ef_offset,
+            std::cmp::min(4096, reader.size().saturating_sub(ef_offset) as usize),
+        )?;
 
-    // Extract file names from /Names array
-    let file_names = extract_file_names(ef_data)?;
+        // Extract file names from /Names array
+        let file_names = extract_file_names(ef_data)?;
 
-    // Build metadata map
-    let mut metadata = MetadataMap::with_capacity(2);
+        // Build metadata map
+        let mut metadata = MetadataMap::with_capacity(2);
 
-    metadata.insert(
-        "PDF:EmbeddedFileCount".to_string(),
-        TagValue::new_integer(file_names.len() as i64),
-    );
-
-    if !file_names.is_empty() {
         metadata.insert(
-            "PDF:EmbeddedFileNames".to_string(),
-            TagValue::new_array(file_names.into_iter().map(TagValue::new_string).collect()),
+            "PDF:EmbeddedFileCount".to_string(),
+            TagValue::new_integer(file_names.len() as i64),
         );
-    }
 
-    Ok(metadata)
+        if !file_names.is_empty() {
+            metadata.insert(
+                "PDF:EmbeddedFileNames".to_string(),
+                TagValue::new_array(file_names.into_iter().map(TagValue::new_string).collect()),
+            );
+        }
+
+        Ok(metadata)
+    })
 }
 
 //

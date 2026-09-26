@@ -88,101 +88,109 @@ use std::str;
 /// - `PDF:EmbeddedImageCount`: Total number of embedded images
 /// - Any EXIF/IPTC/XMP tags found within embedded JPEG images
 pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF context (xref table and trailer)
-    let context = load_pdf_context(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF context (xref table and trailer)
+        let context = load_pdf_context(reader)?;
 
-    // Navigate to first page object
-    let first_page_offset = find_first_page_offset(reader, &context)?;
+        // Navigate to first page object
+        let first_page_offset = find_first_page_offset(reader, &context)?;
 
-    // Read page object data
-    let page_data = reader.read(
-        first_page_offset,
-        std::cmp::min(
-            8192,
-            reader.size().saturating_sub(first_page_offset) as usize,
-        ),
-    )?;
-
-    // Find XObject references in the page's /Resources dictionary
-    let xobject_refs = extract_xobject_references(page_data)?;
-
-    if xobject_refs.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No XObjects found in page resources",
-        ));
-    }
-
-    // Extract metadata from each XObject to find images
-    let mut image_count = 0;
-    let mut first_image_metadata: Option<ImageMetadata> = None;
-
-    // Store extracted metadata from embedded images to merge later
-    let mut embedded_metadata = MetadataMap::new();
-    let mut found_embedded_metadata = false;
-
-    for xobject_ref in &xobject_refs {
-        // Get XObject offset from xref table
-        let xobject_offset = match context.xref_map.get(&xobject_ref.object_num) {
-            Some(&offset) => offset,
-            None => continue, // Skip if not in xref table
-        };
-
-        // Read XObject data (header + dictionary)
-        // We read enough to parse the dictionary and find the stream start
-        let xobject_data = reader.read(
-            xobject_offset,
-            std::cmp::min(4096, reader.size().saturating_sub(xobject_offset) as usize),
+        // Read page object data
+        let page_data = reader.read(
+            first_page_offset,
+            std::cmp::min(
+                8192,
+                reader.size().saturating_sub(first_page_offset) as usize,
+            ),
         )?;
 
-        // Check if this is an image XObject
-        if is_image_xobject(xobject_data) {
-            image_count += 1;
+        // Find XObject references in the page's /Resources dictionary
+        let xobject_refs = extract_xobject_references(page_data)?;
 
-            // Extract basic structural metadata from first image only
-            if first_image_metadata.is_none()
-                && let Ok(metadata) = extract_image_metadata(xobject_data)
-            {
-                first_image_metadata = Some(metadata);
-            }
+        if xobject_refs.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "No XObjects found in page resources",
+            ));
+        }
 
-            // Attempt to extract full metadata if it's a JPEG (DCTDecode)
-            // We only do this for the first JPEG that yields metadata to avoid conflicts
-            if !found_embedded_metadata {
-                if let Ok((_, filter)) = parse_dict_name(xobject_data, "/Filter") {
-                    if filter == "DCTDecode" {
-                        // It's a JPEG. Find the stream data.
-                        if let Ok((_, length)) = parse_dict_integer(xobject_data, "/Length") {
-                            if length > 0 {
-                                if let Some(stream_start_offset) = find_stream_start(xobject_data) {
-                                    let abs_stream_offset =
-                                        xobject_offset + stream_start_offset as u64;
+        // Extract metadata from each XObject to find images
+        let mut image_count = 0;
+        let mut first_image_metadata: Option<ImageMetadata> = None;
 
-                                    // Read the stream data (the JPEG file)
-                                    if let Ok(stream_data) =
-                                        reader.read(abs_stream_offset, length as usize)
+        // Store extracted metadata from embedded images to merge later
+        let mut embedded_metadata = MetadataMap::new();
+        let mut found_embedded_metadata = false;
+
+        for xobject_ref in &xobject_refs {
+            // Get XObject offset from xref table
+            let xobject_offset = match context.xref_map.get(&xobject_ref.object_num) {
+                Some(&offset) => offset,
+                None => continue, // Skip if not in xref table
+            };
+
+            // Read XObject data (header + dictionary)
+            // We read enough to parse the dictionary and find the stream start
+            let xobject_data = reader.read(
+                xobject_offset,
+                std::cmp::min(4096, reader.size().saturating_sub(xobject_offset) as usize),
+            )?;
+
+            // Check if this is an image XObject
+            if is_image_xobject(xobject_data) {
+                image_count += 1;
+
+                // Extract basic structural metadata from first image only
+                if first_image_metadata.is_none()
+                    && let Ok(metadata) = extract_image_metadata(xobject_data)
+                {
+                    first_image_metadata = Some(metadata);
+                }
+
+                // Attempt to extract full metadata if it's a JPEG (DCTDecode)
+                // We only do this for the first JPEG that yields metadata to avoid conflicts
+                if !found_embedded_metadata {
+                    if let Ok((_, filter)) = parse_dict_name(xobject_data, "/Filter") {
+                        if filter == "DCTDecode" {
+                            // It's a JPEG. Find the stream data.
+                            if let Ok((_, length)) = parse_dict_integer(xobject_data, "/Length") {
+                                if length > 0 {
+                                    if let Some(stream_start_offset) =
+                                        find_stream_start(xobject_data)
                                     {
-                                        let stream_reader = BufferedReader::from_bytes(stream_data);
+                                        let abs_stream_offset =
+                                            xobject_offset + stream_start_offset as u64;
 
-                                        // Use the core JPEG parser
-                                        if let Ok(jpeg_meta) =
-                                            crate::core::operations::parse_jpeg_metadata(
-                                                &stream_reader,
-                                                &crate::core::ReadOptions::default_full_listing(),
-                                            )
+                                        // Read the stream data (the JPEG file)
+                                        if let Ok(stream_data) =
+                                            reader.read(abs_stream_offset, length as usize)
                                         {
-                                            if !jpeg_meta.is_empty() {
-                                                // Merge metadata: each winner
-                                                // with its --no-print-conv form,
-                                                // in file order.
-                                                for (k, occurrence) in
-                                                    jpeg_meta.winners_in_file_order()
-                                                {
-                                                    embedded_metadata.insert_carrying_forms(
-                                                        k.clone(),
-                                                        occurrence,
-                                                    );
+                                            let stream_reader =
+                                                BufferedReader::from_bytes(stream_data);
+
+                                            // Use the core JPEG parser
+                                            if let Ok(jpeg_meta) =
+                                                crate::core::operations::parse_jpeg_metadata(
+                                                    &stream_reader,
+                                                    &crate::core::ReadOptions::default_full_listing(
+                                                    ),
+                                                )
+                                            {
+                                                if !jpeg_meta.is_empty() {
+                                                    // Merge metadata: each winner
+                                                    // with its --no-print-conv form,
+                                                    // in file order.
+                                                    for (k, occurrence) in
+                                                        jpeg_meta.winners_in_file_order()
+                                                    {
+                                                        embedded_metadata.insert_carrying_forms(
+                                                            k.clone(),
+                                                            occurrence,
+                                                        );
+                                                    }
+                                                    found_embedded_metadata = true;
                                                 }
-                                                found_embedded_metadata = true;
                                             }
                                         }
                                     }
@@ -193,57 +201,57 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
                 }
             }
         }
-    }
 
-    // Build metadata map
-    let mut metadata = MetadataMap::with_capacity(5 + embedded_metadata.len());
+        // Build metadata map
+        let mut metadata = MetadataMap::with_capacity(5 + embedded_metadata.len());
 
-    metadata.insert(
-        "PDF:EmbeddedImageCount".to_string(),
-        TagValue::new_integer(image_count),
-    );
+        metadata.insert(
+            "PDF:EmbeddedImageCount".to_string(),
+            TagValue::new_integer(image_count),
+        );
 
-    if let Some(img) = first_image_metadata {
-        if let Some(width) = img.width {
-            metadata.insert(
-                "PDF:EmbeddedImageWidth".to_string(),
-                TagValue::new_integer(width as i64),
-            );
+        if let Some(img) = first_image_metadata {
+            if let Some(width) = img.width {
+                metadata.insert(
+                    "PDF:EmbeddedImageWidth".to_string(),
+                    TagValue::new_integer(width as i64),
+                );
+            }
+            if let Some(height) = img.height {
+                metadata.insert(
+                    "PDF:EmbeddedImageHeight".to_string(),
+                    TagValue::new_integer(height as i64),
+                );
+            }
+            if let Some(filter) = img.filter {
+                metadata.insert(
+                    "PDF:EmbeddedImageFilter".to_string(),
+                    TagValue::new_string(filter),
+                );
+            }
+            if let Some(colorspace) = img.colorspace {
+                metadata.insert(
+                    "PDF:EmbeddedImageColorSpace".to_string(),
+                    TagValue::new_string(colorspace),
+                );
+            }
         }
-        if let Some(height) = img.height {
-            metadata.insert(
-                "PDF:EmbeddedImageHeight".to_string(),
-                TagValue::new_integer(height as i64),
-            );
-        }
-        if let Some(filter) = img.filter {
-            metadata.insert(
-                "PDF:EmbeddedImageFilter".to_string(),
-                TagValue::new_string(filter),
-            );
-        }
-        if let Some(colorspace) = img.colorspace {
-            metadata.insert(
-                "PDF:EmbeddedImageColorSpace".to_string(),
-                TagValue::new_string(colorspace),
-            );
-        }
-    }
 
-    // Merge embedded metadata, each winner with its --no-print-conv form, in
-    // file order (`winners_in_file_order`).
-    for (k, occurrence) in embedded_metadata.winners_in_file_order() {
-        metadata.insert_carrying_forms(k.clone(), occurrence);
-    }
+        // Merge embedded metadata, each winner with its --no-print-conv form, in
+        // file order (`winners_in_file_order`).
+        for (k, occurrence) in embedded_metadata.winners_in_file_order() {
+            metadata.insert_carrying_forms(k.clone(), occurrence);
+        }
 
-    if metadata.len() == 1 {
-        // Only have count, no actual image metadata
-        return Err(ExifToolError::parse_error(
-            "Found XObjects but could not extract image metadata",
-        ));
-    }
+        if metadata.len() == 1 {
+            // Only have count, no actual image metadata
+            return Err(ExifToolError::parse_error(
+                "Found XObjects but could not extract image metadata",
+            ));
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 //

@@ -27,12 +27,16 @@ impl AVIFParser {
 
 impl FormatParser for AVIFParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid AVIF signature"));
-        }
-        let mut metadata = MetadataMap::new();
-        metadata.insert("FileType".to_string(), TagValue::String("AVIF".to_string()));
-        Ok(metadata)
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid AVIF signature"));
+            }
+            let mut metadata = MetadataMap::new();
+            metadata.insert("FileType".to_string(), TagValue::String("AVIF".to_string()));
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -44,6 +48,10 @@ impl FormatParser for AVIFParser {
 ///
 /// This is a convenience wrapper around AVIFParser that provides a functional API.
 pub fn parse_avif_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = AVIFParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = AVIFParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }

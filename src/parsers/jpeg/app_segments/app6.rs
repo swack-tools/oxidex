@@ -91,7 +91,11 @@ use super::infiray_tables::MIX_MODE_MIN_LENGTH as INFIRAY_MIXMODE_MIN_LENGTH;
 /// assert!(metadata.contains_key("APP6:Model"));
 /// ```
 pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
-    parse_app6_ijpeg(data, false)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        parse_app6_ijpeg(data, false)
+    })
 }
 
 /// Parses APP6 segment data, optionally allowing the InfiRay MixMode layout.
@@ -115,43 +119,47 @@ pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
 ///
 /// Returns an error if the segment is too short to hold any identifier.
 pub fn parse_app6_ijpeg(data: &[u8], is_ijpeg: bool) -> Result<MetadataMap> {
-    // Minimum APP6 segment should have at least a few bytes
-    if data.len() < 4 {
-        return Err(ExifToolError::parse_error(
-            "APP6 segment too short to contain valid metadata",
-        ));
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Minimum APP6 segment should have at least a few bytes
+        if data.len() < 4 {
+            return Err(ExifToolError::parse_error(
+                "APP6 segment too short to contain valid metadata",
+            ));
+        }
 
-    // Dispatch on the same identifier conditions ExifTool's actual READ path
-    // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
-    // Condition which is never consulted for reads), and in the same order:
-    // EPPIM, NITF, HP TDHD, GoPro, then the identifier-less InfiRay MixMode.
+        // Dispatch on the same identifier conditions ExifTool's actual READ path
+        // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
+        // Condition which is never consulted for reads), and in the same order:
+        // EPPIM, NITF, HP TDHD, GoPro, then the identifier-less InfiRay MixMode.
 
-    if data.starts_with(b"EPPIM\0") {
-        return Ok(parse_eppim(data));
-    }
+        if data.starts_with(b"EPPIM\0") {
+            return Ok(parse_eppim(data));
+        }
 
-    if data.starts_with(b"NITF\0") {
-        return Ok(parse_nitf(&data[5..]));
-    }
+        if data.starts_with(b"NITF\0") {
+            return Ok(parse_nitf(&data[5..]));
+        }
 
-    // ExifTool also requires segment length > 12 for TDHD (ExifTool.pm:8146);
-    // an 8-byte bare identifier extracts nothing.
-    if data.starts_with(b"TDHD\x01\0\0\0") && data.len() > 12 {
-        return parse_tdhd(data);
-    }
+        // ExifTool also requires segment length > 12 for TDHD (ExifTool.pm:8146);
+        // an 8-byte bare identifier extracts nothing.
+        if data.starts_with(b"TDHD\x01\0\0\0") && data.len() > 12 {
+            return parse_tdhd(data);
+        }
 
-    if data.starts_with(b"GoPro\0") {
-        return parse_gpmf(&data[6..]);
-    }
+        if data.starts_with(b"GoPro\0") {
+            return parse_gpmf(&data[6..]);
+        }
 
-    if is_ijpeg && data.len() >= INFIRAY_MIXMODE_MIN_LENGTH {
-        return Ok(parse_infiray_mix_mode(data));
-    }
+        if is_ijpeg && data.len() >= INFIRAY_MIXMODE_MIN_LENGTH {
+            return Ok(parse_infiray_mix_mode(data));
+        }
 
-    // Unknown APP6 formats (DJI DTAT, Motorola MMIMETA, ...) extract
-    // nothing, matching ExifTool's default (no -u) behavior.
-    Ok(MetadataMap::new())
+        // Unknown APP6 formats (DJI DTAT, Motorola MMIMETA, ...) extract
+        // nothing, matching ExifTool's default (no -u) behavior.
+        Ok(MetadataMap::new())
+    })
 }
 
 /// Parse Toshiba's EPPIM APP6 wrapper (`JPEG.pm` `%JPEG::EPPIM`).

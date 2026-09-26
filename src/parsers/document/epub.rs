@@ -15,53 +15,58 @@ pub struct EpubParser;
 
 impl FormatParser for EpubParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let mut metadata = MetadataMap::new();
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let mut metadata = MetadataMap::new();
 
-        // Read as ZIP
-        let size = reader.size() as usize;
-        let file_data = reader.read(0, size)?;
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| ExifToolError::parse_error(format!("Not a valid EPUB: {}", e)))?;
+            // Read as ZIP
+            let size = reader.size() as usize;
+            let file_data = reader.read(0, size)?;
+            let cursor = Cursor::new(file_data);
+            let mut archive = ZipArchive::new(cursor)
+                .map_err(|e| ExifToolError::parse_error(format!("Not a valid EPUB: {}", e)))?;
 
-        // EPUB must contain mimetype file with "application/epub+zip"
-        if let Ok(mut mimetype_file) = archive.by_name("mimetype") {
-            let mut content = String::new();
-            mimetype_file.read_to_string(&mut content).ok();
-            if !content.starts_with("application/epub+zip") {
-                return Err(ExifToolError::parse_error("Not a valid EPUB file"));
+            // EPUB must contain mimetype file with "application/epub+zip"
+            if let Ok(mut mimetype_file) = archive.by_name("mimetype") {
+                let mut content = String::new();
+                mimetype_file.read_to_string(&mut content).ok();
+                if !content.starts_with("application/epub+zip") {
+                    return Err(ExifToolError::parse_error("Not a valid EPUB file"));
+                }
+            } else {
+                return Err(ExifToolError::parse_error(
+                    "Not a valid EPUB file: missing mimetype",
+                ));
             }
-        } else {
-            return Err(ExifToolError::parse_error(
-                "Not a valid EPUB file: missing mimetype",
-            ));
-        }
 
-        // Find the OPF file location from container.xml
-        let opf_path = if let Ok(mut container_file) = archive.by_name("META-INF/container.xml") {
-            let mut content = String::new();
-            container_file.read_to_string(&mut content).map_err(|e| {
-                ExifToolError::parse_error(format!("Failed to read container.xml: {}", e))
-            })?;
+            // Find the OPF file location from container.xml
+            let opf_path = if let Ok(mut container_file) = archive.by_name("META-INF/container.xml")
+            {
+                let mut content = String::new();
+                container_file.read_to_string(&mut content).map_err(|e| {
+                    ExifToolError::parse_error(format!("Failed to read container.xml: {}", e))
+                })?;
 
-            extract_opf_path(&content)?
-        } else {
-            return Err(ExifToolError::parse_error(
-                "Not a valid EPUB: missing META-INF/container.xml",
-            ));
-        };
+                extract_opf_path(&content)?
+            } else {
+                return Err(ExifToolError::parse_error(
+                    "Not a valid EPUB: missing META-INF/container.xml",
+                ));
+            };
 
-        // Parse the OPF file for metadata
-        if let Ok(mut opf_file) = archive.by_name(&opf_path) {
-            let mut content = String::new();
-            opf_file.read_to_string(&mut content).map_err(|e| {
-                ExifToolError::parse_error(format!("Failed to read OPF file: {}", e))
-            })?;
+            // Parse the OPF file for metadata
+            if let Ok(mut opf_file) = archive.by_name(&opf_path) {
+                let mut content = String::new();
+                opf_file.read_to_string(&mut content).map_err(|e| {
+                    ExifToolError::parse_error(format!("Failed to read OPF file: {}", e))
+                })?;
 
-            parse_opf_metadata(&content, &mut metadata)?;
-        }
+                parse_opf_metadata(&content, &mut metadata)?;
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -173,10 +178,14 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
 pub fn parse_epub_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = EpubParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("EPUB parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = EpubParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("EPUB parse error: {}", e))
+    })
 }
 
 #[cfg(test)]
