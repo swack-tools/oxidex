@@ -1334,9 +1334,10 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         let plan = crate::writers::generated_public_write::plan_public_write(
             &original, metadata, removed,
         )?;
-        let out = crate::writers::generated_public_write::rewrite_tiff_transaction(
+        let mut out = crate::writers::generated_public_write::rewrite_tiff_transaction(
             file_bytes, &original, plan,
         )?;
+        crate::writers::tiff_surgical::add_ifd1_mandatory_entries(&mut out, metadata)?;
         // Every removal gone, every set present, before anything is written.
         if !whole_clear {
             crate::writers::exif_surgical::verify_exif_write(
