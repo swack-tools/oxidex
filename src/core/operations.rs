@@ -1581,6 +1581,23 @@ pub(crate) fn resolve_write_key_for(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request(path, tag_name, baseline, false)
+}
+
+/// [`resolve_write_key_for`] for one request of a transaction whose other
+/// requests delete the EXIF maker note (`makernote_deleted`: a planned
+/// `-MakerNotes:All=`, `-ExifIFD:All=` or `-EXIF:All=` deletion,
+/// `core::write_transaction::plan_changes`). Pinned 13.59 then edits no
+/// maker-note copy of a bare name, whichever order the arguments came in
+/// (`-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` on t/images/Canon.jpg both leave `[ExifIFD]
+/// WhiteBalance` 1 and no maker note).
+pub(crate) fn resolve_write_key_in_request(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+    makernote_deleted: bool,
+) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
         png_prefers_text, resolve_exif_family_key, resolve_write_key,
@@ -1652,7 +1669,10 @@ pub(crate) fn resolve_write_key_for(
     };
     // Whether the file's EXIF carries a maker note, scanned only when a name
     // with a maker-note candidate asks (`write_request::makernote_may_hold`).
-    let makernote_block = || file_carries_makernote(&reader, format, surgical);
+    let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
+        deleted: makernote_deleted,
+        ..file_makernote_census(&reader, format, surgical)
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1719,19 +1739,24 @@ pub(crate) fn resolve_write_key_for(
     Ok((key, addressed))
 }
 
-/// Whether the file's EXIF carries a maker note ExifTool reads
-/// (`exif_surgical::blocks_carry_makernote`): the JPEG's APP1 EXIF blocks, a
+/// The file's EXIF blocks and the ones carrying a maker note that may hold
+/// tags (`exif_surgical::makernote_census`): the JPEG's APP1 EXIF blocks, a
 /// PNG's `eXIf`, or a TIFF-structured file itself. Unprovable -- a file
-/// that cannot be read or split into blocks -- counts as carrying one.
-fn file_carries_makernote(reader: &MMapReader, format: FileFormat, surgical: bool) -> bool {
+/// that cannot be read or split into blocks -- is
+/// [`MakerNoteCensus::UNKNOWN`](crate::writers::exif_surgical::MakerNoteCensus::UNKNOWN).
+fn file_makernote_census(
+    reader: &MMapReader,
+    format: FileFormat,
+    surgical: bool,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
     use crate::writers::exif_surgical::{
-        EXIF_BLOCK_MAGICS, blocks_carry_makernote, jpeg_exif_payloads,
+        EXIF_BLOCK_MAGICS, MakerNoteCensus, jpeg_exif_payloads, makernote_census,
     };
     let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
-        return true;
+        return MakerNoteCensus::UNKNOWN;
     };
     let payloads = if surgical {
-        return blocks_carry_makernote(
+        return makernote_census(
             &[file_bytes],
             crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
         );
@@ -1742,14 +1767,14 @@ fn file_carries_makernote(reader: &MMapReader, format: FileFormat, surgical: boo
                 Ok(payloads) => Some(payloads.unwrap_or_default()),
                 Err(_) => None,
             },
-            _ => return false,
+            _ => return MakerNoteCensus::default(),
         }
     };
     let Some(payloads) = payloads else {
-        return true;
+        return MakerNoteCensus::UNKNOWN;
     };
     let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-    blocks_carry_makernote(&blocks, EXIF_BLOCK_MAGICS)
+    makernote_census(&blocks, EXIF_BLOCK_MAGICS)
 }
 
 /// Whether deleting `key` from the file at `path` changes nothing: the map
@@ -1800,7 +1825,7 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
         if !name.eq_ignore_ascii_case("all")
             && !name.starts_with("MakerNote")
             && crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
-                file_carries_makernote(&reader, format, surgical)
+                file_makernote_census(&reader, format, surgical)
             })
             .is_some()
         {

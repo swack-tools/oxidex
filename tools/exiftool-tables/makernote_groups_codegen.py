@@ -24,6 +24,18 @@ name, the root table, the root's family-1 group, and the sorted union of
 `GROUPS{1}` and per-tag `Groups{1}` over every table reachable through
 `SubDirectory => { TagTable => ... }`.
 
+Two name-level captures ride along, both from the pinned `FindTagInfo`
+over every `%tagLookup` (writable) name, so the resolver never has to infer
+a candidate from a row the reader happened to surface:
+
+- `MAKERNOTE_CANDIDATES`: every name with a writable `MakerNotes`
+  candidate, with those candidates' family-1 groups. oxidex's maker-note
+  decoders do not surface every row ExifTool edits (t/images/Nikon.jpg:
+  no `[Nikon] FocusMode` row, which `-MakerNotes:FocusMode=` deletes).
+- `GPS_NAME_CANDIDATES`: every writable candidate (family 0 and 1) of each
+  `GPS::Main` name -- the bare GPS spellings the resolver keeps by hand
+  (`GPSDateStamp`) have no rows in the SetNewValue address capture.
+
 Usage:
     makernote_groups_codegen.py --exiftool-dir <pinned tree> --perl <pinned perl> \
         --output src/writers/generated_makernote_groups.rs
@@ -63,6 +75,36 @@ sub walk {
 my @roots = map { [$$_{Name}, $$_{SubDirectory} ? $$_{SubDirectory}{TagTable} : undef] }
             grep { ref $_ eq 'HASH' } @Image::ExifTool::MakerNotes::Main;
 push @roots, ['CIFF', 'Image::ExifTool::CanonRaw::Main'];
+if (($ENV{OXIDEX_MN_MODE} // '') eq 'names') {
+    require Image::ExifTool::TagLookup;
+    require Image::ExifTool::GPS;
+    my $et = Image::ExifTool->new;
+    open my $fh, '<', $INC{'Image/ExifTool/TagLookup.pm'} or die;
+    my ($in, %names);
+    while (<$fh>) {
+        $in = 1 if /^my %tagLookup = \(/;
+        $in = 0 if $in and /^\);/;
+        $names{$1} = 1 if $in and /^\t'([^']+)' => /;
+    }
+    my $gps = Image::ExifTool::GetTagTable('Image::ExifTool::GPS::Main');
+    my %gpsnames;
+    foreach my $key (Image::ExifTool::TagTableKeys($gps)) {
+        foreach my $info (Image::ExifTool::GetTagInfoList($gps, $key)) {
+            $gpsnames{lc $$info{Name}} = 1 if ref $info eq 'HASH';
+        }
+    }
+    foreach my $name (sort keys %names) {
+        my @infos = Image::ExifTool::TagLookup::FindTagInfo($name);
+        my %mn;
+        foreach my $info (@infos) {
+            my @g = $et->GetGroup($info);
+            $mn{$g[1]} = 1 if $g[0] eq 'MakerNotes';
+            print join("\t", 'GPS', $name, $g[0], $g[1]), "\n" if $gpsnames{$name};
+        }
+        print join("\t", 'MN', $name, join(',', sort keys %mn)), "\n" if %mn;
+    }
+    exit 0;
+}
 foreach my $root (@roots) {
     my ($entry, $tt) = @$root;
     # A value-typed entry (no SubDirectory table): the note is one value,
@@ -77,9 +119,11 @@ foreach my $root (@roots) {
 """
 
 
-def perl(perl_bin: str, lib: Path, script: str) -> str:
+def perl(perl_bin: str, lib: Path, script: str, mode: str = "") -> str:
     env = {k: v for k, v in os.environ.items()
-           if k not in {"PERL5LIB", "PERLLIB", "PERL5OPT", "EXIFTOOL"}}
+           if k not in {"PERL5LIB", "PERLLIB", "PERL5OPT", "EXIFTOOL", "OXIDEX_MN_MODE"}}
+    if mode:
+        env["OXIDEX_MN_MODE"] = mode
     run = subprocess.run([perl_bin, f"-I{lib}", "-e", script],
                          capture_output=True, text=True, env=env, check=True)
     return run.stdout
@@ -117,6 +161,24 @@ def main() -> int:
     if len(rows) < 50 or not any(entry == "MakerNoteCanon" for entry, *_ in rows):
         raise SystemExit(f"implausible capture: {len(rows)} roots")
 
+    makernote_names: dict[str, list[str]] = {}
+    gps_names: list[tuple[str, str, str]] = []
+    for line in perl(args.perl, lib, WALK, mode="names").splitlines():
+        kind, *rest = line.split("\t")
+        if kind == "MN":
+            name, groups = rest
+            makernote_names[name] = [g for g in groups.split(",") if g]
+        elif kind == "GPS":
+            gps_names.append(tuple(rest))
+        else:
+            raise SystemExit(f"unrecognized capture line {line!r}")
+    if len(makernote_names) < 1000 or "whitebalance" not in makernote_names:
+        raise SystemExit(f"implausible maker-note name capture: {len(makernote_names)}")
+    if not any(name == "gpsdatestamp" for name, *_ in gps_names):
+        raise SystemExit("implausible GPS name capture")
+    if any(name != name.lower() for name in makernote_names):
+        raise SystemExit("a captured name is not lower-case")
+
     makernotes_pm = lib / "Image/ExifTool/MakerNotes.pm"
     sha = hashlib.sha256(makernotes_pm.read_bytes()).hexdigest()
     out = [
@@ -153,6 +215,20 @@ def main() -> int:
         out.append(
             f"    MakerNoteRoot {{ entry: {rust_str(entry)}, table: {rust_str(table)}, "
             f"group: {rust_str(group)}, closure: &[{', '.join(rust_str(g) for g in groups)}] }},\n")
+    out.append("];\n")
+    out.append("/// Lower-case names with a writable `MakerNotes` candidate (pinned\n"
+               "/// `FindTagInfo`), each with those candidates' family-1 groups; sorted\n"
+               "/// for binary search.\n")
+    out.append("pub(crate) const MAKERNOTE_CANDIDATES: &[(&str, &[&str])] = &[\n")
+    for name in sorted(makernote_names):
+        groups = ", ".join(rust_str(g) for g in makernote_names[name])
+        out.append(f"    ({rust_str(name)}, &[{groups}]),\n")
+    out.append("];\n")
+    out.append("/// Every writable candidate (lower-case name, family 0, family 1) of each\n"
+               "/// `GPS::Main` name (pinned `FindTagInfo`).\n")
+    out.append("pub(crate) const GPS_NAME_CANDIDATES: &[(&str, &str, &str)] = &[\n")
+    for name, g0, g1 in sorted(set(gps_names)):
+        out.append(f"    ({rust_str(name)}, {rust_str(g0)}, {rust_str(g1)}),\n")
     out.append("];\n")
     args.output.write_text("".join(out))
     print(f"wrote {args.output}: {len(rows)} roots", file=sys.stderr)

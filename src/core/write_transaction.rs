@@ -44,7 +44,7 @@
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
     exif_group_in_pdf, field_spellings, metadata_holds, plan_group_deletion, read_metadata,
-    removal_is_no_op, remove_field, resolve_write_key_for, write_metadata_transaction,
+    removal_is_no_op, remove_field, resolve_write_key_in_request, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -319,6 +319,24 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let mut refused: Vec<TagNotWritten> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
+    // Whether the request deletes the EXIF maker note: a bare name is then
+    // judged with no maker-note copy to also update, whichever order the
+    // deletion came in (pinned 13.59, `resolve_write_key_in_request`). Only
+    // a deletion `plan_group_deletion` plans for real counts -- one it
+    // proves a no-op (a note ExifTool files under EXIF) leaves the note.
+    let makernote_deleted = changes.iter().any(|change| {
+        change.value().is_none()
+            && group_deletion(change.tag()).is_some()
+            && crate::writers::exif_surgical::removal_deletes_makernote(change.tag())
+            && matches!(
+                plan_group_deletion(
+                    path,
+                    change.tag(),
+                    group_deletion(change.tag()).unwrap_or("")
+                ),
+                Ok(Some(_))
+            )
+    });
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -363,7 +381,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for(path, change.tag(), &baseline) {
+        match resolve_write_key_in_request(path, change.tag(), &baseline, makernote_deleted) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),

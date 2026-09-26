@@ -46,6 +46,7 @@
 //!
 //! [`SET_NEW_VALUE_LOOKUP`]: super::generated_setnewvalue_address_rules::SET_NEW_VALUE_LOOKUP
 
+use super::exif_surgical::MakerNoteCensus;
 use super::generated_setnewvalue_address_rules::{
     SET_NEW_VALUE_LOOKUP, StaticNativeLookupCandidate,
 };
@@ -429,7 +430,7 @@ pub(crate) fn resolve_write_key(
     exif_ifd0_target: bool,
     png_target: bool,
     baseline: &MetadataMap,
-    makernote_block: &dyn Fn() -> bool,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Result<String> {
     if tag.contains(':') {
         return Ok(tag.to_string());
@@ -562,40 +563,67 @@ pub(crate) fn ensure_not_also_updated(
     tag: &str,
     key: &str,
     baseline: &MetadataMap,
-    makernote_block: &dyn Fn() -> bool,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Result<()> {
     let name = key.rsplit(':').next().unwrap_or(key);
-    let everywhere: Vec<&StaticNativeLookupCandidate> = SET_NEW_VALUE_LOOKUP
-        .iter()
-        .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
-        .collect();
     let use_exif_only = |what: String| {
         refuse(
             tag,
             format!("{what}; use -{key}= to change only the EXIF field"),
         )
     };
+    // Every writable candidate as (family 0, family 1): the SetNewValue
+    // address capture, or -- for the `GPS::Main` names it holds no rows for
+    // (`GPSDateStamp`) -- the pinned `FindTagInfo` capture of those names.
+    // A name neither capture holds is refused: no candidate is ever
+    // inferred from the rows the reader happened to surface.
+    let lowered = name.to_ascii_lowercase();
+    let mut everywhere: Vec<(&str, &str)> = SET_NEW_VALUE_LOOKUP
+        .iter()
+        .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
+        .map(|candidate| {
+            (
+                family0(candidate).unwrap_or(""),
+                family1(candidate).unwrap_or(""),
+            )
+        })
+        .collect();
     if everywhere.is_empty() {
-        if let Some((existing, _)) = baseline.iter().find(|(existing, _)| {
-            existing
-                .split_once(':')
-                .is_some_and(|(group, existing_name)| {
-                    existing_name.eq_ignore_ascii_case(name) && !NOT_ALSO_UPDATED.contains(&group)
-                })
-        }) {
-            return Err(use_exif_only(format!(
-                "ExifTool would also update the existing {existing}, which oxidex cannot write"
-            )));
-        }
-        return Ok(());
+        everywhere = super::generated_makernote_groups::GPS_NAME_CANDIDATES
+            .iter()
+            .filter(|(candidate, _, _)| *candidate == lowered)
+            .map(|(_, g0, g1)| (*g0, *g1))
+            .collect();
     }
-    let others: Vec<&StaticNativeLookupCandidate> = everywhere
+    if everywhere.is_empty() {
+        return Err(refuse(
+            tag,
+            "oxidex holds no capture of the groups ExifTool writes this name to; name the \
+             group explicitly",
+        ));
+    }
+    // ExifTool writes the tag in every EXIF APP1 of a JPEG (13.59:
+    // `Warning: Multiple APP1 EXIF records`, then both written); oxidex
+    // writes one.
+    let census = makernote_block();
+    if census.blocks > 1 {
+        return Err(use_exif_only(format!(
+            "the file carries {} EXIF blocks, each of which ExifTool writes {name} to, \
+             and oxidex writes one",
+            if census.blocks == usize::MAX {
+                "several".to_string()
+            } else {
+                census.blocks.to_string()
+            }
+        )));
+    }
+    let others: Vec<(&str, &str)> = everywhere
         .into_iter()
-        .filter(|candidate| family0(candidate) != Some("EXIF"))
+        .filter(|(g0, _)| *g0 != "EXIF")
         .collect();
     if let Some(group) = others
         .iter()
-        .filter_map(|candidate| family0(candidate))
+        .map(|(g0, _)| *g0)
         .find(|group| matches!(*group, "File" | "Composite"))
     {
         return Err(use_exif_only(format!(
@@ -603,12 +631,10 @@ pub(crate) fn ensure_not_also_updated(
              writes along with it), which oxidex cannot write"
         )));
     }
-    if let Some(reason) = makernote_may_hold(name, baseline, makernote_block) {
+    if let Some(reason) = makernote_may_hold(name, baseline, &|| census) {
         return Err(use_exif_only(reason));
     }
-    if others
-        .iter()
-        .any(|candidate| family0(candidate) == Some("MIE"))
+    if others.iter().any(|(g0, _)| *g0 == "MIE")
         && let Some(mie) = mie_row(baseline)
     {
         return Err(use_exif_only(format!(
@@ -616,15 +642,19 @@ pub(crate) fn ensure_not_also_updated(
              tables are PREFERRED), which oxidex cannot write"
         )));
     }
+    // A same-named row a non-maker-note candidate can be (`XMP-exif`,
+    // `IPTC`): the reader surfaces these, unlike maker-note rows, which
+    // `makernote_may_hold` decides from the complete capture.
     if let Some((existing, _)) = baseline.iter().find(|(existing, _)| {
         existing
             .split_once(':')
             .is_some_and(|(group, existing_name)| {
                 existing_name.eq_ignore_ascii_case(name)
                     && !NOT_ALSO_UPDATED.contains(&group)
+                    && !super::exif_surgical::is_makernote_row(baseline, existing)
                     && others
                         .iter()
-                        .any(|candidate| candidate_lives_in(candidate, group))
+                        .any(|&(g0, g1)| g0 != "MakerNotes" && candidate_lives_in(g0, g1, group))
             })
     }) {
         return Err(use_exif_only(format!(
@@ -676,23 +706,24 @@ pub(crate) fn ensure_no_mie_copy(tag: &str, key: &str, baseline: &MetadataMap) -
     }
 }
 
-/// Whether a row the reader files under family-1 `group` can be `candidate`:
-/// its family-0 or family-1 group, or an `XMP-*` group of an XMP candidate.
-fn candidate_lives_in(candidate: &StaticNativeLookupCandidate, group: &str) -> bool {
-    candidate
-        .groups
-        .iter()
-        .any(|family| matches!(family.family, 0 | 1) && family.value.eq_ignore_ascii_case(group))
-        || (family0(candidate) == Some("XMP")
+/// Whether a row the reader files under family-1 `group` can be a candidate
+/// of family-0 `g0` and family-1 `g1`: either group, or an `XMP-*` group of
+/// an XMP candidate.
+fn candidate_lives_in(g0: &str, g1: &str, group: &str) -> bool {
+    g0.eq_ignore_ascii_case(group)
+        || g1.eq_ignore_ascii_case(group)
+        || (g0 == "XMP"
             && group
                 .get(..4)
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("XMP-")))
 }
 
 /// Why pinned ExifTool may also write `name` in the file's maker note, or
-/// `None` when it provably cannot: the name has no `MakerNotes` candidate,
-/// or the file carries no maker note, or no candidate's family-1 group is
-/// one the file's maker note can reach.
+/// `None` when it provably cannot: the name has no writable `MakerNotes`
+/// candidate ([`MAKERNOTE_CANDIDATES`], the pinned `FindTagInfo` over every
+/// writable name -- never the reader's rows), or the file carries no maker
+/// note that bears tags, or the request deletes it, or no candidate's
+/// family-1 group is one the file's maker note can reach.
 ///
 /// ExifTool edits a maker-note tag only where the note already holds it,
 /// but oxidex's maker-note decoders do not surface every row ExifTool reads
@@ -703,52 +734,52 @@ fn candidate_lives_in(candidate: &StaticNativeLookupCandidate, group: &str) -> b
 /// ([`MAKERNOTE_ROOTS`], captured from the pinned `MakerNotes::Main` and
 /// every `SubDirectory` below it), and the note may hold `name` when a
 /// candidate's family-1 group is in the union of those closures. A file
-/// whose EXIF carries a maker note (`makernote_block`) the reader decoded
-/// no row of -- or only rows of groups no root reaches -- may hold any.
+/// whose EXIF carries a tag-bearing maker note (`makernote_block`'s
+/// [`MakerNoteCensus`], counted per EXIF block) the reader decoded no row
+/// of -- or more than one, whose rows cannot be told apart -- may hold any.
 ///
 /// [`MAKERNOTE_ROOTS`]: super::generated_makernote_groups::MAKERNOTE_ROOTS
+/// [`MAKERNOTE_CANDIDATES`]: super::generated_makernote_groups::MAKERNOTE_CANDIDATES
 pub(crate) fn makernote_may_hold(
     name: &str,
     baseline: &MetadataMap,
-    makernote_block: &dyn Fn() -> bool,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Option<String> {
-    use super::generated_makernote_groups::MAKERNOTE_ROOTS;
-    let groups: Vec<&str> = SET_NEW_VALUE_LOOKUP
-        .iter()
-        .filter(|candidate| {
-            candidate.name.eq_ignore_ascii_case(name) && family0(candidate) == Some("MakerNotes")
-        })
-        .filter_map(family1)
-        .collect();
+    use super::generated_makernote_groups::{MAKERNOTE_CANDIDATES, MAKERNOTE_ROOTS};
+    let lowered = name.to_ascii_lowercase();
+    let groups: &[&str] = MAKERNOTE_CANDIDATES
+        .binary_search_by(|(candidate, _)| (*candidate).cmp(lowered.as_str()))
+        .map_or(&[], |at| MAKERNOTE_CANDIDATES[at].1);
     if groups.is_empty() {
         return None;
     }
     let decoded = super::exif_surgical::makernote_row_groups(baseline);
-    let block = makernote_block();
-    if decoded.is_empty() && !block {
+    let census = makernote_block();
+    // A request that deletes the EXIF maker note leaves no copy there to
+    // edit; a CIFF segment (a separate APP0 maker-note block) survives it.
+    let ciff = decoded.contains("CIFF") || decoded.contains("CanonRaw");
+    if census.deleted && !ciff {
         return None;
     }
-    // The EXIF maker note must be one the reader identified: rows only from
-    // outside it (a JPEG's CIFF segment, a Qualcomm APP7) say nothing of it.
-    // A note ExifTool reads as one value (`MakerNoteUnknownBinary`, a
-    // value-typed `MakerNotes::Main` entry, which the reader reports under
-    // that name) holds no tags at all.
-    let value_typed = MAKERNOTE_ROOTS.iter().any(|root| {
-        root.table.is_empty()
-            && baseline.keys().any(|key| {
-                key.rsplit(':')
-                    .next()
-                    .is_some_and(|row| row.eq_ignore_ascii_case(root.entry))
-            })
-    });
-    if value_typed && decoded.is_empty() {
+    let tag_bearing = if census.deleted {
+        0
+    } else {
+        census.tag_bearing
+    };
+    if decoded.is_empty() && tag_bearing == 0 {
         return None;
     }
-    if block
-        && !value_typed
-        && !MAKERNOTE_ROOTS.iter().any(|root| {
-            root.entry != "CIFF" && !root.group.is_empty() && decoded.contains(root.group)
-        })
+    // Rows do not say which EXIF block they were decoded from, so more than
+    // one tag-bearing note cannot be told apart; and the one tag-bearing
+    // note must be one the reader identified -- rows only from outside it
+    // (a JPEG's CIFF segment, a Qualcomm APP7) say nothing of it. A note
+    // ExifTool reads as one value, or a JPEG preview, bears no tags and is
+    // not counted (`exif_surgical::makernote_census`).
+    if tag_bearing > 1
+        || (tag_bearing == 1
+            && !MAKERNOTE_ROOTS.iter().any(|root| {
+                root.entry != "CIFF" && !root.group.is_empty() && decoded.contains(root.group)
+            }))
     {
         return Some(format!(
             "the file carries a maker note oxidex cannot identify, where ExifTool also \
@@ -922,6 +953,23 @@ mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
 
+    /// One EXIF block, no tag-bearing maker note.
+    fn no_note() -> MakerNoteCensus {
+        MakerNoteCensus {
+            blocks: 1,
+            tag_bearing: 0,
+            deleted: false,
+        }
+    }
+
+    /// One EXIF block whose maker note bears tags.
+    fn one_note() -> MakerNoteCensus {
+        MakerNoteCensus {
+            tag_bearing: 1,
+            ..no_note()
+        }
+    }
+
     #[test]
     fn tag_exists_capture_is_sorted_lowercase_and_pinned() {
         assert!(TAG_EXISTS.windows(2).all(|pair| pair[0] < pair[1]));
@@ -976,13 +1024,13 @@ mod tests {
             ("DateTimeOriginal", "ExifIFD:DateTimeOriginal"),
         ] {
             assert_eq!(
-                resolve_write_key(tag, true, false, &empty, &|| false).unwrap(),
+                resolve_write_key(tag, true, false, &empty, &no_note).unwrap(),
                 key,
                 "{tag}"
             );
         }
         assert_eq!(
-            resolve_write_key("XMP:Title", true, false, &empty, &|| false).unwrap(),
+            resolve_write_key("XMP:Title", true, false, &empty, &no_note).unwrap(),
             "XMP:Title"
         );
     }
@@ -991,14 +1039,14 @@ mod tests {
     fn ungrouped_names_exiftool_writes_elsewhere_are_refused() {
         let empty = MetadataMap::new();
         // XMP-dc:Title (pinned 13.59 on Writer.jpg); no EXIF candidate.
-        assert!(resolve_write_key("Title", true, false, &empty, &|| false).is_err());
+        assert!(resolve_write_key("Title", true, false, &empty, &no_note).is_err());
         // Exif.pm 0x4746 Rating is `Avoid => 1`: ExifTool creates XMP instead.
-        assert!(resolve_write_key("Rating", true, false, &empty, &|| false).is_err());
+        assert!(resolve_write_key("Rating", true, false, &empty, &no_note).is_err());
         // Not defined at all.
-        let err = resolve_write_key("NoSuchTag", true, false, &empty, &|| false).unwrap_err();
+        let err = resolve_write_key("NoSuchTag", true, false, &empty, &no_note).unwrap_err();
         assert!(err.to_string().contains("is not defined"), "{err}");
         // Outside JPEG/TIFF no ungrouped name is resolved.
-        assert!(resolve_write_key("XPTitle", false, false, &empty, &|| false).is_err());
+        assert!(resolve_write_key("XPTitle", false, false, &empty, &no_note).is_err());
     }
 
     /// Pinned 13.59 on t/images/ExifTool.jpg (which carries [CIFF] Make):
@@ -1010,11 +1058,11 @@ mod tests {
         baseline.insert("IFD1:Make", TagValue::new_string("x"));
         baseline.insert("File:Make", TagValue::new_string("x"));
         assert_eq!(
-            resolve_write_key("Make", true, false, &baseline, &|| false).unwrap(),
+            resolve_write_key("Make", true, false, &baseline, &no_note).unwrap(),
             "IFD0:Make"
         );
         baseline.insert("CIFF:Make", TagValue::new_string("Canon"));
-        let err = resolve_write_key("Make", true, false, &baseline, &|| false).unwrap_err();
+        let err = resolve_write_key("Make", true, false, &baseline, &no_note).unwrap_err();
         assert!(err.to_string().contains(":Make"), "{err}");
     }
 
@@ -1072,13 +1120,13 @@ mod tests {
             "OtherImageLength",
         ] {
             assert!(
-                resolve_write_key(name, true, false, &empty, &|| false).is_err(),
+                resolve_write_key(name, true, false, &empty, &no_note).is_err(),
                 "{name}"
             );
         }
         // Pinned 13.59: `-CalibrationIlluminant1#=20` -> [IFD0].
         assert_eq!(
-            resolve_write_key("CalibrationIlluminant1", true, false, &empty, &|| false).unwrap(),
+            resolve_write_key("CalibrationIlluminant1", true, false, &empty, &no_note).unwrap(),
             "IFD0:CalibrationIlluminant1"
         );
     }
@@ -1088,7 +1136,7 @@ mod tests {
     #[test]
     fn a_writable_composite_candidate_refuses_the_bare_name() {
         let empty = MetadataMap::new();
-        let err = ensure_not_also_updated("Flash", "ExifIFD:Flash", &empty, &|| false).unwrap_err();
+        let err = ensure_not_also_updated("Flash", "ExifIFD:Flash", &empty, &no_note).unwrap_err();
         assert!(err.to_string().contains("Composite:Flash"), "{err}");
     }
 
@@ -1100,33 +1148,112 @@ mod tests {
         canon.insert("Canon:MacroMode", TagValue::new_string("Normal"));
         // Canon::ShotInfo defines WhiteBalance; no Canon table defines
         // CalibrationIlluminant1 (only EXIF does).
-        assert!(makernote_may_hold("WhiteBalance", &canon, &|| true).is_some());
-        assert!(makernote_may_hold("CalibrationIlluminant1", &canon, &|| true).is_none());
+        assert!(makernote_may_hold("WhiteBalance", &canon, &one_note).is_some());
+        assert!(makernote_may_hold("CalibrationIlluminant1", &canon, &one_note).is_none());
         // A Canon note reaches no CanonRaw (CIFF) table.
-        assert!(makernote_may_hold("DateTimeOriginal", &canon, &|| true).is_none());
+        assert!(makernote_may_hold("DateTimeOriginal", &canon, &one_note).is_none());
 
         let mut fuji = MetadataMap::new();
         fuji.insert("FujiFilm:Quality", TagValue::new_string("NORMAL"));
         // No FujiFilm table defines ColorSpace; Nikon::Main does.
-        assert!(makernote_may_hold("ColorSpace", &fuji, &|| true).is_none());
+        assert!(makernote_may_hold("ColorSpace", &fuji, &one_note).is_none());
         let mut nikon = MetadataMap::new();
         nikon.insert("Nikon:Quality", TagValue::new_string("FINE"));
-        assert!(makernote_may_hold("ColorSpace", &nikon, &|| true).is_some());
+        assert!(makernote_may_hold("ColorSpace", &nikon, &one_note).is_some());
 
         // No maker note at all: nothing to hold. A maker note the reader
         // decoded no row of: anything.
         let empty = MetadataMap::new();
-        assert!(makernote_may_hold("WhiteBalance", &empty, &|| false).is_none());
-        let err = makernote_may_hold("WhiteBalance", &empty, &|| true).unwrap();
+        assert!(makernote_may_hold("WhiteBalance", &empty, &no_note).is_none());
+        let err = makernote_may_hold("WhiteBalance", &empty, &one_note).unwrap();
         assert!(err.contains("cannot identify"), "{err}");
-        // A note ExifTool reads as one value holds no tags (a SilverFast
-        // `LSI1` note is `MakerNoteUnknownBinary`, MakerNotes.pm 13.59).
-        let mut binary = MetadataMap::new();
-        binary.insert(
-            "ExifIFD:MakerNoteUnknownBinary",
-            TagValue::new_string("(Binary data)"),
+        // A note ExifTool reads as one value holds no tags: the census does
+        // not count it (a SilverFast `LSI1` note, MakerNoteUnknownBinary).
+        assert!(makernote_may_hold("Artist", &empty, &no_note).is_none());
+        // Two tag-bearing notes (two EXIF APP1s) cannot be told apart by
+        // rows, even when one of them was decoded.
+        let two = || MakerNoteCensus {
+            blocks: 2,
+            tag_bearing: 2,
+            deleted: false,
+        };
+        assert!(makernote_may_hold("WhiteBalance", &canon, &two).is_some());
+        // A request that deletes the EXIF maker note leaves nothing to
+        // edit (pinned 13.59: `-MakerNotes:All= -WhiteBalance#=1`), but a
+        // CIFF segment survives it.
+        let deleted = || MakerNoteCensus {
+            deleted: true,
+            ..one_note()
+        };
+        assert!(makernote_may_hold("WhiteBalance", &canon, &deleted).is_none());
+        let mut ciff = canon.clone();
+        ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
+        assert!(makernote_may_hold("FocalLength", &ciff, &deleted).is_some());
+    }
+
+    /// Candidates come from the pinned `FindTagInfo` capture, never from
+    /// surfaced rows: `FocusMode` (absent from the SetNewValue address
+    /// capture) has a Nikon candidate, which pinned 13.59 deletes from
+    /// t/images/Nikon.jpg on `-MakerNotes:FocusMode=`; no bare GPS name has
+    /// a maker-note candidate, and the GPS names are captured with their
+    /// XMP and MIE candidates.
+    #[test]
+    fn candidates_come_from_the_capture_not_rows() {
+        use super::super::generated_makernote_groups::{GPS_NAME_CANDIDATES, MAKERNOTE_CANDIDATES};
+        assert!(
+            MAKERNOTE_CANDIDATES
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
         );
-        assert!(makernote_may_hold("Artist", &binary, &|| true).is_none());
+        let empty = MetadataMap::new();
+        assert!(makernote_may_hold("FocusMode", &empty, &one_note).is_some());
+        for gps in [
+            "GPSVersionID",
+            "GPSDateStamp",
+            "GPSLatitudeRef",
+            "GPSDestLatitudeRef",
+            "GPSDestBearing",
+        ] {
+            assert!(
+                makernote_may_hold(gps, &empty, &one_note).is_none(),
+                "{gps}"
+            );
+            assert!(
+                GPS_NAME_CANDIDATES
+                    .iter()
+                    .any(|(name, g0, _)| name.eq_ignore_ascii_case(gps) && *g0 == "EXIF"),
+                "{gps}"
+            );
+        }
+        assert!(GPS_NAME_CANDIDATES.contains(&("gpsdestbearing", "XMP", "XMP-exif")));
+        // A GPS name is judged by its captured candidates: an XMP-exif row
+        // refuses, a GPS row does not.
+        let mut xmp = MetadataMap::new();
+        xmp.insert("XMP-exif:GPSDestBearing", TagValue::new_string("1"));
+        assert!(
+            ensure_not_also_updated("GPSDestBearing", "GPS:GPSDestBearing", &xmp, &one_note)
+                .is_err()
+        );
+        let mut gps = MetadataMap::new();
+        gps.insert("GPS:GPSDestBearing", TagValue::new_string("1"));
+        assert!(
+            ensure_not_also_updated("GPSDestBearing", "GPS:GPSDestBearing", &gps, &one_note)
+                .is_ok()
+        );
+    }
+
+    /// ExifTool writes every EXIF APP1; oxidex writes one, so a bare name in
+    /// a file with two is refused.
+    #[test]
+    fn a_bare_name_in_several_exif_blocks_is_refused() {
+        let empty = MetadataMap::new();
+        let two = || MakerNoteCensus {
+            blocks: 2,
+            tag_bearing: 0,
+            deleted: false,
+        };
+        let err = ensure_not_also_updated("Artist", "IFD0:Artist", &empty, &two).unwrap_err();
+        assert!(err.to_string().contains("2 EXIF blocks"), "{err}");
     }
 
     /// Only a same-named row a candidate can be is one ExifTool also
@@ -1137,12 +1264,12 @@ mod tests {
         let mut spiff = MetadataMap::new();
         spiff.insert("SPIFF:ColorSpace", TagValue::new_integer(1));
         assert!(
-            ensure_not_also_updated("ColorSpace", "ExifIFD:ColorSpace", &spiff, &|| false).is_ok()
+            ensure_not_also_updated("ColorSpace", "ExifIFD:ColorSpace", &spiff, &no_note).is_ok()
         );
         let mut xmp = MetadataMap::new();
         xmp.insert("XMP-exif:ColorSpace", TagValue::new_integer(1));
         assert!(
-            ensure_not_also_updated("ColorSpace", "ExifIFD:ColorSpace", &xmp, &|| false).is_err()
+            ensure_not_also_updated("ColorSpace", "ExifIFD:ColorSpace", &xmp, &no_note).is_err()
         );
         let mut mie = MetadataMap::new();
         mie.insert("MIE:TrailerSignature", TagValue::new_string("x"));
