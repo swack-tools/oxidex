@@ -493,12 +493,12 @@
         "blocked_generated_reader_refusal": 156,
         "generated_reader_declaration_option_gated": 1123,
         "generated_reader_declaration_unobserved": 778,
-        "ifd_schema_declaration_eligible_unobserved": 2888,
-        "ifd_schema_declaration_omitted_unobserved": 418,
+        "ifd_schema_declaration_eligible_unobserved": 2889,
+        "ifd_schema_declaration_omitted_unobserved": 417,
         "ifd_schema_declaration_refused_unobserved": 9562,
         "source_row_not_yet_consumed": 18562
       },
-      "strict": 3666,
+      "strict": 3667,
       "strict_share": "10.95%"
     }
   },
@@ -654,7 +654,7 @@
   "schema": "oxidex_docs_status_v1",
   "sources": {
     "docs/public/measurements/catalog-corpus-observed-13.59.json": "033e4094bf409c892e592ec43b09a93fce4b091744b2d5f615c3497b6924cc3e",
-    "docs/public/measurements/catalog-hydrated-join-13.59.json": "5fe7878f5c20358ade827b5ad27b395b1a97f8f4188e190a4e2a3da3b9b79f95",
+    "docs/public/measurements/catalog-hydrated-join-13.59.json": "ffb739d5ee1a29aa143bd5e9fd8da48b29a33502f9d0869dc3916179612bfc94",
     "docs/public/measurements/generated-share-13.59.json": "81e3168524d85cd103c615e0fa479050ad677d3a9025f020f9b9760683e9df97",
     "tools/ci/parity_floors.json": "92505e25021bfbd456109b7186089001aae6619f0b2bc77c019d6f390dbe9ca7"
   },

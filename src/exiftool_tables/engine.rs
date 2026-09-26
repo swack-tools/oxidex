@@ -68,8 +68,13 @@
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;
+use oxidex_tags::TagId;
 
 use super::cond;
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
+};
 use super::runtime::{DecodedValue, decode_value_of};
 use super::subdir::{Start, SubdirEdge};
 use super::{BinaryTable, Field, Fmt, Mask, find_table};
@@ -212,6 +217,29 @@ pub fn read_value(
     more: i64,
     byte_order: ByteOrder,
 ) -> Option<DecodedValue> {
+    read_value_with_stored(data, offset, format, count, more, byte_order).map(|read| read.decoded)
+}
+
+/// One physical `ReadValue` result and its source-exact storage projection.
+///
+/// Fixed-point decoders intentionally reproduce ExifTool's decimal rounding,
+/// so their [`DecodedValue`] cannot also serve as the stored channel. For
+/// those formats the physical bytes are the only exact representation in the
+/// public [`TagValue`] model. All other formats retain their exact typed form.
+pub(crate) struct ReadValue {
+    pub decoded: DecodedValue,
+    pub stored: TagValue,
+}
+
+#[must_use]
+pub(crate) fn read_value_with_stored(
+    data: &[u8],
+    offset: usize,
+    format: Fmt,
+    count: usize,
+    more: i64,
+    byte_order: ByteOrder,
+) -> Option<ReadValue> {
     let more = usize::try_from(more).ok()?;
     // ExifTool's ($len, $count) for this field. A sized string/undef is
     // `len == 1` repeated N times in ExifTool's own table, never one N-wide
@@ -242,7 +270,7 @@ pub fn read_value(
 
     if blob {
         // ExifTool.pm:6309-6311: one value spanning every byte.
-        return Some(match format {
+        let decoded = match format {
             Fmt::Str(_) | Fmt::RemainderString => {
                 let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
                 // RawConv receives this byte scalar before FoundTag's output
@@ -251,16 +279,29 @@ pub fn read_value(
                 DecodedValue::StringBytes(bytes[..end].to_vec())
             }
             _ => DecodedValue::Undefined(bytes.to_vec()),
-        });
+        };
+        let stored = super::runtime::to_stored_tag_value(&decoded, byte_order);
+        return Some(ReadValue { decoded, stored });
     }
-    if elem_count == 1 {
-        return decode_value_of(bytes, format, byte_order);
-    }
-    let values = bytes
-        .chunks_exact(elem_len)
-        .map(|chunk| decode_value_of(chunk, format, byte_order))
-        .collect::<Option<Vec<_>>>()?;
-    Some(DecodedValue::Array(values))
+    let decoded = if elem_count == 1 {
+        decode_value_of(bytes, format, byte_order)?
+    } else {
+        DecodedValue::Array(
+            bytes
+                .chunks_exact(elem_len)
+                .map(|chunk| decode_value_of(chunk, format, byte_order))
+                .collect::<Option<Vec<_>>>()?,
+        )
+    };
+    let stored = if matches!(
+        format,
+        Fmt::Fixed16s | Fmt::Fixed16u | Fmt::Fixed32s | Fmt::Fixed32u | Fmt::Extended
+    ) {
+        TagValue::Binary(bytes.to_vec())
+    } else {
+        super::runtime::to_stored_tag_value(&decoded, byte_order)
+    };
+    Some(ReadValue { decoded, stored })
 }
 
 /// ExifTool.pm:10079 -- `$val = ($val & $mask) >> $$tagInfo{BitShift} if $mask`,
@@ -298,6 +339,11 @@ pub struct Emitted {
     pub group1: &'static str,
     pub group2: &'static str,
     pub name: &'static str,
+    /// True source coordinate in the source table, independent of the public
+    /// lookup key selected by an adapter.
+    pub source_id: TagId,
+    /// The typed source value before Mask, RoundFloat, or conversions.
+    pub stored: TagValue,
     pub value: TagValue,
     /// The value ExifTool's `-n` reports -- the `ValueConv` result before
     /// `PrintConv` (ExifTool.pm:3477: `GetValue` stops at `ValueConv` when
@@ -322,6 +368,8 @@ pub struct Emitted {
     /// the fraction as the row's `-n` form without changing what it prints.
     /// IFD tables only; `None` for every binary-table field.
     pub rational: Option<(i64, i64)>,
+    /// The source tag's `List` declaration.
+    pub is_list: bool,
 }
 
 /// The `%dirInfo` a `ProcessBinaryData` call receives (ExifTool.pm:9880-9888).
@@ -533,6 +581,23 @@ pub(super) fn walk(
     let _ = walk_with_policy(table, dir, ctx, guard, out, ChildTaintPolicy::Contain);
 }
 
+/// `ProcessBinaryData`'s explicit conversion policy for the shared stage.
+///
+/// An unrepresentable state value taints the rest of the table. An unmodeled
+/// `RawConv` taints too, but [`walk_with_policy`] already refuses it before
+/// `ReadValue`, so the stage never sees one. A `Field` has no `Binary` or
+/// `List` flag: every unconverted value is ExifTool's one space-joined
+/// string (ExifTool.pm:6312), e.g. `"ConnectionSpaceIlluminant": "0.9642 1
+/// 0.82491"`.
+const BINARY_POLICY: Policy = Policy {
+    member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Taint,
+    set_member_clears_omission: true,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Taint,
+    perl_length: pipeline::scalar_perl_length,
+    scalar_form: super::runtime::to_exiftool_value,
+};
+
 fn walk_with_policy(
     table: &'static BinaryTable,
     dir: Dir<'_>,
@@ -625,12 +690,13 @@ fn walk_with_policy(
             Err(_) => continue,
         };
         // ExifTool.pm:10076-10077.
-        let Some(raw) = read_value(dir.data, offset, format, field.count, more, dir.byte_order)
+        let Some(read) =
+            read_value_with_stored(dir.data, offset, format, field.count, more, dir.byte_order)
         else {
             continue;
         };
         // ExifTool.pm:10079.
-        let Some(raw) = apply_mask(raw, field.mask) else {
+        let Some(raw) = apply_mask(read.decoded, field.mask) else {
             continue;
         };
 
@@ -656,67 +722,55 @@ fn walk_with_policy(
             continue;
         }
 
-        let mut omitted = field.omitted;
-        if entry.condition_resolved {
-            omitted.condition = false;
-        }
-        match field.raw_conv {
-            Some(super::ifd_schema::RawConvEffect::SetMember { member }) => {
-                let Some(value) = member_value(&raw) else {
-                    // `$val` is shared state for later Conditions. If it has
-                    // a domain this closed MemberValue model cannot preserve,
-                    // the safe answer is to stop this table before later
-                    // fields can observe a fabricated or absent value.
-                    return BinaryWalkOutcome::Tainted;
-                };
-                // FoundTag runs RawConv before it considers whether to report
-                // a tag. The assignment returns `$val`, so clearing this
-                // local omission is valid only after the state change.
-                ctx.members.insert(member, value);
-                omitted.raw_conv = false;
-            }
-            // This conversion changes only FoundTag's local `$val`; the
-            // value itself remains withheld until a renderer is modeled.
-            Some(super::ifd_schema::RawConvEffect::ValueLocal) | None => {}
-        }
-        if omitted.any() {
-            continue;
-        }
-        let Some(converted) = super::runtime::apply_value_conv(field.value_conv, &raw) else {
-            // A verified ValueConv may faithfully return Perl undef.  That is
-            // tag suppression, not permission to emit the raw value.
-            continue;
-        };
-        // The unconverted value in the form ExifTool reports it: a
-        // fixed-count field is ONE space-joined string (ExifTool.pm:6312
-        // `join ' '`), not a list -- `exiftool -j` prints
-        // `"ConnectionSpaceIlluminant": "0.9642 1 0.82491"`.
-        let (value, value_conv) = match super::runtime::render(field.print_conv, &converted) {
-            Some(rendered) => (
-                TagValue::String(rendered),
-                Some(super::runtime::to_exiftool_value(&converted)),
-            ),
-            None => (super::runtime::to_exiftool_value(&converted), None),
-        };
-        if !super::attribution::silenced(super::attribution::Token::Engine) {
-            out.push(Emitted {
+        // FoundTag (ExifTool.pm:10163) and GetValue: the shared stage.
+        let input = PipelineInput {
+            identity: StableFieldIdentity::BinaryIndex {
+                index: field.index,
+                sub: field.sub,
+            },
+            provenance: Provenance {
                 module: table.module,
                 table: table.table,
-                group0: table.group0,
+            },
+            groups: Groups {
+                g0: table.group0,
                 // The field's own `Groups{1}` else the table's (ExifTool.pm:
                 // 9236-9244 via `effective_groups`).
-                group1: table.effective_groups(field).1,
-                group2: table.group2,
+                g1: Some(table.effective_groups(field).1),
+                g2: table.group2,
+            },
+            reporting: Reporting {
                 name: field.name,
-                value,
-                value_conv,
-                low_priority: table.priority == Some(0),
-                // `Avoid` is not part of the binary-table schema (`Field` has no
-                // flags); no ProcessBinaryData field in the pinned tree declares
-                // it.
+                low_priority: pipeline::effective_priority(None, table.priority, false) == Some(0),
+                // `Avoid` is not part of the binary-table schema (`Field` has
+                // no flags); no ProcessBinaryData field in the pinned tree
+                // declares it.
                 avoid: false,
-                rational: None,
-            });
+                is_list: false,
+            },
+            conversions: Conversions {
+                omitted: field.omitted,
+                condition_resolved: entry.condition_resolved,
+                raw_conv: field.raw_conv,
+                value_conv: field.value_conv,
+                print_conv: PrintStage::Shared(field.print_conv),
+                binary: false,
+            },
+            raw,
+            stored: read.stored,
+            rational: None,
+        };
+        match pipeline::execute(input, &BINARY_POLICY, ctx.members, None) {
+            Outcome::Report(row) => {
+                if !super::attribution::silenced(super::attribution::Token::Engine) {
+                    out.push(row);
+                }
+            }
+            Outcome::Omitted | Outcome::Declined => {}
+            // `$val` is shared state for later Conditions. If it has a domain
+            // this closed MemberValue model cannot preserve, stop this table
+            // before later fields can observe a fabricated or absent value.
+            Outcome::Tainted => return BinaryWalkOutcome::Tainted,
         }
     }
     BinaryWalkOutcome::Complete
@@ -1199,6 +1253,64 @@ mod tests {
             read_value(&data, 0, Fmt::Int16uRev, 1, 2, ByteOrder::Big),
             Some(DecodedValue::Integer(0x3412))
         );
+    }
+
+    #[test]
+    fn real_lossy_numeric_producers_keep_physical_storage_before_rounding() {
+        let table = find_table("ICC_Profile", "Chromaticity")
+            .expect("generated ICC_Profile::Chromaticity table");
+        let mut data = vec![0u8; 44];
+        data[8..10].copy_from_slice(&2u16.to_be_bytes());
+        data[10..12].copy_from_slice(&1u16.to_be_bytes());
+        data[12..16].copy_from_slice(&1u32.to_be_bytes());
+        data[16..20].copy_from_slice(&65_536u32.to_be_bytes());
+
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut rows = Vec::new();
+        process_binary_data(
+            table,
+            Dir::whole(&data, ByteOrder::Big),
+            &mut ctx,
+            &mut rows,
+        );
+
+        let channel = rows
+            .iter()
+            .find(|row| row.name == "ChromaticityChannel1")
+            .expect("real fixed32u field emitted");
+        assert_eq!(
+            channel.stored,
+            TagValue::Binary(data[12..20].to_vec()),
+            "stored channel must retain the exact fixed-point source bytes"
+        );
+        assert_eq!(
+            channel.value,
+            TagValue::String("2e-05 1".to_owned()),
+            "display decoding remains ExifTool-compatible and rounded"
+        );
+        assert_eq!(channel.source_id, TagId::Numeric(12));
+        assert!(!channel.is_list);
+
+        let aiff = find_table("AIFF", "Common").expect("generated AIFF::Common table");
+        let mut common = vec![0u8; 20];
+        common[8..18].copy_from_slice(&[0x3f, 0xff, 0x80, 0, 0, 0, 0, 0, 0, 0]);
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut rows = Vec::new();
+        process_binary_data(
+            aiff,
+            Dir::whole(&common, ByteOrder::Big),
+            &mut ctx,
+            &mut rows,
+        );
+        let sample_rate = rows
+            .iter()
+            .find(|row| row.name == "SampleRate")
+            .expect("real 80-bit extended field emitted");
+        assert_eq!(sample_rate.stored, TagValue::Binary(common[8..18].to_vec()));
+        assert_eq!(sample_rate.value, TagValue::Float(1.0));
+        assert_eq!(sample_rate.source_id, TagId::Numeric(4));
     }
 
     // -- The walk -----------------------------------------------------------
@@ -1959,6 +2071,53 @@ mod tests {
              Step 28 the generated schema dropped it and each engine \
              hardcoded its own copy"
         );
+    }
+
+    #[test]
+    fn engine_stored_precedes_mask_and_keeps_source_coordinate() {
+        static FIELDS: &[Field] = &[Field {
+            index: 0,
+            sub: Some(1),
+            name: "Masked",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0x00f0,
+                shift: 4,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        }];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Masked",
+            group0: "MakerNotes",
+            group1: "Test",
+            group2: "Camera",
+            first_entry: 0,
+            default_format: Fmt::Int16u,
+            offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
+            fields: FIELDS,
+            variants: &[],
+        };
+
+        let rows = run(&TABLE, &[0x12, 0x34]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, TagValue::Integer(3));
+        assert_eq!(rows[0].stored, TagValue::Integer(0x1234));
+        assert_eq!(
+            rows[0].source_id,
+            oxidex_tags::TagId::Named("0.1".to_string())
+        );
+        assert!(!rows[0].is_list);
     }
 
     #[test]

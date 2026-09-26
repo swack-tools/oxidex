@@ -107,8 +107,12 @@ pub fn is_walkable_tiff(bytes: &[u8]) -> bool {
         b"MM" => ByteOrder::BigEndian,
         _ => return false,
     };
-    matches!(read_u16(&bytes[2..4], bo), 42 | 85)
+    WALKABLE_TIFF_MAGICS.contains(&read_u16(&bytes[2..4], bo))
 }
+
+/// The TIFF magic numbers [`is_walkable_tiff`] accepts; the post-write check
+/// of a TIFF-structured file scans with exactly this set.
+pub(crate) const WALKABLE_TIFF_MAGICS: &[u16] = &[42, 85];
 
 /// Walks IFD0, the ExifIFD and the GPS IFD, recording where each entry
 /// record physically sits.
@@ -186,7 +190,14 @@ fn walk(bytes: &[u8], offset: usize, which: IfdKind, scan: &mut TiffScan) {
         let record = &bytes[record_offset..record_end];
         let tag_id = read_u16(&record[0..2], scan.byte_order);
         let field_type = read_u16(&record[2..4], scan.byte_order);
-        let value_or_offset = read_u32(&record[8..12], scan.byte_order) as usize;
+        // A pointer held inline is decoded by its TIFF type (a SHORT is the
+        // first two bytes), as the reader does.
+        let value_or_offset = crate::writers::exif_surgical::inline_unsigned(
+            field_type,
+            read_u32(&record[4..8], scan.byte_order),
+            &record[8..12],
+            scan.byte_order,
+        );
 
         // Structural pointers are followed, never treated as editable entries
         if which == IfdKind::Ifd0 && tag_id == EXIF_IFD_POINTER {
@@ -307,6 +318,21 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     let scan = scan_tiff(file_bytes)?;
     let bo = scan.byte_order;
 
+    // A group-wide `<group>:All` reaching this writer would delete whole
+    // directories, which it cannot do. The public write path resolves every
+    // one first (`exif_surgical::resolve_tiff_group_removals`: a no-op where
+    // pinned ExifTool 13.59 leaves the file unchanged, refused otherwise);
+    // this is the backstop, refused rather than reported as done.
+    if let Some(key) = removed
+        .iter()
+        .find(|key| crate::writers::exif_surgical::group_removal(key).is_some())
+    {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Removing '{key}' from a TIFF-structured file is not supported: this \
+             writer edits entries in place and cannot delete a directory"
+        )));
+    }
+
     if !embedded_exif && !desired.iter().any(|(k, _)| is_exif_family(k)) {
         return Err(ExifToolError::unsupported_format(
             "Clearing all metadata from a TIFF-structured file is not supported: \
@@ -403,6 +429,18 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
 
     // --- Pass 2: added keys (no located entry) ---
     for (key, value) in desired.iter() {
+        // IFD1/InteropIFD/MakerNotes keys no located entry consumed: this
+        // pass adds to IFD0/ExifIFD/GPS only, so an added or changed one is
+        // refused rather than skipped (a skip reported success and wrote
+        // nothing).
+        if crate::writers::exif_surgical::is_carried_only_key(key)
+            && !consumed.iter().any(|k| k == key)
+            && original.get(key) != Some(value)
+        {
+            return Err(crate::writers::exif_surgical::carried_only_edit_refused(
+                key,
+            ));
+        }
         if !is_exif_family(key) || consumed.iter().any(|k| k == key) {
             continue;
         }
@@ -1037,6 +1075,29 @@ mod tests {
             "got: {}",
             err
         );
+    }
+
+    #[test]
+    fn an_ifd1_or_interop_edit_it_cannot_place_is_refused_not_dropped() {
+        // Pinned ExifTool 13.59 adds `-IFD1:PanasonicTitle=x` and
+        // `-InteropIFD:RelatedImageWidth=5` (creating the directory). This
+        // writer places additions in IFD0/ExifIFD/GPS only; before, pass 2
+        // skipped these keys and the write succeeded without them.
+        let file = build_tiff(ByteOrder::LittleEndian);
+        let original = original_map();
+        for (key, value) in [
+            ("IFD1:PanasonicTitle", TagValue::new_string("x")),
+            ("InteropIFD:RelatedImageWidth", TagValue::Integer(5)),
+        ] {
+            let mut desired = original.clone();
+            desired.insert(key, value);
+            for embedded in [false, true] {
+                let err =
+                    rewrite_tiff_payload_with_removals(&file, &original, &desired, &[], embedded)
+                        .unwrap_err();
+                assert!(err.to_string().contains(key), "got: {err}");
+            }
+        }
     }
 
     #[test]

@@ -26,10 +26,14 @@ pub mod tables;
 pub mod text_info;
 
 use crate::const_decoder;
-use crate::core::{MetadataMap, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::ifd_engine::{
+    IfdEntryEvent, IfdEntryObserver, process_exif_with_observer,
+};
 use crate::exiftool_tables::session::{MemberVal, Session};
-use crate::exiftool_tables::{Ctx, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif};
+use crate::exiftool_tables::{Ctx, Emitted, IfdDir, IfdTable, MemberValue, find_ifd_table};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -94,6 +98,10 @@ const OLYMPUS_HEADER_BE: &[u8] = b"OLYMPUS\0MM";
 // `data[0..8] == LITERAL` comparison could never be true and every type-1
 // Olympus JPEG (163 of the 315 in the corpus) was rejected outright.
 const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
+// MakerNotes.pm:505-515's MakerNoteMinolta2 signatures. Both route to this
+// Olympus table at byte 8, seed OlympusCAMER, and declare ByteOrder Unknown.
+const OLYMPUS_HEADER_CAMER: &[u8] = b"CAMER\x00";
+const OLYMPUS_HEADER_MINOL: &[u8] = b"MINOL\x00";
 // Type 3 (OM System bodies -- OM-1, OM-3, OM-5, OM-1 Mark II, TG-7). The
 // header is "OM SYSTEM\0" padded to 12 bytes, then "II"/"MM" and a version
 // word, so the directory starts 16 bytes in:
@@ -401,6 +409,12 @@ impl MakerNoteParser for OlympusParser {
             return true;
         }
 
+        if data.len() >= 8
+            && (&data[0..6] == OLYMPUS_HEADER_CAMER || &data[0..6] == OLYMPUS_HEADER_MINOL)
+        {
+            return true;
+        }
+
         // Check for Type 3 headers: "OM SYSTEM\0" plus padding, byte order and
         // a version word.
         if data.len() >= 16 && data.starts_with(OLYMPUS_HEADER_TYPE3) {
@@ -494,7 +508,37 @@ impl MakerNoteParser for OlympusParser {
             cond_ctx,
             tags,
             value_forms,
+            None,
         )?;
+        absolutise_preview_image_start(preview_image_start_base(ctx), tags);
+        Ok(())
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        let first_new = occurrences.len();
+        self.parse_located_with_session(
+            ctx.window(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.payload_base(),
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+            Some(occurrences),
+        )?;
+        absolutise_preview_occurrence_start(preview_image_start_base(ctx), occurrences, first_new);
         absolutise_preview_image_start(preview_image_start_base(ctx), tags);
         Ok(())
     }
@@ -619,6 +663,41 @@ fn absolutise_preview_image_start(base: Option<u64>, tags: &mut HashMap<String, 
     }
 }
 
+/// Apply the same `IsOffset` adjustment to canonical generated rows while
+/// leaving their stored source value untouched. Detached MakerNotes cannot
+/// report an absolute file offset, so their generated start row is withheld
+/// just like the legacy map projection.
+fn absolutise_preview_occurrence_start(
+    base: Option<u64>,
+    rows: &mut Vec<(String, TagOccurrence)>,
+    first_new: usize,
+) {
+    let mut tail = rows.split_off(first_new);
+    tail.retain_mut(|(key, occurrence)| {
+        if key != PREVIEW_IMAGE_START {
+            return true;
+        }
+        let stored = match occurrence.value.as_ref().unwrap_or(&occurrence.raw) {
+            TagValue::Integer(value) => u64::try_from(*value).ok(),
+            TagValue::String(value) => value.parse::<u64>().ok(),
+            _ => None,
+        };
+        let Some(absolute) = base
+            .zip(stored)
+            .and_then(|(base, stored)| base.checked_add(stored))
+            .and_then(|value| i64::try_from(value).ok())
+        else {
+            return false;
+        };
+        let value = TagValue::Integer(absolute);
+        occurrence.raw = value.clone();
+        occurrence.value = Some(value.clone());
+        occurrence.print = Some(value);
+        true
+    });
+    rows.extend(tail);
+}
+
 impl OlympusParser {
     fn parse_located(
         &self,
@@ -642,6 +721,7 @@ impl OlympusParser {
             &mut cond_ctx,
             tags,
             value_forms,
+            None,
         )
     }
 
@@ -657,6 +737,7 @@ impl OlympusParser {
         cond_ctx: &mut Ctx<'_>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
+        mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -708,6 +789,7 @@ impl OlympusParser {
         // is deliberate: six of sixty-eight rows under real ExifTool tag
         // names would look like ordinary output, whereas an empty Olympus
         // block is unmistakable.
+        let mut zoomed_preview = ZoomedPreviewState::default();
         let main_table = find_ifd_table("Olympus", "Main").filter(|table| table.enabled());
         if let Some(table) = main_table {
             walk_main_through_engine(
@@ -721,6 +803,8 @@ impl OlympusParser {
                 effective_byte_order,
                 model,
                 tags,
+                structured_rows.as_deref_mut(),
+                &mut zoomed_preview,
             );
             // The `MAIN` rows the generated table withholds or never
             // transcribed keep their hand conversion, and the three rows the
@@ -878,6 +962,8 @@ impl OlympusParser {
                 order,
                 model,
                 tags,
+                structured_rows.as_deref_mut(),
+                &mut zoomed_preview,
             );
             // The same remainder as for the top level: the withheld rows
             // (a MainInfo directory carries SpecialMode and DigitalZoom
@@ -893,6 +979,14 @@ impl OlympusParser {
                 tags,
             );
         }
+
+        append_zoomed_preview_datatag(
+            data,
+            data_base,
+            data_domain,
+            zoomed_preview,
+            structured_rows.as_deref_mut(),
+        );
 
         // 0x0201 `Quality`, 0x0207 `CameraType` and 0x0208 `TextInfo` sit
         // wherever the body put them: the older bodies write them in the
@@ -921,6 +1015,137 @@ impl OlympusParser {
 
         Ok(())
     }
+}
+
+/// Materialize Olympus.pm:893-907's OffsetPair/DataTag contract without
+/// flattening its binary value through the residual string map.
+#[derive(Default)]
+struct ZoomedPreviewState {
+    start: Option<i64>,
+    length: Option<i64>,
+}
+
+/// Emit the source scalars at their exact generated-engine traversal point
+/// and retain independent later-wins values for the one post-walk DataTag.
+struct ZoomedPreviewObserver<'a> {
+    state: &'a mut ZoomedPreviewState,
+}
+
+impl IfdEntryObserver for ZoomedPreviewObserver<'_> {
+    fn observe(&mut self, event: IfdEntryEvent<'_, '_>, out: &mut Vec<Emitted>) {
+        if event.table.module != "Olympus" || event.table.table != "Main" {
+            return;
+        }
+        let pair = &tables::ZOOMED_PREVIEW_PAIR;
+        let (name, value) = match event.entry.tag_id {
+            id if id == pair.offset_id => ("ZoomedPreviewStart", &mut self.state.start),
+            id if id == pair.length_id => ("ZoomedPreviewLength", &mut self.state.length),
+            _ => return,
+        };
+        let Some(decoded) = event.declared_value().and_then(|value| value.as_integer()) else {
+            return;
+        };
+        *value = Some(decoded);
+        let stored = TagValue::Integer(decoded);
+        out.push(Emitted {
+            module: "Olympus",
+            table: "Main",
+            group0: "MakerNotes",
+            group1: "Olympus",
+            group2: "Camera",
+            name,
+            source_id: oxidex_tags::TagId::Numeric(event.entry.tag_id),
+            stored: stored.clone(),
+            value: stored,
+            value_conv: None,
+            low_priority: false,
+            avoid: false,
+            rational: None,
+            is_list: false,
+        });
+    }
+}
+
+/// Olympus.pm's composite runs after its required tags are found, so the
+/// final Start and Length may originate in different physical directories.
+/// The eager typed path can retain a DataTag only when its declared range is
+/// readable; it never invents bytes for an unreadable carrier.
+fn append_zoomed_preview_datatag(
+    data: &[u8],
+    data_base: Option<u32>,
+    data_domain: u64,
+    state: ZoomedPreviewState,
+    rows: Option<&mut Vec<(String, TagOccurrence)>>,
+) {
+    let pair = &tables::ZOOMED_PREVIEW_PAIR;
+    let (Some(start), Some(length)) = (state.start, state.length) else {
+        return;
+    };
+    let (Ok(start_u64), Ok(length_u64)) = (u64::try_from(start), u64::try_from(length)) else {
+        return;
+    };
+    if length_u64 == 0 {
+        return;
+    }
+    let Some(rows) = rows else {
+        return;
+    };
+
+    let Some(local_start) = data_base
+        .map(u64::from)
+        .and_then(|payload_start| start_u64.checked_sub(payload_start))
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return;
+    };
+    let Some(local_end) = usize::try_from(length_u64)
+        .ok()
+        .and_then(|length| local_start.checked_add(length))
+    else {
+        return;
+    };
+    let Some(bytes) = data.get(local_start..local_end) else {
+        return;
+    };
+    let Some(byte_range) = u64::try_from(local_start)
+        .ok()
+        .and_then(|start| data_domain.checked_add(start))
+        .zip(
+            u64::try_from(local_end)
+                .ok()
+                .and_then(|end| data_domain.checked_add(end)),
+        )
+        .map(|(start, end)| start..end)
+    else {
+        return;
+    };
+    let binary = TagValue::Binary(bytes.to_vec());
+    rows.push((
+        format!("Olympus:{}", pair.data_name),
+        TagOccurrence {
+            id: crate::core::TagId::Named("DataTag:ZoomedPreviewImage".to_string()),
+            name: intern(pair.data_name),
+            group0: intern("MakerNotes"),
+            group1: intern("Olympus"),
+            group2: Some(intern("Preview")),
+            instance: Instance::default(),
+            raw: binary.clone(),
+            value: Some(binary.clone()),
+            print: Some(TagValue::String(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                bytes.len()
+            ))),
+            stored: Some(binary),
+            priority: 1,
+            is_list: false,
+            order: 0,
+            origin: Provenance {
+                module: Some("Olympus"),
+                table: Some("Main"),
+                byte_range: Some(byte_range),
+            },
+        },
+    ));
 }
 
 // ============================================================================
@@ -993,6 +1218,8 @@ fn walk_main_through_engine(
     order: ByteOrder,
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
+    mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
+    zoomed_preview: &mut ZoomedPreviewState,
 ) {
     if let Some(model) = model {
         let model = model.to_string();
@@ -1000,7 +1227,10 @@ fn walk_main_through_engine(
         let _ = session.set_member("Model", MemberVal::Str(model));
     }
     let mut emitted = Vec::new();
-    process_exif(
+    let mut observer = ZoomedPreviewObserver {
+        state: zoomed_preview,
+    };
+    process_exif_with_observer(
         table,
         IfdDir {
             data,
@@ -1013,16 +1243,44 @@ fn walk_main_through_engine(
         session,
         ctx,
         &mut emitted,
+        &mut observer,
     );
     for tag in emitted {
-        let Some(text) = engine_value_text(&tag.value) else {
-            continue;
-        };
         // The tag's family-1 group as ExifTool reports it: `Olympus` for
         // every reported `Olympus::Main` row (the table's group 1; the only
         // `Groups => { 1 => 'MakerNotes' }` overrides sit on the `*IFD`
         // sub-directory variants, which are never values).
         let key = format!("{}:{}", tag.group1, tag.name);
+        if let Some(rows) = structured_rows.as_deref_mut() {
+            let value = tag.value_conv.clone().unwrap_or_else(|| tag.value.clone());
+            rows.push((
+                key,
+                TagOccurrence {
+                    id: tag.source_id,
+                    name: intern(tag.name),
+                    group0: intern(tag.group0),
+                    group1: intern(tag.group1),
+                    group2: (!tag.group2.is_empty()).then(|| intern(tag.group2)),
+                    instance: Instance::default(),
+                    raw: tag.value.clone(),
+                    value: Some(value),
+                    print: Some(tag.value),
+                    stored: Some(tag.stored),
+                    priority: u8::from(!(tag.low_priority || tag.avoid)),
+                    is_list: tag.is_list,
+                    order: 0,
+                    origin: Provenance {
+                        module: Some(tag.module),
+                        table: Some(tag.table),
+                        byte_range: None,
+                    },
+                },
+            ));
+            continue;
+        }
+        let Some(text) = engine_value_text(&tag.value) else {
+            continue;
+        };
         if tag.low_priority {
             super::shared::tag_priority::insert_low_priority(tags, key, text);
         } else {
@@ -1969,7 +2227,21 @@ fn detect_header_type_and_offsets(
         return Ok((16, order));
     }
 
-    // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
+    // Type 1 and MakerNoteMinolta2 start at byte 8. MINOL/CAMER explicitly
+    // declare ByteOrder Unknown, resolved with Exif.pm:6886-6893's entry-count
+    // predicate rather than inherited blindly from the outer TIFF.
+    if data.len() >= 8
+        && (&data[0..6] == OLYMPUS_HEADER_CAMER || &data[0..6] == OLYMPUS_HEADER_MINOL)
+    {
+        return Ok((
+            8,
+            crate::parsers::tiff::makernotes::shared::ifd_parser_base::resolve_byte_order_at(
+                data,
+                8,
+                default_byte_order,
+            ),
+        ));
+    }
     if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
         return Ok((8, default_byte_order));
     }

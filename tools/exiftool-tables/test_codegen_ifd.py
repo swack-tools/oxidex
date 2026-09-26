@@ -161,6 +161,145 @@ class IdentityLedger(unittest.TestCase):
             {("not-a-tag-id", (0,), "One"), ("not-a-tag-id", (1,), "Two")},
         )
 
+    def test_binary_ownership_rows_preserve_fractional_and_kodak_raw_keys(self):
+        binary = {"__name": "Image::ExifTool::ProcessBinaryData"}
+        doc = {
+            "modules": {
+                "Nikon": {"tables": {"MakerNotes0x56": {
+                    "meta": {"PROCESS_PROC": binary},
+                    "tags": {
+                        "4.1": {"Name": "BurstStartSlotNumber"},
+                        "4.4": {"Name": "BurstStartImageType"},
+                        "PRINT_CONV": {"Name": "not a field"},
+                        "Groups": {},
+                    },
+                }}},
+                "Kodak": {"tables": {"Main": {
+                    "meta": {"PROCESS_PROC": binary},
+                    "tags": {"20": {"Name": "TimeCreated"}},
+                }}},
+                "JPEG": {"tables": {"MediaJukebox": {
+                    "meta": {"VARS": {"ID_FMT": "none"}},
+                    "tags": {
+                        "": {},
+                        "123": {},
+                        "Album": {},
+                        "Caption": {},
+                        "Date": {},
+                        "Explicit": {"Name": "ExplicitName"},
+                        "Keywords": {},
+                        "Name": {},
+                        "People": {},
+                        "Places": {},
+                        "Tool_Name": {},
+                        "Tool_Version": {},
+                    },
+                }}},
+                "Lookup": {"tables": {"Values": {
+                    "meta": {},
+                    "tags": {"OTHER": {}},
+                }, "ValuesWithIdFormat": {
+                    "meta": {"VARS": {"ID_FMT": "hex"}},
+                    "tags": {"OTHER": {}},
+                }}},
+                "Trailer": {"tables": {"Vivo": {
+                    "meta": {"VARS": {"ID_FMT": "none"}},
+                    "tags": {"HDRImage": {}, "HiddenData": {}, "JSONInfo": {}},
+                }}},
+                "Samsung": {"tables": {"Trailer": {
+                    "meta": {"PROCESS_PROC": {"__name": "Image::ExifTool::Samsung::ProcessSamsung"}, "VARS": {"ID_FMT": "none"}},
+                    "tags": {
+                        "0x0001": {"Name": "EmbeddedImage"},
+                        "0x0100-name": {"Name": "EmbeddedAudioFileName", "_shorthand": True},
+                        "0x0100": {"Name": "EmbeddedAudioFile", "Binary": "1"},
+                        "0x0201": {"Name": "SurroundShotVideo"},
+                    },
+                }}},
+            },
+        }
+        rows = codegen.gen_ownership_identities(
+            doc, ["JPEG", "Kodak", "Lookup", "Nikon", "Samsung", "Trailer"]
+        )
+        by_identity = {
+            (row["full_name"], row["raw_key"], tuple(row["variant_path"])): row
+            for row in rows
+        }
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Nikon::MakerNotes0x56", "4.1", ())]["name"],
+            "BurstStartSlotNumber",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Nikon::MakerNotes0x56", "4.4", ())]["name"],
+            "BurstStartImageType",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Kodak::Main", "20", ())]["name"],
+            "TimeCreated",
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Nikon::MakerNotes0x56", "PRINT_CONV", ()),
+            by_identity,
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Nikon::MakerNotes0x56", "Groups", ()),
+            by_identity,
+        )
+        self.assertEqual(
+            {
+                raw_key
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::JPEG::MediaJukebox"
+                and not variant_path
+            },
+            {
+                "Album", "Caption", "Date", "Keywords", "Name", "People",
+                "Places", "Tool_Name", "Tool_Version",
+            },
+        )
+        self.assertEqual(
+            {
+                raw_key
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::Trailer::Vivo" and not variant_path
+            },
+            {"HDRImage", "HiddenData", "JSONInfo"},
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Lookup::Values", "OTHER", ()),
+            by_identity,
+        )
+        self.assertEqual(
+            {
+                (raw_key, name)
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::Samsung::Trailer" and not variant_path
+                for name in [by_identity[(full_name, raw_key, variant_path)]["name"]]
+            },
+            {("0x0100-name", "EmbeddedAudioFileName"), ("0x0100", "EmbeddedAudioFile")},
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Lookup::ValuesWithIdFormat", "OTHER", ()),
+            by_identity,
+        )
+        for raw_key in ("", "123", "Explicit"):
+            self.assertNotIn(
+                ("Image::ExifTool::JPEG::MediaJukebox", raw_key, ()),
+                by_identity,
+            )
+        self.assertEqual(
+            {row["source_kind"] for row in rows},
+            {"binary", "named-raw-key", "samsung-trailer"},
+        )
+        self.assertEqual(
+            codegen.ownership_identity_counts(rows),
+            {"binary_rows": 3, "named_raw_key_rows": 12, "samsung_trailer_rows": 2},
+        )
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]) for row in rows))
+        self.assertFalse(any(
+            row["full_name"] == "Image::ExifTool::Samsung::Trailer"
+            for row in codegen.gen_ownership_identities(doc, ["JPEG", "Trailer"])
+        ))
+
     def test_cli_binds_ledger_to_input_and_emitted_ifd_rust(self):
         doc = self._doc()
         with tempfile.TemporaryDirectory() as tmp:
@@ -177,6 +316,15 @@ class IdentityLedger(unittest.TestCase):
             self.assertIsNone(report["source"]["expr_ledger_sha256"])
             self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2,
                                                 "reader_eligible": 2, "reader_omitted": 1})
+            self.assertEqual(
+                report["ownership_counts"],
+                {
+                    "binary_rows": 0,
+                    "named_raw_key_rows": 0,
+                    "samsung_trailer_rows": 0,
+                },
+            )
+            self.assertEqual(report["ownership_rows"], [])
             self.assertEqual(
                 report["source"]["tables_json_sha256"],
                 __import__("hashlib").sha256(tables.read_bytes()).hexdigest(),

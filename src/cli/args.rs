@@ -2,7 +2,9 @@
 //!
 //! This module defines the CLI argument structure for the oxidex application.
 
+use crate::cli::non_utf8::os_bytes;
 use lexopt::prelude::*;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 // Re-export DetectorMode from parsers module
@@ -35,8 +37,14 @@ pub struct CliArgs {
     /// Output in CSV format
     pub csv: bool,
 
-    /// Short output format (not yet fully implemented)
-    pub short_format: bool,
+    /// ExifTool's short output level (`exiftool`:1243-1244): `0` is the
+    /// default layout, `1` (`-s`, `-short`) prints tag names padded to 32
+    /// columns, `2` (`-s2`, `-S`, `-veryShort`, `-s -s`) prints unpadded
+    /// `Name: value`, and `3` or more (`-s3`, `-s -s -s`, `-s -S`) prints
+    /// values only. `-s` adds 1, `-S`/`-veryShort` add 2, and `-sN`/`-shortN`
+    /// set the level to N. Rendered by
+    /// `cli::tag_resolution::render_short_lines`.
+    pub short_level: u8,
 
     /// Display every retained occurrence of a requested tag, not just the
     /// current priority winner (ExifTool's `-a`). Consumed by
@@ -116,7 +124,9 @@ pub struct CliArgs {
     /// Use with optional tag names to copy specific tags, or without to copy all tags.
     /// Example: oxidex -TagsFromFile src.jpg dest.jpg (copy all)
     /// Example: oxidex -TagsFromFile src.jpg -EXIF:Artist -EXIF:Copyright dest.jpg
-    pub tags_from_file: Option<String>,
+    ///
+    /// A path, so kept as the bytes it was given: it need not be UTF-8.
+    pub tags_from_file: Option<OsString>,
 
     /// Date format string for DateTime tags in filename patterns (using chrono format).
     /// Example: -d %Y%m%d_%H%M%S
@@ -143,7 +153,22 @@ pub struct CliArgs {
     /// Tag modifications and file path. Use -TAG=VALUE to modify tags.
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
-    pub args: Vec<String>,
+    ///
+    /// Kept as `OsString`s because a path is bytes, not text. `parse`
+    /// guarantees that an entry which is not valid UTF-8 is either a plain
+    /// positional path (it does not start with `-`) or a `-TAG=VALUE`
+    /// modification whose `TAG` is valid UTF-8 and whose value is not; every
+    /// other non-UTF-8 argument is refused with an error there. The
+    /// accessors below rely on that: they read options and tag names as
+    /// UTF-8 and never see anything else.
+    pub args: Vec<OsString>,
+
+    /// Every argument after `--`, in order. These are always file paths,
+    /// however they are spelled: pinned 13.59 `exiftool -s2 -Make -- a.jpg -s`
+    /// reads both `a.jpg` and a file named `-s`. They are kept apart from
+    /// `args`, whose accessors classify by spelling (a leading `-` means an
+    /// option or tag) and by position (the last argument is the file).
+    pub literal_paths: Vec<OsString>,
 }
 
 fn normalize_exiftool_option(arg: String) -> String {
@@ -162,6 +187,111 @@ fn normalize_exiftool_option(arg: String) -> String {
         "-TagsFromFile" => "--TagsFromFile".to_string(),
         _ => arg,
     }
+}
+
+/// Where an argument that is not valid UTF-8 goes.
+#[derive(Debug)]
+enum NonUtf8Arg {
+    /// A `-TAG=VALUE` whose tag name is UTF-8 and whose value oxidex can
+    /// write (`cli::non_utf8::tag_value`).
+    Modification(OsString),
+    /// A path, positional or `--TagsFromFile=PATH`, or the next argument's
+    /// value for lexopt.
+    Lexopt(OsString),
+}
+
+/// Classifies an argument that is not valid UTF-8, or refuses it.
+///
+/// A path is bytes, so a positional argument (no leading `-`) passes through
+/// untouched, as does the path in `-TagsFromFile=PATH`. A `-TAG=VALUE` is
+/// accepted when `TAG` is UTF-8 and the value is one oxidex can write as
+/// pinned ExifTool 13.59 does; its conversion is checked here, before any
+/// file is touched. Everything else -- an option or tag name that is not
+/// UTF-8, or a value oxidex would have to approximate -- is an error. The
+/// oracle refuses such names too (`Invalid tag name 'Art\xffist'`,
+/// `Unknown option -\xff`).
+fn non_utf8_arg(arg: OsString) -> Result<NonUtf8Arg, lexopt::Error> {
+    let bytes = os_bytes(&arg);
+    if bytes.starts_with(b"--TagsFromFile=") {
+        return Ok(NonUtf8Arg::Lexopt(arg));
+    }
+    if bytes.starts_with(b"-TagsFromFile=") {
+        // `normalize_exiftool_option`'s rewrite, byte-wise.
+        let mut long = OsString::from("-");
+        long.push(&arg);
+        return Ok(NonUtf8Arg::Lexopt(long));
+    }
+    if !bytes.starts_with(b"-") {
+        return Ok(NonUtf8Arg::Lexopt(arg));
+    }
+    let named = !bytes.starts_with(b"--")
+        && crate::cli::non_utf8::split_at_equals(&arg)
+            .is_some_and(|(name, _)| name.to_str().is_some());
+    if !named {
+        return Err(format!(
+            "invalid option or tag name {arg:?}: option and tag names must be valid UTF-8"
+        )
+        .into());
+    }
+    let Some((tag_name, value)) = CliArgs::parse_modification(&arg) else {
+        return Err(format!("invalid tag name in {arg:?}").into());
+    };
+    crate::cli::non_utf8::tag_value(&tag_name, os_bytes(&value))
+        .map_err(|error| lexopt::Error::Custom(Box::new(error)))?;
+    Ok(NonUtf8Arg::Modification(arg))
+}
+
+/// The value of an option that takes text (`-d`, `--detector`), refused
+/// with a clear error when it is not UTF-8.
+fn text_option_value(option: &str, value: OsString) -> Result<String, lexopt::Error> {
+    value
+        .into_string()
+        .map_err(|value| format!("the value of {option} must be valid UTF-8, got {value:?}").into())
+}
+
+/// One of ExifTool's short-output option spellings, as the `exiftool` script
+/// itself parses them (13.59, `exiftool`:1243-1244):
+///
+/// ```perl
+/// (/^S$/ or $a eq 'veryshort') and $outFormat+=2, next;
+/// /^s(hort)?(\d*)$/i and $outFormat = $2 eq '' ? $outFormat + 1 : $2, next;
+/// ```
+///
+/// `$a` is the lower-cased option, so `-veryShort`, `-SHORT` and `-S2` are
+/// all accepted; only the bare uppercase `-S` means "add 2".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortLevelOption {
+    Add(u8),
+    Set(u8),
+}
+
+impl ShortLevelOption {
+    fn apply(self, level: u8) -> u8 {
+        match self {
+            ShortLevelOption::Add(n) => level.saturating_add(n),
+            ShortLevelOption::Set(n) => n,
+        }
+    }
+}
+
+fn parse_short_level_option(arg: &str) -> Option<ShortLevelOption> {
+    let body = arg.strip_prefix('-')?;
+    if body == "S" || body.eq_ignore_ascii_case("veryshort") {
+        return Some(ShortLevelOption::Add(2));
+    }
+    let lower = body.to_ascii_lowercase();
+    let digits = lower
+        .strip_prefix("short")
+        .or_else(|| lower.strip_prefix('s'))?;
+    if digits.is_empty() {
+        return Some(ShortLevelOption::Add(1));
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // Perl keeps the number as given; any level of 3 or more renders the
+    // same values-only layout, so saturating an absurd one is exact.
+    Some(ShortLevelOption::Set(digits.parse().unwrap_or(u8::MAX)))
 }
 
 fn is_flag_short_option(ch: char) -> bool {
@@ -263,11 +393,32 @@ impl CliArgs {
     /// - A required value for an option is missing
     /// - Help (`--help`, `-h`) or version (`--version`, `-V`) is requested (exits immediately)
     pub fn parse() -> Result<Self, lexopt::Error> {
+        // `args_os`, never `args`: `std::env::args()` panics on the first
+        // argument that is not valid UTF-8, and a path or a tag value is
+        // bytes (pinned ExifTool 13.59 reads `n\xff.jpg` and writes
+        // `-XPTitle=A\xed\xa0\x80B`).
+        Self::parse_from(std::env::args_os().skip(1))
+    }
+
+    /// [`CliArgs::parse`] over an explicit argument list (without the program
+    /// name).
+    ///
+    /// # Errors
+    ///
+    /// As [`CliArgs::parse`], and also for an argument that is not valid
+    /// UTF-8 where only text can appear: an option or tag name, a
+    /// `-TAG=VALUE` whose value oxidex cannot write as ExifTool would (see
+    /// `cli::non_utf8`), or the value of `-d`/`--detector`. A path may be any
+    /// bytes.
+    pub fn parse_from<I>(raw_args: I) -> Result<Self, lexopt::Error>
+    where
+        I: IntoIterator<Item = OsString>,
+    {
         // Initialize with default values
         let mut detector = DetectorMode::default();
         let mut json = false;
         let mut csv = false;
-        let mut short_format = false;
+        let mut short_level: u8 = 0;
         let mut all_tags = false;
         let mut group_display: Option<Vec<u8>> = None;
         let mut extended_output = false;
@@ -281,14 +432,16 @@ impl CliArgs {
         let mut date_format = None;
         let mut dry_run = false;
         let mut strict = false;
-        let mut args = Vec::new();
+        let mut args: Vec<OsString> = Vec::new();
 
         // Pre-process arguments to handle tag modifications that look like flags
         // e.g., "-EXIF:Artist=value" starts with '-' but isn't a regular flag
-        let raw_args: Vec<String> = std::env::args().skip(1).collect();
-        let mut lexopt_args = Vec::new();
-        let mut tag_modifications = Vec::new();
+        let mut lexopt_args: Vec<OsString> = Vec::new();
+        let mut tag_modifications: Vec<OsString> = Vec::new();
         let mut next_arg_is_lexopt_value = false;
+
+        let mut options_ended = false;
+        let mut literal_paths = Vec::new();
 
         for raw_arg in raw_args {
             if next_arg_is_lexopt_value {
@@ -297,7 +450,47 @@ impl CliArgs {
                 continue;
             }
 
+            // `--` ends option recognition: everything after it is a path,
+            // however it is spelled (pinned 13.59 `exiftool -Make -- a.jpg -s`
+            // reads `a.jpg` and a file named `-s`). They go to
+            // `literal_paths`, never through the option/tag recognition below
+            // or into `args`, where a leading `-` would read as a tag.
+            if options_ended {
+                literal_paths.push(raw_arg);
+                continue;
+            }
+            if raw_arg == "--" {
+                options_ended = true;
+                continue;
+            }
+
+            // An argument that is not valid UTF-8 can only be a path or the
+            // value of a `-TAG=VALUE`; see `non_utf8_arg`.
+            let raw_arg = match raw_arg.into_string() {
+                Ok(arg) => arg,
+                Err(raw_arg) => {
+                    match non_utf8_arg(raw_arg)? {
+                        NonUtf8Arg::Modification(arg) => tag_modifications.push(arg),
+                        NonUtf8Arg::Lexopt(arg) => lexopt_args.push(arg),
+                    }
+                    continue;
+                }
+            };
+
             let arg = normalize_exiftool_option(raw_arg);
+
+            // ExifTool's short-output levels. Handled here, in argument
+            // order, because `-s2`/`-s3`/`-S`/`-veryShort`/`-short3` are not
+            // lexopt clusters and used to fall through to the specific-tag
+            // branch below as requests for tags literally named `s3`, `S`,
+            // ... -- `-s3 -Make` printed the full `Group:Tag: value` line
+            // instead of the value alone. Every spelling that sets the level
+            // is handled here, in this one ordered pass, so `-s -S` and
+            // `-S -s` both reach level 3 and a later `-s1` always wins.
+            if let Some(option) = parse_short_level_option(&arg) {
+                short_level = option.apply(short_level);
+                continue;
+            }
 
             // ExifTool's group-display flags (-G, -G0..-G8, -g, -g0..-g8, and
             // colon-separated family lists like -G1:2) must not fall through
@@ -330,11 +523,11 @@ impl CliArgs {
                     || arg.len() > 1)
             {
                 // This is a tag modification, date shift, or specific tag - don't pass to lexopt
-                tag_modifications.push(arg);
+                tag_modifications.push(arg.into());
             } else {
                 next_arg_is_lexopt_value = lexopt_arg_requires_next_value(&arg);
                 // Regular argument - pass to lexopt
-                lexopt_args.push(arg);
+                lexopt_args.push(arg.into());
             }
         }
 
@@ -355,25 +548,19 @@ impl CliArgs {
                     // that lexopt tries to parse as flags
                     let error_msg = e.to_string();
                     if let Some(arg_str) = extract_arg_from_error(&error_msg) {
-                        args.push(arg_str);
+                        args.push(arg_str.into());
                     } else {
                         // If we can't extract the argument, return the error
                         return Err(e);
                     }
-                    // Collect remaining arguments
-                    match parser.raw_args() {
-                        Ok(raw) => {
-                            for remaining_arg in raw {
-                                if let Ok(s) = remaining_arg.string() {
-                                    args.push(s);
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // raw_args() can fail, but we already collected the main arg
-                            // so we can continue
-                        }
+                    // Collect remaining arguments. They are kept as given:
+                    // a path need not be UTF-8, and dropping one that is
+                    // not would silently process a different file list.
+                    if let Ok(raw) = parser.raw_args() {
+                        args.extend(raw);
                     }
+                    // (raw_args() can fail, but we already collected the
+                    // main arg, so we can continue.)
                     break;
                 }
             };
@@ -397,10 +584,14 @@ impl CliArgs {
                 Long("csv") => {
                     csv = true;
                 }
-                // Short format
-                Short('s') => {
-                    short_format = true;
-                }
+                // An `s` inside an option cluster (`-sa`, `-ss`, `-sr`) never
+                // changes the short level. ExifTool has no single-letter
+                // clustering: pinned 13.59 reads `-sa`/`-ss`/`-sS` as unknown
+                // tag names, so `-sa -s1` is level 1 and `-s2 -ss` level 2.
+                // Counting it here, after pre-processing had already applied
+                // every standalone spelling, also replayed it out of order.
+                // The cluster's other letters keep their OxiDex meaning.
+                Short('s') => {}
                 // All tags
                 Short('a') => {
                     all_tags = true;
@@ -443,13 +634,14 @@ impl CliArgs {
                 Long("no-print-conv") => {
                     exiftool_compat = false;
                 }
-                // TagsFromFile (copy metadata from source file)
+                // TagsFromFile (copy metadata from source file). A path: any
+                // bytes.
                 Long("TagsFromFile") => {
-                    tags_from_file = Some(parser.value()?.string()?);
+                    tags_from_file = Some(parser.value()?);
                 }
                 // Date format
                 Short('d') => {
-                    date_format = Some(parser.value()?.string()?);
+                    date_format = Some(text_option_value("-d", parser.value()?)?);
                 }
                 // Dry-run
                 Short('n') => {
@@ -457,7 +649,7 @@ impl CliArgs {
                 }
                 // Detector mode (signature or magika)
                 Long("detector") => {
-                    let value_str = parser.value()?.string()?;
+                    let value_str = text_option_value("--detector", parser.value()?)?;
                     detector = value_str.parse().map_err(|e| {
                         lexopt::Error::Custom(Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
@@ -465,9 +657,10 @@ impl CliArgs {
                         )))
                     })?;
                 }
-                // Value argument (file path or positional argument)
+                // Value argument (file path or positional argument): kept as
+                // given, since a path need not be UTF-8.
                 Value(val) => {
-                    args.push(val.string()?);
+                    args.push(val);
                 }
                 // Unknown short or long option
                 // This could be a tag modification like -EXIF:Artist=value
@@ -495,13 +688,12 @@ impl CliArgs {
                     // Error format is typically "unexpected argument '--option'"
                     // or "unexpected option '-o'"
                     if let Some(arg_str) = extract_arg_from_error(&current_arg) {
-                        args.push(arg_str);
+                        args.push(arg_str.into());
                     }
 
-                    // Collect all remaining arguments
-                    for remaining_arg in parser.raw_args()? {
-                        args.push(remaining_arg.string()?);
-                    }
+                    // Collect all remaining arguments, as given (paths need
+                    // not be UTF-8).
+                    args.extend(parser.raw_args()?);
 
                     // Break out of the loop since we've consumed all arguments
                     break;
@@ -513,7 +705,7 @@ impl CliArgs {
             detector,
             json,
             csv,
-            short_format,
+            short_level,
             all_tags,
             group_display,
             extended_output,
@@ -527,12 +719,30 @@ impl CliArgs {
             dry_run,
             strict,
             args,
+            literal_paths,
         })
     }
 
-    /// Extracts the file path from the arguments (last argument)
+    /// The arguments that can be options, tags or modifications: all of
+    /// `args` when `--` supplied the paths, otherwise every argument but the
+    /// last, which is the file.
+    fn option_args(&self) -> &[OsString] {
+        if !self.literal_paths.is_empty() {
+            &self.args
+        } else if self.args.is_empty() {
+            &[]
+        } else {
+            &self.args[..self.args.len() - 1]
+        }
+    }
+
+    /// Extracts the file path from the arguments: the last path given after
+    /// `--`, otherwise the last argument.
     pub fn file(&self) -> Option<PathBuf> {
-        self.args.last().map(PathBuf::from)
+        self.literal_paths
+            .last()
+            .or(self.args.last())
+            .map(PathBuf::from)
     }
 
     /// Extracts every file/directory path from the arguments, preserving
@@ -548,11 +758,16 @@ impl CliArgs {
     /// Falls back to `file()` when the filter finds nothing, so an edge
     /// case like a single dash-prefixed filename still resolves the same
     /// way it did before this method existed.
+    ///
+    /// Every argument after `--` is a path regardless of spelling, and comes
+    /// after the plain positional ones -- which is also its command-line
+    /// order, since `--` ends the options.
     pub fn files(&self) -> Vec<PathBuf> {
         let files: Vec<PathBuf> = self
             .args
             .iter()
-            .filter(|arg| !arg.starts_with('-'))
+            .filter(|arg| !os_bytes(arg).starts_with(b"-"))
+            .chain(self.literal_paths.iter())
             .map(PathBuf::from)
             .collect();
 
@@ -564,15 +779,15 @@ impl CliArgs {
     }
 
     /// Parses tag modification arguments (all args except the last one)
-    /// Returns a vector of (tag_name, value) tuples
-    pub fn tag_modifications(&self) -> Vec<(String, String)> {
-        if self.args.len() <= 1 {
-            return Vec::new();
-        }
-
+    /// Returns a vector of (tag_name, value) tuples.
+    ///
+    /// The value is an `OsString` because it need not be UTF-8: `parse`
+    /// accepted it only if `cli::non_utf8::tag_value` can write it (an XP
+    /// string), and `value_parser::parse_cli_tag_value_os` converts it.
+    pub fn tag_modifications(&self) -> Vec<(String, OsString)> {
         let mut modifications = Vec::new();
-        // Process all arguments except the last one (which is the file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the file, see `option_args`)
+        for arg in self.option_args() {
             if let Some((tag, value)) = Self::parse_modification(arg) {
                 modifications.push((tag, value));
             }
@@ -580,8 +795,30 @@ impl CliArgs {
         modifications
     }
 
-    /// Parses a single modification argument in the form -TAG=VALUE
-    fn parse_modification(arg: &str) -> Option<(String, String)> {
+    /// Parses a single modification argument in the form -TAG=VALUE. A
+    /// value that is not UTF-8 goes through the same steps byte-wise
+    /// (`cli::non_utf8::unquote`); the tag name always is UTF-8 (`parse`).
+    fn parse_modification(arg: &OsStr) -> Option<(String, OsString)> {
+        let Some(arg) = arg.to_str() else {
+            let (name, value) = crate::cli::non_utf8::split_at_equals(arg)?;
+            let name = name.to_str()?;
+            if !name.starts_with('-') {
+                return None;
+            }
+            let tag_name = name.trim_start_matches('-').trim();
+            if tag_name.is_empty() {
+                return None;
+            }
+            return Some((
+                tag_name.to_string(),
+                crate::cli::non_utf8::unquote(value).to_os_string(),
+            ));
+        };
+        Self::parse_text_modification(arg).map(|(tag, value)| (tag, value.into()))
+    }
+
+    /// [`CliArgs::parse_modification`] for an argument that is valid UTF-8.
+    fn parse_text_modification(arg: &str) -> Option<(String, String)> {
         // Check if it starts with '-' and contains '='
         if !arg.starts_with('-') || !arg.contains('=') {
             return None;
@@ -639,15 +876,12 @@ impl CliArgs {
         // If -TagsFromFile is not set, return None
         self.tags_from_file.as_ref()?;
 
-        // If no additional args (only destination file), copy all tags
-        if self.args.len() <= 1 {
-            return Some(Vec::new());
-        }
-
         let mut tag_names = Vec::new();
 
-        // Process all arguments except the last one (which is the destination file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the destination file). One
+        // that is not UTF-8 is a path or a modification (`parse`), neither
+        // of which is a tag name to copy.
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
                 // Extract tag name (remove leading '-')
@@ -683,20 +917,16 @@ impl CliArgs {
         }
 
         // Don't apply in write mode (has tag modifications with '=')
-        let has_modifications = self.args.iter().any(|arg| arg.contains('='));
+        let has_modifications = self.args.iter().any(|arg| os_bytes(arg).contains(&b'='));
         if has_modifications {
-            return None;
-        }
-
-        // If only file argument present, show all tags
-        if self.args.len() <= 1 {
             return None;
         }
 
         let mut tag_names = Vec::new();
 
-        // Process all arguments except the last one (file path)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never a file path, see `option_args`).
+        // One that is not UTF-8 is a path or a modification (`parse`).
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Tag extraction: starts with '-', does NOT contain '='
             if arg.starts_with('-') && !arg.contains('=') {
                 let tag_name = arg.trim_start_matches('-').to_string();
@@ -721,7 +951,7 @@ impl CliArgs {
     /// - `oxidex -all= photo.jpg` → clears all metadata
     /// - `oxidex -ALL= photo.jpg` → clears all metadata (case-insensitive)
     pub fn is_clear_all_metadata(&self) -> bool {
-        self.args.iter().any(|arg| {
+        self.args.iter().filter_map(|arg| arg.to_str()).any(|arg| {
             let lower = arg.to_lowercase();
             lower == "-all=" || lower == "--all="
         })
@@ -748,7 +978,7 @@ impl CliArgs {
     /// Example: '-FileName<DateTimeOriginal' -> Some("DateTimeOriginal")
     /// Example: '-FileName<${EXIF:Make}_${EXIF:Model}' -> Some("${EXIF:Make}_${EXIF:Model}")
     pub fn filename_pattern(&self) -> Option<String> {
-        for arg in &self.args {
+        for arg in self.args.iter().filter_map(|arg| arg.to_str()) {
             // Check if this is a -FileName argument
             if arg.starts_with("-FileName") || arg.starts_with("'FileName") {
                 // Find the '<' character that separates -FileName from the pattern
@@ -781,14 +1011,12 @@ impl CliArgs {
     /// - `-EXIF:DateTime-=0:1:0 0:0:0` -> Subtract 1 month from DateTime
     /// - `-EXIF:DateTime=2025:01:15 10:30:00` -> Set DateTime to specific value
     pub fn date_shift_operations(&self) -> Vec<(String, String, String)> {
-        if self.args.len() <= 1 {
-            return Vec::new();
-        }
-
         let mut operations = Vec::new();
 
-        // Process all arguments except the last one (which is the file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the file, see `option_args`).
+        // A non-UTF-8 value is never a date (`parse` refuses one for every
+        // tag but the XP strings).
+        for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             if let Some((tag, op, value)) = Self::parse_date_shift(arg) {
                 operations.push((tag, op, value));
             }
@@ -953,7 +1181,9 @@ fn print_help() {
     println!("    -V, --version               Print version information");
     println!("    -j, --json                  Output in JSON format");
     println!("        --csv                   Output in CSV format");
-    println!("    -s                          Short output format (not yet fully implemented)");
+    println!(
+        "    -s, -short                  Short output: tag names, padded (-s2/-S: unpadded, -s3: values only)"
+    );
     println!("    -a                          Display all tags (default behavior)");
     println!("    -r                          Recursive directory processing");
     println!(
@@ -1037,6 +1267,191 @@ mod tests {
         assert!(!is_group_display_flag("--json"));
     }
 
+    fn cli_args(args: &[&str], literal_paths: &[&str]) -> CliArgs {
+        CliArgs {
+            detector: DetectorMode::default(),
+            json: false,
+            csv: false,
+            short_level: 2,
+            all_tags: false,
+            group_display: None,
+            extended_output: false,
+            recursive: false,
+            preserve_file_times: false,
+            backup: false,
+            readonly: false,
+            exiftool_compat: true,
+            tags_from_file: None,
+            date_format: None,
+            dry_run: false,
+            strict: false,
+            args: args.iter().map(OsString::from).collect(),
+            literal_paths: literal_paths.iter().map(OsString::from).collect(),
+        }
+    }
+
+    /// Arguments that are not valid UTF-8 used to panic inside
+    /// `std::env::args()`. A path is bytes and survives parsing untouched in
+    /// every position a path can take; an XP value is accepted; every other
+    /// non-UTF-8 name or value is an error, not a panic.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_survive_parsing_in_every_position() {
+        use std::os::unix::ffi::OsStrExt;
+        let os = |bytes: &[u8]| OsStr::from_bytes(bytes).to_os_string();
+        let parse = |argv: &[&[u8]]| CliArgs::parse_from(argv.iter().map(|a| os(a)));
+        let path = |bytes: &[u8]| PathBuf::from(os(bytes));
+
+        let args = parse(&[b"-s2", b"-Make", b"n\xff.jpg"]).unwrap();
+        assert_eq!(args.file(), Some(path(b"n\xff.jpg")));
+        assert_eq!(args.files(), [path(b"n\xff.jpg")]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        let args = parse(&[b"-j", b"a\xfe.jpg", b"b\xff.jpg"]).unwrap();
+        assert_eq!(args.files(), [path(b"a\xfe.jpg"), path(b"b\xff.jpg")]);
+
+        let args = parse(&[b"-Make", b"--", b"-\xff.jpg"]).unwrap();
+        assert_eq!(args.files(), [path(b"-\xff.jpg")]);
+
+        for argv in [
+            &[&b"-TagsFromFile"[..], b"s\xff.jpg", b"d.jpg"][..],
+            &[b"--TagsFromFile", b"s\xff.jpg", b"d.jpg"],
+            &[b"-TagsFromFile=s\xff.jpg", b"d.jpg"],
+            &[b"--TagsFromFile=s\xff.jpg", b"d.jpg"],
+        ] {
+            let args = parse(argv).unwrap();
+            assert_eq!(args.tags_from_file, Some(os(b"s\xff.jpg")), "{argv:?}");
+            assert_eq!(args.file(), Some(path(b"d.jpg")), "{argv:?}");
+        }
+
+        // An XP value is kept as bytes, and a modification that follows it is
+        // still one (it is not swallowed as a path).
+        let args = parse(&[
+            b"-IFD0:XPTitle=A\xed\xa0\x80B",
+            b"-IFD0:Model=X",
+            b"d\xff.jpg",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.tag_modifications(),
+            vec![
+                ("IFD0:XPTitle".to_string(), os(b"A\xed\xa0\x80B")),
+                ("IFD0:Model".to_string(), os(b"X")),
+            ]
+        );
+        assert_eq!(args.specific_tags(), None);
+        assert_eq!(args.file(), Some(path(b"d\xff.jpg")));
+
+        // Quotes come off a non-UTF-8 value as they do off a UTF-8 one.
+        let args = parse(&[b"-EXIF:XPTitle=\"A\xed\xa0\x80\"", b"d.jpg"]).unwrap();
+        assert_eq!(
+            args.tag_modifications(),
+            vec![("EXIF:XPTitle".to_string(), os(b"A\xed\xa0\x80"))]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_names_and_unwritable_values_are_errors() {
+        use std::os::unix::ffi::OsStrExt;
+        let os = |bytes: &[u8]| OsStr::from_bytes(bytes).to_os_string();
+        let parse = |argv: &[&[u8]]| CliArgs::parse_from(argv.iter().map(|a| os(a)));
+        for (argv, expected) in [
+            (
+                &[&b"-Art\xffist=x"[..], b"a.jpg"][..],
+                "must be valid UTF-8",
+            ),
+            (&[b"-\xff", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"--js\xffon", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"-Mak\xffe", b"a.jpg"], "must be valid UTF-8"),
+            (&[b"-=\xff", b"a.jpg"], "invalid tag name"),
+            (&[b"-IFD0:Artist=A\xffB", b"a.jpg"], "not valid UTF-8"),
+            (&[b"-IFD0:XPTitle=A\xffB", b"a.jpg"], "Malformed UTF-8"),
+            (&[b"-XPTitle=A\xed\xa0\x80B", b"a.jpg"], "-IFD0:XPTitle="),
+            (&[b"-d", b"%Y\xff", b"a.jpg"], "-d must be valid UTF-8"),
+            (
+                &[b"--detector", b"\xff", b"a.jpg"],
+                "--detector must be valid UTF-8",
+            ),
+        ] {
+            let error = parse(argv).unwrap_err().to_string();
+            assert!(error.contains(expected), "{argv:?}: {error}");
+        }
+    }
+
+    /// Pinned 13.59 reads every argument after `--` as a file:
+    /// `-s2 -Make -- normal.jpg -s` and `-s2 -Make normal.jpg -- -s` both
+    /// read `normal.jpg` then `-s`, and `-- -a -b` reads `-a` then `-b`.
+    #[test]
+    fn paths_after_double_dash_are_files_for_every_accessor() {
+        let paths = |args: &CliArgs| {
+            args.files()
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        let args = cli_args(&["-Make"], &["normal.jpg", "-s"]);
+        assert_eq!(paths(&args), ["normal.jpg", "-s"]);
+        assert_eq!(args.file(), Some(PathBuf::from("-s")));
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+        assert!(args.tag_modifications().is_empty());
+
+        let args = cli_args(&["-Make", "normal.jpg"], &["-s"]);
+        assert_eq!(paths(&args), ["normal.jpg", "-s"]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        let args = cli_args(&["-Make"], &["-a", "-b"]);
+        assert_eq!(paths(&args), ["-a", "-b"]);
+        assert_eq!(args.file(), Some(PathBuf::from("-b")));
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        // A path that looks like a modification or date shift is still a path.
+        let args = cli_args(&["-Make"], &["-all=", "-AllDates+=1"]);
+        assert!(args.tag_modifications().is_empty());
+        assert!(args.date_shift_operations().is_empty());
+        assert!(!args.is_clear_all_metadata());
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        // Without `--`, the last argument is still the file.
+        let args = cli_args(&["-Make", "photo.jpg"], &[]);
+        assert_eq!(paths(&args), ["photo.jpg"]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+    }
+
+    /// Mirrors `exiftool`:1243-1244 (13.59): `-S`/`-veryShort` add 2,
+    /// `-s`/`-short` add 1, `-sN`/`-shortN` (any case) set the level.
+    #[test]
+    fn short_level_option_spellings_match_exiftool() {
+        use ShortLevelOption::{Add, Set};
+        for (arg, expected) in [
+            ("-s", Some(Add(1))),
+            ("-short", Some(Add(1))),
+            ("-SHORT", Some(Add(1))),
+            ("-S", Some(Add(2))),
+            ("-veryShort", Some(Add(2))),
+            ("-veryshort", Some(Add(2))),
+            ("-s0", Some(Set(0))),
+            ("-s2", Some(Set(2))),
+            ("-S2", Some(Set(2))),
+            ("-s3", Some(Set(3))),
+            ("-short3", Some(Set(3))),
+            ("-s999", Some(Set(u8::MAX))),
+            ("-sa", None),
+            ("-sep", None),
+            ("-shortx", None),
+            ("-Sharpness", None),
+            ("-ShutterSpeed", None),
+            ("-EXIF:s3", None),
+            ("s3", None),
+        ] {
+            assert_eq!(parse_short_level_option(arg), expected, "{arg}");
+        }
+        let level = [Add(1), Add(2)].iter().fold(0, |l, o| o.apply(l));
+        assert_eq!(level, 3, "-s -S is level 3");
+        assert_eq!(Set(2).apply(Add(1).apply(0)), 2, "-s -s2 is level 2");
+    }
+
     #[test]
     fn short_option_clusters_are_lexopt_args() {
         assert!(is_lexopt_short_arg("-s"));
@@ -1097,7 +1512,7 @@ mod tests {
         assert_eq!(CliArgs::unquote("'"), "'");
         assert_eq!(CliArgs::unquote(" \" "), " \" ");
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist=\""),
+            CliArgs::parse_text_modification("-EXIF:Artist=\""),
             Some(("EXIF:Artist".to_string(), "\"".to_string()))
         );
 
@@ -1118,21 +1533,21 @@ mod tests {
     /// file. ExifTool rejects these outright and leaves the file alone.
     #[test]
     fn empty_tag_name_is_not_a_modification() {
-        assert_eq!(CliArgs::parse_modification("-="), None);
-        assert_eq!(CliArgs::parse_modification("-=x"), None);
-        assert_eq!(CliArgs::parse_modification("-=\""), None);
-        assert_eq!(CliArgs::parse_modification("-  =  "), None);
-        assert_eq!(CliArgs::parse_modification("--="), None);
+        assert_eq!(CliArgs::parse_text_modification("-="), None);
+        assert_eq!(CliArgs::parse_text_modification("-=x"), None);
+        assert_eq!(CliArgs::parse_text_modification("-=\""), None);
+        assert_eq!(CliArgs::parse_text_modification("-  =  "), None);
+        assert_eq!(CliArgs::parse_text_modification("--="), None);
 
         // Real modifications are unaffected.
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist=Ansel Adams"),
+            CliArgs::parse_text_modification("-EXIF:Artist=Ansel Adams"),
             Some(("EXIF:Artist".to_string(), "Ansel Adams".to_string()))
         );
         // Clearing a tag with an empty value is still a modification: the tag
         // name is what has to be present, not the value.
         assert_eq!(
-            CliArgs::parse_modification("-EXIF:Artist="),
+            CliArgs::parse_text_modification("-EXIF:Artist="),
             Some(("EXIF:Artist".to_string(), String::new()))
         );
     }

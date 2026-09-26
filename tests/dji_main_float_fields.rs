@@ -20,12 +20,11 @@
 //! ```
 
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/DJI";
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
 fn assert_fields(file: &str, expected: &[(&str, &str)]) {
-    let path = Path::new(CORPUS).join(file);
+    let path = fixtures::required_combined_fixture_path(&format!("DJI/{file}"));
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
     for (tag, value) in expected {
         assert_eq!(

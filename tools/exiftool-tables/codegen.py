@@ -438,7 +438,31 @@ def _rust_pairs(pairs):
     return ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
 
 
-def conv_for(tag, stats, input_domain, verified_exprs):
+def _fixed_array_pattern_pairs(mapping):
+    """Validate the exact two-decimal-component grammar used by StackedImage."""
+    pairs = []
+    for key, rendered in mapping.items():
+        if not isinstance(key, str) or not isinstance(rendered, str):
+            return None
+        components = key.split(" ")
+        if len(components) != 2 or any(not component for component in components):
+            return None
+        first, second = components
+        if not first.isdecimal() or not (second.isdecimal() or second == "*"):
+            return None
+        if second == "*":
+            if rendered.count("*") != 1:
+                return None
+        elif "*" in rendered:
+            return None
+        pairs.append((key, rendered))
+    return sorted(pairs)
+
+
+FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
+
+def conv_for(tag, stats, input_domain, verified_exprs, *, source_identity=None):
     """`(rust_printconv_src, refused)` for one tag.
 
     `refused` is True exactly when ExifTool declares a `PrintConv` here that
@@ -533,6 +557,30 @@ def conv_for(tag, stats, input_domain, verified_exprs):
             deparse = None
             if isinstance(other, dict) and other.get("__perl") == "CODE":
                 deparse = other.get("__deparse")
+                if others.is_fixed_array_pattern_other(deparse):
+                    fixed_array_pairs = _fixed_array_pattern_pairs(m)
+                    exact_identity = source_identity == ("Olympus", "CameraSettings", 0x0804)
+                    exact_shape = (
+                        tag.get("Name") == "StackedImage"
+                        and tag.get("Writable") == "int32u"
+                        and tag.get("Count") in (2, "2")
+                        and input_domain == "list"
+                    )
+                    if exact_identity and exact_shape and fixed_array_pairs:
+                        stats["other_fixed_array_pattern"] += 1
+                        body = ", ".join(
+                            [
+                                f'("{rust_str(FIXED_ARRAY_PATTERN_MARKER)}", "")',
+                                *[
+                                    f'("{rust_str(key)}", "{rust_str(rendered)}")'
+                                    for key, rendered in fixed_array_pairs
+                                ],
+                            ]
+                        )
+                        return f"PrintConv::StrEnum(&[{body}])", False
+                    stats["pc_directives_dropped"]["OTHER"] += 1
+                    stats["other_unregistered"] += 1
+                    return "PrintConv::None", False
                 if deparse:
                     other_id = others.translate_other(deparse)
             if other_id is not None:
@@ -2549,7 +2597,13 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
         # the REPORT still says why; the table-disqualifying key is NOT
         # raised for it.
         trial = new_ifd_stats()  # carries the nested Counters conv_for indexes into
-        pc_src, pc_refused = conv_for(tag, trial, pc_domain, verified_exprs)
+        pc_src, pc_refused = conv_for(
+            tag,
+            trial,
+            pc_domain,
+            verified_exprs,
+            source_identity=((*enclosing, tag_id) if enclosing is not None else None),
+        )
         if pc_src == "PrintConv::None" and not pc_refused and isinstance(pc, dict):
             pc_refused = True
             withheld_by = [k for k in IFD_WITHHELD_PRINT_CONV_KEYS if trial.get(k)]
@@ -2850,6 +2904,153 @@ def _ifd_identity_source_sha256(source):
     ).encode("utf-8")).hexdigest()
 
 
+def gen_binary_ownership_identities(doc, module_names):
+    """Return stable source identities for ProcessBinaryData rows.
+
+    The IFD compiler ledger predates ownership fragments, but ownership also
+    needs to bind hand-written readers to binary-table rows whose raw keys are
+    not Rust integer literals (notably Nikon's fractional bit-field keys).
+    Keep these rows in a separate ledger member so IFD replay and patch tools
+    continue to describe only the IFD compiler artifact.
+    """
+    rows = []
+    modules = doc.get("modules") or {}
+    for module in module_names:
+        mod = modules.get(module)
+        if not isinstance(mod, dict):
+            continue
+        tables = mod.get("tables") or {}
+        for table in sorted(tables):
+            value = tables[table]
+            if not isinstance(value, dict) or not is_binary_table(value.get("meta") or {}):
+                continue
+            tags = value.get("tags") or {}
+            for raw_key_value in sorted(tags, key=str):
+                raw_key = str(raw_key_value)
+                index, _sub_index = parse_index(raw_key)
+                if index is None:
+                    # ProcessBinaryData tables may carry table directives in
+                    # the same hash as their fields.  The runtime generator
+                    # admits only numeric offsets (including fractional
+                    # bit-field keys), so the ownership identity inventory
+                    # must use the identical boundary.
+                    continue
+                source = tags[raw_key_value]
+                variants = source.get("_variants") if isinstance(source, dict) else None
+                alternatives = enumerate(variants) if isinstance(variants, list) else [(None, source)]
+                for variant_index, tag in alternatives:
+                    rows.append({
+                        "module": module,
+                        "table": table,
+                        "full_name": f"Image::ExifTool::{module}::{table}",
+                        "raw_key": raw_key,
+                        "variant_path": [] if variant_index is None else [variant_index],
+                        "name": tag.get("Name") if isinstance(tag, dict) else None,
+                        "source_sha256": _ifd_identity_source_sha256(tag),
+                        "source_kind": "binary",
+                    })
+    return sorted(
+        rows,
+        key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"])),
+    )
+
+
+def gen_samsung_trailer_ownership_identities(doc):
+    """Return the two source identities Task 16 reads from Samsung::Trailer.
+
+    ProcessSamsung is neither ProcessBinaryData nor a generic named-key table:
+    it interprets the paired `0x0100-name`/`0x0100` records as one bounded
+    Sound & Shot directory entry. Keep this admission table-qualified so an
+    unrelated PROCESS_PROC table cannot acquire ownership rows by resemblance.
+    """
+    table = ((doc.get("modules") or {}).get("Samsung") or {}).get("tables", {}).get("Trailer")
+    if not isinstance(table, dict):
+        return []
+    proc = (table.get("meta") or {}).get("PROCESS_PROC")
+    if not isinstance(proc, dict) or (proc.get("__name") or "") != "Image::ExifTool::Samsung::ProcessSamsung":
+        return []
+    rows = []
+    for raw_key, expected_name in (("0x0100-name", "EmbeddedAudioFileName"), ("0x0100", "EmbeddedAudioFile")):
+        source = (table.get("tags") or {}).get(raw_key)
+        if not isinstance(source, dict) or source.get("Name") != expected_name:
+            return []
+        rows.append({
+            "module": "Samsung",
+            "table": "Trailer",
+            "full_name": "Image::ExifTool::Samsung::Trailer",
+            "raw_key": raw_key,
+            "variant_path": [],
+            "name": expected_name,
+            "source_sha256": _ifd_identity_source_sha256(source),
+            "source_kind": "samsung-trailer",
+        })
+    return rows
+
+
+def gen_ownership_identities(doc, module_names):
+    """Return non-IFD identities needed by runtime ownership fragments.
+
+    Besides every binary row, emit a bounded alias set for source hashes whose
+    tag name is the raw string key itself. ExifTool's ID_FMT=none tables such
+    as JPEG::MediaJukebox and Trailer::Vivo intentionally use that compact
+    shape (`Tool_Name => {}`, `HDRImage => {...}`), so requiring a separate
+    `Name` would make a real source row impossible to bind. This is not a
+    universal keyed-table classifier: broader coverage requires the hydrated
+    allTables/TagTableKeys projection rather than guessing from hash shape.
+    """
+    rows = gen_binary_ownership_identities(doc, module_names)
+    if "Samsung" in module_names:
+        rows.extend(gen_samsung_trailer_ownership_identities(doc))
+    modules = doc.get("modules") or {}
+    for module in module_names:
+        mod = modules.get(module)
+        if not isinstance(mod, dict):
+            continue
+        for table, value in sorted((mod.get("tables") or {}).items()):
+            if not isinstance(value, dict):
+                continue
+            meta = value.get("meta") or {}
+            variables = meta.get("VARS") if isinstance(meta, dict) else None
+            if is_binary_table(meta) or not (
+                isinstance(variables, dict) and variables.get("ID_FMT") == "none"
+            ):
+                # A string key alone does not make a tag table: ExifTool's
+                # modules also expose PrintConv and lookup hashes in the dump.
+                # ID_FMT=none is the source declaration that the hash contains
+                # real tags whose raw identifiers are their names.
+                continue
+            for raw_key, source in sorted((value.get("tags") or {}).items(), key=lambda item: str(item[0])):
+                variants = source.get("_variants") if isinstance(source, dict) else None
+                alternatives = enumerate(variants) if isinstance(variants, list) else [(None, source)]
+                for variant_index, tag in alternatives:
+                    if not isinstance(raw_key, str) or not raw_key or parse_ifd_tag_id(raw_key) is not None or (
+                        isinstance(tag, dict) and isinstance(tag.get("Name"), str)
+                    ):
+                        continue
+                    rows.append({
+                        "module": module,
+                        "table": table,
+                        "full_name": f"Image::ExifTool::{module}::{table}",
+                        "raw_key": raw_key,
+                        "variant_path": [] if variant_index is None else [variant_index],
+                        "name": raw_key,
+                        "source_sha256": _ifd_identity_source_sha256(tag),
+                        "source_kind": "named-raw-key",
+                    })
+    return sorted(
+        rows,
+        key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"])),
+    )
+
+
+def ownership_identity_counts(rows):
+    return {
+        "binary_rows": sum(row["source_kind"] == "binary" for row in rows),
+        "named_raw_key_rows": sum(row["source_kind"] == "named-raw-key" for row in rows),
+        "samsung_trailer_rows": sum(row["source_kind"] == "samsung-trailer" for row in rows),
+    }
+
+
 def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx,
                   *, include_identity_ledger=False):
     """Emit one `IfdTable` literal for a table `is_ifd_table` selected.
@@ -3140,6 +3341,7 @@ IFD_REPORT = (
         ("ValueConv ExprIds (oracle-approved)", "value_conv_compiled"),
         ("BITMASK fields (DecodeBits)", "bitmask_emitted"),
         ("OTHER conversions registered", "other_translated"),
+        ("fixed-array OTHER patterns (exact source identity)", "other_fixed_array_pattern"),
         ("per-tag group overrides", "tag_group_override"),
         ("SubDirectory edges modeled", "ifd_subdir_edge_modeled"),
         ("  target is an IFD-style table", "ifd_subdir_edge_target_ifd"),
@@ -4579,6 +4781,7 @@ def main():
 
     if args.ifd_identity_ledger_out:
         source_bytes = Path(args.tables_json).read_bytes()
+        ownership_rows = gen_ownership_identities(doc, names)
         emitted = sum(row["artifact_state"] == "emitted" for row in ifd_identity_ledger)
         refused = len(ifd_identity_ledger) - emitted
         eligible = sum(row["reader_state"] == "eligible" for row in ifd_identity_ledger)
@@ -4596,6 +4799,8 @@ def main():
             },
             "counts": {"rows": len(ifd_identity_ledger), "emitted": emitted, "refused": refused,
                        "reader_eligible": eligible, "reader_omitted": omitted},
+            "ownership_counts": ownership_identity_counts(ownership_rows),
+            "ownership_rows": ownership_rows,
             "rows": sorted(
                 ifd_identity_ledger,
                 key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"])),

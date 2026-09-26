@@ -10,9 +10,13 @@ use crate::io::ByteOrder;
 
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
+};
 use super::runtime;
 use super::{
-    Cond, Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, WordDirectory,
+    Cond, Fmt, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, WordDirectory,
     find_keyed_table, find_table,
 };
 
@@ -381,8 +385,18 @@ fn process_word_directory(
             // Format/Count/Size guide tag selection but do not re-read or
             // truncate this masked u16 value.
             let raw = runtime::DecodedValue::Integer(i64::from(value));
+            let stored = runtime::to_stored_tag_value(&raw, block.byte_order);
             if matches!(
-                emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, &mut result),
+                emit_resolved_scalar(
+                    table,
+                    block.scope,
+                    resolved,
+                    raw,
+                    stored,
+                    ctx,
+                    sink,
+                    &mut result,
+                ),
                 ScalarAction::Tainted
             ) {
                 result.word_traces.push(trace);
@@ -706,7 +720,7 @@ fn process_entry<'a>(
     };
     let format = tag.format.unwrap_or_else(|| default_format(entry_type));
     let count = native_count(tag, format, value_size, inline);
-    let Some(raw) = engine::read_value(
+    let Some(read) = engine::read_value_with_stored(
         value,
         0,
         format,
@@ -717,7 +731,16 @@ fn process_entry<'a>(
         result.bad_value += 1;
         return KeyedEntryAction::Continue;
     };
-    match emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, result) {
+    match emit_resolved_scalar(
+        table,
+        block.scope,
+        resolved,
+        read.decoded,
+        read.stored,
+        ctx,
+        sink,
+        result,
+    ) {
         ScalarAction::Continue => KeyedEntryAction::Continue,
         ScalarAction::Tainted => KeyedEntryAction::Tainted,
     }
@@ -728,15 +751,29 @@ enum ScalarAction {
     Tainted,
 }
 
+/// The keyed readers' explicit conversion policy for the shared stage.
+/// Unrepresentable state and an unmodeled `RawConv` both taint: pending
+/// parent frames may evaluate Conditions against the shared member state.
+const KEYED_POLICY: Policy = Policy {
+    member_value: engine::member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Taint,
+    set_member_clears_omission: true,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Taint,
+    perl_length: pipeline::scalar_perl_length,
+    scalar_form: runtime::to_exiftool_value,
+};
+
 /// Apply the shared keyed tag-reporting semantics after a layout has supplied
 /// one logical scalar. CIFF and source-authenticated word directories differ
-/// only in obtaining that scalar; selection, state, conversion and emission
-/// stay in this one path.
+/// only in obtaining that scalar; selection stays here and state, conversion
+/// and the emitted shape are the shared `FoundTag` stage.
+#[allow(clippy::too_many_arguments)]
 fn emit_resolved_scalar(
     table: &'static KeyedDirectoryTable,
     scope: KeyedScope,
     resolved: ResolvedTag,
     raw: runtime::DecodedValue,
+    stored: TagValue,
     ctx: &mut Ctx,
     sink: &mut dyn KeyedEmissionSink,
     result: &mut KeyedWalkResult,
@@ -745,103 +782,63 @@ fn emit_resolved_scalar(
     if tag.flags.unknown {
         return ScalarAction::Continue;
     }
-    let mut omitted = tag.omitted;
-    if resolved.condition_resolved {
-        omitted.condition = false;
-    }
-    match tag.raw_conv {
-        Some(super::RawConvEffect::SetMember { member }) => {
-            let Some(member_value) = engine::member_value(&raw) else {
-                result.omitted += 1;
-                // An unrepresentable state value could change every following
-                // source Condition. Stop this directory rather than leave
-                // stale state for its later siblings.
-                return ScalarAction::Tainted;
-            };
-            ctx.members.insert(member, member_value);
-            omitted.raw_conv = false;
-        }
-        Some(super::RawConvEffect::ValueLocal) | None => {}
-    }
-    if omitted.raw_conv && tag.raw_conv.is_none() {
-        result.omitted += 1;
-        // An unmodeled RawConv may mutate state shared by later entries.
-        return ScalarAction::Tainted;
-    }
-    if omitted.any() {
-        result.omitted += 1;
-        return ScalarAction::Continue;
-    }
-    let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
-        let Some(len) = keyed_perl_length(&raw) else {
-            result.omitted += 1;
-            return ScalarAction::Continue;
-        };
-        (
-            TagValue::String(format!(
-                "(Binary data {len} bytes, use -b option to extract)"
-            )),
-            None,
-        )
-    } else {
-        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-            result.omitted += 1;
-            return ScalarAction::Continue;
-        };
-        let unconverted = || {
-            if tag.flags.list {
-                runtime::to_tag_value(&converted)
-            } else {
-                runtime::to_exiftool_value(&converted)
-            }
-        };
-        match runtime::render(tag.print_conv, &converted) {
-            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
-            None => (unconverted(), None),
-        }
-    };
-    if !super::attribution::silenced(super::attribution::Token::Keyed) {
-        sink.emit(Emitted {
+    let input = PipelineInput {
+        identity: StableFieldIdentity::KeyedRawId(tag.raw_id),
+        provenance: Provenance {
             module: table.module,
             table: table.table,
-            group0: tag.groups.g0.unwrap_or(table.group0),
-            group1: scope
-                .group1_override
-                .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
-            group2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        groups: Groups {
+            g0: tag.groups.g0.unwrap_or(table.group0),
+            g1: Some(
+                scope
+                    .group1_override
+                    .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
+            ),
+            g2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        reporting: Reporting {
             name: tag.name,
-            value,
-            value_conv,
-            // The keyed compiler has already folded table PRIORITY and AVOID into
-            // the tag flags. Only ExifTool's final Avoid default remains here.
-            low_priority: effective_priority(tag.flags) == Some(0),
+            // The keyed compiler has already folded table PRIORITY and AVOID
+            // into the tag flags. Only ExifTool's final Avoid default remains.
+            low_priority: pipeline::effective_priority(tag.flags.priority, None, tag.flags.avoid)
+                == Some(0),
             avoid: tag.flags.avoid,
-            // `Emitted::rational` is for IFD tables only (the binary walk sets
-            // `None` too); a keyed directory never keeps the raw fraction.
-            rational: None,
-        });
-    }
-    result.emitted += 1;
-    ScalarAction::Continue
-}
-
-/// ExifTool.pm:9469-9473 after keyed code generation has applied table
-/// PRIORITY/AVOID precedence. A remaining Avoid supplies priority zero only
-/// when neither source-level priority was defined.
-fn effective_priority(flags: IfdFlags) -> Option<i64> {
-    flags.priority.or(if flags.avoid { Some(0) } else { None })
-}
-
-/// `length($$val)` for a keyed Binary placeholder. ProcessCanonRaw already
-/// handed this exact ReadValue result to FoundTag; `perl_string` is the shared
-/// scalar representation used for non-list output.
-fn keyed_perl_length(value: &runtime::DecodedValue) -> Option<usize> {
-    match value {
-        runtime::DecodedValue::Undefined(bytes) | runtime::DecodedValue::StringBytes(bytes) => {
-            Some(bytes.len())
+            is_list: tag.flags.list,
+        },
+        conversions: Conversions {
+            omitted: tag.omitted,
+            condition_resolved: resolved.condition_resolved,
+            raw_conv: tag.raw_conv,
+            value_conv: tag.value_conv,
+            print_conv: PrintStage::Shared(tag.print_conv),
+            binary: tag.flags.binary,
+        },
+        raw,
+        stored,
+        // `Emitted::rational` is for IFD tables only; a keyed directory never
+        // keeps the raw fraction.
+        rational: None,
+    };
+    match pipeline::execute(input, &KEYED_POLICY, ctx.members, None) {
+        Outcome::Report(row) => {
+            if !super::attribution::silenced(super::attribution::Token::Keyed) {
+                sink.emit(row);
+            }
+            result.emitted += 1;
+            ScalarAction::Continue
         }
-        runtime::DecodedValue::String(text) => Some(text.len()),
-        other => other.perl_string().map(|text| text.len()),
+        Outcome::Omitted | Outcome::Declined => {
+            result.omitted += 1;
+            ScalarAction::Continue
+        }
+        // An unrepresentable state value, or an unmodeled RawConv, could
+        // change every following source Condition. Stop this directory
+        // rather than leave stale state for its later siblings.
+        Outcome::Tainted => {
+            result.omitted += 1;
+            ScalarAction::Tainted
+        }
     }
 }
 
@@ -1793,6 +1790,42 @@ mod tests {
     }
 
     #[test]
+    fn real_keyed_word_table_retains_source_coordinate_storage_and_list_fact() {
+        let table = find_keyed_table("CanonCustom", "FunctionsD30")
+            .expect("generated CanonCustom::FunctionsD30 table");
+        let data = words(ByteOrder::Big, 4, &[0x0101], &[]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            table,
+            KeyedBlock::new(
+                &data,
+                ByteOrder::Big,
+                KeyedScope {
+                    group1_override: Some("Canon"),
+                },
+            ),
+            &mut ctx,
+            &mut sink,
+        );
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows.len(), 1);
+        let row = &sink.rows[0];
+        assert_eq!(row.name, "LongExposureNoiseReduction");
+        assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(1));
+        assert_eq!(row.stored, TagValue::Integer(1));
+        assert_eq!(row.value, TagValue::String("On".to_owned()));
+        assert_eq!(row.group0, "MakerNotes");
+        assert_eq!(row.group1, "Canon");
+        assert_eq!(row.group2, "Camera");
+        assert!(!row.is_list, "source flags do not declare List");
+    }
+
+    #[test]
     fn word_directory_uses_empty_missing_model_only_for_length_exception() {
         static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
         static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
@@ -2478,9 +2511,26 @@ mod tests {
             TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
         );
         assert_eq!(
+            sink.rows[0].stored,
+            TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
+        );
+        assert_eq!(sink.rows[0].source_id, oxidex_tags::TagId::Numeric(2));
+        assert!(sink.rows[0].is_list);
+        assert_eq!(
             sink.rows[1].value,
             TagValue::String("(Binary data 2 bytes, use -b option to extract)".into())
         );
+        let scoped = re_scope(
+            sink.rows[0].clone(),
+            KeyedScope {
+                group1_override: Some("Nested"),
+                ..scope()
+            },
+        );
+        assert_eq!(scoped.group1, "Nested");
+        assert_eq!(scoped.stored, sink.rows[0].stored);
+        assert_eq!(scoped.source_id, sink.rows[0].source_id);
+        assert!(scoped.is_list);
         assert!(sink.rows[2].low_priority);
         assert!(sink.rows[2].avoid);
         assert!(!sink.rows[3].low_priority);

@@ -157,7 +157,7 @@ pub fn dispatch_format_parser(
     format: FileFormat,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
-    match format {
+    let mut metadata = match format {
         FileFormat::JPEG => parse_jpeg_metadata(reader, options),
         FileFormat::TIFF => parse_tiff_metadata_with_options(reader, options),
         FileFormat::PNG => parse_png_metadata(reader),
@@ -326,7 +326,126 @@ pub fn dispatch_format_parser(
             "Format {:?} not yet supported in this iteration",
             format
         ))),
+    }?;
+
+    // DoProcessTIFF (ExifTool.pm), CanonRaw.pm and Photoshop.pm call
+    // IdentifyTrailer/ProcessTrailers after a successful carrier parse; no
+    // other non-JPEG reader does. Without a JPEG TrailerStart, ProcessVivo
+    // returns 0 there, so only Samsung (and the trailers sized on the way to
+    // it) can be reached. Read the whole carrier only after a bounded EOF check
+    // finds such a candidate; unknown/identity-only fallbacks never reach this
+    // successful dispatch path, and JPEG walks its trailers in
+    // parse_jpeg_metadata.
+    if exiftool_processes_trailers(format, reader) && has_recognized_trailer_candidate(reader) {
+        if let Ok(length) = usize::try_from(reader.size())
+            && let Ok(file) = reader.read(0, length)
+        {
+            metadata.merge_winners_keeping_group1(
+                &crate::parsers::samsung_trailer::parse_trailer_chain(file, None),
+            );
+        }
     }
+    Ok(metadata)
+}
+
+/// Non-JPEG carriers whose pinned ExifTool reader walks trailers: the
+/// `%fileTypeLookup` TIFF-module types read by DoProcessTIFF (plus ORF/ORI,
+/// whose ProcessORF is ProcessTIFF), CRW (CanonRaw.pm) and PSD/PSB
+/// (Photoshop.pm), plus a `.raw` or `.fff` whose bytes select the TIFF
+/// reader. CR3, RAF, MRW, X3F and the rest are left out rather than assumed.
+fn exiftool_processes_trailers(format: FileFormat, reader: &dyn FileReader) -> bool {
+    use crate::parsers::raw::RawFormat as R;
+    match format {
+        FileFormat::TIFF | FileFormat::PSD => true,
+        FileFormat::CameraRaw(R::GenericRAW) => raw_selects_tiff_reader(reader),
+        FileFormat::CameraRaw(R::HasselbladFFF) => reader
+            .read(0, reader.size().min(8) as usize)
+            .is_ok_and(tiff_header_reaches_trailers),
+        FileFormat::CameraRaw(raw) => matches!(
+            raw,
+            R::CanonCR2
+                | R::CanonCRW
+                | R::NikonNEF
+                | R::NikonNRW
+                | R::SonyARW
+                | R::SonySR2
+                | R::SonySRF
+                | R::SonySRW
+                | R::SonyARQ
+                | R::OlympusORF
+                | R::OlympusORI
+                | R::PentaxPEF
+                | R::PanasonicRW2
+                | R::PanasonicRWL
+                | R::Hasselblad3FR
+                | R::PhaseOneIIQ
+                | R::MamiyaMEF
+                | R::LeafMOS
+                | R::KodakDCR
+                | R::KodakKDC
+                | R::EpsonERF
+                | R::GoProGPR
+                | R::AdobeDNG
+        ),
+        _ => false,
+    }
+}
+
+/// `RAW => [['RAW','TIFF'], ...]` with magic `(.{25}ARECOYK|II|MM)`:
+/// KyoceraRaw::ProcessRAW (which never walks trailers) claims a Kyocera
+/// header first; otherwise DoProcessTIFF runs, and reaches its trailer pass
+/// only with an `II`/`MM` byte order and an IFD0 offset of at least 8.
+fn raw_selects_tiff_reader(reader: &dyn FileReader) -> bool {
+    const KYOCERA_HEADER: u64 = 156;
+    let Ok(head) = reader.read(0, reader.size().min(KYOCERA_HEADER) as usize) else {
+        return false;
+    };
+    !crate::parsers::raw::looks_like_kyocera_raw(head) && tiff_header_reaches_trailers(head)
+}
+
+/// DoProcessTIFF reaches its trailer pass only with an `II`/`MM` byte order
+/// and an IFD0 offset of at least 8. For `FFF => [['TIFF','FLIR'], ...]`
+/// this is also what selects the TIFF reader over FLIR.pm, which never walks
+/// trailers.
+fn tiff_header_reaches_trailers(head: &[u8]) -> bool {
+    let Some(offset) = head.get(4..8).map(|bytes| {
+        let bytes: [u8; 4] = bytes.try_into().expect("four bytes");
+        match head.get(..2) {
+            Some(b"II") => Some(u32::from_le_bytes(bytes)),
+            Some(b"MM") => Some(u32::from_be_bytes(bytes)),
+            _ => None,
+        }
+    }) else {
+        return false;
+    };
+    offset.is_some_and(|offset| offset >= 8)
+}
+
+/// Mirrors IdentifyTrailer's bounded EOF recognition for the trailers a
+/// non-JPEG walk can pass through (Samsung, MIE, PhotoMechanic) before the
+/// whole carrier is read. The walk independently validates every declared
+/// start/end structure, so this is only an inexpensive admission guard.
+fn has_recognized_trailer_candidate(reader: &dyn FileReader) -> bool {
+    const WINDOW: u64 = 64;
+    const SAMSUNG_QDIOBS: &[u8] = b"\0\0QDIOBS";
+    const SAMSUNG_SEFT: &[u8] = b"\0\0SEFT";
+    const MIE_SHORT: &[u8] = b"~\0\x04\0zmie~\0\0\x06";
+    const MIE_LONG: &[u8] = b"~\0\x04\0zmie~\0\0\x0a";
+    const PHOTO_MECHANIC: &[u8] = b"cbipcbbl";
+
+    let size = reader.size();
+    let start = size.saturating_sub(WINDOW);
+    let Ok(window_len) = usize::try_from(size - start) else {
+        return false;
+    };
+    let Ok(tail) = reader.read(start, window_len) else {
+        return false;
+    };
+    tail.ends_with(SAMSUNG_QDIOBS)
+        || tail.ends_with(SAMSUNG_SEFT)
+        || tail.ends_with(PHOTO_MECHANIC)
+        || memchr::memmem::find(tail, MIE_SHORT).is_some()
+        || memchr::memmem::find(tail, MIE_LONG).is_some()
 }
 
 /// Converts a Result<T, String> to Result<T, ExifToolError> with a formatted parse error.

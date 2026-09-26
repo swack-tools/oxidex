@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import tarfile
 import textwrap
 import threading
 import unittest
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -254,12 +256,19 @@ class DurablePathTests(unittest.TestCase):
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             staging_created = threading.Event()
-            release_first_installer = threading.Event()
+            allow_first_intent = threading.Event()
+            second_attempted_lifecycle = threading.Event()
             second_recovery_entered = threading.Event()
+            first_verified = threading.Event()
+            second_verified = threading.Event()
+            release_first_publish = threading.Event()
+            release_second_publish = threading.Event()
+            first_published = threading.Event()
             results: list[str] = []
             failures: list[BaseException] = []
             original_mkdtemp = oracle.tempfile.mkdtemp
             original_recover = oracle._recover_abandoned_staging
+            original_lifecycle_lock = oracle._staging_lifecycle_lock
             first_mkdtemp = True
 
             def pausing_mkdtemp(*args: object, **kwargs: object) -> str:
@@ -268,13 +277,28 @@ class DurablePathTests(unittest.TestCase):
                 if first_mkdtemp:
                     first_mkdtemp = False
                     staging_created.set()
-                    self.assertTrue(release_first_installer.wait(timeout=10))
+                    self.assertTrue(allow_first_intent.wait(timeout=10))
                 return created
 
             def observing_recovery(*args: object, **kwargs: object) -> Path | None:
                 if threading.current_thread().name == "second-installer":
                     second_recovery_entered.set()
                 return original_recover(*args, **kwargs)
+
+            @contextmanager
+            def observing_lifecycle_lock(*args: object, **kwargs: object):
+                if threading.current_thread().name == "second-installer":
+                    second_attempted_lifecycle.set()
+                with original_lifecycle_lock(*args, **kwargs):
+                    yield
+
+            def hold_verified_staging(_staging: Path) -> None:
+                if threading.current_thread().name == "first-installer":
+                    first_verified.set()
+                    self.assertTrue(release_first_publish.wait(timeout=10))
+                else:
+                    second_verified.set()
+                    self.assertTrue(release_second_publish.wait(timeout=10))
 
             def populate(staging: Path) -> None:
                 (staging / "sentinel").write_text("verified\n", encoding="utf-8")
@@ -286,23 +310,40 @@ class DurablePathTests(unittest.TestCase):
             def install() -> None:
                 try:
                     results.append(
-                        oracle.install_immutable_tree(root, destination, populate, verify)
+                        oracle.install_immutable_tree(
+                            root,
+                            destination,
+                            populate,
+                            verify,
+                            after_verify=hold_verified_staging,
+                        )
                     )
+                    if threading.current_thread().name == "first-installer":
+                        first_published.set()
                 except BaseException as exc:  # retained for the parent assertion
                     failures.append(exc)
 
             with mock.patch.object(oracle, "DURABLE_ROOT", root), mock.patch.object(
                 oracle.tempfile, "mkdtemp", side_effect=pausing_mkdtemp
-            ), mock.patch.object(oracle, "_recover_abandoned_staging", side_effect=observing_recovery):
+            ), mock.patch.object(
+                oracle, "_recover_abandoned_staging", side_effect=observing_recovery
+            ), mock.patch.object(
+                oracle, "_staging_lifecycle_lock", side_effect=observing_lifecycle_lock
+            ):
                 first = threading.Thread(target=install, name="first-installer")
                 second = threading.Thread(target=install, name="second-installer")
                 first.start()
                 self.assertTrue(staging_created.wait(timeout=10))
                 second.start()
-                # Before the lifecycle correction this event proves the second
-                # installer saw the first directory without its sidecar.
-                second_recovery_entered.wait(timeout=1)
-                release_first_installer.set()
+                self.assertTrue(second_attempted_lifecycle.wait(timeout=10))
+                self.assertFalse(second_recovery_entered.is_set())
+                allow_first_intent.set()
+                self.assertTrue(first_verified.wait(timeout=10))
+                self.assertTrue(second_verified.wait(timeout=10))
+                self.assertTrue(second_recovery_entered.is_set())
+                release_first_publish.set()
+                self.assertTrue(first_published.wait(timeout=10))
+                release_second_publish.set()
                 first.join(timeout=20)
                 second.join(timeout=20)
             self.assertFalse(first.is_alive())
@@ -699,6 +740,91 @@ class DurablePathTests(unittest.TestCase):
                 (extracted / "payload.txt").read_text(encoding="utf-8"),
                 "durable payload\n",
             )
+
+    def test_materialize_corpus_split_normalizes_base_and_archive_modes(self) -> None:
+        """Base modes normalize while archive files retain their locked modes."""
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
+            root = Path(directory)
+            base = oracle.exiftool_root(root) / "t/images"
+            base.mkdir(parents=True)
+            (base / "base.txt").write_bytes(b"base\n")
+            (base / "base.txt").chmod(0o664)
+            (base / "base-run").write_bytes(b"#!/bin/sh\n")
+            (base / "base-run").chmod(0o775)
+            archive = root / "samples_fixture.tar"
+            with tarfile.open(archive, "w") as source:
+                nested = tarfile.TarInfo("nested")
+                nested.type = tarfile.DIRTYPE
+                nested.mode = 0o775
+                source.addfile(nested)
+                ordinary = tarfile.TarInfo("archive.txt")
+                ordinary.mode = 0o644
+                ordinary.size = len(b"archive\n")
+                source.addfile(ordinary, io.BytesIO(b"archive\n"))
+                private = tarfile.TarInfo("archive-private")
+                private.mode = 0o700
+                private.size = len(b"private\n")
+                source.addfile(private, io.BytesIO(b"private\n"))
+
+            expected_tree = root / "expected"
+            shutil.copytree(base, expected_tree)
+            for item in expected_tree.rglob("*"):
+                item.chmod(0o755 if item.is_dir() or item.name == "base-run" else 0o644)
+            with tarfile.open(archive) as source:
+                source.extractall(expected_tree)
+            for item in expected_tree.rglob("*"):
+                if item.is_dir():
+                    item.chmod(0o755)
+            expected = oracle.sha256_tree(expected_tree)
+            test_lock = {**oracle.LOCK, "corpus_tree_sha256": expected}
+            original_extractall = tarfile.TarFile.extractall
+
+            def legacy_extractall(
+                source: tarfile.TarFile,
+                destination: Path,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if "filter" in kwargs:
+                    raise TypeError("filter keyword is unavailable")
+                if "filter" in inspect.signature(original_extractall).parameters:
+                    original_extractall(
+                        source, destination, *args, filter="fully_trusted", **kwargs
+                    )
+                else:
+                    original_extractall(source, destination, *args, **kwargs)
+
+            for mask in (0o002, 0o077):
+                for extraction_path in ("data", "legacy"):
+                    with self.subTest(umask=oct(mask), extraction_path=extraction_path), mock.patch.object(
+                        oracle, "DURABLE_ROOT", root
+                    ), mock.patch.object(oracle, "LOCK", test_lock), mock.patch.object(
+                        oracle, "MIN_CORPUS_FILES", 4
+                    ):
+                        extraction = (
+                            mock.patch.object(
+                                tarfile.TarFile,
+                                "extractall",
+                                autospec=True,
+                                side_effect=legacy_extractall,
+                            )
+                            if extraction_path == "legacy"
+                            else nullcontext()
+                        )
+                        old_umask = os.umask(mask)
+                        try:
+                            with extraction:
+                                oracle._materialize_corpus(root, {"samples_fixture": archive})
+                        finally:
+                            os.umask(old_umask)
+                        corpus = oracle.corpus_path(root)
+                        self.assertEqual(oracle.sha256_tree(corpus), expected)
+                        self.assertEqual((corpus / "nested").stat().st_mode & 0o777, 0o755)
+                        self.assertEqual((corpus / "base.txt").stat().st_mode & 0o777, 0o644)
+                        self.assertEqual((corpus / "base-run").stat().st_mode & 0o777, 0o755)
+                        self.assertEqual((corpus / "archive.txt").stat().st_mode & 0o777, 0o644)
+                        self.assertEqual((corpus / "archive-private").stat().st_mode & 0o777, 0o700)
+                        shutil.rmtree(corpus)
 
     def test_named_release_recipes_have_no_system_temporary_defaults(self) -> None:
         repository = MODULE.parents[2]

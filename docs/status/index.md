@@ -22,7 +22,7 @@ Where these numbers are going, and the rules for what counts as progress: [Autog
 <StatusMeter label="Read parity: catalog entries proven" :value="2378" :total="33487" note="observed_matched_read / ExifTool 13.59 catalog entries" />
 <StatusMeter label="Of what ExifTool reads in the corpus" :value="2378" :total="4270" note="credited catalog entries / entries ExifTool reads in the corpus" />
 <StatusMeter label="Write parity: writable entries proven" :value="19" :total="14169" note="observed_matched_write / writable catalog entries" />
-<StatusMeter label="Catalog entries with a generated reader (strict)" :value="3666" :total="33487" note="unconditional generated declarations / catalog entries" />
+<StatusMeter label="Catalog entries with a generated reader (strict)" :value="3667" :total="33487" note="unconditional generated declarations / catalog entries" />
 <StatusMeter label="Expression uses today's translators accept" :value="9068" :total="13290" note="exprs.py and conds.py, every expression in the dump" />
 <StatusMeter label="Reachable with Session + ported helpers" :value="12513" :total="13290" note="with the 19 v2 helper ports, same denominator" />
 <StatusMeter label="Helper subs ported" :value="25" :total="157" note="helpers.rs PORTS / distinct helper subs the tables call" />
@@ -85,14 +85,14 @@ How each of the 33,487 catalog entries is implemented on the read side today. So
 | Reader state | Entries | Share | Proven reads |
 | --- | ---: | ---: | ---: |
 | Generated reader declaration (emits unconditionally) (`generated_reader_declaration_unobserved`) | 778 | 2.32% | 130 |
-| Generated IFD schema declaration, eligible (`ifd_schema_declaration_eligible_unobserved`) | 2,888 | 8.62% | 288 |
+| Generated IFD schema declaration, eligible (`ifd_schema_declaration_eligible_unobserved`) | 2,889 | 8.63% | 288 |
 | Generated reader declaration, behind an ExifTool option (`generated_reader_declaration_option_gated`) | 1,123 | 3.35% | 0 |
-| Generated IFD schema declaration, omitted (`ifd_schema_declaration_omitted_unobserved`) | 418 | 1.25% | 52 |
+| Generated IFD schema declaration, omitted (`ifd_schema_declaration_omitted_unobserved`) | 417 | 1.25% | 52 |
 | Generated reader explicitly refuses the row (`blocked_generated_reader_refusal`) | 156 | 0.47% | 3 |
 | IFD schema declaration refused (layout not representable) (`ifd_schema_declaration_refused_unobserved`) | 9,562 | 28.55% | 393 |
 | Source row not yet consumed by any generator (`source_row_not_yet_consumed`) | 18,562 | 55.43% | 1,512 |
 
-- **Strict** (a generated declaration that emits unconditionally, the first two rows): **3,666** entries (10.95%).
+- **Strict** (a generated declaration that emits unconditionally, the first two rows): **3,667** entries (10.95%).
 - **Loose** (any generated declaration, including option-gated, omitted and refusing ones, the first five rows): **5,363** entries (16.02%).
 - 1,905 of the 2,378 proven reads (80.11%) are on entries with no usable generated declaration, so hand parsers produce them. Reads and generation are still largely independent.
 
@@ -230,7 +230,7 @@ The machine-readable form of this page is [`/measurements/status.json`](/measure
 | Source | sha256 |
 | --- | --- |
 | [`docs/public/measurements/catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) | `033e4094bf409c89` |
-| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `5fe7878f5c20358a` |
+| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `ffb739d5ee1a29aa` |
 | [`docs/public/measurements/generated-share-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/generated-share-13.59.json) | `81e3168524d85cd1` |
 | [`tools/ci/parity_floors.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/ci/parity_floors.json) | `92505e25021bfbd4` |
 

@@ -837,7 +837,7 @@ fn ac3_sample_rate(code: u8) -> TagValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{PINNED_CORPUS_ROOT, TestReader, pinned_corpus_available};
+    use crate::test_support::{TestReader, pinned_combined_fixture_path};
 
     /// Build a 188-byte TS packet with the given PID and payload.
     fn ts_packet(pid: u16, payload_unit_start: bool, payload: &[u8]) -> Vec<u8> {
@@ -1018,13 +1018,10 @@ mod tests {
     /// pinned oracle reports for that file.
     #[test]
     fn real_m2ts_rec_info_uses_the_generated_binary_table() {
-        if !pinned_corpus_available() {
-            return;
-        }
-        let path = format!("{PINNED_CORPUS_ROOT}/M2TS.mts");
-        let Ok(bytes) = std::fs::read(path) else {
+        let Some(path) = pinned_combined_fixture_path("M2TS.mts") else {
             return;
         };
+        let bytes = std::fs::read(path).expect("pinned M2TS sample should be readable");
         let metadata = MtsParser
             .parse(&TestReader::new(bytes))
             .expect("pinned M2TS sample parses");

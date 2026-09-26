@@ -13,8 +13,9 @@ use crate::core::jpeg_helpers::{
     process_app15_segments, process_com_segments, process_dji_dbg_segments,
     process_dji_thermal_segments, process_dqt_segments_with_options,
     process_exif_segments_with_options, process_icc_segments, process_infiray_segments,
-    process_iptc_segments, process_jfif_segments, process_mpf_segments, process_photoshop_segments,
-    process_qualcomm_segments, process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
+    process_iptc_segments, process_jfif_segments, process_media_jukebox_segments,
+    process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
+    process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
     process_sof_segments_with_options, process_spiff_segments,
     process_uniform_resource_name_segments, process_xmp_segments,
 };
@@ -39,7 +40,7 @@ use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::pdf_writer::write_pdf_file;
-use crate::writers::png_writer::{write_png_metadata, write_png_metadata_with_baseline};
+use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
 
 // ============================================================================
@@ -941,6 +942,88 @@ pub(crate) fn write_metadata_with_removals(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_metadata_transaction(path, metadata, removed, &[])
+}
+
+/// One write transaction: `removed` (named tags and `<group>:All`) applied
+/// first, then the map -- and `assigned`, the keys the caller explicitly set
+/// (`modify_tag`'s tag, a batch's `-TAG=value`s), whatever their value.
+///
+/// Provenance, not equality, decides what a set is. A value that differs
+/// from the file's is a set whatever the list says (a carried row never
+/// differs); an assigned key whose value equals the file's is a set too,
+/// which the map alone cannot show. When such a same-value set falls under
+/// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
+/// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
+/// ExifTool's order -- the removals, then the sets -- as two passes on a
+/// private copy of the file that replaces it only when both succeed; pinned
+/// ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme` keeps Make. Otherwise it
+/// is one pass.
+pub(crate) fn write_metadata_transaction(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    assigned: &[String],
+) -> Result<()> {
+    let baseline = read_metadata(path).unwrap_or_default();
+    let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
+    let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
+    // Same-value sets a removal covers: the only ones the map cannot tell
+    // from carried rows, and the only ones that need the two passes.
+    let resets: Vec<(String, TagValue)> = assigned
+        .iter()
+        .filter_map(|key| {
+            let value = metadata.get(key)?.clone();
+            let key = canonical(key);
+            (baseline.get(key.as_str()) == Some(&value)
+                && removals.iter().any(|removal| {
+                    crate::writers::exif_surgical::removal_covers(removal, &key, &baseline)
+                }))
+            .then_some((key, value))
+        })
+        .collect();
+    if resets.is_empty() {
+        return write_single_pass(path, metadata, removed);
+    }
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // Same directory (the final rename stays on one filesystem), same
+    // extension (a format some readers tell by it reads the same).
+    let suffix = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    let staged = tempfile::Builder::new()
+        .prefix(".oxidex-transaction-")
+        .suffix(&suffix)
+        .tempfile_in(dir)
+        .map_err(ExifToolError::from)?;
+    std::fs::copy(path, staged.path()).map_err(ExifToolError::from)?;
+    // Pass 1: the removals, with the same-value sets they cover left out.
+    let mut first = metadata.clone();
+    for (key, _) in &resets {
+        first.remove(key);
+        if let Some(spelled) = assigned.iter().find(|k| canonical(k) == *key) {
+            first.remove(spelled);
+        }
+    }
+    write_single_pass(staged.path(), &first, removed)?;
+    // Pass 2: the sets, over what the removals left.
+    let mut second = read_metadata(staged.path())?;
+    for (key, value) in &resets {
+        second.insert(key.clone(), value.clone());
+    }
+    write_single_pass(staged.path(), &second, &[])?;
+    staged
+        .persist(path)
+        .map_err(|error| ExifToolError::from(error.error))?;
+    Ok(())
+}
+
+/// One pass of [`write_metadata_transaction`].
+fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) -> Result<()> {
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
@@ -948,6 +1031,21 @@ pub(crate) fn write_metadata_with_removals(
     // recovers it: by re-reading the file being written. See
     // `validate_caller_changes` for why that is both sufficient and necessary.
     let baseline = read_metadata(path).ok();
+
+    // One spelling for every key, once, before any gate reads one: group
+    // and tag names are case-insensitive, as they are to ExifTool
+    // (`-exif:All=`, `-ExifIFD:iso=`, `-ifd0:artist=you`). Every prefix test
+    // below -- the no-op checks, the carrier and group removals, the PNG
+    // EXIF gate, the planners, the verifiers -- then sees the canonical form;
+    // before, a lowercase group was carried as unchanged and reported done.
+    let (normalized_metadata, normalized_removed) =
+        crate::writers::exif_surgical::normalize_write_request(
+            baseline.as_ref().unwrap_or(&MetadataMap::new()),
+            metadata,
+            removed,
+        );
+    let metadata = &normalized_metadata;
+    let removed = normalized_removed.as_slice();
 
     // PHASE 1: VALIDATION
     // JPEG and the TIFF-structured formats validate inside their surgical
@@ -957,40 +1055,251 @@ pub(crate) fn write_metadata_with_removals(
     }
 
     // PHASE 2: ROUTE TO APPROPRIATE WRITER
+    // A whole-carrier clear (an empty replacement map, no named removals:
+    // `clear_all_metadata`, `-all=`) never parses or verifies what it
+    // discards; its post-condition is only that the carrier is gone. Any
+    // other request is first asked whether it is a no-op for the file's EXIF
+    // (`exif_surgical::exif_request_is_no_op`) -- before every writer guard
+    // and the post-write check -- and a no-op writes nothing.
+    let whole_clear = metadata.is_empty() && removed.is_empty();
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
+        // Group-wide `<group>:All` removals pinned ExifTool 13.59 makes no
+        // change for here (IFD0 of any TIFF; ExifIFD and MakerNotes of a raw
+        // type) are no-ops; the rest are refused
+        // (`exif_surgical::resolve_tiff_group_removals`).
+        let removed = &crate::writers::exif_surgical::resolve_tiff_group_removals(
+            file_bytes, &original, removed,
+        )?;
+        // A single-tag edit pinned ExifTool 13.59 makes in a Panasonic
+        // JpgFromRaw's own EXIF is refused by name, before the no-op check
+        // (which reads only the outer directories) can take a tag held only
+        // there for an absent one (`exif_surgical::refuse_embedded_jpeg_edits`).
+        if !whole_clear {
+            crate::writers::exif_surgical::refuse_embedded_jpeg_edits(
+                file_bytes, &original, metadata, removed,
+            )?;
+        }
+        // A maker-note row left out of the map is a deletion this writer
+        // cannot make (`exif_surgical::dropped_makernote_rows`); nor is such
+        // a request a no-op.
+        let drops_makernote_rows = !whole_clear
+            && (!crate::writers::exif_surgical::dropped_makernote_rows(&original, metadata, &[])
+                .is_empty()
+                || !crate::writers::exif_surgical::changed_makernote_rows(&original, metadata)
+                    .is_empty());
+        if !whole_clear {
+            crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                &crate::writers::exif_surgical::dropped_makernote_rows(
+                    &original, metadata, removed,
+                ),
+            )?;
+            crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                &crate::writers::exif_surgical::changed_makernote_rows(&original, metadata),
+            )?;
+        }
+        if !whole_clear
+            && !drops_makernote_rows
+            && crate::writers::exif_surgical::exif_request_is_no_op(
+                &[file_bytes],
+                &[file_bytes],
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                false,
+                &original,
+                metadata,
+                removed,
+            )
+        {
+            return Ok(());
+        }
         let plan = crate::writers::generated_public_write::plan_public_write(
             &original, metadata, removed,
         )?;
         let out = crate::writers::generated_public_write::rewrite_tiff_transaction(
             file_bytes, &original, plan,
         )?;
+        // Every removal gone, every set present, before anything is written.
+        if !whole_clear {
+            crate::writers::exif_surgical::verify_exif_write(
+                Some(file_bytes),
+                &out,
+                &original,
+                metadata,
+                removed,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+            crate::writers::exif_surgical::verify_dropped_rows_gone(
+                &original,
+                metadata,
+                &out,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+            crate::writers::exif_surgical::verify_makernote_rows_set(
+                &original,
+                metadata,
+                Some(file_bytes),
+                &out,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+        }
         write_atomic(path, &out)?;
         return Ok(());
     }
 
     match format {
         FileFormat::JPEG => {
-            // Use JPEG writer to serialize metadata
             let original = baseline.unwrap_or_default();
+            let file_bytes = reader.read(0, reader.size() as usize)?;
+            // `MakerNotes:All` also drops a Canon CIFF APP0 segment, as pinned
+            // ExifTool 13.59 does (`exif_surgical::jpeg_without_ciff`); the
+            // EXIF half of the write then runs on the file without it.
+            let without_ciff = removed
+                .iter()
+                .any(|key| {
+                    crate::writers::exif_surgical::group_removal(key)
+                        == Some(crate::writers::exif_surgical::GroupRemoval::MakerNotes)
+                })
+                .then(|| crate::writers::exif_surgical::jpeg_without_ciff(file_bytes))
+                .transpose()?
+                .flatten();
+            let stripped = without_ciff
+                .as_deref()
+                .map(crate::writers::exif_surgical::SliceReader);
+            let (reader, file_bytes): (&dyn FileReader, &[u8]) = match &stripped {
+                Some(stripped) => (stripped, stripped.0),
+                None => (&reader, file_bytes),
+            };
+            let drops_makernote_rows = !whole_clear
+                && (!crate::writers::exif_surgical::dropped_makernote_rows(
+                    &original,
+                    metadata,
+                    &[],
+                )
+                .is_empty()
+                    || !crate::writers::exif_surgical::changed_makernote_rows(&original, metadata)
+                        .is_empty());
+            if !whole_clear {
+                crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                    &crate::writers::exif_surgical::dropped_makernote_rows(
+                        &original, metadata, removed,
+                    ),
+                )?;
+                crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                    &crate::writers::exif_surgical::changed_makernote_rows(&original, metadata),
+                )?;
+            }
+            if !whole_clear
+                && !drops_makernote_rows
+                && let Ok(payloads) = crate::writers::exif_surgical::jpeg_exif_payloads(file_bytes)
+            {
+                let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                if crate::writers::exif_surgical::exif_request_is_no_op(
+                    &blocks,
+                    &blocks,
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                    true,
+                    &original,
+                    metadata,
+                    removed,
+                ) {
+                    if without_ciff.is_some() {
+                        write_atomic(path, file_bytes)?;
+                    }
+                    return Ok(());
+                }
+            }
             let plan = crate::writers::generated_public_write::plan_public_write(
                 &original, metadata, removed,
             )?;
             let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
-                &reader, &original, plan,
+                reader, &original, plan,
             )?;
+            let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
+            if whole_clear
+                || (crate::writers::exif_surgical::removes_carrier(removed) && after.len() > 1)
+            {
+                // The clear's only post-condition, and one of `IFD0:All` /
+                // `EXIF:All` (every EXIF APP1 goes): no second EXIF APP1 is
+                // left, nor any after a clear.
+                if !after.is_empty() {
+                    return Err(ExifToolError::unsupported_format(
+                        "EXIF write verification failed: the EXIF block was to be \
+                         cleared but is still present; nothing was written",
+                    ));
+                }
+            } else {
+                // Every removal gone, every set present, before anything is
+                // written (`exif_surgical::verify_exif_write`).
+                let before = crate::writers::exif_surgical::jpeg_exif_payload(file_bytes)?;
+                crate::writers::exif_surgical::verify_exif_write(
+                    before.as_deref(),
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    &original,
+                    metadata,
+                    removed,
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                )?;
+                crate::writers::exif_surgical::verify_dropped_rows_gone(
+                    &original,
+                    metadata,
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                )?;
+                crate::writers::exif_surgical::verify_makernote_rows_set(
+                    &original,
+                    metadata,
+                    before.as_deref(),
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                )?;
+                // A deleted carrier is not read (its chain went with it).
+                if let (false, Some(before), Some(after), Some(header)) = (
+                    crate::writers::exif_surgical::removes_carrier(removed),
+                    before.as_deref(),
+                    after.first(),
+                    crate::writers::exif_surgical::jpeg_exif_header_offset(file_bytes),
+                ) {
+                    crate::writers::exif_surgical::verify_chain_data_after_block(
+                        before,
+                        after,
+                        &file_bytes[header..],
+                    )?;
+                }
+            }
+            if without_ciff.is_some()
+                && !matches!(
+                    crate::writers::exif_surgical::jpeg_without_ciff(&serialized_bytes),
+                    Ok(None)
+                )
+            {
+                return Err(ExifToolError::unsupported_format(
+                    "EXIF write verification failed: the CIFF segment was to be \
+                     deleted but is still present; nothing was written",
+                ));
+            }
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {
             // The caller's map was derived from `read_metadata`, so judge
-            // which PNG: keys changed against that same map.
-            match baseline.as_ref() {
-                Some(baseline) => {
-                    write_png_metadata_with_baseline(path, &reader, metadata, baseline)?
-                }
-                None => write_png_metadata(path, &reader, metadata)?,
+            // which keys changed against that same map (the eXIf chunk goes
+            // through the JPEG writer's surgical EXIF transaction, which also
+            // needs the named removals).
+            let baseline = match baseline {
+                Some(baseline) => baseline,
+                None => crate::parsers::png::parse_png_metadata(&reader).unwrap_or_default(),
+            };
+            if !whole_clear {
+                crate::writers::exif_surgical::refuse_dropped_makernote_rows(
+                    &crate::writers::exif_surgical::dropped_makernote_rows(
+                        &baseline, metadata, removed,
+                    ),
+                )?;
+                crate::writers::exif_surgical::refuse_changed_makernote_rows(
+                    &crate::writers::exif_surgical::changed_makernote_rows(&baseline, metadata),
+                )?;
             }
+            write_png_metadata_with_removals(path, &reader, metadata, &baseline, removed)?
         }
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;
@@ -1164,10 +1473,12 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Modify the single tag
-    metadata.insert(canonical_write_tag_name(tag_name), new_value);
+    let key = canonical_write_tag_name(tag_name);
+    metadata.insert(key, new_value);
 
-    // Step 3: Write all metadata back to file
-    write_metadata(path, &metadata)?;
+    // Step 3: Write all metadata back to file; the tag is an explicit set,
+    // whatever its value.
+    write_metadata_transaction(path, &metadata, &[], &[key.to_string()])?;
 
     Ok(())
 }
@@ -1323,6 +1634,13 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
             // placeholder, `TagOccurrence::stored`); the writer serializes
             // stored forms, never printed ones.
             let value = occurrence.project(ValueChannel::Stored).into_owned();
+            // An XP string copies as its stored bytes re-packed, which keeps
+            // a stored surrogate pair (ExifTool's `-TagsFromFile`). Text
+            // standing in for those bytes cannot say whether a code point
+            // above U+FFFF was a pair; refuse it rather than guess.
+            if crate::writers::xp_strings::is_xp_tag_key(tag_name) {
+                crate::writers::xp_strings::refuse_unknown_provenance(tag_name, &value)?;
+            }
             // Insert tag into destination (merges with existing, preserving others)
             dest_metadata.insert(tag_name.clone(), value);
         }
@@ -1477,6 +1795,7 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments_with_options(&segments, &mut metadata, options);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
+    process_media_jukebox_segments(&segments, &mut metadata);
 
     // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
     // than the parsed segment list, which stops at the EOI marker. It carries
@@ -1500,6 +1819,22 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
         }
         for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
+        }
+        // ProcessJPEG identifies and walks trailers only once it reaches SOS
+        // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
+        // before SOS, a format error) has none read. TrailerStart, which
+        // ProcessVivo scans from, is the byte after the EOI that the walk
+        // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
+        if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
+            let trailer_start = usize::try_from(sos.offset)
+                .ok()
+                .and_then(|offset| offset.checked_add(2))
+                .and_then(|after_marker| {
+                    crate::parsers::vivo::jpeg_trailer_start(file, after_marker)
+                });
+            metadata.merge_winners_keeping_group1(
+                &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
+            );
         }
     }
 
@@ -2290,13 +2625,12 @@ mod tests {
 
     #[test]
     fn mie_reports_parsed() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MIE.mie");
-        if !path.is_file() {
-            eprintln!("skipping: pinned fixture not present at {}", path.display());
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("MIE.mie") else {
+            eprintln!("skipping: pinned fixture MIE.mie is absent");
             return;
-        }
+        };
 
-        let report = read_metadata_report(path).expect("MIE now has a real parser");
+        let report = read_metadata_report(&path).expect("MIE now has a real parser");
 
         // Step 32 routed `FileFormat::MIE` to `mie.rs`'s standalone-document
         // parser -- this file used to bottom out in `add_identity_tags`
@@ -2315,13 +2649,12 @@ mod tests {
 
     #[test]
     fn samsung_i8910_scalado_app4_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGT-i8910.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung GT-i8910 fixture");
         let metadata = parse_jpeg_metadata(&reader, &ReadOptions::default_full_listing())
             .expect("parse pinned Samsung fixture");
@@ -2406,5 +2739,487 @@ mod tests {
 
         // Size should be (100 - 20) = 80
         assert_eq!(sub_reader.size(), 80);
+    }
+}
+
+/// One public-batch transaction that removes a whole group and sets tags in
+/// it (`write_metadata_with_removals`: the map with the sets, the group in
+/// `removed`). Pinned ExifTool 13.59 deletes first, then sets:
+/// `-EXIF:All= -Make=x` leaves a block holding Make, `-ExifIFD:All=
+/// -ExifIFD:ISO=200` an ExifIFD holding ISO, `-GPS:All= -GPS:GPSAltitude=50`
+/// a GPS IFD holding GPSAltitude. The carrier-wide removal returned an empty
+/// plan before looking at the sets, the JPEG and PNG paths dropped the whole
+/// EXIF carrier, and `verify_exif_write` accepted the empty output before
+/// checking the sets: success, and the set lost (b92d0c44). Group removals
+/// cleared the directory the set had just been planned into.
+///
+/// Known difference from the oracle, not asserted: a block or directory
+/// created so carries no mandatory entries (ExifTool adds YCbCrPositioning,
+/// ExifVersion/ComponentsConfiguration/ColorSpace, GPSVersionID...); those
+/// belong to staging/beta1/exififd-mandatory. IFD1 and InteropIFD sets are
+/// refused (a raw-carried class) where ExifTool creates the directory.
+#[cfg(test)]
+mod removal_then_set_tests {
+    use super::*;
+    use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    fn w16(v: u16, bo: ByteOrder) -> [u8; 2] {
+        match bo {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        }
+    }
+    fn w32(v: u32, bo: ByteOrder) -> [u8; 4] {
+        match bo {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        }
+    }
+
+    /// IFD0 {Make "Acme", Model "M1", Artist "me", ExifIFD, GPS} -> IFD1
+    /// {Compression 6, a 4-byte thumbnail}; ExifIFD {ExposureProgram 2,
+    /// ISO 100}; GPS {GPSVersionID 2.3.0.0, GPSAltitudeRef 0}.
+    fn block(bo: ByteOrder) -> Vec<u8> {
+        let entry = |tag: u16, typ: u16, count: u32, value: [u8; 4]| {
+            [
+                w16(tag, bo).as_slice(),
+                &w16(typ, bo),
+                &w32(count, bo),
+                &value,
+            ]
+            .concat()
+        };
+        let short = |v: u16| {
+            let mut b = [0; 4];
+            b[..2].copy_from_slice(&w16(v, bo));
+            b
+        };
+        // IFD0 at 8: 5 entries -> 8+2+60+4 = 74; "Acme\0" at 74 (6 with pad)
+        // ExifIFD at 80: 2 entries -> 80+2+24+4 = 110
+        // GPS at 110: 2 entries -> 140; IFD1 at 140: 3 entries -> 182; thumb 182
+        let mut t = match bo {
+            ByteOrder::LittleEndian => b"II".to_vec(),
+            ByteOrder::BigEndian => b"MM".to_vec(),
+        };
+        t.extend(w16(42, bo));
+        t.extend(w32(8, bo));
+        t.extend(w16(5, bo));
+        t.extend(entry(0x010F, 2, 5, w32(74, bo)));
+        t.extend(entry(0x0110, 2, 3, *b"M1\0\0"));
+        t.extend(entry(0x013B, 2, 3, *b"me\0\0"));
+        t.extend(entry(0x8769, 4, 1, w32(80, bo)));
+        t.extend(entry(0x8825, 4, 1, w32(110, bo)));
+        t.extend(w32(140, bo));
+        t.extend(b"Acme\0\0");
+        assert_eq!(t.len(), 80);
+        t.extend(w16(2, bo));
+        t.extend(entry(0x8822, 3, 1, short(2)));
+        t.extend(entry(0x8827, 3, 1, short(100)));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 110);
+        t.extend(w16(2, bo));
+        t.extend(entry(0x0000, 1, 4, [2, 3, 0, 0]));
+        t.extend(entry(0x0005, 1, 1, [0, 0, 0, 0]));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 140);
+        t.extend(w16(3, bo));
+        t.extend(entry(0x0103, 3, 1, short(6)));
+        t.extend(entry(0x0201, 4, 1, w32(182, bo)));
+        t.extend(entry(0x0202, 4, 1, w32(4, bo)));
+        t.extend(w32(0, bo));
+        assert_eq!(t.len(), 182);
+        t.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+        t
+    }
+
+    fn jpeg(tiff: &[u8]) -> Vec<u8> {
+        const BODY: &str = "ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        out.extend(b"Exif\0\0");
+        out.extend(tiff);
+        out.extend(
+            (0..BODY.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&BODY[i..i + 2], 16).unwrap()),
+        );
+        out
+    }
+
+    fn png(tiff: &[u8]) -> Vec<u8> {
+        let crc = |data: &[u8]| {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &byte in data {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        0xEDB8_8320 ^ (crc >> 1)
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        };
+        let chunk = |kind: &[u8; 4], data: &[u8]| {
+            let body = [kind.as_slice(), data].concat();
+            [
+                (data.len() as u32).to_be_bytes().as_slice(),
+                &body,
+                &crc(&body).to_be_bytes(),
+            ]
+            .concat()
+        };
+        let ihdr = [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0];
+        let idat = [0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01];
+        [
+            b"\x89PNG\r\n\x1a\n".as_slice(),
+            &chunk(b"IHDR", &ihdr),
+            &chunk(b"eXIf", tiff),
+            &chunk(b"IDAT", &idat),
+            &chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// Runs one batch: `removed` plus the `sets` over the map read from the
+    /// file. Returns the result, the file bytes before and the map after.
+    fn batch(
+        dir: &Path,
+        name: &str,
+        original: &[u8],
+        removed: &[&str],
+        sets: &[(&str, TagValue)],
+    ) -> (Result<()>, MetadataMap) {
+        let path = dir.join(name);
+        std::fs::write(&path, original).unwrap();
+        let mut map = read_metadata(&path).unwrap();
+        for (key, value) in sets {
+            map.insert(*key, value.clone());
+        }
+        let removed: Vec<String> = removed.iter().map(|k| k.to_string()).collect();
+        let result = write_metadata_with_removals(&path, &map, &removed);
+        if result.is_err() {
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                original,
+                "{name}: refused but written"
+            );
+        }
+        (result, read_metadata(&path).unwrap())
+    }
+
+    #[test]
+    fn a_set_survives_a_carrier_wide_removal_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("b.jpg", jpeg(&tiff)), ("b.png", png(&tiff))] {
+                for group in ["IFD0:All", "EXIF:All"] {
+                    for sets in [
+                        // legacy
+                        vec![("IFD0:Make", TagValue::new_string("x"))],
+                        // generated
+                        vec![("IFD0:Artist", TagValue::new_string("you"))],
+                        // mixed
+                        vec![
+                            ("IFD0:Make", TagValue::new_string("x")),
+                            ("IFD0:Artist", TagValue::new_string("you")),
+                        ],
+                    ] {
+                        let label = format!(
+                            "{bo:?} {carrier} {group} {:?}",
+                            sets.iter().map(|s| s.0).collect::<Vec<_>>()
+                        );
+                        let (result, after) =
+                            batch(dir.path(), carrier, &original, &[group], &sets);
+                        result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                        for (key, value) in &sets {
+                            assert_eq!(after.get_string(key), value.as_string(), "{label}: {key}");
+                        }
+                        // Everything else went with the carrier.
+                        for gone in [
+                            "IFD0:Model",
+                            "ExifIFD:ISO",
+                            "ExifIFD:ExposureProgram",
+                            "GPS:GPSAltitudeRef",
+                        ] {
+                            assert!(!after.contains_key(gone), "{label}: {gone} kept");
+                        }
+                        if !sets.iter().any(|s| s.0 == "IFD0:Make") {
+                            assert!(!after.contains_key("IFD0:Make"), "{label}: Make kept");
+                        }
+                        if !sets.iter().any(|s| s.0 == "IFD0:Artist") {
+                            assert!(!after.contains_key("IFD0:Artist"), "{label}: Artist kept");
+                        }
+                        // The new block's byte order, as the oracle's: MM,
+                        // but for a PNG's IFD0:All, which keeps its header.
+                        let written =
+                            payload_of(&std::fs::read(dir.path().join(carrier)).unwrap()).unwrap();
+                        let expected: &[u8] = if carrier == "b.png" && group == "IFD0:All" {
+                            &tiff[..2]
+                        } else {
+                            b"MM"
+                        };
+                        assert_eq!(&written[..2], expected, "{label}: byte order");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A TIFF-structured file: pinned ExifTool 13.59 never deletes IFD0
+    /// there ("Can't delete IFD0 from TIFF") and still sets Make, so
+    /// `IFD0:All` is a no-op and the set lands in place; `EXIF:All`, which
+    /// deletes ExifIFD there, is refused (a directory deletion the in-place
+    /// TIFF writer cannot make), the file untouched.
+    #[test]
+    fn a_tiff_file_keeps_ifd0_and_takes_the_set() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            let (result, after) = batch(
+                dir.path(),
+                "t.tif",
+                &tiff,
+                &["IFD0:All"],
+                &[("IFD0:Make", TagValue::new_string("xy"))],
+            );
+            result.unwrap_or_else(|e| panic!("{bo:?}: {e}"));
+            assert_eq!(after.get_string("IFD0:Make"), Some("xy"), "{bo:?}");
+            assert_eq!(after.get_string("IFD0:Model"), Some("M1"), "{bo:?}");
+            let (result, _) = batch(
+                dir.path(),
+                "t.tif",
+                &tiff,
+                &["EXIF:All"],
+                &[("IFD0:Make", TagValue::new_string("xy"))],
+            );
+            assert!(result.is_err(), "{bo:?} EXIF:All");
+        }
+    }
+
+    /// The TIFF payload of a carrier's first EXIF block (JPEG APP1 or PNG
+    /// eXIf), or `None`.
+    fn payload_of(file: &[u8]) -> Option<Vec<u8>> {
+        if file.starts_with(b"\x89PNG") {
+            let mut at = 8;
+            while at + 8 <= file.len() {
+                let len = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+                if &file[at + 4..at + 8] == b"eXIf" {
+                    return Some(file[at + 8..at + 8 + len].to_vec());
+                }
+                at += 12 + len;
+            }
+            None
+        } else {
+            crate::writers::exif_surgical::jpeg_exif_payload(file).unwrap()
+        }
+    }
+
+    /// A carrier the transaction deletes (`IFD0:All` / `EXIF:All`) is never
+    /// parsed: an unreadable APP1 / eXIf payload (too short, a bad byte-order
+    /// mark, a bad magic number, an empty IFD0) no longer fails the write in
+    /// `ifd0_state` or a scan before the fresh block is built (890fca8e
+    /// refused every one with a generated set, "IFD count is outside the
+    /// file" and the like). Pinned ExifTool 13.59, `-EXIF:All= -IFD0:Artist=x`
+    /// on the same payloads (review-head evidence `carrier-malformed-oracle
+    /// .txt`): Artist written into a new block, big-endian for a JPEG and
+    /// for a PNG under `EXIF:All`; a PNG under `IFD0:All` keeps a readable
+    /// `II` mark. One exception, the oracle's: `IFD0:All` keeps a PNG eXIf
+    /// too short for a TIFF header, and ExifTool then writes nothing
+    /// ("unchanged"); this writer refuses the set there instead of dropping
+    /// it. Known difference: no mandatory YCbCrPositioning yet (#955).
+    #[test]
+    fn a_deleted_unreadable_carrier_is_never_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let payloads: [(&str, Vec<u8>); 5] = [
+            ("short", b"II*".to_vec()),
+            ("byte-order", b"XX*\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("magic", b"II\x2b\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("empty-II", b"II*\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            ("empty-MM", b"MM\0*\0\0\0\x08\0\0\0\0\0\0".to_vec()),
+        ];
+        for (label, payload) in payloads {
+            for (carrier, original) in [("u.jpg", jpeg(&payload)), ("u.png", png(&payload))] {
+                for group in ["EXIF:All", "IFD0:All"] {
+                    for sets in [
+                        vec![("IFD0:Artist", TagValue::new_string("x"))],
+                        vec![("IFD0:Make", TagValue::new_string("x"))],
+                        vec![
+                            ("IFD0:Artist", TagValue::new_string("x")),
+                            ("IFD0:Make", TagValue::new_string("x")),
+                        ],
+                    ] {
+                        let case = format!(
+                            "{label} {carrier} {group} {:?}",
+                            sets.iter().map(|s| s.0).collect::<Vec<_>>()
+                        );
+                        let (result, after) =
+                            batch(dir.path(), carrier, &original, &[group], &sets);
+                        if carrier == "u.png" && group == "IFD0:All" && label == "short" {
+                            assert!(result.is_err(), "{case}: the oracle writes nothing here");
+                            continue;
+                        }
+                        result.unwrap_or_else(|e| panic!("{case}: {e}"));
+                        for (key, value) in &sets {
+                            assert_eq!(after.get_string(key), value.as_string(), "{case}: {key}");
+                        }
+                        let written = payload_of(&std::fs::read(dir.path().join(carrier)).unwrap())
+                            .unwrap_or_else(|| panic!("{case}: no EXIF block"));
+                        let keeps_ii =
+                            carrier == "u.png" && group == "IFD0:All" && payload.starts_with(b"II");
+                        let expected: &[u8] = if keeps_ii { b"II" } else { b"MM" };
+                        assert_eq!(&written[..2], expected, "{case}: byte order");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The boundary of the rule above on a PNG: a set in a malformed eXIf
+    /// chunk that the same transaction does *not* delete -- no removal, or a
+    /// removal short of the carrier (`IFD0:Software`, `ExifIFD:All`) -- is
+    /// refused with the file untouched and a message naming the fault
+    /// (`png_writer::MalformedExif`), since that write would have to edit
+    /// the chunk. Pinned ExifTool 13.59 keeps a markless chunk and adds a
+    /// second eXIf, edits a magic-43 chunk in place keeping the 43 (which
+    /// this reader does not read), and leaves a too-short chunk unchanged;
+    /// see `a_set_in_a_malformed_exif_chunk_is_refused_untouched`
+    /// (tests/png_exif_surgical.rs).
+    #[test]
+    fn a_set_in_a_kept_malformed_exif_chunk_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let payloads: [(&str, Vec<u8>, &str); 3] = [
+            ("short", b"II*".to_vec(), "too short for a TIFF header"),
+            (
+                "byte-order",
+                b"XX*\0\x08\0\0\0\0\0\0\0\0\0".to_vec(),
+                "does not start with a TIFF byte-order mark",
+            ),
+            (
+                "magic",
+                b"II\x2b\0\x08\0\0\0\0\0\0\0\0\0".to_vec(),
+                "magic number 43, not 42",
+            ),
+        ];
+        for (label, payload, fault) in payloads {
+            let original = png(&payload);
+            for removed in [&[][..], &["IFD0:Software"], &["ExifIFD:All"]] {
+                let (result, _) = batch(
+                    dir.path(),
+                    "k.png",
+                    &original,
+                    removed,
+                    &[("IFD0:Artist", TagValue::new_string("x"))],
+                );
+                let error = result.expect_err(label).to_string();
+                assert!(error.contains(fault), "{label} {removed:?}: {error}");
+            }
+        }
+    }
+
+    /// A same-value set after a removal of the same tag, in one batch
+    /// (`removed = ["IFD0:Make"]`, then `IFD0:Make=Acme` with Make already
+    /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`
+    /// keeps Make. 00f0c398 inferred from the equal value that the row was
+    /// carried and deleted it; the transaction now records what was assigned
+    /// (`write_metadata_transaction`'s `assigned`), and a carried row -- the
+    /// same map without the assignment -- still goes. The same holds under a
+    /// carrier removal (`EXIF:All` then `IFD0:Make=Acme`). JPEG and PNG, II
+    /// and MM.
+    #[test]
+    fn a_same_value_set_after_a_removal_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("s.jpg", jpeg(&tiff)), ("s.png", png(&tiff))] {
+                for removal in ["IFD0:Make", "EXIF:All", "IFD0:All"] {
+                    let label = format!("{bo:?} {carrier} {removal}");
+                    let path = dir.path().join(carrier);
+                    std::fs::write(&path, &original).unwrap();
+                    let map = read_metadata(&path).unwrap();
+                    assert_eq!(map.get_string("IFD0:Make"), Some("Acme"), "{label}");
+                    write_metadata_transaction(
+                        &path,
+                        &map,
+                        &[removal.to_string()],
+                        &["IFD0:Make".to_string()],
+                    )
+                    .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    let after = read_metadata(&path).unwrap();
+                    assert_eq!(
+                        after.get_string("IFD0:Make"),
+                        Some("Acme"),
+                        "{label}: Make lost"
+                    );
+                    if removal != "IFD0:Make" {
+                        assert!(!after.contains_key("IFD0:Model"), "{label}: Model kept");
+                    }
+
+                    // Carried, not assigned: the removal wins.
+                    std::fs::write(&path, &original).unwrap();
+                    write_metadata_transaction(&path, &map, &[removal.to_string()], &[])
+                        .unwrap_or_else(|e| panic!("{label} carried: {e}"));
+                    assert!(
+                        !read_metadata(&path).unwrap().contains_key("IFD0:Make"),
+                        "{label}: carried Make kept"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_set_survives_a_group_removal_of_its_own_directory_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("g.jpg", jpeg(&tiff)), ("g.png", png(&tiff))] {
+                let label = format!("{bo:?} {carrier}");
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["ExifIFD:All"],
+                    &[("ExifIFD:ISO", TagValue::new_integer(200))],
+                );
+                result.unwrap_or_else(|e| panic!("{label} ExifIFD: {e}"));
+                assert_eq!(after.get_integer("ExifIFD:ISO"), Some(200), "{label}");
+                assert!(!after.contains_key("ExifIFD:ExposureProgram"), "{label}");
+                assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["GPS:All"],
+                    &[("GPS:GPSAltitude", TagValue::new_rational(50, 1))],
+                );
+                result.unwrap_or_else(|e| panic!("{label} GPS: {e}"));
+                assert!(
+                    after.contains_key("GPS:GPSAltitude"),
+                    "{label}: GPSAltitude lost"
+                );
+                assert!(!after.contains_key("GPS:GPSAltitudeRef"), "{label}");
+                assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+
+                // An IFD1 set: honored or refused (file untouched), never
+                // reported done and lost.
+                let (result, after) = batch(
+                    dir.path(),
+                    carrier,
+                    &original,
+                    &["IFD1:All"],
+                    &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
+                );
+                if result.is_ok() {
+                    assert!(
+                        after.contains_key("IFD1:XResolution"),
+                        "{label}: IFD1 set lost"
+                    );
+                }
+            }
+        }
     }
 }

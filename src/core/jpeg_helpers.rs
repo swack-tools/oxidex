@@ -7,7 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
-use crate::core::tag_conversion::exif_entry_to_tag_value;
+use crate::core::tag_conversion::{exif_entry_to_tag_value, exif_main_entry_forms};
 use crate::core::tiff_helpers::{
     parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
     physical_entry_indices,
@@ -30,6 +30,8 @@ use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::{Reader, events::Event};
 
 /// Processes JFIF APP0 segments and extracts version and resolution metadata.
 ///
@@ -504,6 +506,7 @@ fn process_ifd0_tags(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
+        let opcode_residual = matches!(*tag_id, 0xC740 | 0xC741 | 0xC74E);
         if let Some(engine) = engine.as_deref_mut() {
             match engine.route_entry(
                 entry_index,
@@ -513,8 +516,9 @@ fn process_ifd0_tags(
                 crate::core::exif_dir_engine::Owner::Silent,
                 metadata,
                 |name| format!("IFD0:{name}"),
-                |_, _| true,
+                |_, _| !opcode_residual,
             ) {
+                crate::core::exif_dir_engine::Owner::Engine if opcode_residual => {}
                 crate::core::exif_dir_engine::Owner::Engine
                 | crate::core::exif_dir_engine::Owner::Silent => continue,
                 crate::core::exif_dir_engine::Owner::Hand => {}
@@ -533,7 +537,30 @@ fn process_ifd0_tags(
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
-        metadata.insert(tag_name, tag_value);
+        if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                forms.print,
+                forms.value,
+                Some(forms.stored),
+                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
+        } else if opcode_residual {
+            let binary = TagValue::Binary(bytes.to_vec());
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                tag_value,
+                binary.clone(),
+                Some(binary),
+                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
+        } else {
+            metadata.insert(tag_name, tag_value);
+        }
     }
 
     (exif_ifd_offset, gps_ifd_offset)
@@ -1415,6 +1442,267 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
     }
 }
 
+/// Processes ExifTool's exact `Media Jukebox\0` APP9 XML packet.
+pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP9: u16 = 0xffe9;
+    const IDENTIFIER: &[u8] = b"Media Jukebox\0";
+    const DIRECTORY_START: usize = 22;
+    const FIELDS: [&str; 9] = [
+        "Caption",
+        "Keywords",
+        "Tool_Name",
+        "Tool_Version",
+        "People",
+        "Places",
+        "Album",
+        "Name",
+        "Date",
+    ];
+    // (field, published value). XMP.pm lets a later property replace an
+    // earlier one of the same name, so each field is kept once, last wins.
+    let mut found: Vec<(&str, Option<String>)> = Vec::new();
+    let mut record = |field: &str, value: Option<String>| {
+        let value = value.and_then(|value| {
+            if field == "Date" {
+                // JPEG.pm routes Date through ConvertUnixTime and
+                // ConvertDateTime.  Do not turn a non-finite or unsupported
+                // float into a plausible timestamp.
+                format_media_jukebox_date(&value)
+            } else {
+                Some(value)
+            }
+        });
+        let field = FIELDS
+            .iter()
+            .copied()
+            .find(|known| *known == field)
+            .expect("only known fields are recorded");
+        match found.iter_mut().find(|(known, _)| *known == field) {
+            Some(slot) => slot.1 = value,
+            None => found.push((field, value)),
+        }
+    };
+    for segment in segments.iter().filter(|segment| segment.marker == APP9) {
+        if !segment.data.starts_with(IDENTIFIER) {
+            continue;
+        }
+        // JPEG.pm recognizes the 14-byte identifier, then begins its table
+        // directory at byte 22 after the envelope and `<MJMD>` root.
+        let Some(xml) = segment.data.get(DIRECTORY_START..) else {
+            continue;
+        };
+        let mut reader = Reader::from_reader(xml);
+        // XMP.pm keeps an element's text verbatim (it trims whitespace only
+        // for rdf:Description), so no trimming here; `Rock &amp; Roll` also
+        // arrives as text/reference/text events and must keep its spaces.
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        // Element depth below `<MJMD>`: fields are its direct children.
+        let mut depth = 0usize;
+        let mut current: Option<MediaJukeboxField> = None;
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) => {
+                    depth += 1;
+                    if depth == 1 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        current = FIELDS
+                            .contains(&name.as_str())
+                            .then(|| MediaJukeboxField::new(name, &element));
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
+                }
+                Ok(Event::Empty(element)) => {
+                    if depth == 0 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        if FIELDS.contains(&name.as_str()) {
+                            if let Some((name, value)) =
+                                MediaJukeboxField::new(name, &element).published()
+                            {
+                                record(&name, value);
+                            }
+                        }
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
+                }
+                Ok(Event::Text(text)) => {
+                    if let Some(field) = current.as_mut() {
+                        match text.decode() {
+                            Ok(decoded) => field.value.push_str(&decoded),
+                            Err(_) => field.renderable = false,
+                        }
+                    }
+                }
+                Ok(Event::CData(_)) => {
+                    // XMP.pm counts a CDATA section (even `<![CDATA[]]>`) as
+                    // raw text of the element; that is not reproduced here.
+                    if let Some(field) = current.as_mut() {
+                        field.renderable = false;
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    // UnescapeXML: numeric and predefined references resolve;
+                    // an unknown named `&name;` is kept as written. A numeric
+                    // reference to a non-character (`&#0;`, a surrogate, past
+                    // U+10FFFF) becomes raw bytes there, so withhold the field.
+                    if let Some(field) = current.as_mut() {
+                        match reference.xml10_content() {
+                            Ok(name) if name.starts_with('#') => {
+                                match reference.resolve_char_ref() {
+                                    Ok(Some(character)) => field.value.push(character),
+                                    _ => field.renderable = false,
+                                }
+                            }
+                            Ok(name) => {
+                                if let Some(entity) = resolve_predefined_entity(&name) {
+                                    field.value.push_str(entity);
+                                } else {
+                                    field.value.push('&');
+                                    field.value.push_str(&name);
+                                    field.value.push(';');
+                                }
+                            }
+                            Err(_) => field.renderable = false,
+                        }
+                    }
+                }
+                Ok(Event::PI(_) | Event::Decl(_) | Event::DocType(_)) => {
+                    // XMP.pm keeps such markup verbatim in the value
+                    // (`a<?pi x?>b`); it is not reproduced here.
+                    if let Some(field) = current.as_mut() {
+                        field.renderable = false;
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    if depth == 1
+                        && let Some(field) = current.take()
+                        && let Some((name, value)) = field.published()
+                    {
+                        record(&name, value);
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    for (field, value) in found {
+        if let Some(value) = value {
+            metadata.insert_with_group1(
+                format!("XML:{field}"),
+                TagValue::new_string(value),
+                "MediaJukebox",
+            );
+        }
+    }
+}
+
+/// A direct child of the Media Jukebox root while it is being read.
+struct MediaJukeboxField {
+    name: String,
+    value: String,
+    /// Contains a child element (XMP.pm then names it by path instead).
+    nested: bool,
+    /// Every byte and reference decoded to text.
+    renderable: bool,
+    attributes: MediaJukeboxAttributes,
+}
+
+/// How a field element's attributes are treated. Which attributes XMP.pm's
+/// ParseXMPElement turns into shorthand properties, ignores, or uses as the
+/// value is deliberately not transcribed: only the clearly neutral ones are
+/// trusted, and anything else withholds an empty field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MediaJukeboxAttributes {
+    /// None, or only `xml:lang` / `xmlns:<prefix>`.
+    Neutral,
+    /// Any other attribute (a bare default `xmlns` included). A non-empty
+    /// value is still published; an empty one is withheld, since XMP.pm may
+    /// publish "", nothing, or a value taken from the attribute.
+    Other,
+    /// A `nodeID` attribute key, whatever its prefix (pinned 13.59 drops an
+    /// rdf:nodeID field with "internal error parsing nodeID's"), or
+    /// attributes that do not parse: withheld.
+    Withheld,
+}
+
+impl MediaJukeboxField {
+    fn new(name: String, element: &quick_xml::events::BytesStart<'_>) -> Self {
+        Self {
+            name,
+            value: String::new(),
+            nested: false,
+            renderable: true,
+            attributes: MediaJukeboxAttributes::of(element),
+        }
+    }
+
+    /// What reaching the end of this field records, with its name: `None`
+    /// records nothing (an earlier value stands), a `None` value withholds
+    /// the field including any earlier value it would replace, and a
+    /// `Some` value publishes.
+    fn published(self) -> Option<(String, Option<String>)> {
+        if self.nested {
+            // XMP.pm publishes it under a path-concatenated name (e.g.
+            // `CaptionFoo`), never under its own.
+            return None;
+        }
+        let withheld = !self.renderable
+            || self.attributes == MediaJukeboxAttributes::Withheld
+            || (self.value.is_empty() && self.attributes == MediaJukeboxAttributes::Other);
+        Some((self.name, (!withheld).then_some(self.value)))
+    }
+}
+
+impl MediaJukeboxAttributes {
+    fn of(element: &quick_xml::events::BytesStart<'_>) -> Self {
+        let mut attributes = Self::Neutral;
+        for attribute in element.attributes() {
+            let Ok(attribute) = attribute else {
+                return Self::Withheld;
+            };
+            let key = attribute.key.as_ref();
+            // XMP.pm resolves the prefix, so `r:nodeID` with `r` bound to
+            // the RDF namespace is rdf:nodeID too. Namespaces are not
+            // resolved here: any `nodeID` local name withholds the field.
+            // Attribute values (`note="rdf:nodeID"`) are never keys.
+            if key == b"nodeID" || key.ends_with(b":nodeID") {
+                return Self::Withheld;
+            }
+            if !(key == b"xml:lang" || key.starts_with(b"xmlns:")) {
+                attributes = Self::Other;
+            }
+        }
+        attributes
+    }
+}
+
+fn format_media_jukebox_date(value: &str) -> Option<String> {
+    // Perl numification skips ASCII whitespace only (not NBSP or other
+    // Unicode spaces, which leave the value non-numeric).
+    let days = value
+        .trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
+        .parse::<f64>()
+        .ok()?;
+    if !days.is_finite() {
+        return None;
+    }
+    // JPEG.pm:577: ConvertUnixTime(($val - (70 * 365 + 17 + 2)) * 24 * 3600),
+    // multiplied in Perl's left-to-right order so the f64 rounding matches.
+    // Reuse the pinned helper for zero and half-second rounding semantics.
+    let seconds = (days - 25_569.0) * 24.0 * 3600.0;
+    if !seconds.is_finite() || seconds.abs() >= 9.2e18 {
+        return None;
+    }
+    Some(crate::exiftool_tables::exprs::convert_unix_time(
+        seconds, false,
+    ))
+}
+
 /// Processes JPEG COM (comment) segments, and the APP10 "UNICODE" comment
 /// variant that JPEG.pm's `%Main` table declares as the very same `Comment`
 /// tag (`APP10 => [{ Name => 'Comment', Condition => '$$valPt =~
@@ -2225,17 +2513,12 @@ mod tests {
 
     #[test]
     fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path(
+            "DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
+        ) else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned DJI Mavic 2 Enterprise Advanced fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned DJI fixture");
@@ -2257,16 +2540,11 @@ mod tests {
 
     #[test]
     fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Leica/LeicaTL2.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica TL2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica TL2 segments");
@@ -2284,16 +2562,11 @@ mod tests {
 
     #[test]
     fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Leica/LeicaCL.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica CL fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica CL segments");
@@ -2317,17 +2590,12 @@ mod tests {
 
     #[test]
     fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Olympus/OlympusSH-25MR.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Olympus SH-25MR fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Olympus SH-25MR segments");
@@ -2343,15 +2611,10 @@ mod tests {
 
     #[test]
     fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Ricoh2.jpg") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Ricoh2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Ricoh2 segments");
@@ -2368,16 +2631,11 @@ mod tests {
 
     #[test]
     fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Nikon/NikonZ7_2.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Nikon Z7 II fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Nikon Z7 II segments");
@@ -2393,17 +2651,12 @@ mod tests {
 
     #[test]
     fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungSDC-130Z.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung SDC-130Z fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Samsung SDC-130Z segments");
@@ -2419,17 +2672,12 @@ mod tests {
 
     #[test]
     fn panasonic_tz57_title2_uses_exif_string_format_override() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Panasonic/PanasonicDMC-TZ57.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDMC-TZ57.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Panasonic TZ57 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Panasonic TZ57 segments");
@@ -2469,21 +2717,13 @@ mod tests {
 
     #[test]
     fn ricoh2_app5_azimuth_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let paths = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/Ricoh2.jpg",
-        ];
-        let Some(path) = paths
-            .iter()
-            .find(|path| std::path::Path::new(path).exists())
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Ricoh2.jpg")
+            .or_else(|| crate::test_support::pinned_t_images_fixture_path("Ricoh2.jpg"))
         else {
             return;
         };
-        let reader = crate::io::buffered_reader::BufferedReader::new(std::path::Path::new(path))
-            .expect("read Ricoh2.jpg");
+        let reader =
+            crate::io::buffered_reader::BufferedReader::new(&path).expect("read Ricoh2.jpg");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse Ricoh2.jpg segments");
         let mut metadata = MetadataMap::new();
@@ -2495,16 +2735,11 @@ mod tests {
 
     #[test]
     fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
+        };
         let reader =
-            crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");
+            crate::io::buffered_reader::BufferedReader::new(&path).expect("read ExifTool.jpg");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse ExifTool.jpg segments");
         let mut metadata = MetadataMap::new();
@@ -2969,6 +3204,305 @@ mod print_im_tests {
 
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0300"));
         assert!(metadata.get("IFD0:PrintIM").is_none());
+    }
+}
+
+#[cfg(test)]
+mod xp_string_tests {
+    use super::*;
+    use crate::core::tag_occurrence::{SHIM_DEFAULT_PRIORITY, ValueChannel};
+    use crate::parsers::jpeg::segment_parser::parse_segments;
+    use crate::test_support::TestReader;
+
+    fn ucs2(text: &str) -> Vec<u8> {
+        text.encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .chain([0, 0])
+            .collect()
+    }
+
+    /// A little-endian TIFF block whose IFD0 (at 8) holds the five Windows
+    /// XP strings as `int8u` entries, values after the directory.
+    fn xp_tiff() -> Vec<u8> {
+        // FujiFilmFinePixZ100fd.jpg's XPTitle: `00 00`, then UCS-2 spaces.
+        let mut title = vec![0u8, 0];
+        title.extend(ucs2("   "));
+        let entries = [
+            (0x9c9bu16, title),
+            (0x9c9c, ucs2("Comment")),
+            (0x9c9d, ucs2("Author")),
+            (0x9c9e, ucs2("a;b")),
+            (0x9c9f, ucs2("Subject")),
+        ];
+        let mut blob_at = 8 + 2 + 12 * entries.len() + 4;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let mut blobs = Vec::new();
+        for (id, bytes) in &entries {
+            tiff.extend_from_slice(&id.to_le_bytes());
+            tiff.extend_from_slice(&1u16.to_le_bytes());
+            tiff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            assert!(bytes.len() > 4, "every value is out of line");
+            tiff.extend_from_slice(&(blob_at as u32).to_le_bytes());
+            blob_at += bytes.len();
+            blobs.extend_from_slice(bytes);
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&blobs);
+        tiff
+    }
+
+    /// The five XP strings (0x9c9b-0x9c9f), through the JPEG APP1 IFD0 walk
+    /// and the embedded-EXIF IFD0 walk (PNG `eXIf`, PSD, HEIF, WebP, JXL):
+    /// one occurrence each, at the IFD0 walks' uniform priority, carrying
+    /// ExifTool's decoded text on the print and ValueConv channels. A leading
+    /// U+0000 ends the value: 13.59 prints `""` for
+    /// FujiFilmFinePixZ100fd.jpg's XPTitle. The stored channel -- what the
+    /// PNG `eXIf` rebuild and `copy_metadata` serialize -- is the entry's
+    /// bytes, which `writers::xp_strings` re-packs as ExifTool's copy does.
+    #[test]
+    fn xp_strings_decode_to_exiftool_text_on_every_channel() {
+        let tiff = xp_tiff();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("one EXIF APP1 segment");
+        let mut from_jpeg = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut from_jpeg, &mut Vec::new());
+
+        let mut from_embedded = MetadataMap::new();
+        assert!(crate::parsers::image::embedded::parse_embedded_exif(
+            &tiff,
+            &mut from_embedded
+        ));
+
+        let expected = [
+            ("XPTitle", ""),
+            ("XPComment", "Comment"),
+            ("XPAuthor", "Author"),
+            ("XPKeywords", "a;b"),
+            ("XPSubject", "Subject"),
+        ];
+        let stored = {
+            let mut title = vec![0u8, 0];
+            title.extend(ucs2("   "));
+            [
+                title,
+                ucs2("Comment"),
+                ucs2("Author"),
+                ucs2("a;b"),
+                ucs2("Subject"),
+            ]
+        };
+        for (label, metadata) in [("jpeg", &from_jpeg), ("embedded", &from_embedded)] {
+            for ((name, text), stored) in expected.into_iter().zip(&stored) {
+                let key = format!("IFD0:{name}");
+                let occurrences = metadata.occurrences_for(&key);
+                assert_eq!(occurrences.len(), 1, "{label} {key}: one occurrence");
+                assert_eq!(
+                    occurrences[0].priority, SHIM_DEFAULT_PRIORITY,
+                    "{label} {key}: priority"
+                );
+                for channel in [ValueChannel::PrintConv, ValueChannel::ValueConv] {
+                    assert_eq!(
+                        occurrences[0].project(channel).as_ref(),
+                        &TagValue::new_string(text),
+                        "{label} {key} {channel:?}"
+                    );
+                }
+                assert_eq!(
+                    occurrences[0].project(ValueChannel::Stored).as_ref(),
+                    &TagValue::Binary(stored.clone()),
+                    "{label} {key} Stored"
+                );
+            }
+        }
+    }
+
+    /// A TIFF block in `order` whose IFD0 holds every XP tag with the same
+    /// `payload` as `field_type` (int8u or undef), inline when it fits.
+    fn xp_tiff_all(payload: &[u8], field_type: u16, big_endian: bool) -> Vec<u8> {
+        let u16b = |v: u16| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let u32b = |v: u32| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let ids = [0x9c9bu16, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f];
+        let mut tiff = if big_endian {
+            b"MM\0\x2a".to_vec()
+        } else {
+            b"II\x2a\0".to_vec()
+        };
+        tiff.extend_from_slice(&u32b(8));
+        tiff.extend_from_slice(&u16b(ids.len() as u16));
+        let mut blob_at = 8 + 2 + 12 * ids.len() + 4;
+        let mut blobs = Vec::new();
+        for id in ids {
+            tiff.extend_from_slice(&u16b(id));
+            tiff.extend_from_slice(&u16b(field_type));
+            tiff.extend_from_slice(&u32b(payload.len() as u32));
+            if payload.len() <= 4 {
+                let mut inline = payload.to_vec();
+                inline.resize(4, 0);
+                tiff.extend_from_slice(&inline);
+            } else {
+                tiff.extend_from_slice(&u32b(blob_at as u32));
+                blob_at += payload.len();
+                blobs.extend_from_slice(payload);
+            }
+        }
+        tiff.extend_from_slice(&u32b(0));
+        tiff.extend_from_slice(&blobs);
+        tiff
+    }
+
+    fn jpeg_of(tiff: &[u8]) -> MetadataMap {
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(tiff);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("one EXIF APP1 segment");
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+        metadata
+    }
+
+    /// Every class of XP input -- a surrogate pair before the usual NUL
+    /// terminator, lone surrogates, odd byte counts, byte-order marks,
+    /// embedded and leading NULs, inline values -- as int8u and undef, in
+    /// II and MM files, through the JPEG and embedded IFD0 walks, gives
+    /// exactly the hand decoder's value (`raw_bytes_to_tag_value`, the
+    /// pre-B2 producer) on the print and ValueConv channels, and the entry's
+    /// bytes on the stored channel (the provenance a copy re-packs). A
+    /// generated `Decode` arm that declines (a surrogate pair decodes to
+    /// non-UTF-8 CESU-8 under ExifTool's UCS2) must not fall through to a
+    /// residual that keeps the terminator.
+    #[test]
+    fn xp_strings_match_the_hand_decoder_for_every_input_class() {
+        fn utf16le(text: &str) -> Vec<u8> {
+            text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+        }
+        let cat = |parts: &[&[u8]]| parts.concat();
+        let emoji = utf16le("\u{1F38C}");
+        let classes: Vec<(&str, Vec<u8>)> = vec![
+            ("emoji+nul", cat(&[&emoji, &[0, 0]])),
+            ("A+emoji+nul", cat(&[&utf16le("A"), &emoji, &[0, 0]])),
+            ("emoji", emoji.clone()),
+            ("emoji+nul+tail", cat(&[&emoji, &[0, 0], &utf16le("tail")])),
+            ("emoji+nul+nul", cat(&[&emoji, &[0, 0, 0, 0]])),
+            ("emoji+odd", cat(&[&emoji, &[0, 0, 0x41]])),
+            ("bom-le+emoji+nul", cat(&[&[0xff, 0xfe], &emoji, &[0, 0]])),
+            (
+                "bom-be+emoji+nul",
+                cat(&[&[0xfe, 0xff, 0xd8, 0x3c, 0xdf, 0x8c], &[0, 0]]),
+            ),
+            (
+                "lone-high+nul",
+                cat(&[&utf16le("A"), &[0x00, 0xd8], &[0, 0]]),
+            ),
+            (
+                "lone-low+nul",
+                cat(&[&utf16le("A"), &[0x00, 0xdc], &[0, 0]]),
+            ),
+            ("lone-high-end", cat(&[&utf16le("A"), &[0x00, 0xd8]])),
+            (
+                "reversed-pair+nul",
+                cat(&[&[0x8c, 0xdf, 0x3c, 0xd8], &[0, 0]]),
+            ),
+            ("odd", cat(&[&utf16le("Hi"), b"X"])),
+            ("one-byte", b"A".to_vec()),
+            ("nul-nul", vec![0, 0]),
+            ("leading-nul", cat(&[&[0, 0], &utf16le("   ")])),
+            (
+                "embedded-nul",
+                cat(&[&utf16le("Hey"), &[0, 0], &utf16le("x")]),
+            ),
+            ("inline-emoji", emoji.clone()),
+            ("bmp", cat(&[&utf16le("\u{e9}\u{4e2d} caf\u{e9}"), &[0, 0]])),
+            ("latin-high-bytes", vec![0xff, 0x00, 0x80, 0x00, 0, 0]),
+        ];
+        let names = [
+            "XPTitle",
+            "XPComment",
+            "XPAuthor",
+            "XPKeywords",
+            "XPSubject",
+        ];
+        let mut failures = Vec::new();
+        for (class, payload) in &classes {
+            for field_type in [1u16, 7] {
+                for big_endian in [false, true] {
+                    let tiff = xp_tiff_all(payload, field_type, big_endian);
+                    let mut embedded = MetadataMap::new();
+                    assert!(crate::parsers::image::embedded::parse_embedded_exif(
+                        &tiff,
+                        &mut embedded
+                    ));
+                    for (carrier, metadata) in [("jpeg", jpeg_of(&tiff)), ("embedded", embedded)] {
+                        for (offset, name) in names.iter().enumerate() {
+                            let id = 0x9c9b + offset as u16;
+                            let hand = crate::core::tag_conversion::raw_bytes_to_tag_value(
+                                payload,
+                                field_type,
+                                payload.len() as u32,
+                                id,
+                                if big_endian {
+                                    ByteOrder::BigEndian
+                                } else {
+                                    ByteOrder::LittleEndian
+                                },
+                            );
+                            let key = format!("IFD0:{name}");
+                            let occurrences = metadata.occurrences_for(&key);
+                            let label = format!(
+                                "{class} type {field_type} {} {carrier} {key}",
+                                if big_endian { "MM" } else { "II" }
+                            );
+                            if occurrences.len() != 1 {
+                                failures
+                                    .push(format!("{label}: {} occurrences", occurrences.len()));
+                                continue;
+                            }
+                            for channel in [ValueChannel::PrintConv, ValueChannel::ValueConv] {
+                                let got = occurrences[0].project(channel);
+                                if got.as_ref() != &hand {
+                                    failures.push(format!(
+                                        "{label} {channel:?}: {got:?} != hand {hand:?}"
+                                    ));
+                                }
+                            }
+                            let stored = occurrences[0].project(ValueChannel::Stored);
+                            let bytes = TagValue::Binary(payload.clone());
+                            if stored.as_ref() != &bytes {
+                                failures.push(format!("{label} Stored: {stored:?} != {bytes:?}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} mismatches:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }
 

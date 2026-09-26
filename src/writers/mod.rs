@@ -33,6 +33,8 @@ pub(crate) mod raw_segment_properties;
 // Table validation composition remains inactive until the public write route lands.
 pub(crate) mod generated_checkexif;
 pub(crate) mod generated_checkexif_rules;
+// Absolute trailer offsets (AFCP) re-based after a JPEG length change.
+pub(crate) mod jpeg_trailer;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
@@ -41,6 +43,8 @@ pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
 pub mod tiff_writer;
+// Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
+pub(crate) mod xp_strings;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {

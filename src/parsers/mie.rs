@@ -31,6 +31,22 @@ pub fn parse_mie_trailer(file: &[u8]) -> MetadataMap {
     metadata
 }
 
+/// Start of the MIE trailer that ends exactly at `end`, for a trailer-chain
+/// walk. IdentifyTrailer (ExifTool.pm:7007-7010) anchors the `zmie` footer at
+/// the current end, and ProcessMIE (MIE.pm:1705-1730) sizes the trailer from
+/// that footer's length; no interior footer is accepted here.
+pub(crate) fn trailer_start_ending_at(file: &[u8], end: usize) -> Option<usize> {
+    let file = file.get(..end)?;
+    [(SHORT_TRAILER_MARKER, 4), (LONG_TRAILER_MARKER, 8)]
+        .into_iter()
+        .find_map(|(marker, length_width)| {
+            let marker_at = end.checked_sub(marker.len() + length_width + 2)?;
+            (file.get(marker_at..marker_at + marker.len()) == Some(marker))
+                .then(|| trailer_start(file, end, length_width))
+                .flatten()
+        })
+}
+
 #[derive(Clone, Copy)]
 struct MieTrailer {
     start: usize,
@@ -1095,11 +1111,10 @@ mod tests {
 
     #[test]
     fn decodes_the_pinned_exiftool_jpeg_mie_document_trailer() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") else {
             return;
-        }
-        let file = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg")
-            .expect("pinned ExifTool JPEG fixture should be available");
+        };
+        let file = std::fs::read(&path).expect("pinned ExifTool JPEG fixture should be available");
         let metadata = parse_mie_trailer(&file);
 
         assert_eq!(metadata.get_string("MIE:TrailerSignature"), Some(""));

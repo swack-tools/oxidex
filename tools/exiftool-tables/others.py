@@ -121,6 +121,31 @@ _EXIF_PRINT_PARAMETER = (
     "}"
 )
 
+# Olympus.pm:2639-2681's CameraSettings::StackedImage OTHER sub. This is a
+# fixed two-number array conversion. The source map remains generated from the
+# pinned table dump; this registry entry authorizes only the exact executable
+# semantics captured by B::Deparse.
+OLYMPUS_STACKED_IMAGE_OTHER = (
+    "{\n    package Image::ExifTool::Olympus;\n    use strict;\n"
+    "    (my($val, $inv, $conv) = @_);\n"
+    "    if ($inv) {\n"
+    "        ($val = lc($val));\n"
+    "        (($val =~ s/(\\d+) images/* images/) or (return (undef)));\n"
+    "        (my($num) = $1);\n"
+    "        foreach $_ (keys(%$conv)) {\n"
+    "            (($val eq lc($conv->{$_})) or (next));\n"
+    "            ((($val = $_) =~ s/\\*/$num/) or (return (undef)));\n"
+    "            (return $val);\n"
+    "        }\n"
+    "    } else {\n"
+    "        ((($val =~ s/ (\\d+)/ */) and $conv->{$val}) or (return (\"Unknown ($_[0])\")));\n"
+    "        (my($num) = $1);\n"
+    "        (($val = $conv->{$val}) =~ s/\\*/$num/);\n"
+    "        (return $val);\n"
+    "    }\n"
+    "}"
+)
+
 # deparse text (exact, verbatim) -> Rust `OtherId` variant name.
 OTHER_REGISTRY = {
     _MINOLTA_AF_STATUS_FOCUS: "MinoltaAfStatusFocus",
@@ -129,6 +154,11 @@ OTHER_REGISTRY = {
     _FUJIFILM_RETURN_ARG0_IDENTITY: "Identity",
     _EXIF_PRINT_PARAMETER: "ExifPrintParameter",
 }
+
+
+def is_fixed_array_pattern_other(deparse_text):
+    """True only for the pinned Olympus StackedImage closure body."""
+    return deparse_text == OLYMPUS_STACKED_IMAGE_OTHER
 
 
 def translate_other(deparse_text):

@@ -1,13 +1,223 @@
 {
   "category_totals": {
-    "generated": 551,
+    "generated": 563,
     "not-applicable": 29,
-    "refused": 17,
-    "residual": 19,
+    "refused": 18,
+    "residual": 64,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "d0fac0c3816ab9dd98bf80af5810d614e0922482984ac375b290d4d3d7ef9f16",
+  "fragment_inputs_sha256": "70fa9e6c6d1023d40dee24fc4b1ffb5e2b980222e14560373cf177d4b1d72fa4",
   "rows": [
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x3002"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Quality",
+        "raw_key": "12290",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "2a8a0978dcbc5d3dea5176882a17e469f447a756edc06e4c6206623d804d3dd4",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x3007"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BestShotMode",
+        "raw_key": "12295",
+        "variant_path": [
+          26
+        ]
+      },
+      "source_release": "13.59",
+      "source_sha256": "80cb7841ae15f2687b4441f7694c76d23da9490db46808fe5864efafa42ea7d3",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x301b"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ArtMode",
+        "raw_key": "12315",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "74422d1d42012ba275c520d168a8820b92a9383bd721c78c842a71aa779eb72c",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLatitude"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/DJI/DJI_FC2204.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "a3988c6cf6693636420881af9743859e44a5e355a721a8e93405109fd0689a54"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLatitude",
+        "raw_key": "GpsLatitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "3cbfcaa072bbec8719a1223b4513befe3052337e1f85cf4bd66177215c9e1aa9",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLongitude"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/DJI/DJI_FC2204.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "a3988c6cf6693636420881af9743859e44a5e355a721a8e93405109fd0689a54"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLongitude",
+        "raw_key": "GpsLongitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "c154add7d20e13ccc44fb53bb5aef104033d3630ca3afe9c5f6ce0950c9a913f",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLongtitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLongtitude",
+        "raw_key": "GpsLongtitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "992d01cbf27b8bf2c861bdc81cc064f402ce33b7613c1a101c0abe9178767cbd",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Latitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Latitude",
+        "raw_key": "Latitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "be52a20e9e35ca97279a1710b4a3b1ef1f45e9c570dfa2c15bc9079e3c836998",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Longitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Longitude",
+        "raw_key": "Longitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "7feb5dd1084141bb567809362950680437d3aab13593391916b284cd7d6cf3a3",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
     {
       "field": {
         "kind": "index",
@@ -17,8 +227,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::EXIF_IFD_HAND_KEPT",
       "table": "Main"
     },
@@ -31,8 +242,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -45,8 +257,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -59,8 +272,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -73,8 +287,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -87,8 +302,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -101,9 +317,10 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
+      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
     {
@@ -115,9 +332,10 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
+      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
     {
@@ -129,9 +347,10 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
+      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
     {
@@ -143,9 +362,10 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
+      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
     {
@@ -157,9 +377,10 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
-      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
+      "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
     {
@@ -171,8 +392,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "af347c9eb62be7b8f117a04916ec7e439c04fd72eac99f6ab2c3f1d293b1e6be",
+      "source_sha256": "e07284704eb7e1861fd4f38c964c62bc361297da73eea5264e828ee9543e0c0b",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -185,8 +407,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -199,8 +422,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -213,8 +437,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -227,8 +452,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -241,8 +467,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -255,8 +482,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -269,8 +497,9 @@
       "module": "Exif",
       "owner": "residual",
       "refusal": null,
+      "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+      "source_sha256": "9820d4afbe82747aaa80c7e0760c2bcd9726e2c7caef427c5e784ad0fadcdbc2",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -8631,6 +8860,1310 @@
       "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58",
       "symbol": "src/exiftool_tables/conv/exif_main.rs::decode",
       "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x000c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "MaxAperture",
+        "raw_key": "12",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "249d9836071ce00797854f4dc08a204b58373faade990a30e193f72e4007cf1d",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0010"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ExposureTime",
+        "raw_key": "16",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "3d3fcebcfce53e321da5534f0e12914296ff8ee035f55a75c04678456d1087c6",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0014"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CameraDateTime",
+        "raw_key": "20",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "65e9a8d49071bca29bef7e69a9bb9629dfde6cf534bbf73461dc3e6763bb1d1e",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0034"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ISO",
+        "raw_key": "52",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "f4bfeac27bc245414e5ddfd83c725ebe173eb4510771a5e29e84ec07d2ea9511",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x005c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "refused",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": "HP::Type4 SerialNumber RawConv is not modeled; no value emitted",
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "SerialNumber",
+        "raw_key": "92",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "1194330d88d69c0446ea6f0a4b6e92e5ec1791e667f64d7ad3ff4c4e9f34a53f",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Album"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Album",
+        "raw_key": "Album",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Caption"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Caption",
+        "raw_key": "Caption",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Date"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Date",
+        "raw_key": "Date",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "97770fc7c66831a6dc843a05c6f3ad30585f4760c6105541271a529ab1038368",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Keywords"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Keywords",
+        "raw_key": "Keywords",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Name"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Name",
+        "raw_key": "Name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "People"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "People",
+        "raw_key": "People",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Places"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Places",
+        "raw_key": "Places",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Tool_Name"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Tool_Name",
+        "raw_key": "Tool_Name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Tool_Version"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Tool_Version",
+        "raw_key": "Tool_Version",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0002"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/JVC.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "4dfd04b3525052a57ae5825f3da3fbebb155ef311ce7f05c0302290b66aee557"
+      },
+      "module": "JVC",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JVC::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CPUVersions",
+        "raw_key": "2",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "714a16f7609615bf3fd84abfd4aa4c883be1c0c9b7a7461c91a2b0601981327e",
+      "symbol": "src/parsers/tiff/makernotes/jvc.rs::canonical_entry",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0003"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/JVC.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "4dfd04b3525052a57ae5825f3da3fbebb155ef311ce7f05c0302290b66aee557"
+      },
+      "module": "JVC",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JVC::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Quality",
+        "raw_key": "3",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "0624d8947474011160ea94fe3c03e693b3520809937c60d59b3a39a31b0df0e1",
+      "symbol": "src/parsers/tiff/makernotes/jvc.rs::canonical_entry",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0014"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Kodak.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
+      },
+      "module": "Kodak",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "TimeCreated",
+        "raw_key": "20",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "a5cd12e7f01cdbf751fa360f63fbe1e0317ff333efca3ee8366107cc45df94af",
+      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0064"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Kodak.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
+      },
+      "module": "Kodak",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "DateTimeStamp",
+        "raw_key": "100",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "93f52fc1f3090c2d204ed14ecfca1a69f6256e3b3d1613f3c0c84c712c47d07c",
+      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0008"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakMaker",
+        "raw_key": "8",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "228dd03167fd10cc8c8433a1e5151df5448ee18c5da59ebe2ff9d5a216495cb4",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0028"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakModel",
+        "raw_key": "40",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "9836b06a74d51974bc2d59c97e5815ed946d09a5c1fc6bf1f514c4bdebfd2be5",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x006c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakImageWidth",
+        "raw_key": "108",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "9becf26544e79f516d85898ceef0f542cba0e7d1ed76bd9c8a979124888deec4",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0070"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakImageHeight",
+        "raw_key": "112",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "987a4b87d59f0ada49f0211988040f0dbd051ce3b5af192256b12c65fe8fc1cc",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "index",
+        "value": "4.1"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstStartSlotNumber",
+        "raw_key": "4.1",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "0b00b61d32db58d78577c0a54eae565c4446dd253b789347b060c88aa53ba4e0",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "index",
+        "value": "4.2"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstStartFolderNumber",
+        "raw_key": "4.2",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "be567c2e41093f0903f25e33ee84e2b42b1696b3d3f4e12d7fa6c62404870747",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "index",
+        "value": "4.3"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstStartImageNumber",
+        "raw_key": "4.3",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "0a295ce83d6d200199585f1cef3ec428e15895a30214aa53658c9ccf5e159ece",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "index",
+        "value": "4.4"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstStartImageType",
+        "raw_key": "4.4",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "bd0fffe2db927d48170f46fa4e7338f64214e8f60cc8c2f948e9187d19df9bf6",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0000"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "FirmwareVersion56",
+        "raw_key": "0",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "f215cefce034e0faf010efbd7e9b1b0248cf915db2e5f08bb64af188c16bb3d7",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0004"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstFlag",
+        "raw_key": "4",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "e8ddf9412358d43952c422905485ff4780195ed022dc81a11cb4956c42cfac99",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0008"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BurstShotNumber",
+        "raw_key": "8",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "43114dac83a5796d13e5ef7e714bb0d0003cfcc59c054df5a45b5b3042d90bd3",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x000c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"
+      },
+      "module": "Nikon",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "PixelShiftActive",
+        "raw_key": "12",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "2bad057c7b014a3c316147f2358183bb88cdbeea15cbdce2a835794e65b44cfa",
+      "symbol": "src/parsers/tiff/makernotes/nikon/sub_tables.rs::parse_maker_notes_0x56",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0804"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusOM-1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "ba6154c71210b0c0319035e93c87cddcc9b7f2d0119fed0bfb23dd0ce9f60f60"
+      },
+      "module": "Olympus",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::CameraSettings",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "StackedImage",
+        "raw_key": "2052",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "1e4a959b821ec0c95015d6ef1e553169e901a2d1d9535a89ce0f70a32ec5daec",
+      "symbol": "src/exiftool_tables/runtime.rs::render",
+      "table": "CameraSettings"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "LensType"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Composite",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensType",
+        "raw_key": "LensType",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "a6e480934a7fa8c66a971244587e4b600d0ef464a3af0d718ec4274867a5217f",
+      "symbol": "src/composite/compute.rs::panasonic_lens_type",
+      "table": "Composite"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "ZoomedPreviewImage"
+      },
+      "fixture": {
+        "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+        "root": "REPOSITORY",
+        "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Composite",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ZoomedPreviewImage",
+        "raw_key": "ZoomedPreviewImage",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5493ec6ba510a89bd314db766bed2aee11eef4ed8fd21a8d7deab35b7a8520ae",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_datatag",
+      "table": "Composite"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0201"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusC740UZ.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "c97ca0e18a8f9c61635fa177009323411f2966e47fc00cd65e0e7c3f15a088a4"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Quality",
+        "raw_key": "513",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "25aaffdaee68b832ac176ef88bf82d79dd54d5fc048438437204279a7bc86991",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::parse_camera_type_and_quality",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0207"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusC740UZ.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "c97ca0e18a8f9c61635fa177009323411f2966e47fc00cd65e0e7c3f15a088a4"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CameraType",
+        "raw_key": "519",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "a0d5a0c61d51577a18a8880a5fd1f3433e67a7d6ca3b54f005f6d3e37521cefd",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::parse_camera_type_and_quality",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0f04"
+      },
+      "fixture": {
+        "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+        "root": "REPOSITORY",
+        "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ZoomedPreviewStart",
+        "raw_key": "3844",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5e1c9cdf70620a74edc5c60c7cc3c52134fe77c96d0a76e37078cb484baabf9f",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0f05"
+      },
+      "fixture": {
+        "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+        "root": "REPOSITORY",
+        "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ZoomedPreviewLength",
+        "raw_key": "3845",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "75198b9610806e8160e5fc42ab24d782516c511747be9cda5eb8ac865b11b5f4",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x2050"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxIQ_Digital59e.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "da1dcc3ab4599d6e8a0d5173ab0446ec11fea0b44f613cb655a11985028b88a3"
+      },
+      "module": "Olympus",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CameraParameters",
+        "raw_key": "8272",
+        "variant_path": [
+          2
+        ]
+      },
+      "source_release": "13.59",
+      "source_sha256": "952f63280c119fed6fc2f60d832623f7d8186f6f8aff81a1025e049e9f26670e",
+      "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00c4"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeMake",
+        "raw_key": "196",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "c4fefba3412a76794d0b232cd8e179b2779ea8ec04c77889e64c305473723c6b",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00c5"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeModel",
+        "raw_key": "197",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5dcdc2083925c61e6140c4c5b6ae701af2fcbe078323ee2bd9d2511a0faf1f87",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00e4"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-S1H.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "5139c8e4bbd892a4cb761ad27b311831b1fb226d20158a60d5f9e7cb29e9a800"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeModel",
+        "raw_key": "228",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5dcdc2083925c61e6140c4c5b6ae701af2fcbe078323ee2bd9d2511a0faf1f87",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0000"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+      },
+      "module": "Panasonic",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "MakerNoteType",
+        "raw_key": "0",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "98cba2af79e4fd63e4895340c819d2ef09c4c7e65eb0c6e9c4a9188e93ba8fb8",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0003"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+      },
+      "module": "Panasonic",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Gain",
+        "raw_key": "3",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "36e196104f30f41c345041249be7a4284ed712ff61bc7a9f8914ac910cd879b9",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0208"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxK10D.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "6d144b0591c4899a9ecd4feaf3454e2d18413d483233598eabb8e9ac2371104f"
+      },
+      "module": "Pentax",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Pentax::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "FlashInfo",
+        "raw_key": "520",
+        "variant_path": [
+          0
+        ]
+      },
+      "source_release": "13.59",
+      "source_sha256": "e9aa345e728c2991b2c0c7dc1c96edd5505cb0885bb42bb82997dacd538ec42d",
+      "symbol": "src/parsers/tiff/makernotes/pentax.rs::decode_pentax_external_flash_guide_number",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0238"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxQ-S1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "c71f4314c8f51f1f5e96490081defe90d23e8391a1489e0379d87bb8cf8ce1b9"
+      },
+      "module": "Pentax",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Pentax::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CAFPointInfo",
+        "raw_key": "568",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "fe2fc7ff107962f59ec1541c43271f249cb09746c12508bf1d7977afd7f41320",
+      "symbol": "src/parsers/tiff/makernotes/pentax.rs::decode_caf_points",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0207"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxXG-1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24662e6462f74e3fea579f172485d26d4f9e929a045d2f4d62b628299c102795"
+      },
+      "module": "Ricoh",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Ricoh::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "RicohModel",
+        "raw_key": "519",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "2e50292a28bee86543c59fabea0cea3e86cf460297d1e57a73961dabaeb8ceb0",
+      "symbol": "src/parsers/tiff/makernotes/ricoh.rs::parse_ricoh_type2_rows",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0300"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxXG-1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24662e6462f74e3fea579f172485d26d4f9e929a045d2f4d62b628299c102795"
+      },
+      "module": "Ricoh",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Ricoh::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "RicohMake",
+        "raw_key": "768",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "94e52182741c2338ab31355c074be488795d1f01af38d8ade680fd3e68d40a69",
+      "symbol": "src/parsers/tiff/makernotes/ricoh.rs::parse_ricoh_type2_rows",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFile"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFile",
+        "raw_key": "0x0100",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "e9b50c8eb90ff557cf277a0c9ed9497f9e192df5403c6e786a3175abf78ea24c",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFileName"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFileName",
+        "raw_key": "0x0100-name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "22539c93fe4a2c3fff86d928b31d0e7bf7c5e636fc272d6c8286b3fbdcaf3212",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "JSONInfo"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "Trailer",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Trailer::Vivo",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "JSONInfo",
+        "raw_key": "JSONInfo",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/parsers/vivo.rs::process_vivo",
+      "table": "Vivo"
     }
   ],
   "schema": 1,

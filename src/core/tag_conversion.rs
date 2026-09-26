@@ -19,6 +19,84 @@ use crate::core::operations_helpers::{
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
+/// Exact ExifTool 13.59 source projections admitted for hand-owned
+/// `Exif::Main` conversion residuals. The helper oracle independently dumps
+/// the pinned table, checks these hashes, executes the native entries, and
+/// commits their channel outputs for the Rust replay below.
+pub(crate) const EXIF_MAIN_RESIDUAL_PORTS: &[(u16, &str)] = &[
+    (
+        0x8298,
+        "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd",
+    ),
+    (
+        0x9287,
+        "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c",
+    ),
+    (
+        0xA462,
+        "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953",
+    ),
+    (
+        0xC740,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC741,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC74E,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC763,
+        "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5",
+    ),
+];
+
+#[must_use]
+pub(crate) fn exif_main_residual_source(tag_id: u16) -> Option<&'static str> {
+    EXIF_MAIN_RESIDUAL_PORTS
+        .binary_search_by_key(&tag_id, |(id, _)| *id)
+        .ok()
+        .map(|index| EXIF_MAIN_RESIDUAL_PORTS[index].1)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExifMainResidualPort {
+    Copyright,
+    LearningOptOutIn,
+    CompositeImageExposureTimes,
+    OpcodeList,
+    TimeCodes,
+}
+
+/// Select an implementation only for the source hash it was written and
+/// natively replayed against. Updating a registry digest alone therefore
+/// disables the old implementation instead of silently blessing it.
+#[must_use]
+pub(crate) fn exif_main_residual_port(tag_id: u16) -> Option<ExifMainResidualPort> {
+    match (tag_id, exif_main_residual_source(tag_id)) {
+        (0x8298, Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")) => {
+            Some(ExifMainResidualPort::Copyright)
+        }
+        (0x9287, Some("e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c")) => {
+            Some(ExifMainResidualPort::LearningOptOutIn)
+        }
+        (0xA462, Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")) => {
+            Some(ExifMainResidualPort::CompositeImageExposureTimes)
+        }
+        (
+            0xC740 | 0xC741 | 0xC74E,
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"),
+        ) => Some(ExifMainResidualPort::OpcodeList),
+        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")) => {
+            Some(ExifMainResidualPort::TimeCodes)
+        }
+        _ => None,
+    }
+}
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
@@ -120,6 +198,31 @@ pub fn raw_bytes_to_tag_value(
     tag_id: u16,
     byte_order: ByteOrder,
 ) -> TagValue {
+    // Exif.pm 13.59 0x8298 deliberately declares Copyright as `undef`
+    // despite its string semantics. Its RawConv therefore has to run before
+    // dispatching on the on-disk field type: translate the first NUL to a
+    // newline, trim spaces immediately before each of the first two NULs,
+    // and discard everything from the second NUL onward.
+    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::Copyright) {
+        return TagValue::new_string(format_copyright(bytes));
+    }
+
+    // Exif.pm 13.59 `%opcodeInfo`: ConvertBinary preserves the UNDEFINED
+    // payload and PrintOpcode walks a big-endian record list from the scalar
+    // reference. Keep this on the residual path: the generated conversion
+    // backend intentionally refuses ConvertBinary, while this reader still
+    // has the exact bytes and can enforce every bounds check in the source.
+    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::OpcodeList) {
+        return TagValue::new_string(format_opcode_list(bytes));
+    }
+
+    // Exif.pm 13.59 0xc763: ValueConv groups eight int8u values as lowercase
+    // two-digit hex, then PrintConv reverses the first four BCD fields into a
+    // time and optionally appends the date/timezone carried by BGF2.
+    if let Some(forms) = time_codes_forms(tag_id, bytes) {
+        return forms.print;
+    }
+
     // Exif.pm 13.59 tag 0xA20C applies `PrintSFR` to its opaque payload.
     // The header and rational matrix are both byte-order-dependent, so this
     // must happen while the TIFF reader's byte order is still available.
@@ -174,7 +277,10 @@ pub fn raw_bytes_to_tag_value(
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.
-    if tag_id == 0x9287 && matches!(field_type, 3 | 4) {
+    if tag_id == 0x9287
+        && exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::LearningOptOutIn)
+        && matches!(field_type, 3 | 4)
+    {
         if let Some(value) = format_learning_opt_out_in(bytes, byte_order) {
             return TagValue::new_string(value);
         }
@@ -234,20 +340,6 @@ pub fn raw_bytes_to_tag_value(
 
             // ASCII (type 2): null-terminated string
             ExifType::Ascii => {
-                // Exif.pm 0x8298 stores photographer and editor notices as
-                // NUL-separated strings but exposes them separated by a newline.
-                if tag_id == 0x8298 {
-                    let mut parts = bytes.split(|byte| *byte == 0);
-                    let photographer = String::from_utf8_lossy(parts.next().unwrap_or_default());
-                    let editor = String::from_utf8_lossy(parts.next().unwrap_or_default());
-                    let photographer = photographer.trim_end_matches(' ');
-                    let editor = editor.trim_end_matches(' ');
-                    return TagValue::new_string(if editor.is_empty() {
-                        photographer.to_string()
-                    } else {
-                        format!("{photographer}\n{editor}")
-                    });
-                }
                 let value = handle_ascii_type(bytes);
                 // Exif.pm 0x010f Make declares
                 // `RawConv => '$val =~ s/\s+$//; $$self{Make} = $val'`.
@@ -348,6 +440,262 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+fn format_copyright(bytes: &[u8]) -> String {
+    // Exif.pm 13.59 0x8298 applies these substitutions in this exact order:
+    //   s/ *\0/\n/; s/ *\0.*//s; s/\n$//
+    // In particular, editor trailing spaces survive when there is no second
+    // NUL, and only one final newline is removed.
+    let mut rendered = bytes.to_vec();
+    if let Some(nul) = rendered.iter().position(|byte| *byte == 0) {
+        let spaces = rendered[..nul]
+            .iter()
+            .rposition(|byte| *byte != b' ')
+            .map_or(0, |index| index + 1);
+        rendered.splice(spaces..=nul, [b'\n']);
+    }
+    if let Some(nul) = rendered.iter().position(|byte| *byte == 0) {
+        let spaces = rendered[..nul]
+            .iter()
+            .rposition(|byte| *byte != b' ')
+            .map_or(0, |index| index + 1);
+        rendered.truncate(spaces);
+    }
+    if rendered.last() == Some(&b'\n') {
+        rendered.pop();
+    }
+    crate::exiftool_tables::runtime::fix_utf8(&rendered)
+        .unwrap_or_else(|| String::from_utf8_lossy(&rendered).into_owned())
+}
+
+fn format_opcode_list(bytes: &[u8]) -> String {
+    if bytes.len() <= 4 {
+        return String::new();
+    }
+    let count = u32::from_be_bytes(bytes[..4].try_into().expect("four-byte opcode count"));
+    let mut position = 4usize;
+    let mut operations = Vec::new();
+    for _ in 0..count {
+        let Some(header_end) = position.checked_add(16) else {
+            operations.push("<err>".to_string());
+            break;
+        };
+        let Some(header) = bytes.get(position..header_end) else {
+            operations.push("<err>".to_string());
+            break;
+        };
+        let opcode = u32::from_be_bytes(header[..4].try_into().expect("four-byte opcode"));
+        let payload_len =
+            u32::from_be_bytes(header[12..16].try_into().expect("four-byte opcode length"));
+        operations.push(match opcode {
+            1 => "WarpRectilinear".to_string(),
+            2 => "WarpFisheye".to_string(),
+            3 => "FixVignetteRadial".to_string(),
+            4 => "FixBadPixelsConstant".to_string(),
+            5 => "FixBadPixelsList".to_string(),
+            6 => "TrimBounds".to_string(),
+            7 => "MapTable".to_string(),
+            8 => "MapPolynomial".to_string(),
+            9 => "GainMap".to_string(),
+            10 => "DeltaPerRow".to_string(),
+            11 => "DeltaPerColumn".to_string(),
+            12 => "ScalePerRow".to_string(),
+            13 => "ScalePerColumn".to_string(),
+            14 => "WarpRectilinear2".to_string(),
+            other => format!("[opcode {other}]"),
+        });
+        let Ok(payload_len) = usize::try_from(payload_len) else {
+            break;
+        };
+        let Some(next) = header_end.checked_add(payload_len) else {
+            break;
+        };
+        position = next;
+    }
+    operations.join(", ")
+}
+
+fn bcd_text(value: u8) -> String {
+    format!("{value:02x}")
+}
+
+fn bcd_number(value: u8) -> Option<i32> {
+    bcd_text(value).parse().ok()
+}
+
+fn time_code_zone(value: u8) -> Option<f64> {
+    let zone = value & 0x3f;
+    let bcd = bcd_number(zone).unwrap_or(100);
+    if bcd < 26 {
+        Some(f64::from(if bcd < 13 { -bcd } else { 26 - bcd }))
+    } else if bcd == 32 {
+        Some(12.75)
+    } else if (28..=31).contains(&bcd) {
+        Some(0.0)
+    } else if bcd < 100 {
+        None
+    } else if zone < 0x20 {
+        let zone = i32::from(zone);
+        Some(f64::from((if zone < 0x10 { 10 } else { 20 }) - zone) - 0.5)
+    } else {
+        let zone = i32::from(zone);
+        Some(f64::from((if zone < 0x30 { 53 } else { 63 }) - zone) + 0.5)
+    }
+}
+
+fn perl_numeric_i64(text: &str) -> i64 {
+    crate::exiftool_tables::session::numify_str(text).as_f64() as i64
+}
+
+fn perl_numeric_f64(text: &str) -> f64 {
+    crate::exiftool_tables::session::numify_str(text).as_f64()
+}
+
+fn format_time_codes(bytes: &[u8]) -> String {
+    bytes
+        .chunks_exact(8)
+        .map(|group| {
+            let mut rendered = format!(
+                "{}:{}:{}.{}",
+                bcd_text(group[3] & 0x3f),
+                bcd_text(group[2] & 0x7f),
+                bcd_text(group[1] & 0x7f),
+                bcd_text(group[0] & 0x3f),
+            );
+            if group[3] & 0x80 == 0 {
+                return rendered;
+            }
+
+            let zone = time_code_zone(group[7]);
+            if group[7] & 0x80 != 0 {
+                let hour = perl_numeric_i64(&bcd_text(group[3] & 0x3f));
+                let minute = perl_numeric_i64(&bcd_text(group[2] & 0x7f));
+                let second = perl_numeric_i64(&bcd_text(group[1] & 0x7f));
+                let fraction = bcd_text(group[0] & 0x3f);
+                let julian = perl_numeric_f64(&format!(
+                    "{}{}{}",
+                    format!("{:x}", group[6]),
+                    bcd_text(group[5]),
+                    bcd_text(group[4]),
+                ));
+                let zone_hours = zone.unwrap_or(0.0);
+                let unix = (julian - 40_587.0) * 24.0 * 3_600.0
+                    + (((hour as f64 + zone_hours) * 60.0 + minute as f64) * 60.0 + second as f64);
+                rendered = crate::exiftool_tables::exprs::convert_unix_time(unix, false);
+                if !unix.is_finite() {
+                    // ExifTool's ConvertUnixTime reaches failed gmtime with a
+                    // NaN fractional component for +/-Inf and appends `NaN`.
+                    rendered.push_str("NaN");
+                }
+                if rendered.len() >= 10 {
+                    rendered.replace_range(4..5, "-");
+                    rendered.replace_range(7..8, "-");
+                    rendered.replace_range(10..11, "T");
+                }
+                rendered.push('.');
+                rendered.push_str(&fraction);
+            } else {
+                let mut year = perl_numeric_i64(&bcd_text(group[6])) + 1900;
+                if year < 1970 {
+                    year += 100;
+                }
+                rendered = format!(
+                    "{year}-{}-{}T{rendered}",
+                    bcd_text(group[5]),
+                    bcd_text(group[4])
+                );
+            }
+            if let Some(zone_hours) = zone {
+                rendered.push_str(&crate::io::timestamp::timezone_string(
+                    (zone_hours * 3_600.0) as i32,
+                ));
+            }
+            rendered
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The three meanings ExifTool carries for TimeCodes: the decoded on-disk
+/// BYTE list, the hexadecimal ValueConv text exposed by `-n`, and the final
+/// PrintConv display. Keeping them together prevents an adapter from
+/// accidentally publishing presentation text into copy/write channels.
+pub(crate) struct TimeCodesForms {
+    pub(crate) stored: TagValue,
+    pub(crate) value: TagValue,
+    pub(crate) print: TagValue,
+}
+
+fn time_codes_forms_for_admission(
+    admission: Option<ExifMainResidualPort>,
+    bytes: &[u8],
+) -> Option<TimeCodesForms> {
+    if admission != Some(ExifMainResidualPort::TimeCodes) {
+        return None;
+    }
+    let complete = bytes.len() / 8 * 8;
+    let stored = bytes
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let value = bytes[..complete]
+        .chunks_exact(8)
+        .map(|group| {
+            group
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(TimeCodesForms {
+        stored: TagValue::new_string(stored),
+        value: TagValue::new_string(value),
+        print: TagValue::new_string(format_time_codes(bytes)),
+    })
+}
+
+/// The three forms of one of the Windows XP strings, 0x9c9b-0x9c9f
+/// (Exif.pm 13.59:2629-2676, `Format => 'undef'`): the decoded text on the
+/// print and ValueConv channels, and the entry's bytes as the stored form --
+/// "an `undef` run as its bytes" (`TagOccurrence::stored`).
+///
+/// The bytes are the provenance a copy needs: ExifTool's UCS2 decode keeps
+/// every unit as a code point, so its `-TagsFromFile` packs a surrogate pair
+/// (or a lone surrogate) back exactly, while a *typed* code point above
+/// U+FFFF is written as its low 16 bits. The decoded text cannot tell those
+/// apart; `crate::writers::xp_strings` serializes the stored bytes for a
+/// copy and the text only for a value the caller supplied.
+#[must_use]
+pub(crate) fn xp_string_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    if !(0x9C9B..=0x9C9F).contains(&tag_id) {
+        return None;
+    }
+    let text = TagValue::new_string(decode_xp_ucs2_string(bytes));
+    Some(TimeCodesForms {
+        stored: TagValue::Binary(bytes.to_vec()),
+        value: text.clone(),
+        print: text,
+    })
+}
+
+/// The print / ValueConv / stored forms of an Exif::Main entry whose hand
+/// arm keeps a stored form beside its printed value: TimeCodes
+/// ([`time_codes_forms`]) and the XP strings ([`xp_string_forms`]).
+#[must_use]
+pub(crate) fn exif_main_entry_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    time_codes_forms(tag_id, bytes).or_else(|| xp_string_forms(tag_id, bytes))
+}
+
+/// Returns TimeCodes forms only while the tag's exact pinned source hash is
+/// admitted. All adapters use this seam, so registry drift disables the hand
+/// conversion instead of publishing behavior proved against an older body.
+#[must_use]
+pub(crate) fn time_codes_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    time_codes_forms_for_admission(exif_main_residual_port(tag_id), bytes)
 }
 
 /// The existing Exif::Main RawConv trims implemented by this converter.
@@ -670,6 +1018,20 @@ fn handle_special_byte_tags(tag_id: u16, bytes: &[u8]) -> Option<TagValue> {
 /// so [`String::from_utf16_lossy`] folds the pair into U+1F38C instead. There
 /// is no rendering of that input this function could make match.
 fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
+    String::from_utf16_lossy(&xp_ucs2_units(bytes))
+}
+
+/// The UCS-2 code units an XP* value holds, as [`decode_xp_ucs2_string`]
+/// reads them: a leading byte-order mark consumed (and honoured), an odd
+/// trailing byte dropped, and the value ended at the first zero unit.
+///
+/// These are exactly the code points `Decode($val,"UCS2","II")` produces --
+/// UCS2 combines no surrogate pairs, so each unit is one code point, a lone
+/// surrogate included -- and so exactly what `ValueConvInv`'s
+/// `Encode($val,"UCS2","II")` packs back (`pack('v*')`, Charset.pm:387-390).
+/// The writers use them to reproduce what ExifTool stores for a value copied
+/// from these bytes (`crate::writers::xp_strings`).
+pub(crate) fn xp_ucs2_units(bytes: &[u8]) -> Vec<u16> {
     // Honour a leading BOM over the declared "II", as Charset.pm does.
     let (bytes, big_endian) = match bytes {
         [0xFE, 0xFF, rest @ ..] => (rest, true),
@@ -689,7 +1051,7 @@ fn decode_xp_ucs2_string(bytes: &[u8]) -> String {
         }
         units.push(unit);
     }
-    String::from_utf16_lossy(&units)
+    units
 }
 
 // ============================================================================
@@ -1658,14 +2020,13 @@ mod tests {
 
     #[test]
     fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGalaxyA55_5G.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGalaxyA55_5G.jpg",
-        );
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("Samsung Galaxy A55 parses");
+            crate::core::operations::read_metadata(&path).expect("Samsung Galaxy A55 parses");
 
         assert_eq!(metadata.get_integer("ExifIFD:TimeZoneOffset"), Some(2));
     }
@@ -1931,6 +2292,200 @@ mod tests {
         );
 
         assert_eq!(value.as_string(), Some("Photographer\nEditor"));
+    }
+
+    #[test]
+    fn copyright_applies_the_three_source_substitutions_in_order() {
+        for (raw, expected) in [
+            (&b"A\0B "[..], "A\nB "),
+            (&b"A \0B \0ignored"[..], "A\nB"),
+            (&b"A\n"[..], "A"),
+            (&b"A\n\n"[..], "A\n"),
+        ] {
+            let value =
+                raw_bytes_to_tag_value(raw, 7, raw.len() as u32, 0x8298, ByteOrder::LittleEndian);
+            assert_eq!(value.as_string(), Some(expected), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn pinned_residual_capture_replays_every_characterized_helper() {
+        fn unhex(text: &str) -> Vec<u8> {
+            text.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
+                        .expect("valid capture hex")
+                })
+                .collect()
+        }
+        fn channel(case: &serde_json::Value, name: &str) -> Vec<u8> {
+            unhex(case[name]["hex"].as_str().expect("captured channel bytes"))
+        }
+
+        let capture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/exiftool-tables/testdata/helper_oracle_outputs.json"
+        )))
+        .expect("valid helper capture");
+        let residuals = capture["residuals"].as_object().expect("residual capture");
+        assert_eq!(residuals.len(), EXIF_MAIN_RESIDUAL_PORTS.len());
+
+        for &(tag_id, source_sha256) in EXIF_MAIN_RESIDUAL_PORTS {
+            let key = format!("0x{tag_id:04x}");
+            let proof = &residuals[&key];
+            assert_eq!(proof["source_sha256"].as_str(), Some(source_sha256));
+            for case in proof["cases"].as_array().expect("native cases") {
+                let input = channel(case, "input");
+                let (stored, value, print) = match tag_id {
+                    0x8298 => {
+                        let rendered = format_copyright(&input).into_bytes();
+                        (input.clone(), rendered.clone(), rendered)
+                    }
+                    0x9287 => {
+                        let text = std::str::from_utf8(&input).expect("numeric list");
+                        let numbers = text
+                            .split_ascii_whitespace()
+                            .map(|part| part.parse::<u16>().expect("u16"))
+                            .collect::<Vec<_>>();
+                        let bytes = numbers
+                            .iter()
+                            .flat_map(|number| number.to_be_bytes())
+                            .collect::<Vec<_>>();
+                        let rendered = format_learning_opt_out_in(&bytes, ByteOrder::BigEndian)
+                            .expect("valid learning value")
+                            .into_bytes();
+                        (input.clone(), input.clone(), rendered)
+                    }
+                    0xA462 => {
+                        let rendered = crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times(
+                            &input,
+                            ByteOrder::BigEndian,
+                        )
+                        .into_bytes();
+                        (input.clone(), rendered.clone(), rendered)
+                    }
+                    0xC740 | 0xC741 | 0xC74E => (
+                        input.clone(),
+                        input.clone(),
+                        format_opcode_list(&input).into_bytes(),
+                    ),
+                    0xC763 => {
+                        let bytes = std::str::from_utf8(&input)
+                            .expect("BYTE list")
+                            .split_ascii_whitespace()
+                            .map(|part| part.parse::<u8>().expect("u8"))
+                            .collect::<Vec<_>>();
+                        let forms = time_codes_forms(tag_id, &bytes).expect("admitted TimeCodes");
+                        (
+                            forms
+                                .stored
+                                .as_string()
+                                .expect("stored string")
+                                .as_bytes()
+                                .to_vec(),
+                            forms
+                                .value
+                                .as_string()
+                                .expect("value string")
+                                .as_bytes()
+                                .to_vec(),
+                            forms
+                                .print
+                                .as_string()
+                                .expect("print string")
+                                .as_bytes()
+                                .to_vec(),
+                        )
+                    }
+                    _ => unreachable!("registry limits residual ids"),
+                };
+                assert_eq!(stored, channel(case, "stored"), "{key} stored");
+                assert_eq!(value, channel(case, "value"), "{key} ValueConv");
+                assert_eq!(print, channel(case, "print"), "{key} PrintConv");
+            }
+        }
+    }
+
+    #[test]
+    fn time_codes_forms_refuse_an_unadmitted_source() {
+        assert!(
+            time_codes_forms_for_admission(None, &[0x01, 0x02, 0x03, 0x04, 0, 0, 0, 0]).is_none(),
+            "the forms API used by adapters must fail closed without the admitted source port"
+        );
+    }
+
+    #[test]
+    fn every_time_code_zone_matches_the_exiftool_source_table() {
+        let expected = [
+            Some(0.0),
+            Some(-1.0),
+            Some(-2.0),
+            Some(-3.0),
+            Some(-4.0),
+            Some(-5.0),
+            Some(-6.0),
+            Some(-7.0),
+            Some(-8.0),
+            Some(-9.0),
+            Some(-0.5),
+            Some(-1.5),
+            Some(-2.5),
+            Some(-3.5),
+            Some(-4.5),
+            Some(-5.5),
+            Some(-10.0),
+            Some(-11.0),
+            Some(-12.0),
+            Some(13.0),
+            Some(12.0),
+            Some(11.0),
+            Some(10.0),
+            Some(9.0),
+            Some(8.0),
+            Some(7.0),
+            Some(-6.5),
+            Some(-7.5),
+            Some(-8.5),
+            Some(-9.5),
+            Some(-10.5),
+            Some(-11.5),
+            Some(6.0),
+            Some(5.0),
+            Some(4.0),
+            Some(3.0),
+            Some(2.0),
+            Some(1.0),
+            None,
+            None,
+            Some(0.0),
+            Some(0.0),
+            Some(11.5),
+            Some(10.5),
+            Some(9.5),
+            Some(8.5),
+            Some(7.5),
+            Some(6.5),
+            Some(0.0),
+            Some(0.0),
+            Some(12.75),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(5.5),
+            Some(4.5),
+            Some(3.5),
+            Some(2.5),
+            Some(1.5),
+            Some(0.5),
+        ];
+        for (code, expected) in expected.into_iter().enumerate() {
+            assert_eq!(time_code_zone(code as u8), expected, "zone=0x{code:02x}");
+        }
     }
 
     /// FujiFilm.raf stores Copyright as 510 spaces + NUL; Exif.pm 0x8298's

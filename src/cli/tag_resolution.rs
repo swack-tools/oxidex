@@ -138,12 +138,31 @@ fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
 /// bracket/colon label ExifTool itself prints (`[MakerNotes:CIFF]`,
 /// `[File:System]`), confirmed against the pinned oracle for both the
 /// single-family and multi-family cases.
+///
+/// A multi-family request is *simplified* the way `GetGroup` does it
+/// (`ExifTool.pm` 13.59, the `$simplify` branch at the end of `GetGroup`):
+/// an empty family name is dropped, a name identical to the one before it is
+/// dropped, and a leading `Main` is dropped when anything follows it. So
+/// `-G0:1` labels `File:FileType` `[File]`, not `[File:File]`, and `-G0:1:4`
+/// labels a first-copy tag `MakerNotes:Olympus`, not `MakerNotes:Olympus:`
+/// -- both confirmed against the pinned oracle. A single-family request
+/// (`-G1`) is not simplified and is returned as-is, even when empty.
 pub fn joined_family_label(occurrence: &TagOccurrence, families: &[u8]) -> String {
-    families
-        .iter()
-        .map(|&family| family_label(occurrence, family))
-        .collect::<Vec<_>>()
-        .join(":")
+    if let [family] = families {
+        return family_label(occurrence, *family);
+    }
+    let mut labels: Vec<String> = Vec::with_capacity(families.len());
+    for &family in families {
+        let label = family_label(occurrence, family);
+        if label.is_empty() || labels.last() == Some(&label) {
+            continue;
+        }
+        labels.push(label);
+    }
+    if labels.len() > 1 && labels[0] == "Main" {
+        labels.remove(0);
+    }
+    labels.join(":")
 }
 
 /// Splits a requested token (`"Make"`, `"EXIF:Make"`, `"XMP-dc:Subject"`)
@@ -171,9 +190,8 @@ pub(crate) fn occurrence_matches_qualifier(occurrence: &TagOccurrence, qualifier
 /// should render under.
 pub struct ResolvedOccurrence<'a> {
     pub occurrence: &'a TagOccurrence,
-    /// `occurrence.lookup_key()` -- kept alongside rather than recomputed at
-    /// every call site, since [`crate::core::tag_occurrence::TagOccurrence::
-    /// lookup_key`] allocates.
+    /// The literal public key retained by `MetadataMap`, independent of the
+    /// occurrence's canonical source identity and true family groups.
     pub lookup_key: String,
 }
 
@@ -198,6 +216,41 @@ fn matching_occurrences<'a, 'm>(
         .filter(move |occurrence| {
             qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
         })
+}
+
+/// [`matching_occurrences`] with the retained literal public key alongside
+/// each canonical occurrence.
+fn matching_keyed_occurrences<'a, 'm>(
+    metadata: &'m MetadataMap,
+    token: &'a str,
+) -> impl Iterator<Item = (&'m str, &'m TagOccurrence)> {
+    let (qualifier, short_name) = split_request(token);
+    metadata
+        .keyed_occurrences()
+        .filter(move |(_, occurrence)| occurrence.name.eq_ignore_ascii_case(short_name))
+        .filter(move |(_, occurrence)| {
+            qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+        })
+}
+
+fn arbitrate_keyed<'m>(
+    candidates: impl Iterator<Item = (&'m str, &'m TagOccurrence)>,
+) -> Option<(&'m str, &'m TagOccurrence)> {
+    let mut remaining = candidates;
+    let mut winner = remaining.next()?;
+    for candidate in remaining {
+        let effective_old_priority = if winner.1.priority == 0 {
+            1
+        } else {
+            winner.1.priority
+        };
+        let instance_ok = candidate.1.instance == Instance::default()
+            || candidate.1.instance == winner.1.instance;
+        if candidate.1.priority >= effective_old_priority && instance_ok {
+            winner = candidate;
+        }
+    }
+    Some(winner)
 }
 
 /// The single occurrence a bare or group-qualified `token` resolves to under
@@ -295,15 +348,22 @@ pub fn resolve_requested_tags<'a>(
     let mut out = Vec::new();
     for token in requested {
         if all_occurrences {
-            let mut matches: Vec<&TagOccurrence> = matching_occurrences(metadata, token).collect();
-            matches.sort_by_key(|occurrence| occurrence.order);
-            out.extend(matches.into_iter().map(|occurrence| ResolvedOccurrence {
-                lookup_key: occurrence.lookup_key(),
-                occurrence,
-            }));
-        } else if let Some(winner) = resolve_requested_tag(metadata, token) {
+            let mut matches: Vec<(&str, &TagOccurrence)> =
+                matching_keyed_occurrences(metadata, token).collect();
+            matches.sort_by_key(|(_, occurrence)| occurrence.order);
+            out.extend(
+                matches
+                    .into_iter()
+                    .map(|(key, occurrence)| ResolvedOccurrence {
+                        lookup_key: key.to_string(),
+                        occurrence,
+                    }),
+            );
+        } else if let Some((key, winner)) =
+            arbitrate_keyed(matching_keyed_occurrences(metadata, token))
+        {
             out.push(ResolvedOccurrence {
-                lookup_key: winner.lookup_key(),
+                lookup_key: key.to_string(),
                 occurrence: winner,
             });
         }
@@ -445,36 +505,122 @@ fn dedupe_key(map: &MetadataMap, base_key: String) -> String {
 /// instead of losing it to a formatter written for a different case.
 ///
 /// Reuses `output_formatter`'s own per-tag value rendering
-/// (`format_tag_value`/`format_tag_value_short`) so enum/GPS/binary
-/// rendering stays identical to every other output path; only the line
-/// shape (`"[label] name: value\n"`) and the ordering are specific to this
-/// function.
+/// (`format_tag_value`) so enum/GPS/binary rendering stays identical to
+/// every other output path; only the line shape (`"[label] name: value\n"`)
+/// and the ordering are specific to this function.
+///
+/// This is the default (level 0) layout only. ExifTool's level 0 prints tag
+/// *descriptions* padded to 32 columns, which needs per-table description
+/// text OxiDex does not carry, so it is left as it was; the short levels go
+/// through [`render_short_lines`].
 pub fn render_group_display_lines(
     resolved: &[ResolvedOccurrence<'_>],
     families: &[u8],
     no_print_conv: bool,
-    short: bool,
 ) -> String {
     let mut out = String::new();
     for entry in resolved {
         let label = joined_family_label(entry.occurrence, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        let rendered = if short {
-            super::output_formatter::format_tag_value_short_with_mode(
-                &entry.lookup_key,
-                &value,
-                no_print_conv,
-            )
-        } else {
-            super::output_formatter::format_tag_value_with_mode(
-                &entry.lookup_key,
-                &value,
-                no_print_conv,
-            )
-        };
+        let rendered = super::output_formatter::format_tag_value_with_mode(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+        );
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
             entry.occurrence.name
+        ));
+    }
+    out
+}
+
+/// One line of ExifTool's short text output at `level` (1, 2, or 3 and
+/// above), transcribed from the `exiftool` script's writer (13.59,
+/// `exiftool`:3034-3061):
+///
+/// ```perl
+/// } elsif ($outFormat == 0 or $outFormat == 1) {
+///     if (defined $group) { $buff = sprintf("%-15s ", "[$group]"); $len = 16; }
+///     $wid = 32 - (length($buff) - $len);
+///     my $padLen = $wid - LengthUTF8($desc);  $padLen = 0 if $padLen < 0;
+///     $buff .= $desc . (' ' x $padLen) . ": $val\n";
+/// } elsif ($outFormat == 2) {
+///     $buff = "[$group] " if defined $group;
+///     $buff .= "$tagName: $val\n";
+/// } ... else {
+///     $buff = "$group " if defined $group;
+///     $buff .= "$val\n";
+/// }
+/// ```
+///
+/// (`$desc` is the tag name once `$outFormat > 0`, `exiftool`:2861.) A group
+/// label wider than the 15-column field pushes the name column right, and
+/// the name's own padding shrinks by the same amount so `:` stays aligned:
+/// `[MakerNotes:CIFF] Make                          : Canon`. Level 3 prints
+/// the group *without* brackets.
+pub fn short_output_line(level: u8, group: Option<&str>, name: &str, value: &str) -> String {
+    match level {
+        0 | 1 => {
+            let mut line = String::new();
+            let mut len = 0usize;
+            if let Some(group) = group {
+                line = format!("{:<15} ", format!("[{group}]"));
+                len = 16;
+            }
+            let width = 32usize.saturating_sub(line.chars().count() - len);
+            let pad = width.saturating_sub(name.chars().count());
+            format!("{line}{name}{}: {value}\n", " ".repeat(pad))
+        }
+        2 => match group {
+            Some(group) => format!("[{group}] {name}: {value}\n"),
+            None => format!("{name}: {value}\n"),
+        },
+        _ => match group {
+            Some(group) => format!("{group} {value}\n"),
+            None => format!("{value}\n"),
+        },
+    }
+}
+
+/// Renders `resolved`, in its own order, at short output `level` (see
+/// [`short_output_line`]): request order for a specific `-TAG` list
+/// ([`resolve_requested_tags`]), file order for the full listing -- ExifTool
+/// sorts neither. `families` is the `-G`/`-Gn` request, if any.
+///
+/// Values go through `output_formatter`'s short value rendering, exactly as
+/// the `-G` short path and `ShortFormatter` always did. Without `-G`, the
+/// tags `ShortFormatter` always hid stay hidden
+/// ([`super::output_formatter::hidden_from_ungrouped_short_listing`]): this
+/// renderer changes the line layout and order, not the tag set.
+pub fn render_short_lines(
+    resolved: &[ResolvedOccurrence<'_>],
+    families: Option<&[u8]>,
+    no_print_conv: bool,
+    level: u8,
+) -> String {
+    let mut out = String::new();
+    for entry in resolved {
+        let value = resolved_display_value(entry.occurrence, no_print_conv);
+        if families.is_none()
+            && super::output_formatter::hidden_from_ungrouped_short_listing(
+                &entry.lookup_key,
+                &value,
+            )
+        {
+            continue;
+        }
+        let rendered = super::output_formatter::format_tag_value_short_with_mode(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+        );
+        let label = families.map(|families| joined_family_label(entry.occurrence, families));
+        out.push_str(&short_output_line(
+            level,
+            label.as_deref(),
+            &entry.occurrence.name,
+            &rendered,
         ));
     }
     out
@@ -525,14 +671,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     let tag_filter = args.specific_tags();
     let no_print_conv = !args.exiftool_compat();
 
+    // ExifTool's short text levels (`-s`, `-s2`/`-S`, `-s3`) render straight
+    // from the resolved occurrences, in request or file order, through
+    // `render_short_lines` -- with or without `-G`.
+    let short_text = args.short_level > 0 && !args.json && !args.csv;
+
     if let Some(requested) = &tag_filter {
         let resolved = resolve_requested_tags(raw_metadata, requested, args.all_tags);
+        if short_text {
+            return ResolvedFileOutput::Lines(render_short_lines(
+                &resolved,
+                args.group_display.as_deref(),
+                no_print_conv,
+                args.short_level,
+            ));
+        }
         if let Some(families) = &args.group_display
             && !args.json
             && !args.csv
         {
-            let lines =
-                render_group_display_lines(&resolved, families, no_print_conv, args.short_format);
+            let lines = render_group_display_lines(&resolved, families, no_print_conv);
             return ResolvedFileOutput::Lines(lines);
         }
         let metadata = build_display_map(
@@ -578,7 +736,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     // that path has always gone through `resolve_requested_tags`; only the
     // unfiltered listing was affected.
     let surviving = options.strip_extended_only(raw_metadata);
-    if args.group_display.is_some() || args.all_tags {
+    if args.group_display.is_some() || args.all_tags || short_text {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
         let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
             raw_metadata
@@ -601,14 +759,18 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         };
         resolved.sort_by_key(|entry| entry.occurrence.order);
 
+        if short_text {
+            return ResolvedFileOutput::Lines(render_short_lines(
+                &resolved,
+                args.group_display.as_deref(),
+                no_print_conv,
+                args.short_level,
+            ));
+        }
+
         if let Some(families) = &args.group_display {
             if !args.json && !args.csv {
-                let lines = render_group_display_lines(
-                    &resolved,
-                    families,
-                    no_print_conv,
-                    args.short_format,
-                );
+                let lines = render_group_display_lines(&resolved, families, no_print_conv);
                 return ResolvedFileOutput::Lines(lines);
             }
             let metadata = build_display_map(&resolved, Some(families), no_print_conv, !args.json);
@@ -654,7 +816,303 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Instance;
+    use crate::core::{Instance, Provenance, TagOccurrence};
+
+    fn canonical_occurrence(
+        stored: i64,
+        value: f64,
+        print: &str,
+        priority: u8,
+        instance: Instance,
+    ) -> TagOccurrence {
+        TagOccurrence {
+            id: oxidex_tags::TagId::Numeric(0x0900),
+            name: crate::core::tag_occurrence::intern("ManometerPressure"),
+            group0: crate::core::tag_occurrence::intern("MakerNotes"),
+            group1: crate::core::tag_occurrence::intern("Olympus"),
+            group2: Some(crate::core::tag_occurrence::intern("Camera")),
+            instance,
+            raw: TagValue::new_string(print),
+            value: Some(TagValue::Float(value)),
+            print: Some(TagValue::new_string(print)),
+            stored: Some(TagValue::Integer(stored)),
+            priority,
+            is_list: false,
+            order: 999,
+            origin: Provenance {
+                module: Some("Olympus"),
+                table: Some("CameraSettings"),
+                byte_range: None,
+            },
+        }
+    }
+
+    #[test]
+    fn requested_output_uses_recorded_key_with_true_groups() {
+        let mut metadata = MetadataMap::new();
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(1013, 101.3, "101.3 kPa", 1, Instance(1)),
+        );
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(999, 99.9, "99.9 kPa", 0, Instance(1)),
+        );
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(1200, 120.0, "120 kPa", 9, Instance(2)),
+        );
+
+        assert_eq!(
+            metadata.get_string("Olympus:ManometerPressure"),
+            Some("101.3 kPa"),
+            "priority-zero and another instance must not displace the first winner"
+        );
+        for request in [
+            "ManometerPressure",
+            "MakerNotes:ManometerPressure",
+            "Olympus:ManometerPressure",
+        ] {
+            let resolved = resolve_requested_tags(&metadata, &[request.to_string()], false);
+            assert_eq!(resolved.len(), 1, "{request}");
+            assert_eq!(resolved[0].lookup_key, "Olympus:ManometerPressure");
+            assert_eq!(
+                joined_family_label(resolved[0].occurrence, &[0, 1, 4]),
+                "MakerNotes:Olympus"
+            );
+            assert_eq!(
+                resolved_display_value(resolved[0].occurrence, true),
+                TagValue::Float(101.3)
+            );
+        }
+
+        let all =
+            resolve_requested_tags(&metadata, &["Olympus:ManometerPressure".to_string()], true);
+        assert_eq!(all.len(), 3);
+        assert!(
+            all.iter()
+                .all(|resolved| resolved.lookup_key == "Olympus:ManometerPressure")
+        );
+        assert_eq!(
+            all.iter()
+                .map(|resolved| resolved.occurrence.order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    fn canonical_cli_args(
+        requested: &[&str],
+        all_tags: bool,
+        numeric: bool,
+        groups: Option<Vec<u8>>,
+    ) -> CliArgs {
+        let mut args = requested
+            .iter()
+            .map(|name| std::ffi::OsString::from(format!("-{name}")))
+            .collect::<Vec<_>>();
+        args.push("fixture.orf".into());
+        CliArgs {
+            detector: crate::cli::args::DetectorMode::Signature,
+            json: true,
+            csv: false,
+            short_level: 0,
+            all_tags,
+            group_display: groups,
+            extended_output: false,
+            recursive: false,
+            preserve_file_times: false,
+            backup: false,
+            readonly: true,
+            exiftool_compat: !numeric,
+            tags_from_file: None,
+            date_format: None,
+            dry_run: false,
+            literal_paths: Vec::new(),
+            strict: false,
+            args,
+        }
+    }
+
+    fn output_map(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
+        match resolve_file_output(metadata, args) {
+            ResolvedFileOutput::Metadata(map) => map,
+            ResolvedFileOutput::Lines(_) => panic!("JSON matrix must return metadata"),
+        }
+    }
+
+    #[test]
+    fn resolve_file_output_replays_the_complete_canonical_occurrence_matrix() {
+        fn occurrence(
+            name: &str,
+            stored: i64,
+            value: f64,
+            print: &str,
+            priority: u8,
+            instance: Instance,
+        ) -> TagOccurrence {
+            TagOccurrence {
+                id: oxidex_tags::TagId::Numeric(stored as u16),
+                name: crate::core::tag_occurrence::intern(name),
+                group0: crate::core::tag_occurrence::intern("MakerNotes"),
+                group1: crate::core::tag_occurrence::intern("Olympus"),
+                group2: Some(crate::core::tag_occurrence::intern("Camera")),
+                instance,
+                raw: TagValue::Float(value),
+                value: Some(TagValue::Float(value)),
+                print: Some(TagValue::new_string(print)),
+                stored: Some(TagValue::Integer(stored)),
+                priority,
+                is_list: false,
+                order: u32::MAX,
+                origin: Provenance {
+                    module: Some("Olympus"),
+                    table: Some("CameraSettings"),
+                    byte_range: None,
+                },
+            }
+        }
+
+        let mut metadata = MetadataMap::new();
+        for row in [
+            occurrence("NormalWinner", 1, 1.0, "old", 1, Instance::default()),
+            occurrence("NormalWinner", 2, 2.0, "new", 1, Instance::default()),
+            occurrence("PriorityZero", 3, 3.0, "first-zero", 0, Instance::default()),
+            occurrence("PriorityZero", 4, 4.0, "later-zero", 0, Instance::default()),
+            occurrence("InstanceWinner", 5, 5.0, "track-one", 1, Instance(1)),
+            occurrence("InstanceWinner", 6, 6.0, "track-two", 9, Instance(2)),
+            occurrence(
+                "ChannelReplay",
+                1013,
+                101.3,
+                "101.3 kPa",
+                1,
+                Instance::default(),
+            ),
+        ] {
+            let key = format!("Olympus:{}", row.name);
+            metadata.record_occurrence(key, row);
+        }
+
+        let default = output_map(&metadata, &canonical_cli_args(&[], false, false, None));
+        assert_eq!(default.get_string("Olympus:NormalWinner"), Some("new"));
+        assert_eq!(
+            default.get_string("Olympus:PriorityZero"),
+            Some("first-zero")
+        );
+        assert_eq!(
+            default.get_string("Olympus:InstanceWinner"),
+            Some("track-one")
+        );
+        assert_eq!(
+            default.get_string("Olympus:ChannelReplay"),
+            Some("101.3 kPa")
+        );
+
+        let requested = output_map(
+            &metadata,
+            &canonical_cli_args(
+                &[
+                    "NormalWinner",
+                    "PriorityZero",
+                    "InstanceWinner",
+                    "ChannelReplay",
+                ],
+                false,
+                false,
+                None,
+            ),
+        );
+        assert_eq!(requested.get_string("Olympus:NormalWinner"), Some("new"));
+        assert_eq!(
+            requested.get_string("Olympus:PriorityZero"),
+            Some("first-zero")
+        );
+        assert_eq!(
+            requested.get_string("Olympus:InstanceWinner"),
+            Some("track-one")
+        );
+
+        for qualified in ["MakerNotes:ChannelReplay", "Olympus:ChannelReplay"] {
+            let qualified_output = output_map(
+                &metadata,
+                &canonical_cli_args(&[qualified], false, false, None),
+            );
+            assert_eq!(
+                qualified_output.get_string("Olympus:ChannelReplay"),
+                Some("101.3 kPa"),
+                "family-0 and family-1 qualifiers must reach the real output entry point: {qualified}"
+            );
+        }
+        for wrong_family in ["EXIF:ChannelReplay", "Canon:ChannelReplay"] {
+            let rejected = output_map(
+                &metadata,
+                &canonical_cli_args(&[wrong_family], false, false, None),
+            );
+            assert_eq!(
+                rejected.len(),
+                0,
+                "a non-matching true-family qualifier must not fall back to the bare tag: {wrong_family}"
+            );
+        }
+
+        let all = output_map(
+            &metadata,
+            &canonical_cli_args(&["PriorityZero"], true, false, None),
+        );
+        assert_eq!(all.get_string("Olympus:PriorityZero"), Some("first-zero"));
+        assert_eq!(
+            all.get_string("Olympus:PriorityZero (2)"),
+            Some("later-zero")
+        );
+
+        let numeric = output_map(
+            &metadata,
+            &canonical_cli_args(&["ChannelReplay"], false, true, None),
+        );
+        assert_eq!(
+            numeric.get("Olympus:ChannelReplay"),
+            Some(&TagValue::Float(101.3))
+        );
+
+        let grouped = output_map(
+            &metadata,
+            &canonical_cli_args(&["ChannelReplay"], false, false, Some(vec![0, 1, 2])),
+        );
+        assert_eq!(
+            grouped.get_string("MakerNotes:Olympus:Camera:ChannelReplay"),
+            Some("101.3 kPa")
+        );
+
+        let qualified_group_014 = output_map(
+            &metadata,
+            &canonical_cli_args(
+                &["MakerNotes:ChannelReplay"],
+                false,
+                false,
+                Some(vec![0, 1, 4]),
+            ),
+        );
+        // Pinned 13.59 `-j -G0:1:4 -Olympus:all t/images/Olympus.jpg` keys
+        // `MakerNotes:Olympus:SpecialMode`: `GetGroup` drops the empty
+        // family-4 slot of a multi-family request (see
+        // `joined_family_label`), so no `::` survives into the key.
+        assert_eq!(
+            qualified_group_014.get_string("MakerNotes:Olympus:ChannelReplay"),
+            Some("101.3 kPa"),
+            "-G0:1:4 drops the empty family-4 slot, as ExifTool's GetGroup does"
+        );
+
+        let replay = metadata
+            .keyed_occurrences()
+            .find(|(_, row)| row.name.as_ref() == "ChannelReplay")
+            .map(|(_, row)| row)
+            .expect("canonical row retained");
+        assert_eq!(replay.stored, Some(TagValue::Integer(1013)));
+        assert_eq!(replay.value, Some(TagValue::Float(101.3)));
+        assert_eq!(replay.print, Some(TagValue::new_string("101.3 kPa")));
+        assert_eq!(replay.raw, TagValue::Float(101.3));
+    }
 
     fn sample_metadata() -> MetadataMap {
         // Mirrors the pinned oracle's ExifTool.jpg shape: IFD0's Make comes
@@ -716,7 +1174,7 @@ mod tests {
                     detector: DetectorMode::Signature,
                     json: true,
                     csv: false,
-                    short_format: false,
+                    short_level: 0,
                     all_tags,
                     group_display: grouped.then_some(vec![0, 1]),
                     extended_output: false,
@@ -728,6 +1186,7 @@ mod tests {
                     tags_from_file: None,
                     date_format: None,
                     dry_run: false,
+                    literal_paths: Vec::new(),
                     strict: false,
                     args: if selected {
                         vec!["-DocumentName".into(), "fixture.webp".into()]
@@ -906,6 +1365,66 @@ mod tests {
         );
     }
 
+    /// `GetGroup`'s multi-family simplification: pinned 13.59 prints
+    /// `[File]` for `-G0:1 -FileType` and `[MakerNotes:CIFF]` for `-G0:1:4
+    /// -Make` on `t/images/ExifTool.jpg`.
+    #[test]
+    fn joined_family_label_simplifies_multi_family_requests_like_get_group() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence_with_raw(
+            "File:FileType",
+            TagValue::new_string("JPEG"),
+            TagValue::new_string("JPEG"),
+            1,
+            "File",
+            Instance::default(),
+        );
+        metadata.insert("CIFF:Make", TagValue::new_string("Canon"));
+        let file_type = resolve_requested_tag(&metadata, "FileType").unwrap();
+        assert_eq!(joined_family_label(file_type, &[0, 1]), "File");
+        assert_eq!(joined_family_label(file_type, &[1]), "File");
+        let make = resolve_requested_tag(&metadata, "Make").unwrap();
+        assert_eq!(joined_family_label(make, &[0, 1, 4]), "MakerNotes:CIFF");
+        // A single family is never simplified, even when empty.
+        assert_eq!(joined_family_label(make, &[4]), "");
+    }
+
+    /// Every layout below is the pinned 13.59 oracle's own line for
+    /// `t/images/ExifTool.jpg` (`-s`, `-G1 -s`, `-G0:1 -s`, `-G1 -s2`,
+    /// `-G1 -s3`, `-s3`).
+    #[test]
+    fn short_output_line_matches_the_exiftool_writer_at_each_level() {
+        assert_eq!(
+            short_output_line(1, None, "Make", "Canon"),
+            "Make                            : Canon\n"
+        );
+        assert_eq!(
+            short_output_line(1, Some("CIFF"), "Make", "Canon"),
+            "[CIFF]          Make                            : Canon\n"
+        );
+        assert_eq!(
+            short_output_line(1, Some("MakerNotes:CIFF"), "Make", "Canon"),
+            "[MakerNotes:CIFF] Make                          : Canon\n"
+        );
+        // A name longer than its column is never truncated.
+        let long = "A".repeat(40);
+        assert_eq!(
+            short_output_line(1, None, &long, "x"),
+            format!("{long}: x\n")
+        );
+        assert_eq!(
+            short_output_line(2, Some("CIFF"), "Make", "Canon"),
+            "[CIFF] Make: Canon\n"
+        );
+        assert_eq!(short_output_line(2, None, "Make", "Canon"), "Make: Canon\n");
+        assert_eq!(
+            short_output_line(3, Some("CIFF"), "Make", "Canon"),
+            "CIFF Canon\n"
+        );
+        assert_eq!(short_output_line(3, None, "Make", "Canon"), "Canon\n");
+        assert_eq!(short_output_line(9, None, "Make", "Canon"), "Canon\n");
+    }
+
     #[test]
     fn build_display_map_colon_style_matches_the_oracles_json_key_shape() {
         let metadata = sample_metadata();
@@ -1020,7 +1539,7 @@ mod tests {
                     detector: DetectorMode::Signature,
                     json: true,
                     csv: false,
-                    short_format: false,
+                    short_level: 0,
                     all_tags,
                     group_display: grouped.then_some(vec![0, 1]),
                     extended_output: false,
@@ -1032,6 +1551,7 @@ mod tests {
                     tags_from_file: None,
                     date_format: None,
                     dry_run: false,
+                    literal_paths: Vec::new(),
                     strict: false,
                     args: if selected {
                         vec![
@@ -1114,7 +1634,7 @@ mod tests {
                     }
                 } else {
                     args.json = false;
-                    args.short_format = true;
+                    args.short_level = 2;
                     let ResolvedFileOutput::Lines(lines) = resolve_file_output(&source, &args)
                     else {
                         panic!("expected lines")

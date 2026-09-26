@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, time
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess, sys
+import shutil, subprocess, sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -19,6 +19,15 @@ import table_modules
 import version_rehearsal_stage_adapter as adapter
 
 COMMIT = "a" * 40
+
+
+PIN_COMMIT = "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+BREW_COMMIT = "48a229ceaefd4985c50990b14116b6d856af0985"
+
+
+def fixture_rustc_vv(release: str, commit: str) -> str:
+    return (f"rustc {release} (fixture 2026-01-01)\nbinary: rustc\ncommit-hash: {commit}\n"
+            f"host: aarch64-apple-darwin\nrelease: {release}\n")
 
 
 @dataclass(frozen=True)
@@ -47,11 +56,65 @@ def fixture_text(artifact) -> str:
     return artifact.key
 
 
+
+# Captured from real `cargo test --workspace --all-features --no-fail-fast`
+# runs (stderr merged into stdout, CARGO_TERM_COLOR=never) on this host:
+# cargo's `Running`/`Doc-tests` line precedes each target's own output.
+SUITE_TESTS_OUTPUT = '    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)\n\nrunning 3 tests\ntest t::b ... ignored\ntest t::c ... ok\ntest t::a ... ok\n\ntest result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)\n\nrunning 1 test\ntest m ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-50a268676428d270)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny\n\nrunning 1 test\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n'
+SUITE_FAILED_OUTPUT = "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)\n\nrunning 3 tests\ntest t::b ... ignored\ntest t::a ... ok\ntest t::c ... FAILED\n\nfailures:\n\n---- t::c stdout ----\n\nthread 't::c' (5090742) panicked at src/lib.rs:9:62:\nboom\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    t::c\n\ntest result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`\n     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)\n\nrunning 1 test\ntest m ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-50a268676428d270)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny\n\nrunning 1 test\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\nerror: 1 target failed:\n    `--lib`\n"
+# Edition 2024 merges doc tests: one `Doc-tests` heading carries a merged
+# block and a standalone block, each with its own start and summary.
+SUITE_EDITION2024_OUTPUT = '    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running unittests src/lib.rs (target/debug/deps/tiny24-0f7cd0931238ab25)\n\nrunning 1 test\ntest t::a ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-db7a870656a72ec5)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny24\n\nrunning 3 tests\ntest src/lib.rs - one (line 13) - should panic ... ok\ntest src/lib.rs - one (line 5) ... ok\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest src/lib.rs - one (line 9) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s\n\nall doctests ran in 0.38s; merged doctests compilation took 0.19s\n'
+# Shape of this repository's real output: tests that re-exec their own binary
+# with a filter and inherited stdout interleave nested libtest runs, including
+# garbled lines, inside the outer target's output (excerpt of the 13.59 run).
+SUITE_NESTED_OUTPUT = """     Running unittests src/lib.rs (target/debug/deps/oxidex-1a)
+
+running 4 tests
+test fixtures::tests::absent_optional_fixture_has_no_path ... ok
+
+running 1 test
+
+running 1 test
+test fixtures::pinned_fixtures::environment_tests::absent_fallback_is_optional ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+test fixtures::pinned_fixtures::environment_tests::ops_root_uses_the_contract ... ok
+
+test result: ok
+test result: . 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered outok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+; finished in 0.00s
+
+test fixtures::pinned_fixtures::environment_tests::absent_fallback_is_optional ... ok
+test fixtures::pinned_fixtures::environment_tests::ops_root_uses_the_contract ... ok
+test reads_every_mac_new_header_field ... ignored, requires the pinned ExifTool fixture cache
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+"""
+
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup); self.root = Path(self.temp.name)
         self.checkout = self.root / "checkout"; self.checkout.mkdir()
         (self.checkout / ".exiftool-version").write_text("13.59\n")
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.97.1"\n')
+        self.rustc_release, self.cargo_release = "1.97.1", "1.97.1"
+        self.rustc_commit = self.binary_commit = PIN_COMMIT
+        self.rustc_path = "/Users/test/.cargo/bin/rustc"
+        self.real_resolver = adapter._resolve_executable
+        resolver = patch.object(adapter, "_resolve_executable",
+                                side_effect=lambda name, env: self.rustc_path if name == "rustc" else None)
+        resolver.start(); self.addCleanup(resolver.stop)
+        # rustup's own answer for the pin (None: rustup cannot resolve it).
+        self.rustup_pin = {"release": "1.97.1", "commit_hash": PIN_COMMIT,
+                           "path": "/Users/test/.rustup/toolchains/1.97.1/bin/rustc"}
+        self.real_rustup_pin = adapter._rustup_pin
+        rustup = patch.object(adapter, "_rustup_pin", side_effect=lambda channel, checkout, env: (
+            dict(self.rustup_pin, release=channel) if self.rustup_pin else None))
+        rustup.start(); self.addCleanup(rustup.stop)
         (self.checkout / "tools/exiftool-tables").mkdir(parents=True)
         (self.checkout / "tools/exiftool-tables/regen-all.sh").write_text("#!/bin/sh\n")
         for item in artifacts.ARTIFACTS:
@@ -65,7 +128,26 @@ class AdapterTests(unittest.TestCase):
         self.manifest = self.root / "fixtures.json"; self.manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [{"path": str(self.fixture), "sha256": adapter._sha(self.fixture), "bytes": self.fixture.stat().st_size}]}))
         self.jpeg = self.root / "write.jpg"; self.jpeg.write_bytes(b"\xff\xd8fixture")
         self.write_manifest = self.root / "write-fixtures.json"; self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
-        self.seen = []; self.diff_output = ".exiftool-version\n"
+        self.seen = []; self.suite_calls = []; self.oracle_calls = []; self.diff_output = ".exiftool-version\n"
+        (self.native / "exiftool").write_text("#!/usr/bin/env perl\n")
+        (self.native / "t/images").mkdir(parents=True); (self.native / "t/images/OOXML.docx").write_bytes(b"PK")
+        self.oracle_version, self.oracle_docx, self.missing_module = "11.78", "DOCX", None
+        (self.checkout / "tools/release").mkdir(parents=True)
+        (self.checkout / "tools/release/bootstrap_oracle.py").write_text("# bootstrap placeholder\n")
+        self.ops = self.root / "ops"
+        self.corpus = self.ops / "cache/exiftool/13.59/combined-samples"
+        (self.corpus / "Apple").mkdir(parents=True)
+        (self.corpus / "ExifTool.jpg").write_bytes(b"\xff\xd8exiftool")
+        (self.corpus / "Apple/iPhone.jpg").write_bytes(b"\xff\xd8apple")
+        self.storage = self.ops / "evidence/storage-manifest.json"
+        self.bootstrap = SimpleNamespace(
+            VERSION="13.59", LOCK={"corpus_tree_sha256": "7" * 64},
+            corpus_path=lambda root: root / "cache/exiftool/13.59/combined-samples",
+            manifest_path=lambda root: root / "evidence/storage-manifest.json")
+        self.verify_calls, self.verify_exit, self.corpus_during_run = [], 0, None
+        for name, value in (("_ops_root", lambda: self.ops), ("_bootstrap_module", lambda _checkout: self.bootstrap)):
+            patcher = patch.object(adapter, name, side_effect=value, create=True)
+            patcher.start(); self.addCleanup(patcher.stop)
         self.source_targets = tuple(
             V4Target(0x013c + index, f"StringTarget{index}", "EXIF", "IFD0", "string")
             for index in range(13)
@@ -110,11 +192,47 @@ class AdapterTests(unittest.TestCase):
             if argv[-2:] == ["status", "--porcelain=v1"]: return subprocess.CompletedProcess(argv, 0, "", "")
             if argv[-2:] == ["diff", "--name-only"]: return subprocess.CompletedProcess(argv, 0, self.diff_output, "")
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
+        if argv == ["rustc", "-vV"]:
+            return subprocess.CompletedProcess(argv, 0, fixture_rustc_vv(self.rustc_release, self.rustc_commit), "")
+        if argv == ["cargo", "-V"]:
+            return subprocess.CompletedProcess(argv, 0, f"cargo {self.cargo_release} (fixture 2026-01-01)\n", "")
+        if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
+            self.suite_calls.append((argv, kwargs["env"]))
+            if kwargs.get("stderr") is not subprocess.STDOUT:
+                raise AssertionError("release tests must merge stderr into stdout")
+            if self.corpus_during_run is not None:
+                self.corpus_during_run()
+            return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_OUTPUT, None)
+        if Path(argv[0]).name == "perl":
+            self.oracle_calls.append((argv, kwargs["env"]))
+            if argv[1].startswith("-M"):
+                code = 1 if argv[1][2:] == self.missing_module else 0
+                return subprocess.CompletedProcess(argv, code, "", "")
+            if argv[-1] == "-ver":
+                return subprocess.CompletedProcess(argv, 0, self.oracle_version + "\n", None)
+            if argv[-3:-1] == ["-s3", "-FileType"]:
+                return subprocess.CompletedProcess(argv, 0, self.oracle_docx + "\n", None)
         if argv[0] == "cargo":
             test = argv[1] == "test"
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
-            binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"writer" if test else b"binary"); binary.chmod(0o755)
+            fingerprint = f"\0/rustc/{self.binary_commit}/library/core/src/panicking.rs\0".encode()
+            binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes((b"writer" if test else b"binary") + fingerprint); binary.chmod(0o755)
             return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "manifest_path": str(self.checkout / "Cargo.toml"), "profile": {"test": test}, "target": {"name": "oxidex", "kind": ["lib"] if test else ["bin"]}, "executable": str(binary)}) + "\n", "")
+        if argv[0] == sys.executable and argv[1].endswith("tools/release/bootstrap_oracle.py"):
+            self.verify_calls.append((argv, kwargs["env"]))
+            if self.verify_exit:
+                return subprocess.CompletedProcess(argv, self.verify_exit, "refused: corpus lock hash mismatch", None)
+            root = Path(argv[argv.index("--root") + 1])
+            manifest = root / "cache/exiftool/13.59/combined-samples.manifest"
+            manifest.write_text("".join(
+                f"{adapter._sha(item)}  {item.relative_to(self.corpus).as_posix()}\n"
+                for item in sorted((value for value in self.corpus.rglob("*") if value.is_file()),
+                                   key=lambda value: value.relative_to(self.corpus).as_posix())))
+            self.storage.parent.mkdir(parents=True, exist_ok=True)
+            self.storage.write_text(json.dumps({"artifacts": {
+                "corpus_manifest": {"kind": "file", "path": str(manifest), "sha256": adapter._sha(manifest)},
+                "corpus_tree": {"kind": "tree", "path": str(self.corpus), "sha256": "7" * 64}}}))
+            return subprocess.CompletedProcess(argv, 0, str(self.storage), None)
         if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
             output = Path(argv[argv.index("--output") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             writer = Path(argv[argv.index("--test-binary") + 1]); ledger = Path(argv[argv.index("--ledger") + 1]); rules = Path(argv[argv.index("--rules") + 1])
@@ -258,6 +376,449 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
 
+    def test_release_test_suite_runs_in_isolated_target_and_counts_strictly(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["state"], "passed")
+        # One invocation, like CI's required step, but over the whole workspace.
+        self.assertEqual(adapter.TEST_COMMANDS, (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),))
+        self.assertEqual(result["test_suite"]["scope"], adapter.TEST_SCOPE)
+        self.assertIn("superset", adapter.TEST_SCOPE)
+        self.assertIn("cargo test --all-features", adapter.TEST_SCOPE)
+        self.assertEqual([argv for argv, _env in self.suite_calls], [list(row) for row in adapter.TEST_COMMANDS])
+        suite_target = self.target.resolve() / "test-suite"
+        self.assertTrue(all(env["CARGO_TARGET_DIR"] == str(suite_target) and env["CARGO_TERM_COLOR"] == "never"
+                            for _argv, env in self.suite_calls))
+        suite = result["test_suite"]
+        self.assertEqual(suite["totals"], {"passed": 5, "failed": 0, "ignored": 1, "measured": 0,
+                                           "filtered_out": 0, "targets": 4})
+        self.assertEqual(result["denominator"], 5)
+        self.assertEqual([row["exit"] for row in suite["commands"]], [0])
+        self.assertTrue(all(type(row["duration_seconds"]) is float for row in suite["commands"]))
+        self.assertEqual(suite["target_directory"], str(suite_target))
+        self.assertEqual(suite["log"], result["raw_report"])
+        log = json.loads(Path(suite["log"]["path"]).read_text())
+        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_OUTPUT])
+        # The suite's own target keeps the build's CLI and writer driver intact.
+        adapter.executor._require_binary_proof(built, self.target)
+        adapter.executor._require_binary_proof(built, self.target, "writer_binary")
+        with self.assertRaisesRegex(adapter.Refused, "stale reuse"):
+            adapter.run_release_tests(self.args("test", report=str(self.reports / "again" / "test.json")),
+                                      run=self.fake_run)
+
+    def test_release_tests_record_the_pinned_compiler_immediately_before_the_suite(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        first = len(self.seen)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        compiler = result["test_suite"]["compiler"]
+        self.assertEqual(compiler, {
+            "toolchain": {"rustc": fixture_rustc_vv("1.97.1", PIN_COMMIT).strip(),
+                          "cargo": "cargo 1.97.1 (fixture 2026-01-01)"},
+            "toolchain_pin": built["build_environment"]["toolchain_pin"],
+            "rustc_path": self.rustc_path, "pin_rustc": self.rustup_pin})
+        argvs = [argv for argv, _env in self.seen[first:]]
+        suite = argvs.index(list(adapter.TEST_COMMANDS[0]))
+        # Probed with the suite's own environment, and nothing runs in between.
+        self.assertEqual(argvs[suite - 2:suite], [["rustc", "-vV"], ["cargo", "-V"]])
+        self.assertEqual(self.seen[first + suite - 2][1], self.suite_calls[0][1])
+
+    def test_resumed_release_tests_under_an_off_pin_path_refuse_before_the_suite(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        self.rustc_release, self.rustc_commit = "1.98.1", BREW_COMMIT
+        with self.assertRaisesRegex(adapter.Refused, "rustc 1.98.1 is not the checkout's pinned 1.97.1"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+        self.assertFalse((self.reports / "test.json").exists())
+        shutil.rmtree(self.target / adapter.TEST_TARGET_SUBDIRECTORY)  # the refused attempt's residue
+        self.rustc_release, self.rustc_commit, self.cargo_release = "1.97.1", PIN_COMMIT, "1.98.1"
+        with self.assertRaisesRegex(adapter.Refused, "cargo 1.98.1 is not the checkout's pinned 1.97.1"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+        self.assertFalse((self.reports / "test.json").exists())
+
+    def test_release_tests_refuse_a_pinned_release_from_another_rustc_than_the_build(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        # rustup's 1.97.1 was reinstalled between stages: the pin still
+        # proves itself, but it is not the compiler that built the binaries.
+        self.rustc_commit = "1" * 40
+        self.rustup_pin = dict(self.rustup_pin, commit_hash="1" * 40)
+        with self.assertRaisesRegex(adapter.Refused, "differs from the build's"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+
+    def test_build_refuses_a_non_rustup_rustc_that_reports_the_pinned_release(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustc_commit = self.binary_commit = "2" * 40  # e.g. a distro rustc 1.97.1
+        self.assert_build_refused_before_cargo("is not the rustup-resolved pin")
+
+    def test_build_fails_closed_when_rustup_cannot_resolve_the_pin(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustup_pin = None
+        self.assert_build_refused_before_cargo("rustup cannot resolve the checkout's pinned toolchain 1.97.1")
+
+    def test_release_tests_refuse_a_non_rustup_rustc_before_the_suite(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        self.rustup_pin = dict(self.rustup_pin, commit_hash="3" * 40)  # the pin moved under rustup
+        with self.assertRaisesRegex(adapter.Refused, "is not the rustup-resolved pin"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+        shutil.rmtree(self.target / adapter.TEST_TARGET_SUBDIRECTORY)
+        self.rustup_pin = None
+        with self.assertRaisesRegex(adapter.Refused, "rustup cannot resolve"):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+
+    def test_pinned_toolchain_records_rustups_answer(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        self.assertEqual(built["build_environment"]["pin_rustc"], self.rustup_pin)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["test_suite"]["compiler"]["pin_rustc"], self.rustup_pin)
+
+    def test_rustup_pin_asks_the_shared_rustup_only_resolver_with_the_stage_environment(self):
+        env = {"PATH": "/allowlisted/bin", "HOME": "/Users/test"}
+        identity = adapter.instrument.RustcIdentity("rustup run 1.97.1 rustc", "/r/bin/rustc",
+                                                    "rustc 1.97.1", "1.97.1", PIN_COMMIT)
+        with patch.object(adapter.instrument, "pinned_rustc_identity", return_value=identity) as resolver:
+            self.assertEqual(self.real_rustup_pin("1.97.1", self.checkout, env),
+                             {"release": "1.97.1", "commit_hash": PIN_COMMIT, "path": "/r/bin/rustc"})
+        resolver.assert_called_once_with("1.97.1", cwd=self.checkout, env=env)
+        with patch.object(adapter.instrument, "pinned_rustc_identity", return_value=None):
+            self.assertIsNone(self.real_rustup_pin("1.97.1", self.checkout, env))
+
+    def test_rustc_must_resolve_on_the_allowlisted_path(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustc_path = None
+        self.assert_build_refused_before_cargo("rustc is not resolvable on the allowlisted PATH")
+
+    def test_executable_resolution_uses_only_the_given_environment(self):
+        with TemporaryDirectory() as directory:
+            tool = Path(directory) / "rustc"; tool.write_text("#!/bin/sh\n"); tool.chmod(0o755)
+            resolve = self.real_resolver
+            self.assertEqual(resolve("rustc", {"PATH": directory}), str(tool.resolve()))
+            self.assertIsNone(resolve("rustc", {"PATH": str(Path(directory) / "absent")}))
+
+    def test_release_tests_use_the_selected_oracle_and_ignore_ambient_overrides(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        ambient = {
+            "EXIFTOOL": "/opt/homebrew/bin/exiftool", "EXIFTOOL_CACHE_DIR": "/tmp/foreign-cache",
+            "EXIFTOOL_PERL": "/opt/homebrew/bin/perl", "OXIDEX_ALLOW_EXIFTOOL_SKEW": "1",
+            "OXIDEX_PINNED_EXIFTOOL": "/tmp/other", "CARGO_TERM_QUIET": "true", "RUSTFLAGS": "--cfg skip",
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER": "true", "RUSTC_WRAPPER": "true",
+            "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES": "0",
+        }
+        with patch.dict(os.environ, ambient):
+            result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        perl, native = self.perl.resolve(), self.native.resolve()
+        suite_target = self.target.resolve() / "test-suite"
+        cache = suite_target / "exiftool-oracle"
+        for env in [env for _argv, env in self.suite_calls] + [env for _argv, env in self.oracle_calls]:
+            self.assertFalse({"EXIFTOOL", "OXIDEX_ALLOW_EXIFTOOL_SKEW", "OXIDEX_PINNED_EXIFTOOL",
+                              "CARGO_TERM_QUIET", "RUSTFLAGS", "RUSTC_WRAPPER",
+                              "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER"} & set(env))
+            self.assertLessEqual(set(env), set(adapter.TEST_ENVIRONMENT_PASSTHROUGH) | set(adapter.TEST_ENVIRONMENT_SET))
+            self.assertEqual(env["EXIFTOOL_CACHE_DIR"], str(cache))
+            self.assertEqual(env["EXIFTOOL_PERL"], str(perl))
+            self.assertEqual(env["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"], "1")
+            self.assertTrue(env["PATH"].startswith(str(cache / "bin") + os.pathsep))
+        self.assertEqual((cache / "exiftool").resolve(), native)
+        shim = (cache / "bin" / "exiftool").read_text()
+        self.assertIn(str(perl), shim); self.assertIn(str(cache / "exiftool" / "exiftool"), shim)
+        oracle = result["test_suite"]["exiftool_oracle"]
+        self.assertEqual(oracle["version"], "11.78")
+        self.assertEqual(oracle["docx_filetype"], "DOCX")
+        self.assertTrue(oracle["perl_modules_available"])
+        self.assertEqual(oracle["tree_realpath"], str(native))
+        self.assertEqual(oracle["cache_dir"], str(cache))
+        self.assertEqual(oracle["perl"]["path"], str(perl))
+        self.assertEqual(oracle["lib"]["exiftool_pm_sha256"], result["native_identity"]["lib"]["exiftool_pm_sha256"])
+        self.assertEqual(result["test_suite"]["environment"], self.suite_calls[0][1])
+        # The probes run exactly the argv the Rust oracle builds from EXIFTOOL_CACHE_DIR.
+        self.assertIn([str(perl), f"-I{cache / 'exiftool' / 'lib'}", str(cache / "exiftool" / "exiftool"), "-ver"],
+                      [argv for argv, _env in self.oracle_calls])
+
+    def test_release_tests_bind_the_verified_combined_corpus(self):
+        self.maxDiff = None
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["state"], "passed")
+        argv, env = self.verify_calls[0]
+        self.assertEqual(argv, [sys.executable, str(self.checkout.resolve() / "tools/release/bootstrap_oracle.py"),
+                                "verify", "--root", str(self.ops), "--pin", "13.59"])
+        self.assertEqual(env["OXIDEX_OPS_DIR"], str(self.ops))
+        order = [row[0] for row in self.seen]
+        self.assertLess(order.index(argv), order.index(list(adapter.TEST_COMMANDS[0])))
+        cache = self.target.resolve() / "test-suite" / "exiftool-oracle"
+        self.assertEqual((cache / "combined-samples").resolve(), self.corpus.resolve())
+        manifest = self.ops / "cache/exiftool/13.59/combined-samples.manifest"
+        self.assertEqual(result["test_suite"]["fixture_corpus"], {
+            "ops_root": str(self.ops), "bootstrap_pin": "13.59", "version_independent": True,
+            "corpus": str(self.corpus), "link": str(cache / "combined-samples"),
+            "corpus_tree_sha256": "7" * 64,
+            "manifest": {"path": str(manifest), "sha256": adapter._sha(manifest), "file_count": 2},
+            "storage_manifest": {"path": str(self.storage), "sha256": adapter._sha(self.storage)},
+            "verify_command": argv, "verified_before_run": True, "verified_after_run": True,
+        })
+
+    def test_release_tests_refuse_an_unverified_or_drifted_corpus(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+
+        def verify_then(mutate):
+            def run(argv, **kwargs):
+                result = self.fake_run(argv, **kwargs)
+                if len(argv) > 1 and argv[1].endswith("bootstrap_oracle.py"):
+                    mutate()
+                return result
+            return run
+
+        def rewrite(path, data):
+            return lambda: path.write_bytes(data)
+
+        def storage_edit(old, new):
+            return lambda: self.storage.write_text(self.storage.read_text().replace(old, new))
+
+        manifest = self.ops / "cache/exiftool/13.59/combined-samples.manifest"
+        cases = {
+            "verify refused": ("exit", None),
+            "storage manifest differs": ("after-verify", lambda: storage_edit(adapter._sha(manifest), "0" * 64)()),
+            "wrong lock tree": ("after-verify", storage_edit("7" * 64, "8" * 64)),
+            "manifest rewritten": ("after-verify", lambda: manifest.write_text(
+                manifest.read_text().replace("Apple/iPhone.jpg", "Apple/other.jpg"))),
+            "sample changed after verify": ("after-verify", rewrite(self.corpus / "ExifTool.jpg", b"changed")),
+            "unlisted sample": ("after-verify", rewrite(self.corpus / "Apple/extra.jpg", b"extra")),
+            "sample removed": ("after-verify", lambda: (self.corpus / "Apple/iPhone.jpg").unlink()),
+            "sample changed during run": ("during-run", rewrite(self.corpus / "ExifTool.jpg", b"tests wrote")),
+        }
+        for label, (when, mutate) in cases.items():
+            with self.subTest(label=label):
+                shutil.rmtree(self.corpus); (self.corpus / "Apple").mkdir(parents=True)
+                (self.corpus / "ExifTool.jpg").write_bytes(b"\xff\xd8exiftool")
+                (self.corpus / "Apple/iPhone.jpg").write_bytes(b"\xff\xd8apple")
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.suite_calls.clear()
+                self.verify_exit, self.corpus_during_run = (1 if when == "exit" else 0), None
+                run = self.fake_run
+                if when == "after-verify":
+                    run = verify_then(mutate)
+                elif when == "during-run":
+                    self.corpus_during_run = mutate
+                with self.assertRaisesRegex(adapter.Refused, "fixture corpus"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=run)
+                self.assertFalse(report.exists())
+                if when != "during-run":
+                    self.assertEqual(self.suite_calls, [])
+        self.verify_exit, self.corpus_during_run = 0, None
+
+    def test_release_tests_refuse_cargo_configuration_outside_the_checkout(self):
+        (self.checkout / ".cargo").mkdir(); (self.checkout / ".cargo/config.toml").write_text("[alias]\n")
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        cargo_home = self.root / "cargo-home"; cargo_home.mkdir()
+        cases = {
+            "parent config.toml": (self.root / ".cargo/config.toml", {}),
+            "parent legacy config": (self.root / ".cargo/config", {}),
+            "CARGO_HOME config": (cargo_home / "config.toml", {"CARGO_HOME": str(cargo_home)}),
+        }
+        for label, (config, env) in cases.items():
+            with self.subTest(label=label):
+                config.parent.mkdir(exist_ok=True); config.write_text("[build]\nrustflags = ['--cfg', 'skip']\n")
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.suite_calls.clear()
+                with patch.dict(os.environ, env):
+                    with self.assertRaisesRegex(adapter.Refused, "cargo configuration outside the checkout"):
+                        adapter.run_release_tests(self.args("test", report=str(report)), run=self.fake_run)
+                self.assertEqual(self.suite_calls, [])
+                config.unlink()
+        # The checkout's own tracked .cargo/config.toml is source, not ambient configuration.
+        shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+        clean = self.reports / "clean"; clean.mkdir()
+        (clean / "build.json").write_text((self.reports / "build.json").read_text())
+        result = adapter.run_release_tests(self.args("test", report=str(clean / "test.json")), run=self.fake_run)
+        self.assertEqual(result["test_suite"]["cargo_config"]["outside_checkout"], [])
+        self.assertIn(str(self.root.resolve() / ".cargo" / "config.toml"),
+                      result["test_suite"]["cargo_config"]["checked"])
+
+    def test_release_test_oracle_must_be_the_selected_capable_release(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        for label, change in (("wrong release", {"oracle_version": "13.55"}),
+                              ("zip degraded", {"oracle_docx": "ZIP"}),
+                              ("module missing", {"missing_module": "Archive::Zip"})):
+            with self.subTest(label=label):
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.oracle_version, self.oracle_docx, self.missing_module = "11.78", "DOCX", None
+                for name, value in change.items():
+                    setattr(self, name, value)
+                self.suite_calls.clear()
+                with self.assertRaisesRegex(adapter.Refused, "release test oracle"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=self.fake_run)
+                self.assertEqual(self.suite_calls, [])
+                self.assertFalse(report.exists())
+
+    def test_release_test_failures_publish_a_failed_report_not_a_pass(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        def failing(argv, **kwargs):
+            result = self.fake_run(argv, **kwargs)
+            if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
+                return subprocess.CompletedProcess(argv, 101, SUITE_FAILED_OUTPUT, None)
+            return result
+        result = adapter.run_release_tests(self.args("test"), run=failing)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["test_suite"]["totals"]["failed"], 1)
+        self.assertEqual(result["test_suite"]["commands"][0]["exit"], 101)
+        with self.assertRaisesRegex(adapter.executor.Refused, "passed state"):
+            adapter.executor._stage_result(self.reports / "test.json", "11.78", "test", None)
+
+    def test_unparsable_or_incomplete_test_output_refuses(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        nested_crash = SUITE_NESTED_OUTPUT.rsplit("test result: ok. 3 passed", 1)[0]
+        doc_heading = "   Doc-tests tiny\n"
+        broken = {
+            "garbled result": (0, SUITE_TESTS_OUTPUT.replace("0 measured; ", "", 1)),
+            "crashed target": (101, SUITE_TESTS_OUTPUT.split("   Doc-tests", 1)[0].rsplit("test result:", 1)[0]),
+            "count mismatch": (0, SUITE_TESTS_OUTPUT.replace("running 3 tests", "running 4 tests")),
+            "exit disagrees": (101, SUITE_TESTS_OUTPUT),
+            "status disagrees": (0, SUITE_TESTS_OUTPUT.replace("test result: ok. 2 passed; 0 failed",
+                                                               "test result: ok. 1 passed; 1 failed")),
+            "nothing ran": (101, "error[E0599]: no variant named `ValBpm`\n"),
+            "nested summary only": (101, nested_crash),
+            "filtered outer run": (0, SUITE_TESTS_OUTPUT.replace("0 measured; 0 filtered out", "0 measured; 2 filtered out", 1)),
+            "doc block without summary": (0, SUITE_TESTS_OUTPUT.replace(doc_heading, doc_heading + "\nrunning 2 tests\n")),
+            "garbled doc summary": (0, SUITE_TESTS_OUTPUT.rsplit("test result:", 1)[0] + "test result: ok\n"),
+        }
+        for label, (code, stdout) in broken.items():
+            with self.subTest(label=label):
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                def output(argv, **kwargs):
+                    if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
+                        return subprocess.CompletedProcess(argv, code, stdout, None)
+                    return self.fake_run(argv, **kwargs)
+                with self.assertRaisesRegex(adapter.Refused, "cargo test"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=output)
+                self.assertFalse(report.exists())
+
+    def test_nested_self_reexec_output_counts_only_each_targets_own_run(self):
+        self.assertEqual(adapter.parse_test_output(SUITE_NESTED_OUTPUT), {
+            "passed": 3, "failed": 0, "ignored": 1, "measured": 0, "filtered_out": 0, "targets": 1,
+        })
+        self.assertEqual(adapter.parse_test_output(SUITE_TESTS_OUTPUT)["targets"], 4)
+
+    def test_edition_2024_merged_and_standalone_doctest_blocks_are_summed(self):
+        self.assertEqual(adapter.parse_test_output(SUITE_EDITION2024_OUTPUT), {
+            "passed": 6, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": 3,
+        })
+        broken = SUITE_EDITION2024_OUTPUT.replace("running 1 test\ntest src/lib.rs - one (line 9)",
+                                                  "running 2 tests\ntest src/lib.rs - one (line 9)")
+        with self.assertRaisesRegex(adapter.Refused, "cargo test"):
+            adapter.parse_test_output(broken)
+
+    def test_release_test_suite_requires_the_passed_build(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        with self.assertRaises((adapter.Refused, OSError)):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
+
+    def test_build_uses_the_allowlisted_environment_and_records_its_toolchain(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        hostile = {
+            "RUSTFLAGS": "--cfg forged", "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fforged", "RUSTC": "/tmp/rustc",
+            "RUSTC_WRAPPER": "/tmp/wrap", "RUSTC_WORKSPACE_WRAPPER": "/tmp/wrap", "CARGO_BUILD_TARGET": "x86_64",
+            "CARGO_BUILD_RUSTFLAGS": "--cfg forged", "CARGO_TARGET_DIR": "/tmp/elsewhere", "RUSTDOCFLAGS": "-x",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "3", "EXIFTOOL": "/opt/homebrew/bin/exiftool",
+        }
+        first = len(self.seen)
+        with patch.dict(os.environ, hostile):
+            built = adapter.build(self.args("build"), run=self.fake_run)
+        calls = [(argv, env) for argv, env in self.seen[first:] if argv[0] in {"cargo", "rustc"}]
+        self.assertEqual([argv for argv, _env in calls][:2], [["rustc", "-vV"], ["cargo", "-V"]])
+        allowed = set(adapter.BUILD_ENVIRONMENT_PASSTHROUGH) | set(adapter.BUILD_ENVIRONMENT_SET)
+        for argv, env in calls:
+            self.assertFalse((set(hostile) - {"CARGO_TARGET_DIR"}) & set(env), argv)
+            self.assertLessEqual(set(env), allowed, argv)
+            self.assertEqual(env["CARGO_TARGET_DIR"], str(self.target.resolve()))
+        build_env = built["build_environment"]
+        self.assertEqual(build_env["environment"], calls[-1][1])
+        self.assertEqual(build_env["toolchain"], {
+            "rustc": fixture_rustc_vv("1.97.1", PIN_COMMIT).strip(),
+            "cargo": "cargo 1.97.1 (fixture 2026-01-01)"})
+        self.assertEqual(build_env["cargo_config"]["outside_checkout"], [])
+        self.assertEqual(build_env["toolchain_pin"], {
+            "file": "rust-toolchain.toml", "channel": "1.97.1",
+            "sha256": adapter._sha(self.checkout / "rust-toolchain.toml")})
+        self.assertEqual(build_env["compiled_by"], {"binary": [PIN_COMMIT], "writer_binary": [PIN_COMMIT]})
+        self.assertEqual(build_env["rustc_path"], self.rustc_path)
+
+    def assert_build_refused_before_cargo(self, pattern):
+        first = len(self.seen)
+        with self.assertRaisesRegex(adapter.Refused, pattern):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse(any(argv[:2] in (["cargo", "build"], ["cargo", "test"]) for argv, _env in self.seen[first:]))
+        self.assertFalse((self.reports / "build.json").exists())
+
+    def test_build_refuses_a_path_resolved_compiler_other_than_the_checkouts_pin(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustc_release, self.rustc_commit = "1.98.1", BREW_COMMIT
+        self.assert_build_refused_before_cargo("rustc 1.98.1 is not the checkout's pinned 1.97.1")
+        self.rustc_release, self.rustc_commit, self.cargo_release = "1.97.1", PIN_COMMIT, "1.98.1"
+        self.assert_build_refused_before_cargo("cargo 1.98.1 is not the checkout's pinned 1.97.1")
+
+    def test_build_reads_the_pin_from_the_checkout_being_built(self):
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.80.0"\n')
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("rustc 1.97.1 is not the checkout's pinned 1.80.0")
+        self.rustc_release = self.cargo_release = "1.80.0"
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        self.assertEqual(built["build_environment"]["toolchain_pin"]["channel"], "1.80.0")
+
+    def test_build_refuses_a_checkout_without_a_pin(self):
+        (self.checkout / "rust-toolchain.toml").unlink()
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("no numeric rust-toolchain.toml channel")
+
+    def test_build_refuses_a_symbolic_pin_it_cannot_check(self):
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "stable"\n')
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("no numeric rust-toolchain.toml channel")
+
+    def test_build_refuses_executables_compiled_by_another_rustc(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.binary_commit = BREW_COMMIT
+        with self.assertRaisesRegex(adapter.Refused, "not compiled by the recorded rustc"):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse((self.reports / "build.json").exists())
+
+    def test_build_refuses_cargo_configuration_outside_the_checkout(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        config = self.root / ".cargo" / "config.toml"
+        config.parent.mkdir(); config.write_text("[build]\nrustflags = ['--cfg', 'forged']\n")
+        first = len(self.seen)
+        with self.assertRaisesRegex(adapter.Refused, "cargo configuration outside the checkout"):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse(any(argv[:2] in (["cargo", "build"], ["cargo", "test"]) for argv, _env in self.seen[first:]))
+        self.assertFalse((self.reports / "build.json").exists())
+
     def test_build_records_distinct_cli_and_writer_driver(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         built = adapter.build(self.args("build"), run=self.fake_run)
@@ -284,7 +845,7 @@ class AdapterTests(unittest.TestCase):
         adapter.generate(self.args("generate"), run=self.fake_run)
         def foreign_package(argv, **kwargs):
             result = self.fake_run(argv, **kwargs)
-            if argv[0] == "cargo":
+            if argv[0] == "cargo" and argv[1] in {"build", "test"}:
                 row = json.loads(result.stdout); row["manifest_path"] = str(self.root / "other/Cargo.toml")
                 return subprocess.CompletedProcess(argv, 0, json.dumps(row), "")
             return result
@@ -671,6 +1232,44 @@ class LiveInventoryProofTests(unittest.TestCase):
                 {("stats.refused", 2), ("stats.rows_omitted", 3)},
             )
 
+
+    def test_canonical_unsupported_populations_are_counted_once(self):
+        """sanitize/convinv ledgers declare top-level unsupported_branches; count each once."""
+        with TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            (checkout / "sanitize.json").write_text(json.dumps({
+                "omissions": [],
+                "unsupported_branches": [f"branch-{index}" for index in range(6)],
+                "primitive_contract": {"final": {"unsupported_domains": ["a", "b", "c"]},
+                                       "pristine": {"unsupported_domains": ["a", "b", "c"]}},
+            }))
+            (checkout / "convinv.json").write_text(json.dumps({
+                "unsupported_branches": [f"branch-{index}" for index in range(5)],
+            }))
+            (checkout / "rows.json").write_text(json.dumps({
+                "rows_omitted": 9,
+                "omissions_by_reason": {"row has unsupported source properties: Shift": 7,
+                                        "CHECK_PROC: CHECK_PROC format selector set is unsupported": 2},
+            }))
+            inventory = [SimpleNamespace(path=name) for name in ("sanitize.json", "convinv.json", "rows.json")]
+            with patch.object(adapter.artifacts, "inventory", return_value=inventory):
+                result = adapter.generated_refusal_counts(checkout)
+            self.assertEqual(
+                {(row["artifact"], row["json_path"], row["count"]) for row in result["counters"]},
+                {("sanitize.json", "unsupported_branches", 6), ("convinv.json", "unsupported_branches", 5),
+                 ("rows.json", "rows_omitted", 9)},
+            )
+            self.assertEqual(result["total"], 20)
+
+    def test_real_unsupported_ledgers_are_counted(self):
+        real = adapter.generated_refusal_counts(HERE.parents[1])
+        counted = {(row["artifact"], row["json_path"]): row["count"] for row in real["counters"]}
+        for name in ("sanitize_ledger.json", "convinv_ledger.json"):
+            path = HERE / name
+            branches = json.loads(path.read_text())["unsupported_branches"]
+            self.assertEqual(counted[(f"tools/exiftool-tables/{name}", "unsupported_branches")], len(branches))
+        self.assertFalse(any("unsupported_domains" in path or "omissions_by_reason" in path
+                             for _artifact, path in counted))
 
 class CurrentGeneratedMatrixContractTests(unittest.TestCase):
     def test_actual_committed_operands_define_complete_matrix_and_family_counts(self):

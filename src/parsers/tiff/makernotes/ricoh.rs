@@ -21,7 +21,11 @@
 
 #![allow(dead_code)]
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence};
 use crate::core::{MetadataMap, TagValue};
+use crate::exiftool_tables::Ctx;
+use crate::exiftool_tables::session::Session;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -30,7 +34,7 @@ use std::collections::HashMap;
 
 use super::registries::ricoh::ricoh_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries, resolve_byte_order_at};
 use super::shared::print_im::decode_print_im_from_ifd;
 use super::shared::tag_registry::TagRegistry;
 
@@ -46,6 +50,178 @@ const RICOH_SHARPNESS: u16 = 0x0035;
 
 // Static registry instance for efficient tag lookup and decoding
 static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(ricoh_registry);
+
+/// MakerNotes.pm:924-938. Preserve the source's case-sensitive Make gate and
+/// padded TIFF probe; Ricoh Imaging bodies otherwise reach Pentax by Make.
+pub(crate) fn is_type2_selector(make: &str, model: Option<&str>, data: &[u8]) -> bool {
+    let make = make.strip_prefix("PENTAX ").unwrap_or(make);
+    if !make.starts_with("RICOH") {
+        return false;
+    }
+    if model == Some("RICOH WG-M1") {
+        return true;
+    }
+    let Some(header) = data.get(..12) else {
+        return false;
+    };
+    (header[..8] == *b"MM\0*\0\0\0\x08" && header[8] == 0 && header[10..12] == [0, 0])
+        || (header[..8] == *b"II*\0\x08\0\0\0" && header[9..12] == [0, 0, 0])
+}
+
+/// MakerNotes.pm:1742-1758 `ProcessKodakPatch` rewrites the count two bytes
+/// forward, then starts `ProcessExif` there. Values remain MakerNote-relative
+/// because Ricoh2 declares `Base => '$start - 8'`.
+fn parse_ricoh_type2_rows(
+    ctx: &MakerNoteContext<'_>,
+    inherited_order: ByteOrder,
+) -> Vec<(String, TagOccurrence)> {
+    let payload = ctx.payload();
+    // MakerNotes.pm:937 `ByteOrder => 'Unknown'` is resolved by Exif.pm:6982-6993
+    // from the int16u at `$valuePtr + 8`, before the patch below moves the
+    // count. This also covers the headerless WG-M1 model override.
+    let order = resolve_byte_order_at(payload, 8, inherited_order);
+    let reader = EndianReader::new(payload, order.to_io_byte_order());
+    let Some(first) = reader.u16_at(8) else {
+        return Vec::new();
+    };
+    let Some(second) = reader.u16_at(10) else {
+        return Vec::new();
+    };
+    let count = usize::from(if first != 0 { first } else { second });
+    if count == 0 {
+        return Vec::new();
+    }
+    let Some(end) = count
+        .checked_mul(12)
+        .and_then(|bytes| 12usize.checked_add(bytes))
+    else {
+        return Vec::new();
+    };
+    if end > payload.len() {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    for index in 0..count {
+        let start = 12 + index * 12;
+        let entry = &payload[start..start + 12];
+        let entry_reader = EndianReader::new(entry, order.to_io_byte_order());
+        let Some(id) = entry_reader.u16_at(0) else {
+            continue;
+        };
+        let expected_type = match id {
+            0x0207 => 2, // Ricoh.pm:462-464 string
+            0x0300 => 7, // Ricoh.pm:469-473 undef + trailing-space ValueConv
+            _ => continue,
+        };
+        if entry_reader.u16_at(2) != Some(expected_type) {
+            continue;
+        }
+        let Some(size) = entry_reader.u32_at(4).map(|n| n as usize) else {
+            continue;
+        };
+        let bytes = if size <= 4 {
+            &entry[8..8 + size]
+        } else {
+            let Some(offset) = entry_reader.u32_at(8).map(|n| n as usize) else {
+                continue;
+            };
+            let Some(value_end) = offset.checked_add(size) else {
+                continue;
+            };
+            if offset < end && value_end > 10 {
+                continue; // Conservatively refuse Exif.pm:6549's suspect IFD overlap.
+            }
+            let Some(bytes) = ctx.window().get(offset..value_end) else {
+                continue;
+            };
+            bytes
+        };
+        let (name, raw, value) = if id == 0x0207 {
+            let terminated = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+            let Ok(text) = std::str::from_utf8(terminated) else {
+                continue;
+            };
+            let value = TagValue::new_string(text);
+            ("RicohModel", value.clone(), value)
+        } else {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                continue;
+            };
+            (
+                "RicohMake",
+                TagValue::Binary(bytes.to_vec()),
+                TagValue::new_string(text.trim_end_matches(' ')),
+            )
+        };
+        rows.push((
+            format!("Ricoh:{name}"),
+            TagOccurrence {
+                id: crate::core::TagId::Numeric(id),
+                name: intern(name),
+                group0: intern("MakerNotes"),
+                group1: intern("Ricoh"),
+                group2: Some(intern("Camera")),
+                instance: Instance::default(),
+                raw: raw.clone(),
+                stored: Some(raw),
+                value: Some(value.clone()),
+                print: Some(value),
+                priority: 1,
+                is_list: false,
+                order: 0,
+                origin: Provenance {
+                    module: Some("Ricoh"),
+                    table: Some("Type2"),
+                    byte_range: None,
+                },
+            },
+        ));
+    }
+    rows
+}
+
+/// A separate parser keeps Ricoh::Main's normal fallback from accidentally
+/// treating an unmatched or lower-case Make as the source's Ricoh::Type2.
+pub struct RicohType2Parser;
+
+impl MakerNoteParser for RicohType2Parser {
+    fn manufacturer_name(&self) -> &'static str {
+        "Ricoh"
+    }
+
+    fn tag_prefix(&self) -> &'static str {
+        "Ricoh:"
+    }
+
+    fn parse(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        for (key, row) in parse_ricoh_type2_rows(&MakerNoteContext::detached(data), byte_order) {
+            if let Some(TagValue::String(value)) = row.print {
+                tags.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        _tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        occurrences.extend(parse_ricoh_type2_rows(ctx, byte_order));
+        Ok(())
+    }
+}
 
 /// Extracts a 16-bit unsigned value from IFD entry
 ///
@@ -435,6 +611,56 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert_eq!(tags.get("Ricoh:FocusMode"), Some(&"Manual".to_string()));
+    }
+
+    /// A headerless WG-M1 Ricoh2 note: two little-endian entries whose count
+    /// sits at `count_at` (8 = before the padding, 10 = after it).
+    fn wg_m1_little_endian_note(count_at: usize) -> Vec<u8> {
+        let mut note = vec![0; 100];
+        note[..8].copy_from_slice(b"WG-M1foo");
+        note[count_at..count_at + 2].copy_from_slice(&2u16.to_le_bytes());
+        note[12..14].copy_from_slice(&0x0207u16.to_le_bytes());
+        note[14..16].copy_from_slice(&2u16.to_le_bytes());
+        note[16..20].copy_from_slice(&4u32.to_le_bytes());
+        note[20..24].copy_from_slice(b"ABCD");
+        note[24..26].copy_from_slice(&0x0300u16.to_le_bytes());
+        note[26..28].copy_from_slice(&7u16.to_le_bytes());
+        note[28..32].copy_from_slice(&8u32.to_le_bytes());
+        note[32..36].copy_from_slice(&80u32.to_le_bytes());
+        note[80..88].copy_from_slice(b"Make    ");
+        note
+    }
+
+    fn type2_prints(note: &[u8], inherited: ByteOrder) -> HashMap<String, TagValue> {
+        parse_ricoh_type2_rows(&MakerNoteContext::detached(note), inherited)
+            .into_iter()
+            .filter_map(|(key, row)| row.print.map(|print| (key, print)))
+            .collect()
+    }
+
+    #[test]
+    fn ricoh_type2_resolves_unknown_order_against_a_big_endian_tiff() {
+        // MakerNotes.pm:937 `ByteOrder => 'Unknown'`: Exif.pm:6982-6993 reads
+        // the int16u at `$valuePtr + 8` in the enclosing order and flips when
+        // it is not a plausible entry count (0x0200 read as MM here).
+        let prints = type2_prints(&wg_m1_little_endian_note(8), ByteOrder::BigEndian);
+        assert_eq!(
+            prints.get("Ricoh:RicohModel"),
+            Some(&TagValue::String("ABCD".into()))
+        );
+        assert_eq!(
+            prints.get("Ricoh:RicohMake"),
+            Some(&TagValue::String("Make".into()))
+        );
+    }
+
+    #[test]
+    fn ricoh_type2_order_check_precedes_the_kodak_patch() {
+        // The order test runs before ProcessKodakPatch (MakerNotes.pm:1742)
+        // moves the count, so a zero first word keeps the inherited MM order;
+        // the patched count 0x0200 then overruns the note and nothing is read.
+        let prints = type2_prints(&wg_m1_little_endian_note(10), ByteOrder::BigEndian);
+        assert!(prints.is_empty(), "{prints:?}");
     }
 
     #[test]

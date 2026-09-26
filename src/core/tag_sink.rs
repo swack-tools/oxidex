@@ -43,6 +43,10 @@ pub struct TagSink {
     /// Every occurrence ever recorded, in file order. Index `i` was recorded
     /// at `order == i` (as a `u32`).
     occurrences: Vec<TagOccurrence>,
+    /// Literal public lookup keys, parallel to `occurrences`. These are kept
+    /// for losers and tombstones too: a canonical source identity is not
+    /// necessarily the key under which compatibility output exposes a row.
+    recorded_keys: Vec<String>,
     /// Tombstone flags, parallel to `occurrences`: `tombstoned[i]` is true
     /// once [`TagSink::remove`] has retired occurrence `i`. See that method
     /// and [`TagSink::occurrences`] for why removal marks rather than
@@ -57,6 +61,7 @@ impl TagSink {
     pub fn new() -> Self {
         Self {
             occurrences: Vec::new(),
+            recorded_keys: Vec::new(),
             tombstoned: Vec::new(),
             winners: HashMap::new(),
         }
@@ -65,6 +70,7 @@ impl TagSink {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             occurrences: Vec::with_capacity(capacity),
+            recorded_keys: Vec::with_capacity(capacity),
             tombstoned: Vec::with_capacity(capacity),
             winners: HashMap::with_capacity(capacity),
         }
@@ -127,6 +133,7 @@ impl TagSink {
         let new_priority = occurrence.priority;
         let new_instance = occurrence.instance;
         self.occurrences.push(occurrence);
+        self.recorded_keys.push(key.clone());
         self.tombstoned.push(false);
         match self.winners.entry(key) {
             Entry::Occupied(mut e) => {
@@ -309,6 +316,7 @@ impl TagSink {
 
     pub fn clear(&mut self) {
         self.occurrences.clear();
+        self.recorded_keys.clear();
         self.tombstoned.clear();
         self.winners.clear();
     }
@@ -392,6 +400,18 @@ impl TagSink {
             .map(|(_, occurrence)| occurrence)
     }
 
+    /// Every active occurrence and the literal key supplied to [`record`],
+    /// in file order. The key is retained independently of canonical source
+    /// identity and therefore remains valid for losing occurrences too.
+    pub(crate) fn keyed_occurrences(&self) -> impl Iterator<Item = (&str, &TagOccurrence)> {
+        self.recorded_keys
+            .iter()
+            .zip(&self.occurrences)
+            .enumerate()
+            .filter(|(idx, _)| self.is_active(*idx))
+            .map(|(_, (key, occurrence))| (key.as_str(), occurrence))
+    }
+
     /// How many occurrences have ever been recorded, retired ones included:
     /// one past the largest index [`TagSink::active_occurrence`] accepts.
     pub fn recorded_len(&self) -> usize {
@@ -432,6 +452,24 @@ impl TagSink {
             .collect()
     }
 
+    /// Consumes the sink without losing the literal key associated with any
+    /// active winner or loser. Tombstones are filtered in lockstep with both
+    /// parallel vectors.
+    pub(crate) fn into_keyed_occurrences(self) -> Vec<(String, TagOccurrence)> {
+        let TagSink {
+            occurrences,
+            recorded_keys,
+            tombstoned,
+            ..
+        } = self;
+        recorded_keys
+            .into_iter()
+            .zip(occurrences)
+            .zip(tombstoned)
+            .filter_map(|((key, occurrence), retired)| (!retired).then_some((key, occurrence)))
+            .collect()
+    }
+
     /// Re-records `occurrence` into this sink under its own
     /// [`TagOccurrence::lookup_key`], carrying its priority, family-1 group
     /// and instance over unchanged -- only `order` is reassigned, to this
@@ -448,6 +486,17 @@ impl TagSink {
     /// loser alike -- ends up retained in the target sink too.
     pub fn record_carrying_over(&mut self, mut occurrence: TagOccurrence) {
         let key = occurrence.lookup_key();
+        occurrence.order = self.next_order();
+        self.record(key, occurrence);
+    }
+
+    /// Re-records a canonical occurrence under its retained literal public
+    /// key, changing only the destination file-order slot.
+    pub(crate) fn record_keyed_carrying_over(
+        &mut self,
+        key: String,
+        mut occurrence: TagOccurrence,
+    ) {
         occurrence.order = self.next_order();
         self.record(key, occurrence);
     }

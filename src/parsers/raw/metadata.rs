@@ -47,6 +47,42 @@ use crate::parsers::tiff::makernotes::canon::{
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::tag_db::lookup_tag_name;
 
+fn is_olympus_structured_makernote(data: &[u8]) -> bool {
+    (data.len() >= 8 && data.starts_with(b"OLYMP\0"))
+        || (data.len() >= 12
+            && (data.starts_with(b"OLYMPUS\0II") || data.starts_with(b"OLYMPUS\0MM")))
+        || (data.len() >= 16 && data.starts_with(b"OM SYSTEM\0"))
+}
+
+fn is_olympus_make(make: &str) -> bool {
+    let make = make.trim().to_ascii_lowercase();
+    make.starts_with("olympus")
+        || make.starts_with("om digital solutions")
+        || make.starts_with("om system")
+}
+
+#[cfg(test)]
+mod olympus_structured_header_tests {
+    use super::is_olympus_structured_makernote;
+
+    #[test]
+    fn type2_requires_its_full_twelve_byte_header() {
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II\x03"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0XX\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0II\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0MM\x03\0"));
+    }
+
+    #[test]
+    fn type1_and_type3_require_their_complete_headers() {
+        assert!(!is_olympus_structured_makernote(b"OLYMP\0\x03"));
+        assert!(is_olympus_structured_makernote(b"OLYMP\0\x03\0"));
+        assert!(!is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03"));
+        assert!(is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03\0"));
+    }
+}
+
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
 ///
 /// Some physical RAW IFD tags correspond to standard EXIF concepts but use
@@ -481,6 +517,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut gps_ifd_offset = None;
                 let mut sub_ifd_offsets = Vec::new();
                 let mut makernote_data: Option<Vec<u8>> = None;
+                let mut makernote_location: Option<(usize, usize)> = None;
                 let mut makernote_preview_ifd_base: Option<u64> = None;
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
@@ -682,6 +719,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // MakerNotes contain manufacturer-specific camera settings
                     if *tag_id == 0x927C {
                         makernote_data = Some(bytes.to_vec());
+                        makernote_location = located_selected_external_ifd_entry(
+                            data, ifd_offset, byte_order, 0x927C, bytes,
+                        );
                         makernote_preview_ifd_base =
                             ifd_entry_value_offset(data, ifd_offset, byte_order, 0x927C)
                                 .and_then(|offset| u64::from(offset).checked_add(10));
@@ -928,6 +968,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 {
                     // Also check EXIF IFD for MakerNote and Make tags
                     let mut exif_makernote: Option<Vec<u8>> = None;
+                    let mut exif_makernote_location: Option<(usize, usize)> = None;
                     let mut exif_make: Option<String> = None;
 
                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
@@ -936,6 +977,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // MakerNote in EXIF IFD (more common location)
                         if *tag_id == 0x927C {
                             exif_makernote = Some(bytes.to_vec());
+                            exif_makernote_location = located_selected_external_ifd_entry(
+                                data, offset, byte_order, 0x927C, bytes,
+                            );
                             continue;
                         }
 
@@ -968,6 +1012,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
                     if exif_makernote.is_some() {
                         makernote_data = exif_makernote;
+                        makernote_location = exif_makernote_location;
                         makernote_preview_ifd_base =
                             ifd_entry_value_offset(data, offset, byte_order, 0x927C)
                                 .and_then(|offset| u64::from(offset).checked_add(10));
@@ -1025,6 +1070,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
                     let mut value_forms = std::collections::HashMap::new();
+                    let mut structured_occurrences = Vec::new();
                     let result = if matches!(
                         make.trim().to_ascii_lowercase().as_str(),
                         "nikon" | "nikon corporation"
@@ -1037,6 +1083,51 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             preview_ifd_base,
                             &mut makernote_tags,
                             &mut value_forms,
+                        )
+                    } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
+                        && is_olympus_make(make)
+                        && is_olympus_structured_makernote(mn_data)
+                        && let Some((payload_offset, payload_len)) = makernote_location
+                    {
+                        let ctx = MakerNoteContext::in_tiff(data, payload_offset, payload_len, 0);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
+                        )
+                    } else if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
+                        make,
+                        camera_model.as_deref(),
+                        mn_data,
+                    ) {
+                        // Same detached context and fresh session as the
+                        // legacy entry below; the only difference is the
+                        // occurrence channel, which carries Pentax's
+                        // pre-PrintConv CAF point bytes and unrounded flash
+                        // guide number for `--no-print-conv`.
+                        let ctx = MakerNoteContext::detached(mn_data);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
                         )
                     } else {
                         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
@@ -1051,6 +1142,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Err(e) = result {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
+                        // Structured owners retain their exact identity, typed
+                        // value channels, groups, priority, order and byte
+                        // provenance. Record them before residual map rows and
+                        // never reconstruct them from the string sidecars.
+                        for (key, occurrence) in structured_occurrences {
+                            metadata.record_occurrence(key, occurrence);
+                        }
                         // Add parsed MakerNote tags to metadata.
                         // Tags already have proper prefixes (e.g., "Canon:MacroMode").
                         // `record_makernote_tag` -- not a bare `insert` -- is
@@ -3049,6 +3147,194 @@ fn tiff_external_entry_extent(
     None
 }
 
+/// Locate the physical value selected by [`parse_ifd`] for one tag.
+///
+/// The parsed vector deliberately drops malformed entries and no longer
+/// carries their physical indices, while callers select the last surviving
+/// duplicate. Re-scanning with the same warning/skip rules is therefore the
+/// only safe way to bind the selected bytes back to an on-disk extent. A
+/// located context is returned only for an external, in-bounds value that
+/// does not overlap its declaring directory and exactly equals the payload
+/// selected by the parsed walk.
+fn located_selected_external_ifd_entry(
+    tiff: &[u8],
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    wanted_tag: u16,
+    selected_payload: &[u8],
+) -> Option<(usize, usize)> {
+    let directory_start = usize::try_from(ifd_offset).ok()?;
+    let entry_count = usize::from(read_tiff_u16(
+        tiff.get(directory_start..directory_start.checked_add(2)?)?,
+        byte_order,
+    )?);
+    let entries_len = entry_count.checked_mul(12)?;
+    let directory_end = directory_start
+        .checked_add(2)?
+        .checked_add(entries_len)?
+        .checked_add(4)?;
+    if directory_end > tiff.len() {
+        return None;
+    }
+
+    let mut warnings = 0u32;
+    let mut selected_location: Option<Option<(usize, usize)>> = None;
+    for index in 0..entry_count {
+        if warnings > 10 {
+            break;
+        }
+        let entry_start = directory_start
+            .checked_add(2)?
+            .checked_add(index.checked_mul(12)?)?;
+        let entry = tiff.get(entry_start..entry_start.checked_add(12)?)?;
+        let tag_id = read_tiff_u16(&entry[..2], byte_order)?;
+        let field_type = read_tiff_u16(&entry[2..4], byte_order)?;
+        let Some(type_size) = tiff_field_type_size(field_type) else {
+            if field_type != 0 {
+                warnings += 1;
+            }
+            continue;
+        };
+        let value_count = usize::try_from(read_tiff_u32(&entry[4..8], byte_order)?).ok()?;
+        let Some(value_len) = type_size.checked_mul(value_count) else {
+            warnings += 1;
+            continue;
+        };
+
+        if value_len <= 4 {
+            if tag_id == wanted_tag {
+                selected_location = Some(None);
+            }
+            continue;
+        }
+
+        let value_start = usize::try_from(read_tiff_u32(&entry[8..12], byte_order)?).ok()?;
+        let Some(value_end) = value_start.checked_add(value_len) else {
+            warnings += 1;
+            continue;
+        };
+        if value_end > tiff.len() {
+            warnings += 1;
+            continue;
+        }
+        if tag_id == wanted_tag {
+            let location =
+                (!crate::parsers::tiff::makernotes::makernote_context::value_overlaps_directory(
+                    value_start,
+                    value_len,
+                    directory_start,
+                    directory_end,
+                ))
+                .then_some((value_start, value_len));
+            selected_location = Some(location);
+        }
+    }
+
+    let (value_start, value_len) = selected_location.flatten()?;
+    let value_end = value_start.checked_add(value_len)?;
+    (tiff.get(value_start..value_end)? == selected_payload).then_some((value_start, value_len))
+}
+
+#[cfg(test)]
+mod located_makernote_tests {
+    use super::*;
+
+    fn push_u16(bytes: &mut [u8], value: u16, order: ByteOrder) {
+        let encoded = match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        bytes.copy_from_slice(&encoded);
+    }
+
+    fn push_u32(bytes: &mut [u8], value: u32, order: ByteOrder) {
+        let encoded = match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        bytes.copy_from_slice(&encoded);
+    }
+
+    fn directory(order: ByteOrder, entries: &[(u16, u16, u32, u32)], len: usize) -> Vec<u8> {
+        let mut tiff = vec![0u8; len];
+        push_u16(&mut tiff[8..10], entries.len() as u16, order);
+        for (index, &(tag, ty, count, value)) in entries.iter().enumerate() {
+            let start = 10 + index * 12;
+            push_u16(&mut tiff[start..start + 2], tag, order);
+            push_u16(&mut tiff[start + 2..start + 4], ty, order);
+            push_u32(&mut tiff[start + 4..start + 8], count, order);
+            push_u32(&mut tiff[start + 8..start + 12], value, order);
+        }
+        tiff
+    }
+
+    #[test]
+    fn physical_lookup_tracks_the_last_surviving_duplicate_after_a_skipped_entry() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let first = b"first-note";
+            let selected = b"selected-last";
+            let mut tiff = directory(
+                order,
+                &[
+                    (0x1234, 13, 1, 0), // unknown type: parse_ifd skips it
+                    (0x927c, 7, first.len() as u32, 80),
+                    (0x927c, 7, selected.len() as u32, 112),
+                ],
+                160,
+            );
+            tiff[80..80 + first.len()].copy_from_slice(first);
+            tiff[112..112 + selected.len()].copy_from_slice(selected);
+
+            assert_eq!(
+                located_selected_external_ifd_entry(&tiff, 8, order, 0x927c, selected),
+                Some((112, selected.len()))
+            );
+            assert_eq!(
+                located_selected_external_ifd_entry(&tiff, 8, order, 0x927c, first),
+                None,
+                "the first duplicate must never be rebound as the selected value"
+            );
+        }
+    }
+
+    #[test]
+    fn physical_lookup_refuses_inline_range_overlap_truncation_and_byte_mismatch() {
+        let order = ByteOrder::LittleEndian;
+
+        let inline = directory(order, &[(0x927c, 7, 4, 0x0403_0201)], 64);
+        assert_eq!(
+            located_selected_external_ifd_entry(&inline, 8, order, 0x927c, &[1, 2, 3, 4]),
+            None
+        );
+
+        let out_of_range = directory(order, &[(0x927c, 7, 16, 60)], 64);
+        assert_eq!(
+            located_selected_external_ifd_entry(&out_of_range, 8, order, 0x927c, b"anything"),
+            None
+        );
+
+        let overlap = directory(order, &[(0x927c, 7, 8, 12)], 64);
+        let selected = overlap[12..20].to_vec();
+        assert_eq!(
+            located_selected_external_ifd_entry(&overlap, 8, order, 0x927c, &selected),
+            None
+        );
+
+        let mut mismatch = directory(order, &[(0x927c, 7, 8, 40)], 64);
+        mismatch[40..48].copy_from_slice(b"physical");
+        assert_eq!(
+            located_selected_external_ifd_entry(&mismatch, 8, order, 0x927c, b"different"),
+            None
+        );
+
+        let truncated = directory(order, &[(0x927c, 7, 8, 40)], 25);
+        assert_eq!(
+            located_selected_external_ifd_entry(&truncated, 8, order, 0x927c, b"anything"),
+            None
+        );
+    }
+}
+
 /// TIFF field-type sizes, indexed by the type code. `None` for codes the TIFF
 /// specification does not define.
 fn tiff_field_type_size(field_type: u16) -> Option<usize> {
@@ -3322,16 +3608,43 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
 
     let mut tags = std::collections::HashMap::new();
     let mut forms = std::collections::HashMap::new();
-    if let Err(error) =
+    let mut structured_occurrences = Vec::new();
+    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
+        make, None, &rebuilt,
+    ) {
+        // Pentax emits its CAF point and flash guide-number fields as
+        // canonical occurrences so `--no-print-conv` keeps their ValueConv;
+        // otherwise identical to the legacy entry below.
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = std::collections::HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+            make,
+            None,
+            &MakerNoteContext::detached(&rebuilt),
+            byte_order,
+            &mut session,
+            &mut cond_ctx,
+            &mut tags,
+            &mut forms,
+            &mut structured_occurrences,
+        )
+    } else {
         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
             make, None, &rebuilt, byte_order, &mut tags, &mut forms,
         )
-    {
+    };
+    if let Err(error) = result {
         eprintln!(
             "Warning: Failed to parse DNGPrivateData MakerNote for {}: {}",
             make, error
         );
         return;
+    }
+    // As at the main RAW MakerNote site: structured owners are recorded
+    // before residual map rows and never rebuilt from the string sidecars.
+    for (key, occurrence) in structured_occurrences {
+        metadata.record_occurrence(key, occurrence);
     }
     // `make` is a dynamic value here (a Pentax DNG's DNGPrivateData MakN
     // record names Pentax), so `record_makernote_tag` -- not a bare
@@ -3898,11 +4211,10 @@ mod panasonic_rw2_tests {
 
     #[test]
     fn dng_primary_raw_subifd_compression_wins() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("DNG.dng") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned DNG fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
 
         assert_eq!(metadata.get_string("EXIF:Compression"), Some("JPEG"));
@@ -9072,11 +9384,10 @@ mod cr3_cmt1_artist_tests {
 
     #[test]
     fn extracts_thumbnail_image_from_cr3_thmb_box() {
-        let path = "/tmp/oxidex-exiftool-git-13.59-jjZp0q/exiftool/t/images/CanonRaw.cr3";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("CanonRaw.cr3") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned CR3 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR3 fixture");
         let metadata = parse_cr3(&data, RawFormat::CanonCR3).expect("parse CR3 fixture");
 
         assert_eq!(
@@ -10930,11 +11241,10 @@ mod rational_array_tests {
 
     #[test]
     fn dng_primary_raw_subifd_bits_per_sample_wins() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("DNG.dng") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned DNG fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
 
         assert_eq!(
@@ -10945,11 +11255,10 @@ mod rational_array_tests {
 
     #[test]
     fn cr2_cfa_pattern_uses_exif_group() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("CanonRaw.cr2") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR2 fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
 
         assert_eq!(
@@ -11010,14 +11319,10 @@ mod rational_array_tests {
 
     #[test]
     fn cr2_publishes_the_primary_ifd_dimensions_and_no_dummy_preview() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("CanonRaw.cr2") else {
             return;
-        }
-        let path = concat!(
-            "/tmp/oxidex-exiftool-cache/combined-samples/",
-            "CanonRaw.cr2"
-        );
-        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR2 fixture");
         let metadata =
             parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse pinned CR2 fixture");
 
@@ -11677,5 +11982,141 @@ mod rational_array_tests {
         let file = build_ciff(&scalar_records(&powershot));
         let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
         assert_eq!(metadata.get_string("CanonRaw:SerialNumber"), None);
+    }
+}
+
+#[cfg(test)]
+mod pentax_raw_value_channel_tests {
+    use super::*;
+
+    /// Pentax.pm:5202-5227's CAFPointInfo record for a 7x7 grid: header byte
+    /// 0x77 sets NumCAFPoints to 49, so `int8u[int((49+3)/4)]` is 13 packed
+    /// bytes; byte nine (0x30) selects point 34.
+    const CAF_RECORD: [u8; 15] = [0, 0x77, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0, 0, 0, 0];
+
+    /// Pentax.pm:4650-4661's FlashInfo 24.1 `ExternalFlashGuideNumber`: raw 6
+    /// has ValueConv `2**(6/16 + 4)` and PrintConv `int($val + 0.5)` = 21.
+    fn flash_record() -> [u8; 27] {
+        let mut record = [0_u8; 27];
+        record[24] = 6;
+        record
+    }
+
+    fn packed_caf() -> TagValue {
+        TagValue::Array(
+            [0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 0, 0, 0]
+                .into_iter()
+                .map(TagValue::Integer)
+                .collect(),
+        )
+    }
+
+    /// Both channels of both source fields must survive the raw dispatch.
+    fn assert_pentax_value_channels(metadata: &MetadataMap, route: &str) {
+        let numeric = metadata.without_print_conv();
+        for name in ["Pentax:CAFPointsInFocus", "Pentax:CAFPointsSelected"] {
+            assert_eq!(
+                metadata.get_string(name),
+                Some("34"),
+                "{route}: {name} PrintConv is DecodeAFPoints"
+            );
+            assert_eq!(
+                numeric.get(name),
+                Some(&packed_caf()),
+                "{route}: {name} --no-print-conv must be the packed int8u bytes"
+            );
+        }
+        assert_eq!(
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .find(|(key, _, _)| *key == "Pentax:ExternalFlashGuideNumber")
+                .map(|(_, _, value)| value.into_owned()),
+            Some(TagValue::new_string("21")),
+            "{route}: ExternalFlashGuideNumber PrintConv rounds"
+        );
+        assert_eq!(
+            numeric.get("Pentax:ExternalFlashGuideNumber"),
+            Some(&TagValue::Float(20.749_432_874_416_154)),
+            "{route}: ExternalFlashGuideNumber --no-print-conv keeps the ValueConv"
+        );
+    }
+
+    /// A MakerNotePentax5 body ("PENTAX \0" + byte order, `Base => '$start -
+    /// 10'`, MakerNotes.pm:818-829): value offsets count from the header.
+    fn pentax5_makernote() -> Vec<u8> {
+        let mut note = b"PENTAX \0MM".to_vec();
+        note.extend_from_slice(&2_u16.to_be_bytes());
+        for (tag, count, offset) in [(0x0208_u16, 27_u32, 40_u32), (0x0238, 15, 68)] {
+            note.extend_from_slice(&tag.to_be_bytes());
+            note.extend_from_slice(&7_u16.to_be_bytes());
+            note.extend_from_slice(&count.to_be_bytes());
+            note.extend_from_slice(&offset.to_be_bytes());
+        }
+        note.extend_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(note.len(), 40);
+        note.extend_from_slice(&flash_record());
+        note.push(0);
+        note.extend_from_slice(&CAF_RECORD);
+        note
+    }
+
+    /// The generic TIFF-based RAW walk (PEF) hands IFD0's MakerNote to the
+    /// dispatcher at `parse_tiff_based_raw`'s MakerNote site.
+    #[test]
+    fn pef_makernote_dispatch_preserves_pentax_value_channels() {
+        let note = pentax5_makernote();
+        let make_offset = 38_u32;
+        let note_offset = 46_u32;
+        let mut pef = b"II\x2a\0\x08\0\0\0".to_vec();
+        pef.extend_from_slice(&2_u16.to_le_bytes());
+        for (tag, field_type, count, value) in [
+            (0x010F_u16, 2_u16, 7_u32, make_offset),
+            (0x927C, 7, note.len() as u32, note_offset),
+        ] {
+            pef.extend_from_slice(&tag.to_le_bytes());
+            pef.extend_from_slice(&field_type.to_le_bytes());
+            pef.extend_from_slice(&count.to_le_bytes());
+            pef.extend_from_slice(&value.to_le_bytes());
+        }
+        pef.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(pef.len(), make_offset as usize);
+        pef.extend_from_slice(b"PENTAX\0\0");
+        assert_eq!(pef.len(), note_offset as usize);
+        pef.extend_from_slice(&note);
+
+        let metadata =
+            parse_raw_metadata(&pef, RawFormat::PentaxPEF).expect("synthetic PEF parses");
+        assert_pentax_value_channels(&metadata, "PEF MakerNote");
+    }
+
+    /// DNGPrivateData's `MakN` record (DNG.pm:237-296) relocates the source
+    /// MakerNote; a headerless little-endian Pentax IFD rebuilds and reaches
+    /// the same dispatcher through `parse_adobe_makn_record`.
+    #[test]
+    fn dng_private_makernote_dispatch_preserves_pentax_value_channels() {
+        let original_pos = 1000_u32;
+        let mut ifd = 2_u16.to_le_bytes().to_vec();
+        for (tag, count, relative) in [(0x0208_u16, 27_u32, 30_u32), (0x0238, 15, 58)] {
+            ifd.extend_from_slice(&tag.to_le_bytes());
+            ifd.extend_from_slice(&7_u16.to_le_bytes());
+            ifd.extend_from_slice(&count.to_le_bytes());
+            ifd.extend_from_slice(&(original_pos + relative).to_le_bytes());
+        }
+        ifd.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(ifd.len(), 30);
+        ifd.extend_from_slice(&flash_record());
+        ifd.push(0);
+        ifd.extend_from_slice(&CAF_RECORD);
+
+        let mut block = b"II".to_vec();
+        block.extend_from_slice(&original_pos.to_be_bytes());
+        block.extend_from_slice(&ifd);
+        let mut private = b"Adobe\0MakN".to_vec();
+        private.extend_from_slice(&(block.len() as u32).to_be_bytes());
+        private.extend_from_slice(&block);
+
+        let mut metadata = MetadataMap::new();
+        extract_dng_adobe_private_data(&private, "PENTAX", &mut metadata);
+        assert_pentax_value_channels(&metadata, "DNGPrivateData MakN");
     }
 }

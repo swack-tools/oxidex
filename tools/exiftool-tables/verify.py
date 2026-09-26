@@ -253,6 +253,14 @@ VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 
+# `Olympus::CameraSettings::StackedImage` carries this private StrEnum entry
+# as a runtime discriminator for fixed-array wildcard matching. It is not an
+# ExifTool PrintConv fact and therefore must not be compared with oracle ENUM
+# rows. Keep the exception tied to the one source-gated field and exact empty
+# value so a marker anywhere else remains visible to the verifier.
+FIXED_ARRAY_PATTERN_ENUM_KEY = ("Olympus", "CameraSettings", "2052")
+FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
 
 # Step 26. ExifTool format name -> the Rust `Fmt` variant a correct
 # transcription must use. Written out here on purpose rather than imported
@@ -692,11 +700,32 @@ def _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, prin
                 f"{expected_pairs} entries -- the verifier's pair "
                 "pattern is out of date; fix it before trusting a PASS"
             )
-        for kk, vv in pairs:
+        decoded_pairs = [
+            (kk, unescape(vv)) if int_keys else (unescape(kk), unescape(vv))
+            for kk, vv in pairs
+        ]
+        if not int_keys and k == FIXED_ARRAY_PATTERN_ENUM_KEY:
+            markers = [
+                (index, value)
+                for index, (enum_key, value) in enumerate(decoded_pairs)
+                if enum_key == FIXED_ARRAY_PATTERN_MARKER
+            ]
+            if markers != [(0, "")]:
+                raise SystemExit(
+                    f"enum for {k}: fixed-array runtime marker must occur exactly "
+                    "once as the first entry with an empty value"
+                )
+        for index, (enum_key, enum_value) in enumerate(decoded_pairs):
             if int_keys:
-                enums[k][kk] = unescape(vv)
+                enums[k][enum_key] = enum_value
             else:
-                enums[k][unescape(kk)] = unescape(vv)
+                if (
+                    k == FIXED_ARRAY_PATTERN_ENUM_KEY
+                    and index == 0
+                    and enum_key == FIXED_ARRAY_PATTERN_MARKER
+                ):
+                    continue
+                enums[k][enum_key] = enum_value
     elif _BITMASK_RE.match(pc) or _PARTIAL_ENUM_INT_RE.match(pc):
         # Step 25: both shapes carry an int-domain `exact: &[(i64, "..."),
         # ...]` array built exactly like `IntEnum`'s -- feeding it into the

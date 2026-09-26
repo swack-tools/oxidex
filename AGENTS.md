@@ -34,6 +34,49 @@ a source regression. Prefer `just test`, which supplies the scoped unwind
 override; if reproducing the bare command is necessary, clear the colliding
 artifacts first with `cargo clean --release -p chrono -p oxidex`.
 
+## Rust toolchain pin (build gotcha)
+
+`rust-toolchain.toml` pins the compiler (`channel = "1.97.1"`; CI builds with
+it), but **only rustup's proxies read that file**. Any other `rustc` earlier on
+`PATH` ignores it without a word. On the maintainer's Mac, `/opt/homebrew/bin`
+comes before `~/.cargo/bin`, so `rustc` and `cargo` are Homebrew's 1.98.1 and
+every local build silently used it. Even rustup's own cargo
+(`~/.cargo/bin/cargo`, or `rustup run 1.97.1 cargo build`) compiles with
+Homebrew's rustc there, because cargo runs the first `rustc` it finds on
+`PATH`. **`rustup run` is not a fix.** Checked: a crate built that way embeds
+Homebrew's `/rustc/48a229ce…` std paths.
+
+Fix it once per shell (put it in the profile):
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"   # rustup proxies first; they honour the pin
+```
+
+For a single command, use `PATH="$HOME/.cargo/bin:$PATH" cargo …`. Setting
+`$RUSTC` alone is not enough: cargo must be the pinned one too, and
+preflight, the corpus receipt and the rehearsal stages all check
+`cargo -V`. So if you pin by path, pin both:
+`RUSTC="$(rustup which --toolchain 1.97.1 rustc)" "$(rustup which --toolchain 1.97.1 cargo)" …`.
+Check with
+`tools/preflight.sh`, which exits 6 when `rustc` (or `$RUSTC`) or `cargo`
+resolves to anything but the pinned channel. It also exits 6 when that
+rustc's `commit-hash` is not the one rustup reports for the pin, or when
+rustup cannot resolve the pin at all. `OXIDEX_ALLOW_TOOLCHAIN_SKEW=1`
+turns that failure into a printed warning. Use it only for work that builds
+nothing you will measure.
+
+To see which compiler built a binary, read its own bytes. What `PATH` resolves
+today can differ from what built it:
+`grep -aoE '/rustc/[0-9a-f]{40}' target/release/oxidex | sort -u`, compared
+with `rustup run 1.97.1 rustc -vV | grep commit-hash`. Every instrument
+header does that comparison and warns on a mismatch (see incident 12 below).
+
+**Measurements from 2026-09-23 are off-pin.** Every local build and corpus
+measurement on this Mac that day came from a 1.98.1-built binary: each
+worktree binary checked embeds `/rustc/48a229ce…`, Homebrew 1.98.1. CI used
+the pinned 1.97.1. Before comparing those numbers with CI or with later runs,
+rebuild on the pin and measure again.
+
 ## Structure
 - `src/` - Core library and CLI
 - `src/exiftool_tables/` - Binary tag layouts transcribed from ExifTool's Perl tables (generated)
@@ -222,10 +265,37 @@ instrument keeps lying in a new way, not because the old ways stopped:
     the test — a test that spells the formula itself proves only that its
     author repeated the mistake.
 
+12. **An implicit toolchain resolution.** `rust-toolchain.toml` said
+    1.97.1, but a Homebrew `rustc` ahead of rustup's proxies on `PATH`
+    ignored it. Every local binary and corpus measurement on 2026-09-23 came
+    from 1.98.1 while CI used the pin. Nothing reported it, because nothing
+    asked which compiler ran. Fix: `tools/preflight.sh` fails (exit 6) on a
+    `rustc`/`cargo` that is not the pinned channel, or on a rustc whose
+    commit is not rustup's pin. Every instrument header
+    names the compiler that built the binary under test. It reads the
+    `/rustc/<commit>/` std paths embedded in the binary, because the
+    compiler on `PATH` today may not be the one that built a prebuilt binary,
+    and it warns loudly on a mismatch. `corpus_read_receipt.py build` passes
+    the pinned rustc to Cargo as `$RUSTC`, records it, and refuses anything
+    else. Two version-rehearsal stages compile: the build and the release
+    test suite. Each re-proves its compiler with its own environment right
+    before Cargo runs and records it. Each refuses any compiler other than
+    the one the built checkout's own `rust-toolchain.toml` pins, and the
+    tests must use the build's exact rustc. The qualification replays both.
+    The build is also checked against the binaries' fingerprints. The pin's
+    identity comes only from rustup (`rustup which`/`rustup run`), never from
+    a PATH compiler that merely reports the same release. A matching
+    release string is not an identity: preflight, the corpus receipt build and both
+    rehearsal stages require the running rustc's `commit-hash` to equal the
+    commit rustup reports for the pin. They refuse, failing closed, when
+    rustup cannot resolve the pin. Instrument headers report `unverified`
+    in that case instead. See "Rust toolchain pin" above.
+
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header
 before its first number: which oxidex (path, and a staleness warning per
-#2 above), which git commit and whether the tree is dirty, which ExifTool
+#2 above), which rustc compiled that binary (by its embedded fingerprint)
+against the pin, per #12, which git commit and whether the tree is dirty, which ExifTool
 and its capability-probe result, and the corpus path and file count. A dirty
 tree refuses to measure at all unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set,
 in which case the header says so. See `scripts/instrument.py`'s module
@@ -262,7 +332,9 @@ them to check. `tools/preflight.sh` performs the mechanical half; run it first.
 **Know which checkout you are in.** `tools/preflight.sh` prints the worktree
 root, whether it is the main checkout or a linked worktree, the branch, and the
 uncommitted-file count, and it exits non-zero on a protected branch (`main`,
-`refactor/tag-machinery`) or a dirty tree. Never edit the main checkout while
+`refactor/tag-machinery`), on a dirty tree, or when `rustc`/`cargo`
+resolves to a compiler other than `rust-toolchain.toml`'s (exit 6; see "Rust
+toolchain pin"). Never edit the main checkout while
 operating from a worktree, and never edit a worktree another agent owns: several
 agents sharing one tree is not hypothetical here — a live acceptance run found
 its tree gone dirty 58 s in, from a sibling's staged edits, and everything
@@ -313,6 +385,85 @@ a corrupted instrument), isolate every worker in its own explicit worktree, and
 report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
+
+## How work lands
+
+Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
+one change per PR:
+
+1. One agent, one worktree, one `staging/<slug>` branch off the current tip
+   of `refactor/tag-machinery`. A stacked child is the exception: branch it
+   from its parent's current head (see "Stacking dependent PRs"). Run
+   `tools/preflight.sh --upstream` first.
+2. Verify with the instrument named for the change (a corpus comparison for
+   tag work; see "Closing an ExifTool coverage gap"). A change that touches
+   readers must show 0 proven reads lost (`tools/ci/read_regression_gate.py`,
+   which CI also runs on every PR).
+3. Open the PR against `refactor/tag-machinery`, name the instrument beside
+   every number, and let CI run: build and tests, lint, generated-table
+   verification, the corpus read-regression gate and the parity ratchet.
+4. Squash-merge only when CI is green, no review thread is unresolved, and the
+   PR's central claim has been verified independently of the agent that made
+   it: re-run its instrument yourself, don't trust its report. The maintainer
+   may waive the CI wait explicitly, and only for the PR they name.
+
+**`main` is the maintainer's decision alone.** During ordinary development,
+never push to it, merge into it, or rebase onto it. Release promotion is the
+only path to `main` (see "Release engineering"). `refactor/tag-machinery` and
+`main` carry rulesets that reject force-pushes and deletions.
+
+**Keep the branch on the current tip.** Other sessions land competing fixes
+often. Before starting, and again before merging, fetch and bring the branch
+up to `origin/refactor/tag-machinery` (not `origin/main`). Rebase only before
+the first push; once a branch is pushed, merge the tip with a signed merge,
+because a pushed branch must not be force-pushed. To decide whether upstream
+already fixed the defect, reproduce it against the fetched
+`origin/refactor/tag-machinery` itself (a clean base worktree or a binary
+built from it), never against your own branch, which contains your fix. Then
+verify the corrected behaviour separately on your branch's head. If the tip
+already contains the fix, or the branch's scope has shrunk to nearly nothing,
+report it superseded and stop rather than landing an empty change.
+
+## Stacking dependent PRs
+
+Stack instead of queueing when review loops pile up or too many PRs are open
+at once, and in particular when a branch depends on a PR that has not landed.
+Open the dependent PR now, with the parent's `staging/...` branch as its base,
+rather than parking finished work until the parent merges. CI and the PR
+reviewer then see only the child's own diff and start immediately; a queued
+branch instead waits out every one of the parent's review rounds and then
+takes one large conflict at the end.
+
+- **Keep children current.** Each time the parent's head moves, merge it into
+  every child with a signed merge (`git merge -S --no-ff origin/<parent>`), not
+  a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
+  favour of the parent's structure.
+- **Land only on the integration branch.** Never merge a child into its parent
+  branch. After the parent squash-merges into `refactor/tag-machinery`:
+  1. retarget the child first (`gh pr edit <n> --base refactor/tag-machinery`);
+  2. then merge the new tip into it and push.
+
+  The order matters. Retargeting is a PR `edited` event, which CI's
+  `pull_request` trigger does not subscribe to, so only the push that follows
+  starts a CI run against the new base. If the tip merge was already pushed
+  before retargeting, re-run CI explicitly. Then squash-merge under the rules
+  in "How work lands", which apply unchanged to every PR in the stack.
+- **Keep unapproved work out of any automatic integration queue.** The
+  multi-host fleet is stopped. Its train, however, treats every unclaimed,
+  non-withdrawn `staging/*` ref as a landing candidate
+  (`tools/fleet/workqueue.py`), and it squash-commits and pushes those refs
+  straight onto the integration tip (`tools/fleet/train.py`). It does this
+  whatever the ref's PR base, review state or CI status. If the fleet ever
+  runs again, it would therefore bypass the landing rules above for every PR,
+  not only for stacked children. Before restarting it, give the train an
+  explicit readiness filter (CI green, approved, no unresolved threads,
+  parent landed). Until then, withdraw every not-yet-approved branch from the
+  queue.
+- **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
+  review round, one defect blocking all of it, and no way to verify each
+  change's central claim on its own.
+- **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
+  child's PR body, so a successor knows the retarget order.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:

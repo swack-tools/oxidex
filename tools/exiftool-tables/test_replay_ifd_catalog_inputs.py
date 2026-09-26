@@ -37,7 +37,10 @@ class IfdCatalogReplayTests(unittest.TestCase):
                                  "ifd_rust_sha256": codegen._canonical_ifd_rust_sha256(cls.rust)},
                       "rows": sorted(rows, key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"]))),
                       "counts": {"rows": 2, "emitted": 2, "refused": 0,
-                                 "reader_eligible": 1, "reader_omitted": 1}}
+                                 "reader_eligible": 1, "reader_omitted": 1},
+                      "ownership_rows": [],
+                      "ownership_counts": {"binary_rows": 0, "named_raw_key_rows": 0,
+                                           "samsung_trailer_rows": 0}}
 
     def fresh(self, document=None):
         document = copy.deepcopy(self.document if document is None else document)
@@ -103,6 +106,26 @@ class IfdCatalogReplayTests(unittest.TestCase):
             else:
                 ledger["rows"][1]["omissions"] = []
             with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, "rows/classifications/counts"):
+                replay(source, ledger, self.rust, self.oracle, oracle)
+
+    def test_ownership_rows_and_counts_must_match_fresh_source(self):
+        source, oracle = self.fresh()
+        forged = {
+            "module": "Nikon", "table": "MakerNotes0x56",
+            "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+            "raw_key": "4.1", "variant_path": [],
+            "name": "BurstStartSlotNumber", "source_sha256": "0" * 64,
+            "source_kind": "binary",
+        }
+        for mutation in ("row", "count"):
+            ledger = copy.deepcopy(self.ledger)
+            if mutation == "row":
+                ledger["ownership_rows"].append(forged)
+            else:
+                ledger["ownership_counts"]["binary_rows"] += 1
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(
+                ValueError, "ownership rows/counts"
+            ):
                 replay(source, ledger, self.rust, self.oracle, oracle)
 
     def test_changed_or_failed_oracle_inventory_cannot_reduce_coverage(self):

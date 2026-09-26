@@ -17,6 +17,10 @@ use crate::io::ByteOrder;
 use super::cond;
 use super::{ALL_BINARY_TABLES, BinaryTable, ExprValue, Field, Fmt, Omitted, PrintConv};
 
+/// Source-gated discriminator for Olympus.pm's exact StackedImage array
+/// OTHER closure. Ordinary ExifTool hash keys can never enable this behavior.
+const FIXED_ARRAY_PATTERN_MARKER: &str = "\u{1f}oxidex-fixed-array-pattern-v1";
+
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DecodedValue {
@@ -436,6 +440,54 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
         DecodedValue::String(s) => TagValue::String(s.clone()),
         DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
         DecodedValue::Array(values) => TagValue::Array(values.iter().map(to_tag_value).collect()),
+    }
+}
+
+/// The source-stored form of a decoded value before Mask, RoundFloat,
+/// RawConv, ValueConv, or PrintConv. Unlike [`to_tag_value`], this never
+/// repairs invalid string bytes and never replaces an unsigned rational that
+/// exceeds `TagValue::Rational`'s signed components with its quotient text.
+#[must_use]
+pub(crate) fn to_stored_tag_value(value: &DecodedValue, order: ByteOrder) -> TagValue {
+    match value {
+        DecodedValue::Integer(v) => TagValue::Integer(*v),
+        DecodedValue::Float(v) => TagValue::Float(*v),
+        DecodedValue::UnsignedRational(n, d) => match (i32::try_from(*n), i32::try_from(*d)) {
+            (Ok(numerator), Ok(denominator)) => TagValue::Rational {
+                numerator,
+                denominator,
+            },
+            _ => {
+                let mut bytes = Vec::with_capacity(8);
+                match order {
+                    ByteOrder::Big => {
+                        bytes.extend_from_slice(&n.to_be_bytes());
+                        bytes.extend_from_slice(&d.to_be_bytes());
+                    }
+                    ByteOrder::Little => {
+                        bytes.extend_from_slice(&n.to_le_bytes());
+                        bytes.extend_from_slice(&d.to_le_bytes());
+                    }
+                }
+                TagValue::Binary(bytes)
+            }
+        },
+        DecodedValue::SignedRational(n, d) => TagValue::Rational {
+            numerator: *n,
+            denominator: *d,
+        },
+        DecodedValue::StringBytes(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(text) => TagValue::String(text),
+            Err(_) => TagValue::Binary(bytes.clone()),
+        },
+        DecodedValue::String(text) => TagValue::String(text.clone()),
+        DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
+        DecodedValue::Array(values) => TagValue::Array(
+            values
+                .iter()
+                .map(|value| to_stored_tag_value(value, order))
+                .collect(),
+        ),
     }
 }
 
@@ -1203,6 +1255,43 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             None => unknown_text(&value.perl_string()?),
         }),
         PrintConv::StrEnum(map) => {
+            if map
+                .first()
+                .is_some_and(|(marker, _)| *marker == FIXED_ARRAY_PATTERN_MARKER)
+            {
+                // Strip the non-source discriminator before every value-kind
+                // path, including StringBytes, so it cannot be observed as a
+                // normal exact-match key.
+                let map = &map[1..];
+                let key = match value {
+                    DecodedValue::StringBytes(bytes) => fix_utf8(bytes)?,
+                    _ => value.enum_key()?,
+                };
+                if let Some((_, rendered)) = map.iter().find(|(candidate, _)| *candidate == key) {
+                    return Some((*rendered).to_string());
+                }
+                let mut parts = key.split(' ');
+                let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next())
+                else {
+                    return Some(unknown_text(&key));
+                };
+                if first.is_empty()
+                    || second.is_empty()
+                    || !first.bytes().all(|byte| byte.is_ascii_digit())
+                    || !second.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Some(unknown_text(&key));
+                }
+                let wildcard = format!("{first} *");
+                return Some(
+                    map.iter()
+                        .find(|(candidate, _)| *candidate == wildcard)
+                        .map_or_else(
+                            || unknown_text(&key),
+                            |(_, rendered)| rendered.replacen('*', second, 1),
+                        ),
+                );
+            }
             if let DecodedValue::StringBytes(bytes) = value {
                 let display = fix_utf8(bytes)?;
                 return Some(
@@ -3127,6 +3216,35 @@ mod tests {
                     denominator: 2
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn stored_value_keeps_invalid_bytes_undefined_and_wide_rational_exact() {
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::StringBytes(vec![0xff, 0x00, 0x61]),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xff, 0x00, 0x61])
+        );
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::Undefined(vec![0xde, 0xad]),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xde, 0xad])
+        );
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::UnsignedRational(u32::MAX, 2),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xff, 0xff, 0xff, 0xff, 2, 0, 0, 0])
+        );
+        assert_eq!(
+            to_stored_tag_value(&DecodedValue::UnsignedRational(u32::MAX, 2), ByteOrder::Big,),
+            TagValue::Binary(vec![0xff, 0xff, 0xff, 0xff, 0, 0, 0, 2])
         );
     }
 }

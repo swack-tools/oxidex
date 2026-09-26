@@ -14,6 +14,7 @@ import copy
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -49,12 +50,25 @@ FIXED_SOURCE_COMMITS = {
     "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
     "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
 }
+CANONICAL_MATRIX = REPOSITORY_ROOT / "tools" / "exiftool-tables" / "version_transition_matrix.json"
 INPUT_NAMES = ("capture", "catalog", "plan", "resolution", "materialization")
 SIDES = ("before", "after")
 
 
 class Refused(ValueError):
     """The requested qualification cannot produce attributable evidence."""
+
+
+class OutcomeUnknown(Refused):
+    """A final marker exists, but publication could not be confirmed or refused."""
+
+
+class LeaseRetained(Refused):
+    """The lease is deliberately still held: an owned child was not proven gone."""
+
+    def __init__(self, message: str, survivors: list[dict[str, Any]]):
+        super().__init__(message)
+        self.survivors = survivors
 
 
 def _sha_file(file_path: Path) -> str:
@@ -65,10 +79,25 @@ def _sha_file(file_path: Path) -> str:
     return digest.hexdigest()
 
 
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _make_parent(file_path: Path) -> list[Path]:
+    """Create the receipt directory; return directories whose entries changed."""
+    missing = [parent for parent in (file_path.parent, *file_path.parent.parents) if not parent.exists()]
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    return [file_path.parent, *(directory.parent for directory in missing)]
+
+
 def _atomic_json(file_path: Path, value: Mapping[str, Any]) -> None:
     if file_path.exists() or file_path.is_symlink():
         raise Refused(f"receipt already exists: {file_path}")
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    changed = _make_parent(file_path)
     temporary = file_path.with_name(f".{file_path.name}.{os.getpid()}.tmp")
     try:
         with temporary.open("x", encoding="utf-8") as stream:
@@ -79,16 +108,21 @@ def _atomic_json(file_path: Path, value: Mapping[str, Any]) -> None:
         os.replace(temporary, file_path)
     finally:
         temporary.unlink(missing_ok=True)
+    # Persist the new directory entries too, not only the file contents.
+    for directory in dict.fromkeys(changed):
+        _fsync_directory(directory)
 
 
 def _append_jsonl(file_path: Path, value: Mapping[str, Any]) -> None:
     if file_path.is_symlink():
         raise Refused(f"JSONL receipt must not be a symbolic link: {file_path}")
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    changed = _make_parent(file_path) if not file_path.exists() else []
     with file_path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(value, sort_keys=True) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+    for directory in dict.fromkeys(changed):
+        _fsync_directory(directory)
 
 
 def _read_object(file_path: Path, label: str) -> dict[str, Any]:
@@ -199,12 +233,31 @@ def _validate_row(row: Mapping[str, Any], contract: tuple[str, str, str]) -> Non
         raise Refused("matrix row weakens mandatory transition controls")
 
 
+def _evidence_location(value: Any, label: str) -> Path:
+    """A durable evidence path beneath the ops root (OXIDEX_OPS_DIR)."""
+    if not isinstance(value, (str, Path)) or not Path(value).is_absolute():
+        raise Refused(f"{label} must be an absolute path beneath the ops root: {value}")
+    try:
+        resolved = ops_paths.durable_root(Path(value), label)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    root = ops_paths.ops_root()
+    if not resolved.is_relative_to(root):
+        raise Refused(f"{label} must be beneath the ops root {root}: {value}")
+    return resolved
+
+
 def materialize_matrix(matrix: dict[str, Any], *, output_root: Path, target_root: Path,
                        run_id: str) -> dict[str, Any]:
     if RUN_ID.fullmatch(run_id) is None:
         raise Refused("run ID is malformed")
-    output_root = ops_paths.durable_root(output_root, "qualification output")
-    target_root = ops_paths.durable_root(target_root, "OXIDEX_TARGET_ROOT")
+    # Output and every input bundle beneath it are evidence under the ops root.
+    # The Cargo target root is the documented separate exception.
+    output_root = _evidence_location(output_root, "qualification output")
+    try:
+        target_root = ops_paths.durable_root(target_root, "OXIDEX_TARGET_ROOT")
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
     value = _format_strings(matrix, {
         "output_root": str(output_root), "target_root": str(target_root), "run_id": run_id,
     })
@@ -289,10 +342,8 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
             or not isinstance(locations.get("archive_cache"), str)
             or not isinstance(locations.get("source_root"), str)):
         raise Refused("verified input locations are incomplete")
-    archive_cache = Path(locations["archive_cache"])
-    source_root = Path(locations["source_root"])
-    if not archive_cache.is_absolute() or not source_root.is_absolute():
-        raise Refused("verified archive and source roots must be absolute")
+    archive_cache = _evidence_location(locations["archive_cache"], "verified archive cache")
+    source_root = _evidence_location(locations["source_root"], "verified source root")
     catalog_stage.verify_source_materialization(
         materialization, plan, catalog, capture, resolution, archive_cache, source_root,
     )
@@ -429,6 +480,7 @@ def _commands() -> dict[str, Any]:
     return {
         "generate": {"argv": [sys.executable, adapter, "generate", *common]},
         "build": {"argv": [sys.executable, adapter, "build", *common]},
+        "test": {"argv": [sys.executable, adapter, "test", *common]},
         "read": {"argv": [sys.executable, adapter, "read", *common,
                             "--fixture-manifest", "{read_fixture_manifest}",
                             "--native-probe-sha256", "{native_probe_sha256}"]},
@@ -482,7 +534,21 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or any(type(classification.get(name)) is not int or classification[name] < 0
                    for name in ("matched", "value_diff", "missing", "renames", "extra"))):
         raise Refused("read proof lacks the explicit zero-EXTRA hand-behavior retention control")
+    native = _report_for(run_dir, journal, release, "native")
+    version, docx = native.get("version"), native.get("docx_capability")
+    perl_capability = native.get("perl_capability")
+    if (native.get("state") != "ready" or native.get("probe_sha256") != read.get("native_probe_sha256")
+            or not isinstance(version, dict) or version.get("state") != "ok"
+            or str(version.get("stdout", "")).strip() != release
+            or not isinstance(docx, dict) or docx.get("state") != "ok"
+            or str(docx.get("stdout", "")).strip() != "DOCX"
+            or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
+        raise Refused(f"{release} native capability probe is not the ready probe used by read")
     checkout = run_dir / "checkouts" / executor._safe_name(release)
+    # The build first: the release tests are then checked against its compiler.
+    build_environment = _build_environment_receipt(_report_for(run_dir, journal, release, "build"), release,
+                                                   checkout)
+    release_tests = _release_test_receipt(run_dir, journal, release)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
         raise Refused("generated refusal accounting is unavailable")
@@ -491,6 +557,19 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
         "source_identity": {key: identity[key] for key in (
             "release", "tag_object", "peeled_commit", "source_directory",
             "source_tree_sha256", "materialization_sha256")},
+        "instrument": {
+            "source_commit": read["source_commit"],
+            "binary": read["binary"],
+            "native_identity": read["native_identity"],
+            "native_probe_sha256": read["native_probe_sha256"],
+            "read_fixture_manifest": read["fixtures"]["manifest"],
+            "read_fixture_manifest_sha256": read["fixtures"]["manifest_sha256"],
+            "read_fixture_count": len(read["fixtures"]["entries"]),
+            "capability_probe": {"state": "ready", "version": release, "docx_filetype": "DOCX",
+                                 "perl_modules_available": True},
+        },
+        "release_tests": release_tests,
+        "build_environment": build_environment,
         "generated_artifacts": generate.get("generated_artifacts"),
         "classification_counts": classification,
         "generated_refusals": refusals,
@@ -498,6 +577,182 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
         "write_report_sha256": rehearsal.sha256_json(write),
         "execution_journal_sha256": _sha_file(run_dir / "execution-status.json"),
     }
+
+
+def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """Require the regenerated checkout's own suite: exact commands, zero failures."""
+    if journal.get("scope", {}).get("release_tests") != "passed_per_release":
+        raise Refused(f"{release} release test suite did not pass for this side")
+    report = _report_for(run_dir, journal, release, "test")
+    suite = report.get("test_suite")
+    keys = ("passed", "failed", "ignored", "measured", "filtered_out", "targets")
+
+    def counts(value: Any) -> bool:
+        return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] >= 0 for key in keys)
+
+    commands = suite.get("commands") if isinstance(suite, dict) else None
+    totals = suite.get("totals") if isinstance(suite, dict) else None
+    log = suite.get("log") if isinstance(suite, dict) else None
+    expected = [list(argv) for argv in stage_adapter.TEST_COMMANDS]
+    if (report.get("state") != "passed" or not isinstance(commands, list) or not counts(totals)
+            or not all(counts(row) for row in commands)
+            or [row.get("argv") for row in commands] != expected
+            or any(row.get("exit") != 0 or type(row.get("duration_seconds")) is not float for row in commands)
+            or any(totals[key] != sum(row[key] for row in commands) for key in keys)
+            or totals["failed"] != 0 or totals["passed"] < 1
+            or report.get("denominator") != totals["passed"]
+            or not isinstance(log, dict) or log != report.get("raw_report")
+            or not isinstance(log.get("path"), str) or not isinstance(suite.get("target_directory"), str)):
+        raise Refused(f"{release} release test suite is not a counted zero-failure run of the required commands")
+    try:
+        log_sha = _sha_file(_regular_receipt(Path(log["path"])))
+    except (OSError, Refused) as exc:
+        raise Refused(f"{release} release test suite log is unavailable") from exc
+    if log_sha != log.get("sha256"):
+        raise Refused(f"{release} release test suite log differs from its report")
+    oracle = _release_test_oracle(report, release)
+    corpus = _release_test_corpus(suite, release)
+    # The suite compiled its own target: it must have proved, with its own
+    # environment, the same pinned rustc that built the qualified binaries.
+    compiler = suite.get("compiler")
+    checkout = run_dir / "checkouts" / executor._safe_name(release)
+    try:
+        stage_adapter.validate_pinned_toolchain(compiler, checkout)
+        build_toolchain = _report_for(run_dir, journal, release, "build")["build_environment"]["toolchain"]
+        if compiler["toolchain"] != build_toolchain:
+            raise stage_adapter.Refused("the suite's rustc/cargo differ from the build's")
+    except (stage_adapter.Refused, OSError, KeyError, TypeError) as exc:
+        raise Refused(f"{release} release test suite did not run on the checkout's pinned toolchain: {exc}") from exc
+    cargo_config = suite.get("cargo_config")
+    if (not isinstance(cargo_config, dict) or cargo_config.get("outside_checkout") != []
+            or not isinstance(cargo_config.get("checked"), list) or not cargo_config["checked"]):
+        raise Refused(f"{release} release test suite may have read cargo configuration outside the checkout")
+    return {"commands": expected, "exits": [row["exit"] for row in commands],
+            **{key: totals[key] for key in keys},
+            "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
+            "target_directory": suite["target_directory"], "log": log, "exiftool_oracle": oracle,
+            "fixture_corpus": corpus, "compiler": compiler}
+
+
+def _fixture_corpus_authority() -> dict[str, Any]:
+    """This host's bootstrap-verified combined corpus, read independently of any receipt."""
+    import importlib.util
+    script = REPOSITORY_ROOT / "tools" / "release" / "bootstrap_oracle.py"
+    spec = importlib.util.spec_from_file_location("oxidex_qualification_bootstrap_oracle", script)
+    if spec is None or spec.loader is None:
+        raise Refused("oracle bootstrap cannot be loaded")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    root = ops_paths.ops_root()
+    corpus = Path(bootstrap.corpus_path(root))
+    manifest = corpus.parent / "combined-samples.manifest"
+    storage = _read_object(Path(bootstrap.manifest_path(root)), "oracle storage manifest")
+    manifest_sha = _sha_file(manifest)
+    tree_sha = bootstrap.LOCK.get("corpus_tree_sha256")
+    artifacts_ = storage.get("artifacts") if isinstance(storage.get("artifacts"), dict) else {}
+    if (artifacts_.get("corpus_manifest") != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
+            or artifacts_.get("corpus_tree") != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
+        raise Refused("this host's combined corpus manifest is not bootstrap-verified")
+    count = sum(1 for line in manifest.read_text(encoding="utf-8").splitlines() if line)
+    return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "corpus": str(corpus),
+            "corpus_tree_sha256": tree_sha,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count}}
+
+
+def _release_test_corpus(suite: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """The suite's combined samples must be this host's verified corpus, unchanged across the run."""
+    corpus = suite.get("fixture_corpus")
+    try:
+        authority = _fixture_corpus_authority()
+    except (OSError, ValueError) as exc:
+        raise Refused(f"{release} release test suite fixture corpus cannot be verified on this host") from exc
+    if (not isinstance(corpus, dict)
+            or any(corpus.get(key) != authority[key]
+                   for key in ("ops_root", "bootstrap_pin", "corpus", "corpus_tree_sha256", "manifest"))
+            or corpus.get("version_independent") is not True
+            or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True
+            or corpus.get("link") != str(Path(suite["exiftool_oracle"]["cache_dir"]) / "combined-samples")):
+        raise Refused(f"{release} release test suite fixture corpus is not this host's verified combined corpus")
+    return corpus
+
+
+def _release_test_oracle(report: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """The suite must have been graded by this side's selected, capable ExifTool.
+
+    The report's native identity is the executor-verified selected release
+    (tree, Perl and library). The recorded oracle probe and the suite's
+    allowlisted environment must both resolve to exactly that tree.
+    """
+    suite = report["test_suite"]
+    oracle, env, native = suite.get("exiftool_oracle"), suite.get("environment"), report.get("native_identity")
+    allowed = set(stage_adapter.TEST_ENVIRONMENT_PASSTHROUGH) | set(stage_adapter.TEST_ENVIRONMENT_SET)
+    try:
+        cache = oracle["cache_dir"]
+        shim = str(Path(cache) / "bin")
+        valid = (
+            isinstance(native, dict) and isinstance(env, dict)
+            and oracle["version"] == release and oracle["docx_filetype"] == "DOCX"
+            and oracle["perl_modules_available"] is True
+            and oracle["tree"] == str(Path(cache) / "exiftool")
+            and oracle["tree_realpath"] == native["source"]["path"]
+            and oracle["lib"]["exiftool_pm_sha256"] == native["lib"]["exiftool_pm_sha256"]
+            and oracle["perl"] == native["perl"]
+            and set(env) <= allowed and set(stage_adapter.TEST_ENVIRONMENT_SET) <= set(env)
+            and env["EXIFTOOL_CACHE_DIR"] == cache and env["EXIFTOOL_PERL"] == native["perl"]["path"]
+            and env["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"] == "1"
+            and env["CARGO_TARGET_DIR"] == suite["target_directory"]
+            and isinstance(env.get("PATH"), str) and env["PATH"].split(os.pathsep)[0] == shim
+        )
+    except (KeyError, TypeError) as exc:
+        raise Refused(f"{release} release test suite lacks its ExifTool oracle proof") from exc
+    if not valid:
+        raise Refused(f"{release} release test suite was not graded by the selected capable ExifTool "
+                      "under the allowlisted environment")
+    return oracle
+
+
+def _build_environment_receipt(build: Mapping[str, Any], release: str, checkout: Path) -> dict[str, Any]:
+    """The qualified binaries must come from the allowlisted build environment,
+    compiled by the rustc release that checkout's own rust-toolchain.toml pins.
+
+    PATH is allowlisted, and a rustc ahead of rustup's proxies on it ignores
+    the pin silently, so "some identified rustc" is not enough: the recorded
+    ``rustc -vV``/``cargo -V`` must be the pinned release, the pin recorded at
+    build time must still be the checkout's file, and both executables must
+    embed that rustc's commit (std's /rustc/<commit>/ paths)."""
+    recorded = build.get("build_environment")
+    allowed = set(stage_adapter.BUILD_ENVIRONMENT_PASSTHROUGH) | set(stage_adapter.BUILD_ENVIRONMENT_SET)
+    try:
+        env, toolchain, cargo_config = recorded["environment"], recorded["toolchain"], recorded["cargo_config"]
+        binary = Path(build["binary"]["path"])
+        valid = (
+            isinstance(env, dict) and set(env) <= allowed and set(stage_adapter.BUILD_ENVIRONMENT_SET) <= set(env)
+            and isinstance(toolchain, dict) and set(toolchain) == {"rustc", "cargo"}
+            and toolchain["rustc"].startswith("rustc ") and toolchain["cargo"].startswith("cargo ")
+            and isinstance(cargo_config, dict) and cargo_config.get("outside_checkout") == []
+            and isinstance(cargo_config.get("checked"), list) and cargo_config["checked"]
+            and binary.is_relative_to(Path(env["CARGO_TARGET_DIR"]))
+        )
+        recorded_pin, compiled_by = recorded["toolchain_pin"], recorded["compiled_by"]
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise Refused(f"{release} build environment is not recorded") from exc
+    if not valid:
+        raise Refused(f"{release} build environment is not the allowlisted, identified toolchain build")
+    try:
+        stage_adapter.validate_pinned_toolchain(
+            {"toolchain": toolchain, "toolchain_pin": recorded_pin, "rustc_path": recorded.get("rustc_path"),
+             "pin_rustc": recorded.get("pin_rustc")},
+            checkout)
+        stage_adapter.check_binary_compilers(toolchain, compiled_by)
+    except (stage_adapter.Refused, OSError) as exc:
+        raise Refused(f"{release} build environment is not the checkout's pinned toolchain: {exc}") from exc
+    return recorded
+
+
+def _regular_receipt(path: Path) -> Path:
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f"receipt must be an existing regular file: {path}")
+    return path
 
 
 def _compare_sides(row: Mapping[str, Any], before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
@@ -535,20 +790,27 @@ class TransitionLease:
         self.expires_at = 0.0
         self.sequence = 0
         self.terminal_status = "aborted"
-        self._heartbeat_lock = threading.Lock()
+        # Guards every liveness record; release waits for an in-flight one and
+        # then forbids more, so none can follow the lock release.
+        self._heartbeat_lock = threading.RLock()
+        self._closing = False
+        self._host_lock_capability: executor._HeldHostLock | None = None
 
     def __enter__(self) -> "TransitionLease":
         if self.lease.is_symlink() or not self.lease.is_file():
             raise Refused("transition lease must be an existing regular non-symlink file")
         self.file = self.lease.open("r+")
         try:
-            fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.set_inheritable(self.file.fileno(), True)
+            self._host_lock_capability = executor._HeldHostLock.acquire(self.lease, self.file)
         except BlockingIOError as exc:
             self.file.seek(0)
             observed_owner = self.file.read().strip() or "owner metadata unavailable"
             self.file.close()
             raise Refused(f"transition lease is held: {observed_owner}") from exc
-        os.set_inheritable(self.file.fileno(), True)
+        except BaseException:
+            self.file.close()
+            raise
         try:
             self.acquired_at = time.time()
             self.expires_at = self.acquired_at + self.expires_seconds
@@ -558,6 +820,7 @@ class TransitionLease:
                 "acquired_at": self.acquired_at, "lock_path": str(self.lease), "lock_realpath": real,
                 "lease_mode": "nonblocking-exclusive", "lease_expires_at": self.expires_at,
                 "expiry_policy": "stop-before-next-stage-cleanup-journal-release",
+                "qualification_outcome": "pending",
             }
             self.file.seek(0)
             self.file.truncate()
@@ -569,6 +832,7 @@ class TransitionLease:
             return self
         except BaseException as acquire_error:
             try:
+                self._host_lock_capability.deactivate()
                 fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
             finally:
                 self.file.close()
@@ -580,6 +844,7 @@ class TransitionLease:
                     "release_status": "released-after-acquire-failure", "terminal_status": "failed",
                     "release_reason": "lease-acquisition-receipt-failure",
                     "flock_release_confirmed": True, "receipt_failures": [str(acquire_error)],
+                    "qualification_outcome": "pending",
                 })
             except BaseException as receipt_error:
                 if hasattr(acquire_error, "add_note"):
@@ -588,6 +853,8 @@ class TransitionLease:
 
     def heartbeat(self, event: str, row: str | None, stage: str | None) -> None:
         with self._heartbeat_lock:
+            if self._closing or self.file is None or self.file.closed:
+                raise Refused("transition lease is not held; no liveness record may follow release")
             if time.time() >= self.expires_at:
                 raise Refused("transition lease expired before the next stage")
             self.sequence += 1
@@ -595,6 +862,7 @@ class TransitionLease:
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
                 "sequence": self.sequence, "timestamp": time.time(), "event": event,
                 "row": row, "stage": stage,
+                "qualification_outcome": "pending",
             })
 
     def guard(self) -> None:
@@ -609,79 +877,89 @@ class TransitionLease:
             raise Refused("transition lease descriptor is not held")
         return self.file.fileno()
 
+    @property
+    def host_lock_capability(self) -> executor._HeldHostLock:
+        # Expiry forbids another stage, but interruption recovery must still
+        # borrow the lock while this owner holds it to journal the active stage.
+        if self.file is None or self.file.closed:
+            raise Refused("transition lease is not held")
+        if self._host_lock_capability is None:
+            raise Refused("transition lease has no owned host lock")
+        return self._host_lock_capability
+
     def finish(self, terminal_status: str) -> None:
         self.terminal_status = terminal_status
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        with self._heartbeat_lock:
+            self._closing = True
         expired = time.time() >= self.expires_at
         terminal = "failed" if exc_type is not None or expired else self.terminal_status
-        expiry_status = "expired" if expired else ("aborted" if terminal != "complete" else "not-expired")
+        expiry_status = "expired" if expired else (
+            "aborted" if terminal != "body-validated" else "not-expired"
+        )
         receipt_failures: list[str] = []
         try:
             _atomic_json(self.expiry_receipt, {
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
                 "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
-                "expired_at": time.time() if expired else None, "expiry_status": expiry_status,
-                "terminal_status": terminal,
+                "observed_at": time.time(), "expired_at": time.time() if expired else None,
+                "expiry_status": expiry_status, "terminal_status": terminal,
+                "qualification_outcome": "pending",
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"expiry receipt: {receipt_error}")
         release_status = "released"
         confirmed = False
+        survivors: list[dict[str, Any]] = []
         if self.file is not None:
+            stream, self.file = self.file, None
             try:
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-                confirmed = True
+                # Children inherit this open file description. LOCK_UN would
+                # release it for a still-live child too, so unlock only after
+                # every owned child is proven gone; otherwise keep it held.
+                survivors = executor.release_or_retain(stream, self._host_lock_capability)
+                if survivors:
+                    release_status = "retained-unproven-child"
+                else:
+                    confirmed = True
             except OSError as release_error:
                 release_status = "release-failed"
                 receipt_failures.append(f"lock release: {release_error}")
             finally:
-                try:
-                    self.file.close()
-                except OSError as close_error:
-                    release_status = "release-failed"
-                    receipt_failures.append(f"lock close: {close_error}")
-                finally:
-                    self.file = None
+                if not survivors:
+                    try:
+                        stream.close()
+                    except OSError as close_error:
+                        release_status = "release-failed"
+                        receipt_failures.append(f"lock close: {close_error}")
+        if not confirmed and not survivors:
+            receipt_failures.append("lock release was not confirmed")
         try:
             _atomic_json(self.release_receipt, {
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
+                "lock_realpath": str(self.lease.resolve()), "released_at": None if survivors else time.time(),
                 "release_status": release_status, "terminal_status": terminal,
                 "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
+                "surviving_children": survivors,
                 "receipt_failures": receipt_failures,
+                "qualification_outcome": "pending",
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"release receipt: {receipt_error}")
-        # Receipt I/O and descriptor cleanup can outlast the last guard. Latch
-        # expiry after that work, and correct both terminal receipts before
-        # refusing publication. Cleanup above must run even for expired leases.
-        if not expired and time.time() >= self.expires_at:
-            expired = True
-            for target, record in (
-                (self.expiry_receipt, {
-                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                    "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
-                    "expired_at": time.time(), "expiry_status": "expired",
-                    "terminal_status": "failed",
-                }),
-                (self.release_receipt, {
-                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                    "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
-                    "release_status": release_status, "terminal_status": "failed",
-                    "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
-                    "receipt_failures": receipt_failures,
-                }),
-            ):
-                try:
-                    # Keep the ordinary publisher's stale-receipt refusal:
-                    # only this invocation's terminal records are superseded.
-                    corrected = target.with_name(f"{target.name}.expired")
-                    _atomic_json(corrected, record)
-                    os.replace(corrected, target)
-                except BaseException as receipt_error:
-                    receipt_failures.append(f"expired terminal receipt {target}: {receipt_error}")
-        if expired:
+        if survivors:
+            retained = LeaseRetained(
+                "transition lease " + executor.retained_lock_message(self.lease, survivors), survivors,
+            )
+            if receipt_failures:
+                retained.add_note("transition lease receipt failures: " + "; ".join(receipt_failures))
+            if exc is not None:
+                retained.add_note(f"original exception: {exc!r}")
+            raise retained
+        # Operational receipts never assert qualification success, so a late
+        # expiry needs only to refuse the single final outcome commit. No
+        # fallible successful-to-failed rewrite is required here.
+        if time.time() >= self.expires_at:
             receipt_failures.insert(0, "transition lease expired during final cleanup")
         if receipt_failures:
             detail = "; ".join(receipt_failures)
@@ -720,12 +998,14 @@ class ReceiptCadence:
     def _run(self) -> None:
         while not self.stop.wait(self.interval_seconds):
             try:
-                self.lease.heartbeat("periodic", self.row, self.stage)
-                _append_jsonl(self.handoff_receipt, {
-                    "run_id": self.lease.run_id, "owner": self.lease.owner,
-                    "timestamp": time.time(), "state": "periodic",
-                    "row": self.row, "stage": self.stage, "lease": str(self.lease.lease),
-                })
+                with self.lease._heartbeat_lock:
+                    self.lease.heartbeat("periodic", self.row, self.stage)
+                    _append_jsonl(self.handoff_receipt, {
+                        "run_id": self.lease.run_id, "owner": self.lease.owner,
+                        "timestamp": time.time(), "state": "periodic",
+                        "row": self.row, "stage": self.stage, "lease": str(self.lease.lease),
+                        "qualification_outcome": "pending",
+                    })
             except BaseException as exc:
                 self.failure = exc
                 self.stop.set()
@@ -733,17 +1013,26 @@ class ReceiptCadence:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         self.stop.set()
         self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            failure = Refused("receipt cadence remains running after shutdown")
+            if exc is not None:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(str(failure))
+                return None
+            raise failure
         if exc_type is None:
             self.check()
 
 
 def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path, *,
-                        host_lock_fd: int | None = None) -> bool:
+                        host_lock_fd: executor._HeldHostLock | None = None) -> bool:
     journal_path = run_dir / "execution-status.json"
     if not journal_path.is_file() or journal_path.is_symlink():
         return False
     journal = _read_object(journal_path, "execution journal")
-    if journal.get("phase") == "running" and isinstance(journal.get("active"), dict):
+    # A running journal is recoverable mid-stage (active object) and between
+    # stages (active null); both must be marked terminal, never left running.
+    if journal.get("phase") == "running" and (journal.get("active") is None or isinstance(journal.get("active"), dict)):
         executor.recover(run_dir, archive_cache, source_root, host_lock_fd=host_lock_fd)
         return True
     return False
@@ -771,6 +1060,113 @@ def _validate_receipt_contract(*, output_root: Path, run_id: str, lease_path: Pa
             raise Refused(f"{basename} must be emitted beneath the run output directory")
         if receipt.exists() or receipt.is_symlink():
             raise Refused(f"stale receipt reuse is forbidden: {receipt}")
+    final_marker = receipt_root / "qualification-result.json"
+    if final_marker.exists() or final_marker.is_symlink():
+        raise Refused(f"stale receipt reuse is forbidden: {final_marker}")
+
+
+def _bind_receipt(path: Path) -> dict[str, str]:
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f"required receipt is not a regular file: {path}")
+    return {"path": str(path.resolve()), "sha256": _sha_file(path)}
+
+
+def _receipt_manifest(*, owner_receipt: Path, heartbeat_receipt: Path,
+                      expiry_receipt: Path, release_receipt: Path,
+                      handoff_receipt: Path, row_results: list[Path]) -> dict[str, Any]:
+    return {
+        "owner_receipt": _bind_receipt(owner_receipt),
+        "heartbeat_receipt": _bind_receipt(heartbeat_receipt),
+        "expiry_receipt": _bind_receipt(expiry_receipt),
+        "release_receipt": _bind_receipt(release_receipt),
+        "handoff_receipt": _bind_receipt(handoff_receipt),
+        "row_results": [_bind_receipt(path) for path in row_results],
+    }
+
+
+def load_committed_result(final_path: Path) -> dict[str, Any]:
+    """Accept qualification only through its final marker and exact pending inputs."""
+    final = _read_object(final_path, "qualification result")
+    run_id = final.get("run_id")
+    if (final_path.name != "qualification-result.json" or not isinstance(run_id, str)
+            or final_path.parent.name != run_id or not RUN_ID.fullmatch(run_id)
+            or final.get("schema") != SCHEMA or final.get("kind") != RESULT_KIND
+            or final.get("status") != "tooling-executed-nonpromoting"
+            or final.get("promotion") != "forbidden"
+            or final.get("caller_restored") is not True):
+        raise Refused("qualification final marker has invalid identity or outcome")
+    matrix = final.get("matrix")
+    if (not isinstance(matrix, dict) or set(matrix) != {"path", "sha256"}
+            or not isinstance(matrix["path"], str) or Path(matrix["path"]).name != CANONICAL_MATRIX.name
+            or not isinstance(matrix["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", matrix["sha256"]) is None
+            or not Path(matrix["path"]).is_file() or _sha_file(Path(matrix["path"])) != matrix["sha256"]):
+        raise Refused("qualification final marker does not bind the canonical transition matrix")
+    root = final_path.parent
+    manifest = final.get("receipt_manifest")
+    names = {
+        "owner_receipt": "lease-owner.json",
+        "heartbeat_receipt": "lease-heartbeat.jsonl",
+        "expiry_receipt": "lease-expiry.json",
+        "release_receipt": "lease-release.json",
+        "handoff_receipt": "handoff.jsonl",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != {*names, "row_results"}:
+        raise Refused("qualification final marker lacks the exact receipt manifest")
+    for name, basename in names.items():
+        path = root / basename
+        if manifest[name] != _bind_receipt(path):
+            raise Refused(f"qualification receipt digest or path mismatch: {name}")
+        if basename.endswith(".jsonl"):
+            try:
+                records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            except (OSError, json.JSONDecodeError) as exc:
+                raise Refused(f"qualification receipt is unreadable: {name}") from exc
+            if not records or any(not isinstance(record, dict) or
+                                  record.get("run_id") != run_id or
+                                  record.get("qualification_outcome") != "pending"
+                                  for record in records):
+                raise Refused(f"qualification receipt is not pending for this run: {name}")
+        else:
+            record = _read_object(path, name)
+            if record.get("run_id") != run_id or record.get("qualification_outcome") != "pending":
+                raise Refused(f"qualification receipt is not pending for this run: {name}")
+    owner = _read_object(root / names["owner_receipt"], "lease owner")
+    expiry = _read_object(root / names["expiry_receipt"], "lease expiry")
+    release = _read_object(root / names["release_receipt"], "lease release")
+    observed = final.get("deadline_observed_at")
+    deadline = final.get("lease_expires_at")
+    if (not isinstance(observed, (int, float)) or not isinstance(deadline, (int, float))
+            or not math.isfinite(observed) or not math.isfinite(deadline)
+            or observed >= deadline or owner.get("lease_expires_at") != deadline
+            or expiry.get("lease_expires_at") != deadline or expiry.get("expiry_status") != "not-expired"
+            or expiry.get("terminal_status") != "body-validated"
+            or release.get("release_status") != "released"
+            or release.get("terminal_status") != "body-validated"
+            or release.get("flock_release_confirmed") is not True
+            or release.get("surviving_children") != []
+            or release.get("receipt_failures") != []):
+        raise Refused("qualification final marker has invalid cleanup or deadline evidence")
+    rows = final.get("rows")
+    bound_rows = manifest["row_results"]
+    if (not isinstance(rows, list) or not rows or not isinstance(bound_rows, list)
+            or len(rows) != len(bound_rows)):
+        raise Refused("qualification final marker has invalid row receipts")
+    seen_rows: set[str] = set()
+    for row, bound in zip(rows, bound_rows, strict=True):
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            raise Refused("qualification final marker has invalid row identity")
+        if row["id"] in seen_rows:
+            raise Refused("qualification final marker repeats a row identity")
+        seen_rows.add(row["id"])
+        row_path = root / row["id"] / "transition-result.json"
+        if row_path.resolve().parent.parent != root.resolve() or bound != _bind_receipt(row_path):
+            raise Refused("qualification row receipt digest or path mismatch")
+        if (_read_object(row_path, "row result") != row
+                or row.get("qualification_outcome") != "pending"
+                or row.get("caller_restored") is not True
+                or row.get("promotion") != "forbidden"):
+            raise Refused("qualification row receipt is not pending or differs from final")
+    return final
 
 
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
@@ -785,9 +1181,18 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
         expiry_receipt=expiry_receipt, release_receipt=release_receipt,
         handoff_receipt=handoff_receipt,
     )
+    # The caller is this entry point's own checkout, so the qualification,
+    # executor and inventory code that runs is the code whose HEAD is recorded.
+    if repository.resolve() != REPOSITORY_ROOT.resolve():
+        raise Refused(f"caller repository must be the checkout containing this entry point "
+                      f"({REPOSITORY_ROOT}), not {repository}")
+    if matrix_path.resolve() != CANONICAL_MATRIX.resolve():
+        raise Refused(f"only the canonical transition matrix {CANONICAL_MATRIX} may be qualified, "
+                      f"not {matrix_path}")
+    matrix_binding = {"path": str(CANONICAL_MATRIX), "sha256": _sha_file(CANONICAL_MATRIX)}
     caller = snapshot_caller(repository)
     pinned = caller["pin_version"]
-    matrix = materialize_matrix(load_matrix(matrix_path, pinned), output_root=output_root,
+    matrix = materialize_matrix(load_matrix(CANONICAL_MATRIX, pinned), output_root=output_root,
                                 target_root=target_root, run_id=run_id)
     rows = [row for row in matrix["rows"] if only is None or row["id"] == only]
     if not rows:
@@ -810,7 +1215,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                          release_receipt=release_receipt) as host_lease:
         _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                         "state": "preflight", "rows": [row["id"] for row in rows],
-                                        "lease": str(lease_path)})
+                                        "lease": str(lease_path),
+                                        "qualification_outcome": "pending"})
         cadence = ReceiptCadence(host_lease, handoff_receipt)
         cadence.__enter__()
         try:
@@ -855,7 +1261,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                     try:
                         journal = execute(
                             side_run, repository, Path(identity["archive_cache"]), Path(identity["source_root"]),
-                            host_lock_fd=host_lease.fileno, stage_guard=stage_guard,
+                            host_lock_fd=host_lease.host_lock_capability, stage_guard=stage_guard,
                         )
                         cadence.check()
                     except BaseException as execution_error:
@@ -866,7 +1272,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                                 )
                             recovered = _recover_if_running(
                                 side_run, Path(identity["archive_cache"]), Path(identity["source_root"]),
-                                host_lock_fd=host_lease.fileno,
+                                host_lock_fd=host_lease.host_lock_capability,
                             )
                         except BaseException as recovery_error:
                             if isinstance(execution_error, KeyboardInterrupt):
@@ -888,6 +1294,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         "run_id": run_id, "timestamp": time.time(), "state": "side-complete",
                         "row": row["id"], "stage": side, "lease": str(lease_path),
                         "execution_journal": str(side_run / "execution-status.json"),
+                        "qualification_outcome": "pending",
                     })
                 delta = _compare_sides(row, sides["before"], sides["after"])
                 host_lease.guard()
@@ -896,7 +1303,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                     _verify_frozen_side(frozen)
                 result = {"id": row["id"], "before": sides["before"], "after": sides["after"],
                           "artifact_delta": delta, "caller_restored": True,
-                          "promotion": "forbidden"}
+                          "promotion": "forbidden", "qualification_outcome": "pending"}
                 _atomic_json(row_output / "transition-result.json", result)
                 results.append(result)
                 verify_caller(caller)
@@ -908,14 +1315,15 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             final = {
                 "schema": SCHEMA, "kind": RESULT_KIND, "run_id": run_id,
                 "promotion": "forbidden", "status": "tooling-executed-nonpromoting",
-                "caller": caller, "rows": results, "caller_restored": True,
+                "caller": caller, "matrix": matrix_binding, "rows": results, "caller_restored": True,
             }
             _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                             "state": "final-validation-complete",
-                                            "lease": str(lease_path)})
+                                            "lease": str(lease_path),
+                                            "qualification_outcome": "pending"})
             host_lease.heartbeat("final-validation-complete", None, "final")
             verify_caller(caller)
-            host_lease.finish("complete")
+            host_lease.finish("body-validated")
         finally:
             active_exception = sys.exc_info()
             try:
@@ -924,8 +1332,51 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                 cadence.__exit__(*active_exception)
     if final is None:
         raise Refused("qualification ended without a validated final result")
-    _atomic_json(final_path, final)
-    return final
+    verify_caller(caller)
+    if _sha_file(CANONICAL_MATRIX) != matrix_binding["sha256"]:
+        raise Refused("canonical transition matrix changed during qualification")
+    final["receipt_manifest"] = _receipt_manifest(
+        owner_receipt=owner_receipt, heartbeat_receipt=heartbeat_receipt,
+        expiry_receipt=expiry_receipt, release_receipt=release_receipt,
+        handoff_receipt=handoff_receipt,
+        row_results=[Path(row["durable_output_directory"]) / "transition-result.json"
+                     for row in rows],
+    )
+    # This is the sole eligibility decision after cadence shutdown, lock
+    # release/close and all prerequisite receipt I/O. Publication follows it;
+    # arbitrary later filesystem latency is not promised to fit the lease.
+    final["deadline_observed_at"] = time.time()
+    final["lease_expires_at"] = host_lease.expires_at
+    if final["deadline_observed_at"] >= host_lease.expires_at:
+        raise Refused("transition lease expired before final outcome commit")
+    try:
+        _atomic_json(final_path, final)
+    except BaseException as publication_error:
+        # The replacement may have succeeded before a subsequent I/O/reporting
+        # error surfaced. Inspect the exact marker rather than guessing that a
+        # committed result was refused or that an absent result succeeded.
+        if final_path.exists() or final_path.is_symlink():
+            try:
+                committed = load_committed_result(final_path)
+            except (Refused, OSError, ValueError) as inspection_error:
+                raise OutcomeUnknown(
+                    f"final publication outcome uncertain: {inspection_error}"
+                ) from publication_error
+            if committed == final:
+                return committed
+            raise OutcomeUnknown("final publication outcome uncertain: marker differs") from publication_error
+        raise
+    try:
+        committed = load_committed_result(final_path)
+    except (Refused, OSError, ValueError) as inspection_error:
+        # The publisher returned after replacing the marker. A later read or
+        # validation failure cannot be called an uncommitted refusal.
+        raise OutcomeUnknown(
+            f"postpublication final marker validation is uncertain: {inspection_error}"
+        ) from inspection_error
+    if committed != final:
+        raise OutcomeUnknown("postpublication final marker differs from this invocation")
+    return committed
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -945,6 +1396,41 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _instrument_header(result: Mapping[str, Any]) -> str:
+    """Attribute every reported comparison to its validated build and oracle."""
+    caller = result["caller"]
+    lines = ["=== instrument: version_transition_qualification.py ===",
+             f"caller:  {caller['head']}  pin {caller['pin_version']}  tree {caller['status']}",
+             f"matrix:  {result['matrix']['path']} sha256={result['matrix']['sha256']}"]
+    for row in result["rows"]:
+        for side in SIDES:
+            entry = row[side]
+            proof = entry["instrument"]
+            native = proof["native_identity"]
+            binary = proof["binary"]
+            capability = proof["capability_probe"]
+            tests = entry["release_tests"]
+            label = f"{row['id']}/{side}"
+            lines.extend((
+                f"{label}: OxiDex {binary['path']} sha256={binary['sha256']} source={proof['source_commit']}",
+                f"{label}: ExifTool {native['release']} source={native['source']['path']} "
+                f"lib_sha256={native['lib']['exiftool_pm_sha256']} perl={native['perl']['path']} "
+                f"probe_sha256={proof['native_probe_sha256']}",
+                f"{label}: capability {capability['state']} -ver={capability['version']} "
+                f"OOXML.docx={capability['docx_filetype']} perl-modules="
+                f"{'available' if capability['perl_modules_available'] else 'missing'}",
+                f"{label}: tests passed={tests['passed']} failed={tests['failed']} "
+                f"ignored={tests['ignored']} targets={tests['targets']} log={tests['log']['path']}",
+                f"{label}: tests graded by ExifTool {tests['exiftool_oracle']['version']} "
+                f"tree={tests['exiftool_oracle']['tree_realpath']} "
+                f"OOXML.docx={tests['exiftool_oracle']['docx_filetype']}",
+                f"{label}: corpus {proof['read_fixture_manifest']} "
+                f"manifest_sha256={proof['read_fixture_manifest_sha256']} "
+                f"files={proof['read_fixture_count']}",
+            ))
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -956,9 +1442,9 @@ def main(argv: list[str] | None = None) -> int:
             expiry_receipt=Path(args.expiry_receipt), release_receipt=Path(args.release_receipt),
             handoff_receipt=Path(args.handoff_receipt), only=args.only,
         )
-        print(json.dumps({"run_id": result["run_id"], "status": result["status"],
-                          "promotion": result["promotion"]}, sort_keys=True))
-        return 0
+    except LeaseRetained as exc:
+        print(f"version transition qualification stopped fail-closed: {exc}", file=sys.stderr)
+        return 5
     except KeyboardInterrupt as interruption:
         notes = list(getattr(interruption, "__notes__", []))
         recovery = getattr(interruption, "_oxidex_durable_recovery", None)
@@ -967,15 +1453,30 @@ def main(argv: list[str] | None = None) -> int:
         elif recovery == "not-required":
             message = "version transition qualification interrupted; no running executor journal required recovery"
         else:
-            message = "version transition qualification interrupted; durable recovery incomplete or unverified"
+            message = ("version transition qualification interrupted; durable recovery incomplete or "
+                       "unverified; inspect the durable execution journal and recovery receipts before retrying")
         print(message, file=sys.stderr)
         for note in notes:
             print(f"recovery detail: {note}", file=sys.stderr)
         return 130
+    except OutcomeUnknown as exc:
+        print(f"version transition qualification outcome unknown: {exc}", file=sys.stderr)
+        return 4
     except (Refused, executor.Refused, rehearsal.Refused, catalog_stage.Refused,
             native_oracle.Refused, stage_adapter.Refused, OSError, ValueError) as exc:
         print(f"version transition qualification refused: {exc}", file=sys.stderr)
         return 2
+    # `run_qualification` returns only after validating the committed marker.
+    # Reporting failure is distinct from an uncommitted/refused qualification.
+    try:
+        print(_instrument_header(result))
+        print(json.dumps({"run_id": result["run_id"], "status": result["status"],
+                          "promotion": result["promotion"]}, sort_keys=True))
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        print(f"version transition qualification committed for {result['run_id']}, "
+              f"but stdout reporting failed: {exc}", file=sys.stderr)
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

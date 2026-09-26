@@ -154,7 +154,11 @@ use super::enabled_serial;
 use super::engine::{self, Dir, Emitted};
 use super::exprs;
 use super::ifd_schema::{
-    IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
+    IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag,
+};
+use super::pipeline::{
+    self, Conversions, Groups, OnUnmodeledRawConv, OnUnrepresentableMember, Outcome, PipelineInput,
+    Policy, PrintStage, Provenance, Reporting, StableFieldIdentity,
 };
 use super::runtime::{self, DecodedValue, decode_value_of};
 use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
@@ -481,6 +485,39 @@ struct Located<'d> {
     ty: EntryType,
 }
 
+/// One successfully located IFD entry at its physical traversal point.
+///
+/// An observer sees the entry before the generated table handles it. Native
+/// sub-directory descent still happens in the engine immediately afterward,
+/// and the same observer is carried into that descent. This lets adapters add
+/// source-authenticated rows the generated schema intentionally withheld
+/// without re-walking or sorting the directory after the fact.
+pub struct IfdEntryEvent<'entry, 'data> {
+    pub table: &'static IfdTable,
+    pub dir: IfdDir<'data>,
+    pub entry: &'entry IfdEntry,
+    located: &'entry Located<'data>,
+}
+
+impl IfdEntryEvent<'_, '_> {
+    /// Decode the entry exactly as its declared TIFF type, before any
+    /// table-specific `Format`, `RawConv`, `ValueConv`, or `PrintConv`.
+    #[must_use]
+    pub fn declared_value(&self) -> Option<DecodedValue> {
+        let plan = read_plan(self.located, None)?;
+        decode_plan(self.located, plan, self.dir.byte_order)
+    }
+}
+
+/// Adapter hook for source-authenticated rows absent from a generated table.
+///
+/// Implementations may append rows to `out`; their position is the entry's
+/// actual traversal position. The engine itself remains responsible for all
+/// generated processing and recursive descent.
+pub trait IfdEntryObserver {
+    fn observe(&mut self, event: IfdEntryEvent<'_, '_>, out: &mut Vec<Emitted>);
+}
+
 /// Why an entry's value could not be located.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Refusal {
@@ -651,6 +688,35 @@ fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Optio
     }
 }
 
+/// Project the bytes selected by `ReadValue` into the stored channel before
+/// its string repair or later rational rounding. Numeric IFD formats already
+/// have exact typed representations; strings need the physical byte scalar
+/// because `FixUTF8` belongs only to the value/display path.
+fn stored_plan(
+    located: &Located<'_>,
+    plan: ReadPlan,
+    order: ByteOrder,
+    decoded: &DecodedValue,
+) -> TagValue {
+    let source_bytes = |bytes: &[u8]| match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => TagValue::String(text),
+        Err(_) => TagValue::Binary(bytes.to_vec()),
+    };
+    match plan.kind {
+        Kind::Str => {
+            let end = located
+                .bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(located.bytes.len());
+            source_bytes(&located.bytes[..end])
+        }
+        Kind::Utf8 => source_bytes(located.bytes),
+        Kind::Undef => TagValue::Binary(located.bytes.to_vec()),
+        Kind::Num(_) => runtime::to_stored_tag_value(decoded, order),
+    }
+}
+
 /// `%intFormat` (Exif.pm:125-136): the formats a `SubIFD` pointer may be
 /// read in (Exif.pm:6747, else "Wrong format" and the entry is skipped).
 fn is_int_format(kind: Kind) -> bool {
@@ -754,6 +820,20 @@ pub fn process_exif(
     process_exif_decoded(table, dir, session, ctx, out);
 }
 
+/// [`process_exif`] with an entry observer propagated through every native
+/// IFD sub-directory reached by this walk.
+pub fn process_exif_with_observer(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    session: &mut Session,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+    observer: &mut dyn IfdEntryObserver,
+) {
+    let mut observer = Some(observer);
+    let _ = process_exif_decoded_outcome_inner(table, dir, session, ctx, out, &mut observer);
+}
+
 /// What the walk did with one entry of the ROOT directory
 /// ([`process_exif_decoded`]).
 ///
@@ -820,6 +900,11 @@ pub struct RootReads {
     /// their names belong to the child table, while the index supplies the
     /// parent-entry ordering a legacy carrier needs for a safe migration.
     pub serial_rows: Vec<(usize, usize)>,
+    /// Every root entry whose generated arm declined, in entry order: the
+    /// residual ran for it instead (or withheld it). A caller whose hand arm
+    /// was that field's producer before the generated arm can hand such an
+    /// entry back to it.
+    pub declined: Vec<usize>,
 }
 
 /// Why a decoded root walk did or did not produce per-entry reads.
@@ -844,6 +929,18 @@ pub fn process_exif_decoded_outcome(
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) -> ProcessExifDecoded {
+    let mut observer = None;
+    process_exif_decoded_outcome_inner(table, dir, session, ctx, out, &mut observer)
+}
+
+fn process_exif_decoded_outcome_inner(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    session: &mut Session,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+    observer: &mut Option<&mut dyn IfdEntryObserver>,
+) -> ProcessExifDecoded {
     // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
     // address too, which is what stops a table that points at itself.
     if !session.processed().admit(
@@ -855,7 +952,7 @@ pub fn process_exif_decoded_outcome(
         return ProcessExifDecoded::AlreadyProcessed;
     }
     let mut decoded = RootReads::default();
-    if walk(table, dir, session, ctx, out, Some(&mut decoded)).is_none() {
+    if walk(table, dir, session, ctx, out, observer, Some(&mut decoded)).is_none() {
         ProcessExifDecoded::Refused
     } else {
         ProcessExifDecoded::Read(decoded)
@@ -914,6 +1011,7 @@ fn walk(
     session: &mut Session,
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
+    observer: &mut Option<&mut dyn IfdEntryObserver>,
     decoded: Option<&mut RootReads>,
 ) -> Option<()> {
     let order = match dir.byte_order {
@@ -939,7 +1037,7 @@ fn walk(
 
     let result = {
         let mut scope = session.enter_directory(order, dir.group1);
-        walk_scoped(table, dir, &mut scope, ctx, out, decoded)
+        walk_scoped(table, dir, &mut scope, ctx, out, observer, decoded)
     };
 
     restore_ctx_member(ctx, "DIR_NAME", saved_dir_name);
@@ -965,6 +1063,7 @@ fn walk_scoped(
     session: &mut Session,
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
+    observer: &mut Option<&mut dyn IfdEntryObserver>,
     mut decoded: Option<&mut RootReads>,
 ) -> Option<()> {
     // Exif.pm:6344-6358.
@@ -975,6 +1074,7 @@ fn walk_scoped(
         reads.rows.clear();
         reads.serial_subdirs.clear();
         reads.serial_rows.clear();
+        reads.declined.clear();
     }
     // Every entry from `from` on is one ExifTool never reaches.
     let refuse_rest = |decoded: &mut Option<&mut RootReads>, from: usize| {
@@ -1032,6 +1132,17 @@ fn walk_scoped(
         };
         session.count = Some(i64::from(entry.count));
         session.format = Some(located.ty.name.to_string());
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.observe(
+                IfdEntryEvent {
+                    table,
+                    dir,
+                    entry,
+                    located: &located,
+                },
+                out,
+            );
+        }
         // Exif.pm:6485, 6717-6720. A `$bad` entry never gets this far, which
         // is also ExifTool's order (Exif.pm:6713-6714 drops the tag before
         // the value-scoped `GetTagInfo`).
@@ -1073,7 +1184,9 @@ fn walk_scoped(
         // option is off), so the edge is the whole of the tag.
         if let Some(edge) = &tag.subdir {
             let out_before = out.len();
-            let outcome = descend(table, tag, edge, &located, &dir, session, ctx, out);
+            let outcome = descend_observed(
+                table, tag, edge, &located, &dir, session, ctx, out, observer,
+            );
             if let DescendOutcome::Serial(outcome) = outcome
                 && let Some(reads) = decoded.as_deref_mut()
             {
@@ -1103,6 +1216,7 @@ fn walk_scoped(
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
+        let stored = stored_plan(&located, plan, dir.byte_order, &raw);
         if let Some(reads) = decoded.as_deref_mut() {
             reads.entries[index] = EntryRead::Decoded;
         }
@@ -1117,6 +1231,9 @@ fn walk_scoped(
             match resolve_generated_attempt(attempt, session, ctx) {
                 Arm::Decline(_) => {
                     declined = true;
+                    if let Some(reads) = decoded.as_deref_mut() {
+                        reads.declined.push(index);
+                    }
                 }
                 Arm::Suppress => continue,
                 Arm::Report(report) => {
@@ -1124,7 +1241,15 @@ fn walk_scoped(
                         continue;
                     };
                     if !super::attribution::silenced(super::attribution::Token::Engine) {
-                        out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                        out.push(generated_row(
+                            table,
+                            tag,
+                            group1,
+                            &raw,
+                            stored.clone(),
+                            fraction,
+                            report,
+                        ));
                         if let Some(reads) = decoded.as_deref_mut() {
                             reads.rows.push((out.len() - 1, index));
                         }
@@ -1138,6 +1263,7 @@ fn walk_scoped(
             tag,
             &dir,
             raw,
+            stored,
             fraction,
             omitted,
             declined,
@@ -1151,6 +1277,23 @@ fn walk_scoped(
     Some(())
 }
 
+/// `ProcessExif`'s explicit conversion policy for the shared stage.
+///
+/// Unlike the other walkers, a member the model cannot hold skips only this
+/// entry (later entries still walk), a modeled `RawConv` keeps its omission
+/// flag (the IFD generator never sets one beside a modeled effect), and an
+/// unmodeled `RawConv` is an ordinary omission. The Perl length and
+/// unconverted form are the 64-bit-rational spellings this engine alone may
+/// assume ([`ifd_perl_string`]).
+const IFD_POLICY: Policy = Policy {
+    member_value,
+    on_unrepresentable_member: OnUnrepresentableMember::Decline,
+    set_member_clears_omission: false,
+    on_unmodeled_raw_conv: OnUnmodeledRawConv::Withhold,
+    perl_length,
+    scalar_form: ifd_exiftool_value,
+};
+
 /// The existing per-entry producer, invoked only when no generated arm owns
 /// the entry or after a generated decline has discarded its staged effects.
 /// Keeping this as one named residual is the production seam used by the
@@ -1162,6 +1305,7 @@ fn process_residual_entry(
     tag: &IfdTag,
     dir: &IfdDir<'_>,
     raw: DecodedValue,
+    stored: TagValue,
     fraction: Option<(i64, i64)>,
     omitted: Omitted,
     generated_declined: bool,
@@ -1176,85 +1320,64 @@ fn process_residual_entry(
     // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
     // that number, not the exact quotient. See `round_rationals`.
     let raw = round_rationals(raw);
-    // ExifTool.pm:9484-9505: `FoundTag` runs `RawConv` before any
-    // conversion; the one shape carried as data stores the raw value
-    // and returns it unchanged (the assignment's value).
-    if let Some(RawConvEffect::SetMember { member }) = tag.raw_conv {
-        let Some(value) = member_value(&raw) else {
-            return;
-        };
-        ctx.members.insert(member, value.clone());
-        let session_value = match value {
-            MemberValue::Str(s) => MemberVal::Str(s),
-            MemberValue::Bytes(bytes) => MemberVal::from_bytes(bytes),
-            MemberValue::Num(n) => MemberVal::Int(n),
-        };
-        let _ = session.set_member(member, session_value);
-    }
-    // A `Binary` tag with a refused `PrintConv` is withheld here too,
-    // although ExifTool never runs a PrintConv on a scalar-ref value
-    // (ExifTool.pm:3533): over-refusing is the safe direction.
-    if omitted.any() {
-        // A field whose generated arm declined this entry and whose static
-        // conversion is withheld: the engine cannot vouch for the absence,
-        // so the caller's hand arm runs (`EntryRead::Unread`).
-        if generated_declined && let Some(reads) = decoded.as_deref_mut() {
-            reads.entries[index] = EntryRead::Unread;
-        }
-        return;
-    }
-    let binary = tag.flags.binary && tag.value_conv.is_none();
-    let (value, value_conv) = if binary {
-        // ExifTool.pm:3535-3539: `Binary` with no `ValueConv` gets `\$val`.
-        let Some(len) = perl_length(&raw) else {
-            return;
-        };
-        (
-            TagValue::String(format!(
-                "(Binary data {len} bytes, use -b option to extract)"
-            )),
-            None,
-        )
-    } else {
-        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-            return;
-        };
-        let unconverted = || {
-            if tag.flags.list {
-                runtime::to_tag_value(&converted)
-            } else {
-                ifd_exiftool_value(&converted)
-            }
-        };
-        match runtime::render(tag.print_conv, &converted) {
-            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
-            None => (unconverted(), None),
-        }
-    };
-    let Some(group1) = group1_of(table, tag, dir) else {
-        return;
-    };
-    let emitted_at = out.len();
-    if !super::attribution::silenced(super::attribution::Token::Engine) {
-        out.push(Emitted {
+    let input = PipelineInput {
+        identity: StableFieldIdentity::IfdNumeric(tag.id),
+        provenance: Provenance {
             module: table.module,
             table: table.table,
-            group0: tag.groups.g0.unwrap_or(table.group0),
-            group1,
-            group2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        groups: Groups {
+            g0: tag.groups.g0.unwrap_or(table.group0),
+            // `None` withholds the row, but only after its RawConv ran.
+            g1: group1_of(table, tag, dir),
+            g2: tag.groups.g2.unwrap_or(table.group2),
+        },
+        reporting: Reporting {
             name: tag.name,
-            value,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
-            rational: fraction
-                .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
-            value_conv,
-        });
-    }
-    if out.len() > emitted_at
-        && let Some(reads) = decoded.as_deref_mut()
-    {
-        reads.rows.push((out.len() - 1, index));
+            is_list: tag.flags.list,
+        },
+        conversions: Conversions {
+            // `walk_scoped` already cleared a resolved Condition and skipped
+            // an unresolved one.
+            omitted,
+            condition_resolved: false,
+            raw_conv: tag.raw_conv,
+            value_conv: tag.value_conv,
+            // A `Binary` tag with a refused `PrintConv` is withheld too,
+            // although ExifTool never runs a PrintConv on a scalar-ref value
+            // (ExifTool.pm:3533): over-refusing is the safe direction.
+            print_conv: PrintStage::Shared(tag.print_conv),
+            binary: tag.flags.binary,
+        },
+        raw,
+        stored,
+        rational: fraction,
+    };
+    match pipeline::execute(input, &IFD_POLICY, ctx.members, Some(session)) {
+        Outcome::Report(row) => {
+            let emitted_at = out.len();
+            if !super::attribution::silenced(super::attribution::Token::Engine) {
+                out.push(row);
+            }
+            if out.len() > emitted_at
+                && let Some(reads) = decoded.as_deref_mut()
+            {
+                reads.rows.push((out.len() - 1, index));
+            }
+        }
+        Outcome::Omitted => {
+            // A field whose generated arm declined this entry and whose static
+            // conversion is withheld: the engine cannot vouch for the absence,
+            // so the caller's hand arm runs (`EntryRead::Unread`).
+            if generated_declined && let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Unread;
+            }
+        }
+        // `IFD_POLICY` never taints: an unrepresentable member declines this
+        // entry only, and an unmodeled RawConv is an ordinary omission.
+        Outcome::Declined | Outcome::Tainted => {}
     }
 }
 
@@ -1466,6 +1589,7 @@ fn generated_row(
     tag: &'static IfdTag,
     group1: &'static str,
     raw: &DecodedValue,
+    stored: TagValue,
     fraction: Option<(i64, i64)>,
     report: conv::Report,
 ) -> Emitted {
@@ -1509,11 +1633,14 @@ fn generated_row(
         group1,
         group2: tag.groups.g2.unwrap_or(table.group2),
         name: tag.name,
+        source_id: oxidex_tags::TagId::Numeric(tag.id),
+        stored,
         value,
         low_priority: effective_priority(table, tag) == Some(0),
         avoid: tag.flags.avoid,
         rational: fraction.filter(|_| untouched),
         value_conv,
+        is_list: tag.flags.list,
     }
 }
 
@@ -1546,10 +1673,7 @@ fn single_rational(raw: &DecodedValue) -> Option<(i64, i64)> {
 /// `PRIORITY => 0` table is NOT low priority -- and `Avoid` only supplies the
 /// default when neither declares one.
 fn effective_priority(table: &IfdTable, tag: &IfdTag) -> Option<i64> {
-    tag.flags
-        .priority
-        .or(table.priority)
-        .or(if tag.flags.avoid { Some(0) } else { None })
+    pipeline::effective_priority(tag.flags.priority, table.priority, tag.flags.avoid)
 }
 
 /// The family-1 group `GetGroup` (ExifTool.pm:3810-3860) reports:
@@ -1946,14 +2070,40 @@ fn descend(
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) -> DescendOutcome {
+    let mut observer = None;
+    descend_observed(
+        table,
+        tag,
+        edge,
+        located,
+        dir,
+        session,
+        ctx,
+        out,
+        &mut observer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn descend_observed(
+    table: &'static IfdTable,
+    tag: &'static IfdTag,
+    edge: &IfdSubdirEdge,
+    located: &Located<'_>,
+    dir: &IfdDir<'_>,
+    session: &mut Session,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+    observer: &mut Option<&mut dyn IfdEntryObserver>,
+) -> DescendOutcome {
     if edge.processor != IfdSubdirProcessor::Serial {
-        return descend_inner(table, tag, edge, located, dir, session, ctx, out);
+        return descend_inner(table, tag, edge, located, dir, session, ctx, out, observer);
     }
     if !enabled_serial::owns(edge.module, edge.table) {
         return DescendOutcome::Serial(SerialSubdirRead::Fallback);
     }
     owned_serial_attempt(ctx, out, |ctx, out| {
-        descend_inner(table, tag, edge, located, dir, session, ctx, out)
+        descend_inner(table, tag, edge, located, dir, session, ctx, out, observer)
     })
 }
 
@@ -1967,6 +2117,7 @@ fn descend_inner(
     session: &mut Session,
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
+    observer: &mut Option<&mut dyn IfdEntryObserver>,
 ) -> DescendOutcome {
     // Legacy IFD/binary Validate remains unwalked. A serial edge may proceed
     // only when codegen carried the independently authenticated primitive;
@@ -2179,6 +2330,7 @@ fn descend_inner(
                     session,
                     ctx,
                     out,
+                    observer,
                     None,
                 );
                 session.processed().depth -= 1;
@@ -2297,7 +2449,7 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::cond::{CmpOp, Cond, Ctx, EffectSource};
-    use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
+    use crate::exiftool_tables::ifd_schema::{IfdVariantGroup, RawConvEffect};
     use crate::exiftool_tables::{
         ExprId, GateA, IfdFlags, Omitted, PrintConv, SizeExpectation, TagGroups, U16SizeCheck,
     };
@@ -2622,7 +2774,8 @@ mod tests {
             &TABLE,
             tag,
             &dir,
-            raw,
+            raw.clone(),
+            runtime::to_stored_tag_value(&raw, dir.byte_order),
             None,
             tag.omitted,
             true,
@@ -2669,6 +2822,24 @@ mod tests {
             byte_order: IfdByteOrder::Inherit,
             fix_format: None,
             sub_ifd: false,
+            max_subdirs: None,
+            dir_name: None,
+            validate: false,
+            validation: None,
+            processor: IfdSubdirProcessor::Native,
+            unwalked: None,
+        }
+    }
+
+    const fn pointer_edge(table: &'static str) -> IfdSubdirEdge {
+        IfdSubdirEdge {
+            module: "Test",
+            table,
+            start: IfdStart::Val(0),
+            base: None,
+            byte_order: IfdByteOrder::Inherit,
+            fix_format: None,
+            sub_ifd: true,
             max_subdirs: None,
             dir_name: None,
             validate: false,
@@ -2823,6 +2994,109 @@ mod tests {
         plain(0x0002, "Raw"),
     ];
     static PLAIN: IfdTable = table("Plain", PLAIN_TAGS);
+
+    static OBSERVER_CHILD: IfdTable = table("ObserverChild", &[]);
+    static OBSERVER_PARENT_TAGS: &[IfdTag] = &[
+        plain(0x0001, "First"),
+        IfdTag {
+            subdir: Some(pointer_edge("ObserverChild")),
+            ..plain(0x0010, "Child")
+        },
+    ];
+    static OBSERVER_PARENT: IfdTable = table("ObserverParent", OBSERVER_PARENT_TAGS);
+
+    struct UnknownLongObserver;
+
+    impl IfdEntryObserver for UnknownLongObserver {
+        fn observe(&mut self, event: IfdEntryEvent<'_, '_>, out: &mut Vec<Emitted>) {
+            if event.entry.tag_id != 0x00f0 {
+                return;
+            }
+            let Some(value) = event.declared_value().and_then(|value| value.as_integer()) else {
+                return;
+            };
+            let value = TagValue::Integer(value);
+            out.push(Emitted {
+                module: event.table.module,
+                table: event.table.table,
+                group0: event.table.group0,
+                group1: event.table.group1,
+                group2: event.table.group2,
+                name: "Observed",
+                source_id: oxidex_tags::TagId::Numeric(event.entry.tag_id),
+                stored: value.clone(),
+                value,
+                value_conv: None,
+                low_priority: false,
+                avoid: false,
+                rational: None,
+                is_list: false,
+            });
+        }
+    }
+
+    #[test]
+    fn entry_observer_emissions_interleave_and_follow_recursive_descent() {
+        let _registered = Registered::new(&[&OBSERVER_PARENT, &OBSERVER_CHILD]);
+        let order = ByteOrder::Little;
+        let child_start = 64usize;
+        let mut data = ifd(
+            order,
+            &[
+                int16u_entry(order, 0x0001, 1),
+                entry(order, 0x00f0, 4, 1, bytes32(order, 11)),
+                entry(order, 0x0010, 4, 1, bytes32(order, child_start as u32)),
+                entry(order, 0x00f0, 4, 1, bytes32(order, 33)),
+            ],
+            &[],
+        );
+        data.resize(child_start, 0);
+        data.extend_from_slice(&ifd(
+            order,
+            &[entry(order, 0x00f0, 4, 1, bytes32(order, 22))],
+            &[],
+        ));
+
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut session = Session::new();
+        let mut out = Vec::new();
+        let mut observer = UnknownLongObserver;
+        super::process_exif_with_observer(
+            &OBSERVER_PARENT,
+            IfdDir {
+                data: &data,
+                data_domain: 0,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: order,
+                group1: None,
+            },
+            &mut session,
+            &mut ctx,
+            &mut out,
+            &mut observer,
+        );
+
+        assert_eq!(
+            values(&out),
+            [
+                ("First", TagValue::Integer(1)),
+                ("Observed", TagValue::Integer(11)),
+                ("Observed", TagValue::Integer(22)),
+                ("Observed", TagValue::Integer(33)),
+            ]
+        );
+        assert_eq!(
+            out.iter().map(|row| row.table).collect::<Vec<_>>(),
+            [
+                "ObserverParent",
+                "ObserverParent",
+                "ObserverChild",
+                "ObserverParent",
+            ]
+        );
+    }
 
     #[test]
     fn a_plain_int16u_tag_renders_an_enum_hit_and_reports_a_miss_raw() {
@@ -3412,6 +3686,25 @@ mod tests {
         assert_eq!(values(&out), vec![("Ratio", TagValue::Float(1.5))]);
         assert_eq!(out[0].rational, Some((3, 2)));
         assert_eq!(out[0].value_conv, None);
+        assert_eq!(out[0].stored, TagValue::new_rational(3, 2));
+        assert_eq!(out[0].source_id, oxidex_tags::TagId::Numeric(0x0002));
+        assert!(!out[0].is_list);
+
+        let generated = generated_row(
+            &NUMERIC,
+            &NUMERIC_TAGS[1],
+            "Numeric",
+            &DecodedValue::UnsignedRational(1, 3),
+            TagValue::new_rational(1, 3),
+            Some((1, 3)),
+            conv::Report {
+                value: None,
+                print: None,
+                writes: Vec::new(),
+            },
+        );
+        assert_eq!(generated.stored, TagValue::new_rational(1, 3));
+        assert_eq!(generated.source_id, oxidex_tags::TagId::Numeric(0x0002));
         let refused = process_exif_decoded(
             &NUMERIC,
             IfdDir {
@@ -3422,6 +3715,126 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(refused, None);
+    }
+
+    #[test]
+    fn real_static_and_generated_walks_preserve_physical_string_and_rational_storage() {
+        fn exercise(
+            table: &'static IfdTable,
+            string_id: u16,
+            utf8_id: u16,
+            rational_id: u16,
+            expected_display: &str,
+        ) {
+            let order = ByteOrder::Big;
+            let floor = trailer_at(3) as u32;
+            let string_bytes = [b'A', 0xff, b'B', 0, 0];
+            let mut trailer = string_bytes.to_vec();
+            trailer.extend_from_slice(&1u32.to_be_bytes());
+            trailer.extend_from_slice(&3u32.to_be_bytes());
+            let data = ifd(
+                order,
+                &[
+                    entry(order, string_id, 2, 5, bytes32(order, floor)),
+                    entry(order, utf8_id, 129, 3, [b'A', 0xff, b'B', 0]),
+                    entry(
+                        order,
+                        rational_id,
+                        5,
+                        1,
+                        bytes32(order, floor + string_bytes.len() as u32),
+                    ),
+                ],
+                &trailer,
+            );
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let mut session = Session::new();
+            let mut rows = Vec::new();
+            super::process_exif(
+                table,
+                IfdDir {
+                    data: &data,
+                    data_domain: 0,
+                    ifd_start: 0,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: table.set_group1.map(|_| table.group1),
+                },
+                &mut session,
+                &mut ctx,
+                &mut rows,
+            );
+            let string = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(string_id))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "string row from the real {}::{} table walk; rows={rows:?}",
+                        table.module, table.table
+                    )
+                });
+            assert_eq!(string.stored, TagValue::Binary(vec![b'A', 0xff, b'B']));
+            assert_eq!(
+                string.value,
+                TagValue::String(expected_display.to_owned()),
+                "the existing display conversion must not change"
+            );
+
+            let utf8 = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(utf8_id))
+                .expect("malformed TIFF type 129 row from the real table walk");
+            assert_eq!(
+                utf8.stored,
+                TagValue::Binary(vec![b'A', 0xff, b'B']),
+                "type 129 storage must retain the exact bytes before FixUTF8"
+            );
+            assert_eq!(
+                utf8.value,
+                TagValue::String("A?B".to_owned()),
+                "the existing typed/display FixUTF8 behavior must not change"
+            );
+
+            let rational = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(rational_id))
+                .expect("rational row from the real table walk");
+            assert_eq!(rational.stored, TagValue::new_rational(1, 3));
+            match &rational.value {
+                TagValue::Float(value) => assert_eq!(*value, 0.333_333_333_3),
+                TagValue::String(value) => assert!(
+                    value.contains("0.3333333333"),
+                    "converted rational display kept its existing rounded quotient: {value}"
+                ),
+                other => panic!("unexpected rational display shape: {other:?}"),
+            }
+        }
+
+        let olympus = find_ifd_table("Olympus", "Equipment").expect("Olympus::Equipment");
+        assert!(conv::decoder(olympus).is_none(), "static residual control");
+        exercise(olympus, 0x0100, 0x0102, 0x0103, "Unknown (A?B)");
+
+        let exif = find_ifd_table("Exif", "Main").expect("Exif::Main");
+        let image_description = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x010e)
+            .expect("ImageDescription");
+        let x_resolution = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x011a)
+            .expect("XResolution");
+        let document_name = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x010d)
+            .expect("DocumentName");
+        assert!(conv::claims(exif, image_description));
+        assert!(conv::claims(exif, document_name));
+        assert!(conv::claims(exif, x_resolution));
+        exercise(exif, 0x010e, 0x010d, 0x011a, "A?B");
     }
 
     #[test]

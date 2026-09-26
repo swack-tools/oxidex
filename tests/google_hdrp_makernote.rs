@@ -7,18 +7,17 @@
 //! f6d86743, 8a264d7e), where these fixes landed after this branch diverged;
 //! docs/reference/main-divergence-2026-09-18.md counted them as matched on
 //! main and MISSING on the tip. main's versions returned early when the
-//! fixture was absent; here they are `#[ignore]`d instead, so a checkout
-//! without the corpus reports them as skipped rather than passed.
+//! fixture was absent; here they are `#[ignore]`d instead, and an explicitly
+//! selected ignored target fails loudly if its named fixture is unavailable.
 //!
 //! Expected values are the pinned oracle's (`exiftool -G0:1:4 -a -s -j`).
 
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google";
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
 fn assert_fields(file: &str, expected: &[(&str, &str)]) {
-    let path = Path::new(CORPUS).join(file);
+    let path = fixtures::required_combined_fixture_path(&format!("Google/{file}"));
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
     for (tag, value) in expected {
         assert_eq!(metadata.get_string(tag), Some(*value), "{file} {tag}");

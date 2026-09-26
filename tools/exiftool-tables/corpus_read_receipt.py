@@ -4,7 +4,13 @@
 Three explicit steps, each refusing a dirty checkout:
 
   build    Cargo-build the public CLI and record a replayable build proof
-           (Cargo stdout/stderr bytes, the identified executable and its hash).
+           (Cargo stdout/stderr bytes, the identified executable and its hash,
+           and the compiler: the checkout's rust-toolchain.toml channel, the
+           exact rustc passed to Cargo as $RUSTC with its `-vV` transcript,
+           `cargo -V`, rustup's own identity for the pin, and the
+           /rustc/<commit> fingerprint std embeds in the binary). A rustc
+           whose commit is not rustup's pin refuses, and so does a pin
+           rustup cannot resolve.
   observe  For every corpus file, record raw transcripts of pinned ExifTool
            (`-j -a -G1:4 -s`, and `-n`), of the proven OxiDex binary (`-j -a
            -G1`, and `--no-print-conv`), and of capture_corpus_sources.pl, which
@@ -35,6 +41,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -50,7 +57,7 @@ from native_write_matrix import clean_env  # noqa: E402
 from verify_quicktime_userdata_reader import cargo_artifact, check_file, file_fact, sha  # noqa: E402
 
 SCHEMA = "oxidex_corpus_read_receipt_v2"
-BUILD_SCHEMA = "oxidex_corpus_read_cli_build_proof_v2"
+BUILD_SCHEMA = "oxidex_corpus_read_cli_build_proof_v3"
 BUILD_COMMAND = ["cargo", "build", "--release", "--bin", "oxidex", "--message-format=json", "--jobs", "4"]
 CANONICAL_PERL = "v5.38.2"
 MODES = ("print", "raw")
@@ -89,32 +96,122 @@ def clean_snapshot(root=ROOT):
             "instrument_inputs": tool_inputs(root)}
 
 
+def build_toolchain(root=ROOT, env=None) -> dict:
+    """Resolve, record and check the compiler the build will be handed.
+
+    rust-toolchain.toml binds only rustup's proxies; a `rustc` found earlier
+    on PATH (Homebrew's, say) ignores it silently. So resolve the compiler the
+    way Cargo would (``$RUSTC``, else ``rustc`` on PATH, from the checkout so
+    a proxy honours the pin), take the real executable in its sysroot, and
+    pass THAT to Cargo as ``$RUSTC`` -- the build then cannot resolve a
+    second, different compiler. Refuses unless it is the checkout's pin.
+    """
+    env = dict(os.environ if env is None else env)
+    channel = instrument.pinned_rust_channel(root)
+    toolchain_file = instrument.rust_toolchain_file(root)
+    if channel is None or toolchain_file is None:
+        raise ValueError("checkout has no rust-toolchain.toml channel; the build compiler cannot be pinned")
+    requested = env.get("RUSTC") or "rustc"
+    try:
+        sysroot = subprocess.run([requested, "--print", "sysroot"], cwd=root, env=env, capture_output=True,
+                                 text=True, timeout=TIMEOUT_SECONDS, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"cannot resolve the build compiler ({requested} --print sysroot)") from error
+    rustc = Path(sysroot) / "bin" / "rustc"
+    if not rustc.is_file():
+        raise ValueError(f"build compiler sysroot has no rustc executable: {rustc}")
+    record = {"channel": channel, "toolchain_file": file_fact(toolchain_file), "requested_rustc": requested,
+              "rustc": file_fact(rustc),
+              "rustc_version": transcript([str(rustc.resolve()), "-vV"], env=env, cwd=root),
+              "cargo_version": transcript(["cargo", "-V"], env=env, cwd=root)}
+    # A release string is not an identity: a non-rustup rustc (distro,
+    # Homebrew) can report 1.97.1 too. Ask rustup -- the same rustup-only
+    # resolver the instrument headers use, never PATH -- for the pin's own
+    # commit, and fail closed when it cannot answer.
+    toolchain_identity(record, channel, require_pin=False)  # off-release refuses before asking rustup
+    pinned = instrument.pinned_rustc_identity(channel, cwd=root, env=env)
+    if pinned is None:
+        raise ValueError(f"rustup cannot resolve the pinned toolchain {channel}; the build compiler cannot be "
+                         f"proven to be the pin (install it: rustup toolchain install {channel})")
+    record["pin_rustc"] = {"release": pinned.release, "commit_hash": pinned.commit_hash, "path": pinned.path}
+    toolchain_identity(record, channel)
+    return record
+
+
+def toolchain_identity(record: dict, expected_channel: str, *, require_pin: bool = True) -> dict:
+    """The recorded compiler, replayed from its transcripts; refuses anything but the pin.
+
+    -> {"release", "commit_hash", "cargo_release"}.
+    """
+    if not isinstance(record, dict) or record.get("channel") != expected_channel:
+        raise ValueError(f"build toolchain is not the checkout's pinned channel {expected_channel!r}")
+    rustc = record.get("rustc")
+    if not isinstance(rustc, dict) or set(rustc) != {"path", "sha256"}:
+        raise ValueError("build compiler identity is malformed")
+    fields = instrument.parse_rustc_verbose(
+        stdout_of(record.get("rustc_version"), [rustc["path"], "-vV"], require_success=True).decode())
+    cargo = instrument.cargo_release(
+        stdout_of(record.get("cargo_version"), ["cargo", "-V"], require_success=True).decode())
+    release, commit = fields.get("release"), fields.get("commit-hash", "")
+    if instrument.channel_matches(expected_channel, release) is not True:
+        raise ValueError(f"build compiler is rustc {release or '?'} ({rustc['path']}), not the pinned "
+                         f"{expected_channel}; put ~/.cargo/bin ahead of other rustc installs on PATH")
+    if instrument.channel_matches(expected_channel, cargo) is not True:
+        raise ValueError(f"build cargo is {cargo or '?'}, not the pinned {expected_channel}")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("build compiler commit hash is missing or malformed")
+    if not require_pin:
+        return {"release": release, "commit_hash": commit, "cargo_release": cargo}
+    pin = record.get("pin_rustc")
+    if (not isinstance(pin, dict) or instrument.channel_matches(expected_channel, pin.get("release")) is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("commit_hash", "")))):
+        raise ValueError("build proof lacks rustup's identity for the pinned toolchain")
+    if commit != pin["commit_hash"]:
+        raise ValueError(f"build compiler {rustc['path']} (rustc {release}, commit {commit[:12]}) is not the "
+                         f"rustup-resolved pin (commit {pin['commit_hash'][:12]}): it reports the pinned "
+                         "release but is a different compiler")
+    return {"release": release, "commit_hash": commit, "cargo_release": cargo}
+
+
 def build(output: Path, root=ROOT) -> dict:
     output = output.resolve()
     if output.is_relative_to(root.resolve()) or output.exists():
         raise ValueError("choose a new build evidence directory outside the checkout")
     before = clean_snapshot(root)
+    toolchain = build_toolchain(root)
     output.mkdir(parents=True)
+    env = {**os.environ, "RUSTC": toolchain["rustc"]["path"]}
     with (output / "cargo.jsonl").open("wb") as stdout, (output / "cargo.stderr").open("wb") as stderr:
-        run = subprocess.run(BUILD_COMMAND, cwd=root, stdout=stdout, stderr=stderr)
+        run = subprocess.run(BUILD_COMMAND, cwd=root, stdout=stdout, stderr=stderr, env=env)
     if run.returncode != 0:
         raise ValueError("Cargo CLI build failed; transcripts retained")
     raw_stdout, raw_stderr = (output / "cargo.jsonl").read_bytes(), (output / "cargo.stderr").read_bytes()
     artifact = cargo_artifact(raw_stdout, root)
+    # What actually compiled the binary, from its own bytes: std's embedded
+    # /rustc/<commit>/ paths. Must be exactly the compiler recorded above.
+    toolchain["binary_rustc_commits"] = instrument.embedded_rustc_commits(artifact["executable"])
     proof = {"schema": BUILD_SCHEMA, "snapshot": before, "source_root": str(root.resolve()),
              "command": BUILD_COMMAND, "returncode": run.returncode, "cargo_artifact": artifact,
-             "binary": file_fact(artifact["executable"]),
+             "binary": file_fact(artifact["executable"]), "toolchain": toolchain,
              "cargo_stdout_hex": raw_stdout.hex(), "cargo_stdout_sha256": sha(raw_stdout),
              "cargo_stderr_hex": raw_stderr.hex(), "cargo_stderr_sha256": sha(raw_stderr)}
     if clean_snapshot(root) != before:
         raise ValueError("source changed during Cargo CLI build")
-    validate_build_proof(proof, before)
+    validate_build_proof(proof, before, expected_channel=toolchain["channel"])
     (output / "build-proof.json").write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n")
     return proof
 
 
-def validate_build_proof(proof: dict, expected_snapshot: dict) -> None:
-    """Replay the Cargo transcript; the binary must be the executable it names."""
+def check_binary_compiler(proof: dict) -> None:
+    """Re-read the on-disk binary's compiler fingerprint against its proof."""
+    if instrument.embedded_rustc_commits(proof["binary"]["path"]) != proof["toolchain"]["binary_rustc_commits"]:
+        raise ValueError("binary compiler fingerprint differs from its build proof")
+
+
+def validate_build_proof(proof: dict, expected_snapshot: dict, *, expected_channel: str | None = None) -> None:
+    """Replay the Cargo transcript; the binary must be the executable it names,
+    compiled by the pinned toolchain (``expected_channel``, default: this
+    checkout's rust-toolchain.toml)."""
     if (not isinstance(proof, dict) or proof.get("schema") != BUILD_SCHEMA or proof.get("command") != BUILD_COMMAND
             or proof.get("returncode") != 0 or proof.get("snapshot") != expected_snapshot
             or not isinstance(expected_snapshot, dict) or expected_snapshot.get("source_dirty") is not False):
@@ -139,6 +236,14 @@ def validate_build_proof(proof: dict, expected_snapshot: dict) -> None:
             or Path(artifact["executable"]).resolve() != Path(fact["path"])
             or not re.fullmatch(r"[0-9a-f]{64}", str(fact["sha256"]))):
         raise ValueError("build proof binary differs from the Cargo transcript")
+    channel = expected_channel if expected_channel is not None else instrument.pinned_rust_channel(ROOT)
+    if channel is None:
+        raise ValueError("no rust-toolchain.toml channel to check the build compiler against")
+    toolchain = proof.get("toolchain")
+    identity = toolchain_identity(toolchain, channel)
+    if toolchain.get("binary_rustc_commits") != [identity["commit_hash"]]:
+        raise ValueError(f"binary was not compiled by the recorded pinned rustc {identity['release']} "
+                         f"(embedded compiler commits: {toolchain.get('binary_rustc_commits')})")
 
 
 def native_command(native: dict, mode: str, path: str) -> list[str]:
@@ -199,10 +304,10 @@ def validate_native(facts: dict, expected: str) -> None:
         raise ValueError("native library fingerprint is malformed")
 
 
-def transcript(command, *, env):
+def transcript(command, *, env, cwd=None):
     """Raw process transcript; a non-zero exit or timeout (-1) is recorded, not raised."""
     try:
-        run = subprocess.run(command, capture_output=True, env=env, timeout=TIMEOUT_SECONDS)
+        run = subprocess.run(command, capture_output=True, env=env, timeout=TIMEOUT_SECONDS, cwd=cwd)
         returncode, stdout, stderr = run.returncode, run.stdout, run.stderr
     except subprocess.TimeoutExpired as expired:
         returncode, stdout, stderr = -1, expired.stdout or b"", expired.stderr or b""
@@ -393,6 +498,8 @@ def observe(args) -> Path:
     snapshot = clean_snapshot()
     validate_build_proof(proof, snapshot)
     check_file(proof["binary"])
+    check_binary_compiler(proof)
+    compiler = toolchain_identity(proof["toolchain"], proof["toolchain"]["channel"])
     expected = pin()
     native = native_identity(args.perl.resolve(), args.exiftool_dir.resolve(), expected)
     corpus = args.corpus.resolve()
@@ -402,6 +509,8 @@ def observe(args) -> Path:
         raise ValueError(f"corpus has {len(files)} files; floor is {args.min_files}")
     instrument.print_header(tool="corpus_read_receipt.py", git=instrument.git_state(ROOT),
                             extra=[f"oxidex: {proof['binary']['path']} ({proof['binary']['sha256'][:12]})",
+                                   f"rustc:  {compiler['release']} ({compiler['commit_hash'][:12]}) = pin "
+                                   f"{proof['toolchain']['channel']}; binary fingerprint matches",
                                    f"native: ExifTool {expected} via {native['perl']['path']}",
                                    f"corpus: {corpus} ({len(files)} files)"])
     output.mkdir(parents=True)

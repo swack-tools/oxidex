@@ -195,8 +195,10 @@ fn no_print_conv_focal_length_selects_the_raw_quotient() {
         "-FocalLength",
         file.to_str().unwrap(),
     ]);
-    assert!(
-        output.contains("FocalLength: 34\n") || output.trim_end() == "FocalLength: 34",
+    // Pinned 13.59 `-n -s -FocalLength Canon.jpg`, byte for byte (`-s` pads
+    // the tag name to 32 columns).
+    assert_eq!(
+        output, "FocalLength                     : 34\n",
         "--no-print-conv -FocalLength should show the bare 34, got: {output:?}"
     );
 }

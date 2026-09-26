@@ -436,10 +436,23 @@ pub static MAIN_RESIDUAL: &[TagDef] = &[
     TagDef::func(0x0200, "SpecialMode", print_special_mode),
     TagDef::func(0x0204, "DigitalZoom", print_digital_zoom),
     TagDef::binary(0x0280, "PreviewImage"),
-    TagDef::raw(0x0F04, "ZoomedPreviewStart"),
-    TagDef::raw(0x0F05, "ZoomedPreviewLength"),
     TagDef::raw(0x1036, "PreviewImageStart"),
 ];
+
+/// Olympus.pm:893-907's coupled offset pair and synthesized binary DataTag.
+/// This is deliberately not two independent scalar residuals: the public
+/// image exists only when both source rows form an in-bounds JPEG carrier.
+pub struct OffsetPairDataTag {
+    pub offset_id: u16,
+    pub length_id: u16,
+    pub data_name: &'static str,
+}
+
+pub const ZOOMED_PREVIEW_PAIR: OffsetPairDataTag = OffsetPairDataTag {
+    offset_id: 0x0f04,
+    length_id: 0x0f05,
+    data_name: "ZoomedPreviewImage",
+};
 
 /// The `MAIN_RESIDUAL` rows that override an engine rendering rather than
 /// supply a withheld one -- see the second class in the comment above.
@@ -813,9 +826,10 @@ static CS_FLASH_CONTROL_MODE_LIST: &[ElemConv] = &[ElemConv::Map(&[
 // * 0x0901 `ManometerReading` -- `ValueConv => 'my @a=split(" ",$val); $_ /=
 //   10 foreach @a; "@a"'` (Olympus.pm:2758); `print_manometer_reading`.
 //
-// Withheld rows the hand table never had (0x0804 `StackedImage`, 0x0903
-// `RollAngle`, 0x0904 `PitchAngle`) stay MISSING: no hand conversion exists
-// and none is guessed at. The two sub-directory rows (0x030a
+// Withheld rows the hand table never had (0x0903 `RollAngle`, 0x0904
+// `PitchAngle`) stay MISSING: no hand conversion exists and none is guessed
+// at. Generated 0x0804 `StackedImage` is now source-complete. The two
+// sub-directory rows (0x030a
 // `AFTargetInfo`, 0x030b `SubjectDetectInfo`, Olympus.pm:1962-1975) are
 // edges to tables no allowlist carries, so the engine refuses them exactly
 // as the hand walk ignored them.
@@ -1223,7 +1237,6 @@ static EQUIPMENT_UNSUPPLIED: &[u16] = &[];
 static CAMERA_SETTINGS_UNSUPPLIED: &[u16] = &[
     0x030a, // withheld, no hand conversion
     0x030b, // SubjectDetectInfo, a SubDirectory
-    0x0804, // withheld, no hand conversion
     0x0903, // withheld, no hand conversion
     0x0904, // withheld, no hand conversion
 ];

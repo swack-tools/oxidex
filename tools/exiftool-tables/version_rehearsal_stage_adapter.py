@@ -11,24 +11,65 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any, Callable
 
 import artifacts
 import generated_tiff_write_matrix as generated_matrix
 import native_write_matrix as native
+import instrument  # noqa: E402 -- scripts/ is on sys.path via native_write_matrix
 import version_rehearsal as rehearsal
 import version_rehearsal_executor as executor
 
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
+# The release's own test suite, run in the regenerated checkout as ONE
+# invocation like CI's required step, because a separate `--doc` run
+# self-heals a mid-run lib rebuild that only the combined command exposes
+# (see the doc-test step in .github/workflows/ci.yml). It is a deliberate
+# superset of that step, not a copy: CI runs `cargo test --all-features`,
+# which tests only the root package, while this adds --workspace because the
+# oxidex-tags-* member crates are generated from ExifTool for each release and
+# a version transition must test them too. All features match the adapter
+# build; --no-fail-fast counts every target.
+TEST_COMMANDS = (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),)
+TEST_SCOPE = ("workspace: every member, including the generated oxidex-tags-* crates; a deliberate "
+              "superset of CI's required `cargo test --all-features` (root package only), run as one "
+              "invocation like that step")
+TEST_TARGET_SUBDIRECTORY = "test-suite"
+# The suite runs from an allowlisted environment, never the caller's: an
+# ambient EXIFTOOL, EXIFTOOL_CACHE_DIR, OXIDEX_ALLOW_EXIFTOOL_SKEW, RUSTFLAGS,
+# or CARGO_* runner/quiet/wrapper *variable* cannot reach it. Cargo also reads
+# configuration *files* (CARGO_HOME and every ancestor's .cargo/), which can
+# set the same things; the stage refuses when any exists outside the checkout.
+TEST_ENVIRONMENT_PASSTHROUGH = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+                                "CARGO_HOME", "RUSTUP_HOME", "SDKROOT", "DEVELOPER_DIR")
+TEST_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR", "EXIFTOOL_CACHE_DIR", "EXIFTOOL_PERL",
+                        "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES")
+# The build that produces the qualified CLI and writer driver runs from the
+# same allowlist and the same cargo-configuration refusal, so an ambient
+# RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, RUSTC, RUSTC_WRAPPER,
+# RUSTC_WORKSPACE_WRAPPER or CARGO_BUILD_* cannot alter binaries the result
+# attributes only to the source commit. Build scripts read only OUT_DIR.
+BUILD_ENVIRONMENT_PASSTHROUGH = TEST_ENVIRONMENT_PASSTHROUGH
+BUILD_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
+TEST_ORACLE_DIRECTORY = "exiftool-oracle"
+TEST_ORACLE_MODULES = ("strict", "warnings", "Archive::Zip", "Compress::Zlib")
+_TEST_RESULT = re.compile(
+    r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; "
+    r"(\d+) filtered out; finished in \d+(?:\.\d+)?s")
+_TEST_RUNNING = re.compile(r"running (\d+) tests?")
+_TEST_TARGET = re.compile(r"\s+(?:Running (?:unittests )?\S+ \(.+\)|Doc-tests \S+)")
 READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
 
@@ -88,18 +129,21 @@ def _atomic(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
+         merge_stderr: bool = False) -> dict[str, Any]:
     """Run below the executor's process group and retain the actual output.
 
     The executor owns a session and an inheritable host-lock descriptor.  A
     nested generation/build/comparison process must stay in that group so an
     executor timeout kills it too and its inherited lock cannot outlive the
-    supervisor.  Do not create another session here.
+    supervisor.  Do not create another session here. ``merge_stderr`` keeps
+    one ordered stream (stderr into stdout) for output that must be segmented.
     """
+    stderr_target = subprocess.STDOUT if merge_stderr else subprocess.PIPE
     try:
         if run is subprocess.run:
             child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace", stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, start_new_session=False, close_fds=False)
+                                     stderr=stderr_target, start_new_session=False, close_fds=False)
             try:
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
@@ -111,8 +155,9 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., 
             completed = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process = {"pid": child.pid, "pgid": os.getpgid(child.pid) if child.poll() is None else None}
         else:
-            completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", capture_output=True,
-                            timeout=COMMAND_TIMEOUT_SECONDS, start_new_session=False, close_fds=False)
+            completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", stdout=subprocess.PIPE,
+                            stderr=stderr_target, timeout=COMMAND_TIMEOUT_SECONDS, start_new_session=False,
+                            close_fds=False)
             process = {}
         stdout, stderr = completed.stdout or "", completed.stderr or ""
         return {"argv": argv, "cwd": str(cwd), "exit": completed.returncode, "state": "ok" if completed.returncode == 0 else "exit_failed", "stdout": stdout, "stderr": stderr, **process}
@@ -202,7 +247,7 @@ def _validate_artifacts(checkout: Path, rows: Any) -> list[dict[str, Any]]:
 
 
 def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
-    """Count one canonical refusal/omission population per ledger and family.
+    """Count one canonical refusal/omission/unsupported population per ledger and family.
 
     This is evidence that a historical generation refused source behavior
     explicitly; it is not permission to reinterpret a refusal as coverage.
@@ -213,6 +258,10 @@ def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
     """
     candidates: list[dict[str, Any]] = []
     key_pattern = re.compile(r"(?:refus|omitt|withheld)", re.IGNORECASE)
+    # A canonical unsupported population is a snake_case field name such as
+    # `unsupported_branches`; free-text reason keys that merely mention
+    # "unsupported" (e.g. under omissions_by_reason) are breakdowns, not fields.
+    unsupported_field = re.compile(r"(?:[a-z0-9]+_)*unsupported(?:_[a-z0-9]+)*")
 
     def walk(value: Any, location: str, artifact_path: str, depth: int = 0) -> None:
         if isinstance(value, dict):
@@ -220,8 +269,10 @@ def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
                 child = value[key]
                 child_location = f"{location}.{key}" if location else key
                 lowered = key.casefold()
-                if key_pattern.search(key) and not lowered.startswith("top_"):
-                    family = "omitted" if "omitt" in lowered else "refused"
+                unsupported = unsupported_field.fullmatch(key) is not None
+                if (key_pattern.search(key) or unsupported) and not lowered.startswith("top_"):
+                    family = ("unsupported" if unsupported
+                              else "omitted" if "omitt" in lowered else "refused")
                     if type(child) is int and child >= 0:
                         candidates.append({"artifact": artifact_path, "json_path": child_location,
                                            "kind": "integer", "count": child,
@@ -391,11 +442,17 @@ def _cargo_executable(record: dict[str, Any], checkout: Path, target: Path,
 
 
 def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
-    checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
+    checkout, target, report, _perl, _source, _native_lib, identity = _common(args, run)
     if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("build checkout is not pinned to selected release")
     generated = _validate_artifacts(checkout, _prior(report, "generate", args, identity, checkout).get("generated_artifacts"))
-    env = _environment(perl, native_lib, target)
+    env = _build_environment(target)
+    cargo_config = _ambient_cargo_configuration(checkout, env)
+    if cargo_config["outside_checkout"]:
+        raise Refused("build refuses cargo configuration outside the checkout: "
+                      + ", ".join(cargo_config["outside_checkout"]))
+    compiler = pinned_toolchain(checkout, env, run)
+    toolchain = compiler["toolchain"]
     records = []
     for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
                     ["cargo", "test", "--lib", "--all-features", "--no-run", "--message-format=json"]):
@@ -409,12 +466,461 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     writer = _cargo_executable(records[1], checkout, target, test=True)
     if executable["path"] == writer["path"]:
         raise Refused("CLI and writer driver must be distinct Cargo executables")
+    # What actually compiled each executable, from its own bytes (std's
+    # embedded /rustc/<commit>/ paths): exactly the rustc recorded above.
+    compiled_by = {"binary": instrument.embedded_rustc_commits(executable["path"]),
+                   "writer_binary": instrument.embedded_rustc_commits(writer["path"])}
+    check_binary_compilers(toolchain, compiled_by)
     # A build may not change the generated inputs whose identity it claims.
     _validate_artifacts(checkout, generated)
     result = {**_base("build", args, checkout, identity), "state": "passed", "denominator": 2,
               "generated_artifacts": generated, "binary": executable,
-              "writer_binary": writer, "raw_report": raw}
+              "writer_binary": writer, "raw_report": raw,
+              "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config,
+                                    "toolchain_pin": compiler["toolchain_pin"],
+                                    "rustc_path": compiler["rustc_path"], "pin_rustc": compiler["pin_rustc"],
+                                    "compiled_by": compiled_by}}
     _atomic(report, result); return result
+
+
+def _resolve_executable(name: str, env: dict[str, str]) -> str | None:
+    """``name`` as ``env``'s PATH resolves it (absolute), or None."""
+    found = shutil.which(name, path=env.get("PATH", os.defpath))
+    return str(Path(found).resolve()) if found else None
+
+
+def pinned_toolchain(checkout: Path, env: dict[str, str],
+                     run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Identify the compiler ``env`` resolves in ``checkout``; refuse anything but its pin.
+
+    PATH is allowlisted, and only rustup's proxies honour the checkout's
+    rust-toolchain.toml: a Homebrew rustc ahead of them compiles with its own
+    release, silently. Every stage that compiles (build, release tests) calls
+    this with its own environment immediately before Cargo runs, and records
+    the result. The pin is read from the checkout itself -- another release
+    may pin another toolchain. -> {"toolchain", "toolchain_pin", "rustc_path"}.
+    """
+    toolchain = {}
+    for name, command in (("rustc", ["rustc", "-vV"]), ("cargo", ["cargo", "-V"])):
+        record = _run(command, cwd=checkout, env=env, run=run)
+        if record["state"] != "ok" or not record["stdout"].strip().startswith(name + " "):
+            raise Refused(f"build toolchain cannot be identified: {' '.join(command)}")
+        toolchain[name] = record["stdout"].strip()
+    toolchain_pin = toolchain_pin_for(checkout)
+    check_toolchain_against_pin(toolchain, toolchain_pin["channel"])
+    rustc_path = _resolve_executable("rustc", env)
+    if rustc_path is None:
+        raise Refused("build toolchain rustc is not resolvable on the allowlisted PATH")
+    # A release string is not an identity: a non-rustup rustc can report the
+    # pinned release too. rustup's own answer for the pin, through the same
+    # allowlisted environment, must name the very compiler about to run.
+    pin_rustc = _rustup_pin(toolchain_pin["channel"], checkout, env)
+    if pin_rustc is None:
+        raise Refused(f"rustup cannot resolve the checkout's pinned toolchain {toolchain_pin['channel']} under the "
+                      "allowlisted environment; the compiler cannot be proven to be the pin")
+    record = {"toolchain": toolchain, "toolchain_pin": toolchain_pin, "rustc_path": rustc_path,
+              "pin_rustc": pin_rustc}
+    check_pin_identity(record)
+    return record
+
+
+def _rustup_pin(channel: str, checkout: Path, env: dict[str, str]) -> dict[str, Any] | None:
+    """rustup's identity for ``channel`` -- the instruments' rustup-only resolver, never PATH."""
+    identity = instrument.pinned_rustc_identity(channel, cwd=checkout, env=env)
+    if identity is None:
+        return None
+    return {"release": identity.release, "commit_hash": identity.commit_hash, "path": identity.path}
+
+
+def check_pin_identity(record: dict[str, Any]) -> None:
+    """The recorded rustc's commit must EQUAL rustup's commit for the pinned channel."""
+    channel = record["toolchain_pin"]["channel"]
+    used = check_toolchain_against_pin(record["toolchain"], channel)
+    pin = record.get("pin_rustc")
+    if (not isinstance(pin, dict) or instrument.channel_matches(channel, pin.get("release")) is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", str(pin.get("commit_hash", "")))):
+        raise Refused("rustup's identity for the pinned toolchain is not recorded")
+    if used["commit_hash"] != pin["commit_hash"]:
+        raise Refused(f"rustc on the allowlisted PATH (rustc {used['release']}, commit {used['commit_hash'][:12]}) "
+                      f"is not the rustup-resolved pin (commit {pin['commit_hash'][:12]}): same release, "
+                      "different compiler")
+
+
+def validate_pinned_toolchain(record: Any, checkout: Path) -> dict[str, str]:
+    """Replay a recorded :func:`pinned_toolchain` against the checkout's pin as it is now."""
+    try:
+        toolchain, recorded_pin, rustc_path = record["toolchain"], record["toolchain_pin"], record["rustc_path"]
+    except (KeyError, TypeError) as exc:
+        raise Refused("pinned toolchain is not recorded") from exc
+    if (not isinstance(toolchain, dict) or set(toolchain) != {"rustc", "cargo"}
+            or not all(isinstance(value, str) for value in toolchain.values())
+            or not isinstance(rustc_path, str) or not Path(rustc_path).is_absolute()):
+        raise Refused("pinned toolchain record is malformed")
+    pin = toolchain_pin_for(checkout)
+    if recorded_pin != pin:
+        raise Refused(f"recorded toolchain pin {recorded_pin} is not the checkout's {pin}")
+    check_pin_identity(record)
+    return check_toolchain_against_pin(toolchain, pin["channel"])
+
+
+def toolchain_pin_for(checkout: Path) -> dict[str, str]:
+    """The checkout's own rust-toolchain.toml pin; refuses a checkout without a numeric one."""
+    path = instrument.rust_toolchain_file(checkout)
+    channel = instrument.pinned_rust_channel(checkout)
+    if path is None or channel is None or instrument.channel_matches(channel, channel) is not True:
+        raise Refused("build checkout has no numeric rust-toolchain.toml channel; its compiler cannot be qualified")
+    return {"file": path.name, "sha256": _sha(path), "channel": channel}
+
+
+def check_toolchain_against_pin(toolchain: dict[str, Any], channel: str) -> dict[str, str]:
+    """Recorded ``rustc -vV``/``cargo -V`` must be the pinned release. -> {release, commit_hash}."""
+    try:
+        fields = instrument.parse_rustc_verbose(toolchain["rustc"])
+        cargo = instrument.cargo_release(toolchain["cargo"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise Refused("build toolchain is not recorded") from exc
+    release, commit = fields.get("release"), fields.get("commit-hash", "")
+    if instrument.channel_matches(channel, release) is not True:
+        raise Refused(f"build toolchain rustc {release or '?'} is not the checkout's pinned {channel}: the "
+                      "allowlisted PATH resolves another compiler first (put ~/.cargo/bin ahead of it)")
+    if instrument.channel_matches(channel, cargo) is not True:
+        raise Refused(f"build toolchain cargo {cargo or '?'} is not the checkout's pinned {channel}")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise Refused("build toolchain rustc -vV carries no commit hash")
+    return {"release": release, "commit_hash": commit}
+
+
+def check_binary_compilers(toolchain: dict[str, Any], compiled_by: Any) -> None:
+    """Every built executable must embed exactly the recorded rustc's commit."""
+    commit = instrument.parse_rustc_verbose(toolchain["rustc"]).get("commit-hash")
+    if (not isinstance(compiled_by, dict) or set(compiled_by) != {"binary", "writer_binary"}
+            or any(value != [commit] for value in compiled_by.values())):
+        raise Refused(f"build executables were not compiled by the recorded rustc {commit}: {compiled_by}")
+
+
+def _summary(line: str) -> tuple[str, int, int, int, int, int]:
+    match = _TEST_RESULT.fullmatch(line)
+    if match is None:
+        raise Refused(f"cargo test summary line is unparsable: {line!r}")
+    return (match.group(1), *(int(match.group(index)) for index in range(2, 7)))
+
+
+def _checked_block(started: int, summary: tuple[str, int, int, int, int, int]) -> tuple[int, int, int, int]:
+    status, passed, failed, ignored, measured, filtered = summary
+    if filtered != 0:
+        raise Refused("cargo test summary is filtered; it is not the target's own run")
+    if started != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
+        raise Refused("cargo test summary disagrees with its own test count or status")
+    return passed, failed, ignored, measured
+
+
+def parse_test_output(output: str) -> dict[str, int]:
+    """Strictly count one cargo test invocation from its merged output stream.
+
+    Cargo announces each target (``Running ...`` / ``Doc-tests ...``) before
+    running it, so the merged stream splits into one segment per target.
+
+    A test binary's segment is read only at its boundaries: tests that
+    re-execute their own binary with a filter and inherited stdout interleave
+    nested libtest runs (some lines garbled) inside it. Its first ``running N
+    tests`` line precedes every test and its last summary follows every
+    nested run, so only those two are the target's own.
+
+    A doc-test segment has no nested runs, but edition 2024 prints a merged
+    and a standalone block under one heading. Every line there must parse,
+    blocks pair in order, and each is checked and summed.
+
+    Every counted summary must be unfiltered, account for its N and agree with
+    its own status. Anything else refuses.
+    """
+    segments: list[tuple[bool, list[str]]] = []
+    for line in output.splitlines():
+        if _TEST_TARGET.fullmatch(line):
+            segments.append((line.strip().startswith("Doc-tests "), []))
+        elif segments:
+            segments[-1][1].append(line.strip())
+    if not segments:
+        raise Refused("cargo test ran no test targets")
+    totals = {"passed": 0, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0,
+              "targets": len(segments)}
+    for doc, lines in segments:
+        starts = [line for line in lines if line.startswith("running ")]
+        summaries = [line for line in lines if line.startswith("test result:")]
+        if not starts or not summaries:
+            raise Refused("cargo test output is incomplete: a target has no start or summary")
+        if doc:
+            counts = []
+            if len(starts) != len(summaries):
+                raise Refused("cargo test doc-test blocks are incomplete")
+            for start, summary in zip(starts, summaries, strict=True):
+                match = _TEST_RUNNING.fullmatch(start)
+                if match is None:
+                    raise Refused(f"cargo test running line is unparsable: {start!r}")
+                counts.append(_checked_block(int(match.group(1)), _summary(summary)))
+        else:
+            match = _TEST_RUNNING.fullmatch(starts[0])
+            if match is None:
+                raise Refused(f"cargo test running line is unparsable: {starts[0]!r}")
+            counts = [_checked_block(int(match.group(1)), _summary(summaries[-1]))]
+        for passed, failed, ignored, measured in counts:
+            totals["passed"] += passed
+            totals["failed"] += failed
+            totals["ignored"] += ignored
+            totals["measured"] += measured
+    return totals
+
+
+def _file_identity(path: Path) -> dict[str, str]:
+    return {"path": str(path), "sha256": _sha(_regular(path, "release test oracle file"))}
+
+
+def _release_test_oracle(suite_target: Path, perl: Path, native_source: Path) -> tuple[Path, Path]:
+    """Lay out the side's selected ExifTool where the Rust oracle resolves it.
+
+    ``EXIFTOOL_CACHE_DIR/exiftool`` is the oracle's pinned-tree root, so it
+    names the selected native source. A PATH shim makes any bare ``exiftool``
+    lookup run the same tree under the selected Perl rather than whatever
+    the host installed.
+    """
+    cache = suite_target / TEST_ORACLE_DIRECTORY
+    cache.mkdir()
+    (cache / "exiftool").symlink_to(native_source, target_is_directory=True)
+    shim_directory = cache / "bin"
+    shim_directory.mkdir()
+    tree = cache / "exiftool"
+    shim = shim_directory / "exiftool"
+    shim.write_text("#!/bin/sh\nexec " + " ".join(shlex.quote(part) for part in (
+        str(perl), f"-I{tree / 'lib'}", str(tree / "exiftool"))) + ' "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return cache, shim_directory
+
+
+def _ops_root() -> Path:
+    """The durable ops root, resolved exactly as every other ops consumer does."""
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import ops_paths
+    return ops_paths.ops_root()
+
+
+def _bootstrap_module(checkout: Path) -> Any:
+    """The checkout's own oracle bootstrap, which owns the corpus layout and lock."""
+    script = _regular(checkout / "tools" / "release" / "bootstrap_oracle.py", "oracle bootstrap")
+    spec = importlib.util.spec_from_file_location("oxidex_release_test_bootstrap_oracle", script)
+    if spec is None or spec.loader is None:
+        raise Refused("fixture corpus bootstrap cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _corpus_manifest_entries(corpus: Path, manifest: Path) -> int:
+    """Check the corpus against its manifest: same files, same bytes, nothing extra."""
+    listed: dict[str, str] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (\S.*)", line)
+        if match is None or match.group(2) in listed:
+            raise Refused("fixture corpus manifest is malformed")
+        listed[match.group(2)] = match.group(1)
+    present = {item.relative_to(corpus).as_posix(): item for item in corpus.rglob("*") if item.is_file()}
+    if not listed or set(present) != set(listed):
+        raise Refused("fixture corpus files differ from its verified manifest")
+    for name, digest in listed.items():
+        if _sha(present[name]) != digest:
+            raise Refused(f"fixture corpus file differs from its verified manifest: {name}")
+    return len(listed)
+
+
+def _verify_fixture_corpus(checkout: Path, env: dict[str, str],
+                           run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Authenticate the combined-samples corpus through the oracle bootstrap.
+
+    The corpus is the one every conformance receipt uses: the bootstrap's
+    lock-hashed ``combined-samples`` tree beneath the durable ops root, whose
+    ``verify`` refreshes and binds the sibling manifest. Sample images are
+    version-independent, so every release side uses this one corpus under the
+    bootstrap's own pin; only ``t/images`` comes from the side's selected tree.
+    """
+    root = _ops_root()
+    bootstrap = _bootstrap_module(checkout)
+    command = [sys.executable, str(checkout / "tools" / "release" / "bootstrap_oracle.py"), "verify",
+               "--root", str(root), "--pin", bootstrap.VERSION]
+    verify_env = {**{key: value for key, value in env.items() if key in TEST_ENVIRONMENT_PASSTHROUGH},
+                  "OXIDEX_OPS_DIR": str(root)}
+    record = _run(command, cwd=checkout, env=verify_env, run=run, merge_stderr=True)
+    if record["state"] != "ok":
+        raise Refused(f"fixture corpus verification failed: {record['stdout'].strip()[-400:]}")
+    corpus = Path(bootstrap.corpus_path(root))
+    manifest = corpus.parent / "combined-samples.manifest"
+    storage = Path(bootstrap.manifest_path(root))
+    _regular(storage, "fixture corpus storage manifest")
+    try:
+        artifacts_ = _json(storage)["artifacts"]
+        bound_manifest, bound_tree = artifacts_["corpus_manifest"], artifacts_["corpus_tree"]
+    except (KeyError, TypeError, Refused) as exc:
+        raise Refused("fixture corpus storage manifest is unreadable") from exc
+    manifest_sha = _sha(_regular(manifest, "fixture corpus manifest"))
+    tree_sha = bootstrap.LOCK.get("corpus_tree_sha256")
+    if (corpus.is_symlink() or not corpus.is_dir()
+            or bound_manifest != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
+            or bound_tree != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
+        raise Refused("fixture corpus is not the bootstrap-verified corpus for this ops root")
+    count = _corpus_manifest_entries(corpus, manifest)
+    return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "version_independent": True,
+            "corpus": str(corpus), "corpus_tree_sha256": tree_sha,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count},
+            "storage_manifest": {"path": str(storage), "sha256": _sha(storage)},
+            "verify_command": command}
+
+
+def _recheck_fixture_corpus(corpus_record: dict[str, Any], when: str) -> None:
+    manifest = Path(corpus_record["manifest"]["path"])
+    try:
+        if (_sha(_regular(manifest, "fixture corpus manifest")) != corpus_record["manifest"]["sha256"]
+                or _corpus_manifest_entries(Path(corpus_record["corpus"]), manifest)
+                != corpus_record["manifest"]["file_count"]):
+            raise Refused("fixture corpus manifest changed")
+    except (OSError, Refused) as exc:
+        raise Refused(f"fixture corpus drifted {when} the release tests: {exc}") from exc
+
+
+def _ambient_cargo_configuration(checkout: Path, env: dict[str, str]) -> dict[str, Any]:
+    """Cargo config files the suite would read from outside the checkout.
+
+    Cargo merges ``.cargo/config[.toml]`` from the working directory and every
+    ancestor, then ``$CARGO_HOME`` (default ``~/.cargo``). The checkout's own
+    tracked file is source; any other can set rustflags, a runner or a
+    wrapper, so the stage refuses rather than hash-and-trust it.
+    """
+    checkout = checkout.resolve()
+    home = env.get("CARGO_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".cargo")
+    directories = [parent / ".cargo" for parent in checkout.parents] + [Path(home)]
+    checked = [str(directory / name) for directory in directories for name in ("config.toml", "config")]
+    outside = [path for path in checked if Path(path).exists() or Path(path).is_symlink()]
+    return {"checked": checked, "outside_checkout": outside}
+
+
+def _allowlisted_environment() -> dict[str, str]:
+    """Only the allowlisted caller variables: never RUSTFLAGS, wrappers or ExifTool overrides."""
+    return {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
+
+
+def _build_environment(target: Path) -> dict[str, str]:
+    env = _allowlisted_environment()
+    env.update(CARGO_TARGET_DIR=str(target), CARGO_TERM_COLOR="never")
+    return env
+
+
+def _release_test_environment(perl: Path, suite_target: Path, cache: Path, shim_directory: Path) -> dict[str, str]:
+    env = _allowlisted_environment()
+    env["PATH"] = str(shim_directory) + os.pathsep + env.get("PATH", os.defpath)
+    env.update(CARGO_TARGET_DIR=str(suite_target), CARGO_TERM_COLOR="never", EXIFTOOL_CACHE_DIR=str(cache),
+               EXIFTOOL_PERL=str(perl), OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES="1")
+    return env
+
+
+def _probe_release_test_oracle(release: str, perl: Path, cache: Path, shim_directory: Path,
+                               native_source: Path, identity: dict[str, Any], env: dict[str, str],
+                               checkout: Path,
+                               run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Prove, with the suite's own environment, which ExifTool it will grade against."""
+    tree = cache / "exiftool"
+    lib, program = tree / "lib", tree / "exiftool"
+    prefix = [str(perl), f"-I{lib}", str(program)]
+    version = _run([*prefix, "-ver"], cwd=checkout, env=env, run=run, merge_stderr=True)
+    docx = _run([*prefix, "-s3", "-FileType", str(tree / "t" / "images" / "OOXML.docx")],
+                cwd=checkout, env=env, run=run, merge_stderr=True)
+    modules = {module: _run([str(perl), f"-M{module}", "-e", "1"], cwd=checkout, env=env, run=run,
+                            merge_stderr=True)["state"] == "ok" for module in TEST_ORACLE_MODULES}
+    oracle = {
+        "cache_dir": str(cache), "tree": str(tree), "tree_realpath": str(tree.resolve()),
+        "program": _file_identity(program),
+        "lib": {"path": str(lib), "exiftool_pm_sha256": _sha(_regular(lib / "Image" / "ExifTool.pm",
+                                                                      "release test oracle library"))},
+        "perl": _file_identity(perl),
+        "version": version["stdout"].strip() if version["state"] == "ok" else None,
+        "docx_filetype": docx["stdout"].strip() if docx["state"] == "ok" else None,
+        "perl_modules": modules, "perl_modules_available": all(modules.values()),
+        "path_shim": _file_identity(shim_directory / "exiftool"),
+    }
+    if (oracle["version"] != release or oracle["docx_filetype"] != "DOCX" or not oracle["perl_modules_available"]
+            or oracle["tree_realpath"] != str(native_source.resolve())
+            or oracle["lib"]["exiftool_pm_sha256"] != identity["lib"]["exiftool_pm_sha256"]
+            or oracle["perl"] != identity["perl"]):
+        raise Refused(f"release test oracle is not the selected capable ExifTool {release}: "
+                      f"-ver={oracle['version']!r} OOXML.docx={oracle['docx_filetype']!r} "
+                      f"modules={modules} tree={oracle['tree_realpath']}")
+    return oracle
+
+
+def run_release_tests(args: argparse.Namespace, *,
+                      run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
+    """Run the regenerated checkout's own test suite in a dedicated target."""
+    checkout, target, report, perl, native_source, _native_lib, identity = _common(args, run)
+    if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
+        raise Refused("test checkout is not pinned to selected release")
+    # A separate target keeps the build's proven CLI and writer driver intact;
+    # a default- or differently-featured test build would replace them.
+    suite_target = target / TEST_TARGET_SUBDIRECTORY
+    if suite_target.exists() or suite_target.is_symlink():
+        raise Refused("release test target already exists; stale reuse is forbidden")
+    previous = _prior(report, "build", args, identity, checkout)
+    generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
+    suite_target.mkdir()
+    cache, shim_directory = _release_test_oracle(suite_target, perl, native_source)
+    env = _release_test_environment(perl, suite_target, cache, shim_directory)
+    oracle = _probe_release_test_oracle(args.release, perl, cache, shim_directory, native_source,
+                                        identity, env, checkout, run)
+    cargo_config = _ambient_cargo_configuration(checkout, env)
+    if cargo_config["outside_checkout"]:
+        raise Refused("release tests refuse cargo configuration outside the checkout: "
+                      + ", ".join(cargo_config["outside_checkout"]))
+    corpus = _verify_fixture_corpus(checkout, env, run)
+    (cache / "combined-samples").symlink_to(Path(corpus["corpus"]), target_is_directory=True)
+    corpus["link"] = str(cache / "combined-samples")
+    _recheck_fixture_corpus(corpus, "before")
+    corpus["verified_before_run"] = True
+    # The suite compiles its own fresh target, so it re-proves the compiler
+    # with its own environment right before Cargo runs: a resumed stage under
+    # another PATH must not run off-pin, nor on a different rustc than the
+    # one that built the qualified binaries.
+    compiler = pinned_toolchain(checkout, env, run)
+    built_by = previous.get("build_environment", {}).get("toolchain") if isinstance(previous, dict) else None
+    if compiler["toolchain"] != built_by:
+        raise Refused("release test compiler differs from the build's recorded toolchain")
+    records = []
+    for argv in TEST_COMMANDS:
+        began = time.monotonic()
+        record = _run(list(argv), cwd=checkout, env=env, run=run, merge_stderr=True)
+        record["duration_seconds"] = round(time.monotonic() - began, 3)
+        records.append(record)
+    raw = _raw(report, "test", {"commands": records})
+    _recheck_fixture_corpus(corpus, "during")
+    corpus["verified_after_run"] = True
+    commands = []
+    for record in records:
+        if record["state"] not in {"ok", "exit_failed"}:
+            raise Refused(f"cargo test command {record['state']}")
+        counts = parse_test_output(record["stdout"])
+        if (record["exit"] == 0) != (counts["failed"] == 0):
+            raise Refused("cargo test exit status disagrees with its parsed results")
+        commands.append({"argv": record["argv"], "exit": record["exit"],
+                         "duration_seconds": float(record["duration_seconds"]), **counts})
+    totals = {key: sum(row[key] for row in commands)
+              for key in ("passed", "failed", "ignored", "measured", "filtered_out", "targets")}
+    # Tests may not rewrite the generated inputs whose identity they claim.
+    _validate_artifacts(checkout, generated)
+    passed = totals["failed"] == 0 and totals["passed"] > 0 and all(row["exit"] == 0 for row in commands)
+    result = {**_base("test", args, checkout, identity), "state": "passed" if passed else "failed",
+              "denominator": totals["passed"] + totals["failed"], "generated_artifacts": generated,
+              "raw_report": raw,
+              "test_suite": {"commands": commands, "totals": totals, "log": raw,
+                             "target_directory": str(suite_target), "features": "all", "scope": TEST_SCOPE,
+                             "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus,
+                             "cargo_config": cargo_config, "compiler": compiler}}
+    _atomic(report, result)
+    return result
 
 
 def _fixtures(manifest: Path, target: Path, *, kind: str, subtarget: str) -> tuple[list[dict[str, Any]], str, Path]:
@@ -772,7 +1278,7 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest="stage", required=True)
-    for name in ("generate", "build", "read", "write"):
+    for name in ("generate", "build", "test", "read", "write"):
         command = sub.add_parser(name)
         for option in ("checkout", "target", "report", "release", "source-commit", "native-source", "native-lib", "native-perl"):
             command.add_argument("--" + option, required=True)
@@ -783,7 +1289,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = write(args) if args.stage == "write" else globals()[args.stage](args)
+        stage = {"generate": generate, "build": build, "test": run_release_tests,
+                 "read": read, "write": write}[args.stage]
+        result = stage(args)
         print(json.dumps(result, sort_keys=True)); return 0 if result["state"] == "passed" else 2
     except (Refused, OSError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr); return 2

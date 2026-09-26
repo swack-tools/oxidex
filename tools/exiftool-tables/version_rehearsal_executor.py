@@ -11,7 +11,7 @@ It deliberately has no promotion action.
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
+from contextlib import contextmanager
 import ctypes
 import fcntl
 import hashlib
@@ -34,7 +34,8 @@ import artifacts
 SCHEMA = 1
 KIND = "oxidex_exiftool_version_rehearsal_execution"
 RESULT_KIND = "oxidex_version_rehearsal_stage_result"
-STAGES = ("native", "generate", "build", "read", "write")
+STAGES = ("native", "generate", "build", "test", "read", "write")
+OPTIONAL_COMMANDS = ("test", "write")
 REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
 COMMAND_TIMEOUT_SECONDS = 3600
@@ -51,6 +52,14 @@ _READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 
 class Refused(ValueError):
     """The requested execution cannot be attributed safely."""
+
+
+class LockRetained(Refused):
+    """A host lock was deliberately left held because an owned child may be live."""
+
+    def __init__(self, message: str, survivors: list[dict[str, Any]]):
+        super().__init__(message)
+        self.survivors = survivors
 
 
 class OwnedChildCleanupIncomplete(OSError):
@@ -143,7 +152,7 @@ def _config(value: Any, releases: list[str], *, allow_legacy_recovery: bool = Fa
     if not isinstance(commands, dict) or any(stage not in commands for stage in REQUIRED_COMMANDS):
         raise Refused("generate, build, and read commands are required")
     for stage, spec in commands.items():
-        if stage not in {"generate", "build", "read", "write"}:
+        if stage not in {"generate", "build", "test", "read", "write"}:
             raise Refused("execution config has an unknown command stage")
         if not isinstance(spec, dict) or not isinstance(spec.get("argv"), list) or not spec["argv"]:
             raise Refused(f"{stage} command requires a nonempty argv array")
@@ -263,6 +272,7 @@ def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], conf
             "selected_releases": releases,
             "untested_eligible_releases": plan["untested_eligible_releases"],
             "write_acceptance": "pending_or_unsupported",
+            "release_tests": "pending_or_unsupported",
             "parity": "unproven_until_each_release_has_passed_read_and_write_reports",
         },
     }
@@ -461,6 +471,43 @@ def _require_native_identity(result: Mapping[str, Any], release: str, native: tu
         raise Refused("stage result is not bound to the selected native identity")
 
 
+def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
+    """A release test stage passes only with counted, zero-failure results."""
+    suite = result.get("test_suite")
+    keys = ("passed", "failed", "ignored", "measured", "filtered_out", "targets")
+    totals = suite.get("totals") if isinstance(suite, dict) else None
+    commands = suite.get("commands") if isinstance(suite, dict) else None
+    if (not isinstance(totals, dict) or not isinstance(commands, list) or not commands
+            or any(type(totals.get(key)) is not int or totals[key] < 0 for key in keys)
+            or totals["failed"] != 0 or totals["passed"] < 1 or totals["targets"] < 1
+            or result.get("denominator") != totals["passed"] + totals["failed"]
+            or suite.get("log") != result.get("raw_report")
+            or any(not isinstance(row, dict) or row.get("exit") != 0
+                   or any(type(row.get(key)) is not int or row[key] < 0 for key in keys)
+                   for row in commands)
+            or any(totals[key] != sum(row[key] for row in commands) for key in keys)):
+        raise Refused("test result lacks a counted zero-failure release test suite")
+    oracle = suite.get("exiftool_oracle")
+    native = result.get("native_identity")
+    try:
+        same_native = (oracle["tree_realpath"] == native["source"]["path"]
+                       and oracle["lib"]["exiftool_pm_sha256"] == native["lib"]["exiftool_pm_sha256"]
+                       and oracle["perl"] == native["perl"])
+    except (KeyError, TypeError):
+        same_native = False
+    if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
+            or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True
+            or not same_native):
+        raise Refused("test result was not graded by the selected release's capable ExifTool")
+    corpus = suite.get("fixture_corpus")
+    manifest = corpus.get("manifest") if isinstance(corpus, dict) else None
+    if (not isinstance(manifest, dict) or type(manifest.get("file_count")) is not int or manifest["file_count"] < 1
+            or not isinstance(manifest.get("sha256"), str)
+            or __import__("re").fullmatch(r"[0-9a-f]{64}", manifest["sha256"]) is None
+            or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True):
+        raise Refused("test result lacks a verified fixture corpus held unchanged across the run")
+
+
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
                   checkout: Path | None = None, source_commit: str | None = None,
                   source_tree: Mapping[str, Any] | None = None, target: Path | None = None,
@@ -498,6 +545,8 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             _require_binary_proof(result, target, "writer_binary")
         if stage in {"read", "write"}:
             _require_fixture_proof(result)
+        if stage == "test":
+            _require_test_suite_proof(result)
         if stage == "write":
             mode = result.get("write_mode")
             if (not isinstance(mode, dict) or mode.get("kind") != "selected-release-live-native"
@@ -590,6 +639,319 @@ def _descendants(pid: int, *, proc_root: Path = Path("/proc")) -> list[int]:
                 found.append(child)
                 pending.append(child)
     return found
+
+
+class _OwnedChildren:
+    """Every child spawned with inherited host-lock descriptors, until proven gone.
+
+    Children run with ``close_fds=False`` so a live child keeps the host lock's
+    open file description referenced. flock(2) is per description: an explicit
+    LOCK_UN by the owner would release it for the child too, while closing only
+    the owner's descriptor would not. A lock owner therefore unlocks only once
+    each registered child has been reaped and its process group is empty.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.children: dict[int, subprocess.Popen[Any]] = {}
+        self.spawns_in_flight = 0
+
+
+_OWNED = _OwnedChildren()
+# Lock streams deliberately neither unlocked nor closed because an owned
+# child could not be proven gone; see release_retained_locks().
+_RETAINED_LOCKS: list[Any] = []
+
+
+def _spawn(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+    """Popen that registers the child before any interruption can lose its PID."""
+    owned = _OWNED
+    with owned.lock:
+        owned.spawns_in_flight += 1
+    try:
+        child = subprocess.Popen(argv, **kwargs)
+    except OSError:
+        with owned.lock:
+            owned.spawns_in_flight -= 1
+        raise
+    # Any other interruption above deliberately leaves the in-flight count
+    # raised: a child may exist whose PID was never observed, so every later
+    # lock release in this process must fail closed.
+    with owned.lock:
+        owned.children[child.pid] = child
+        owned.spawns_in_flight -= 1
+    return child
+
+
+# Process-group membership is read from the kernel, never from `ps` columns
+# (a `ps` column silently wrong on one platform is AGENTS.md incident #9).
+# Only macOS offers a trustworthy view here. On Linux /proc/<pid>/stat shows
+# only a main thread's state (a worker thread sharing the lock descriptor can
+# outlive a `Z` main thread) and a /proc walk is not a snapshot, so every
+# other platform stays fail closed: a group that still answers is unproven.
+_DARWIN_PROC_PGRP_ONLY = 2          # proc_listpids(PROC_PGRP_ONLY, pgid, ...)
+_DARWIN_KERN_PROC = (1, 14)         # CTL_KERN, KERN_PROC
+_DARWIN_KERN_PROC_PID, _DARWIN_KERN_PROC_PGRP = 1, 2
+_DARWIN_KINFO_PROC_SIZE = 648       # sizeof(struct kinfo_proc), 64-bit
+_DARWIN_P_STAT_OFFSET, _DARWIN_P_PID_OFFSET = 36, 40  # extern_proc.p_stat / p_pid
+_DARWIN_SRUN, _DARWIN_SZOMB = 2, 5
+_DARWIN_LIBRARIES: tuple[Any, Any] | None = None
+
+
+def _darwin_libraries() -> tuple[Any, Any]:
+    """libc and libproc with explicit prototypes (no default int conversions)."""
+    global _DARWIN_LIBRARIES
+    if _DARWIN_LIBRARIES is None:
+        import ctypes
+        import ctypes.util
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        libc.sysctl.restype = ctypes.c_int
+        library = ctypes.util.find_library("proc")
+        if library is None:
+            raise OSError("libproc is unavailable")
+        libproc = ctypes.CDLL(library, use_errno=True)
+        libproc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        libproc.proc_listpids.restype = ctypes.c_int
+        _DARWIN_LIBRARIES = (libc, libproc)
+    return _DARWIN_LIBRARIES
+
+
+def _darwin_pgrp_listpids(pgid: int) -> list[int] | None:
+    """libproc's view of a group's members; None when it cannot be read."""
+    try:
+        import ctypes
+        _libc, libproc = _darwin_libraries()
+        needed = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, None, 0)
+        if needed < 0:
+            return None
+        buffer = (ctypes.c_int * (needed // ctypes.sizeof(ctypes.c_int) + 64))()
+        filled = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, buffer, ctypes.sizeof(buffer))
+        if filled < 0 or filled >= ctypes.sizeof(buffer):
+            return None  # an error, or possibly truncated: never guess
+        return [pid for pid in buffer[: filled // ctypes.sizeof(ctypes.c_int)] if pid > 0]
+    except (OSError, AttributeError, ctypes.ArgumentError):
+        return None
+
+
+def _darwin_kinfo(mib: list[int]) -> list[tuple[int, int]] | None:
+    """(pid, p_stat) for each kinfo_proc a KERN_PROC sysctl returns."""
+    try:
+        import ctypes
+        libc, _libproc = _darwin_libraries()
+        names = (ctypes.c_int * len(mib))(*mib)
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(names, len(mib), None, ctypes.byref(size), None, 0) != 0:
+            return None
+        size = ctypes.c_size_t(size.value + _DARWIN_KINFO_PROC_SIZE * 16)
+        buffer = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(names, len(mib), buffer, ctypes.byref(size), None, 0) != 0:
+            return None
+    except (OSError, AttributeError, ctypes.ArgumentError):
+        return None
+    raw = buffer.raw[: size.value]
+    if len(raw) % _DARWIN_KINFO_PROC_SIZE:
+        return None
+    return [(int.from_bytes(raw[start + _DARWIN_P_PID_OFFSET:start + _DARWIN_P_PID_OFFSET + 4], sys.byteorder,
+                            signed=True), raw[start + _DARWIN_P_STAT_OFFSET])
+            for start in range(0, len(raw), _DARWIN_KINFO_PROC_SIZE)]
+
+
+def _darwin_group_members(pgid: int) -> list[tuple[int, str]] | None:
+    """Members only when libproc and sysctl agree and the struct layout checks."""
+    # Validate the kinfo_proc layout against this running process first.
+    me = os.getpid()
+    if _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PID, me]) != [(me, _DARWIN_SRUN)]:
+        return None
+    listed = _darwin_pgrp_listpids(pgid)
+    kinfo = _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PGRP, pgid])
+    if listed is None or kinfo is None or sorted(listed) != sorted(pid for pid, _stat in kinfo):
+        return None
+    return [(pid, "zombie" if stat == _DARWIN_SZOMB else "live") for pid, stat in kinfo]
+
+
+def _group_member_states(pgid: int) -> list[tuple[int, str]] | None:
+    """Every member of a process group as (pid, zombie|live); None if unknowable here.
+
+    macOS only. Every other platform returns None, which keeps the group
+    unproven and the host lock held.
+    """
+    if sys.platform == "darwin":
+        return _darwin_group_members(pgid)
+    return None
+
+
+def _zombie_only_group(pgid: int) -> bool:
+    """True only when every member is verified to be a zombie, twice over.
+
+    A zombie has already closed every descriptor, so a group holding only
+    zombies cannot keep the host lock's file description referenced. The
+    enumeration is repeated and must return the identical all-zombie member
+    set, closing the window in which a member forks a live child into the
+    group between the two kernel views. Any enumeration failure, an empty
+    answer, a live member, a changed membership or a non-macOS platform
+    leaves the group unproven.
+    """
+    first = _group_member_states(pgid)
+    if not first or any(state != "zombie" for _pid, state in first):
+        return False
+    second = _group_member_states(pgid)
+    return second is not None and sorted(second) == sorted(first)
+
+
+def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
+    """None only when the child is reaped and its whole process group is gone.
+
+    A group that still answers ``killpg(pgid, 0)`` (or refuses it with EPERM,
+    as macOS does for a zombie-only group) counts as gone only when every
+    member is verified to be a zombie.
+    """
+    try:
+        if child.poll() is None:
+            return "running"
+    except OSError as exc:
+        return f"exit status cannot be observed: {exc}"
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as exc:
+        if _zombie_only_group(child.pid):
+            return None
+        return f"exited; process group {child.pid} cannot be inspected: {exc}"
+    if _zombie_only_group(child.pid):
+        return None
+    return f"exited; process group {child.pid} still has live members"
+
+
+def _settle(child: subprocess.Popen[Any]) -> None:
+    owned = _OWNED
+    with owned.lock:
+        if owned.children.get(child.pid) is child and _unproven_state(child) is None:
+            del owned.children[child.pid]
+
+
+def unproven_children() -> list[dict[str, Any]]:
+    """Owned children not proven gone; proven ones are pruned."""
+    owned = _OWNED
+    survivors: list[dict[str, Any]] = []
+    with owned.lock:
+        for pid, child in list(owned.children.items()):
+            state = _unproven_state(child)
+            if state is None:
+                del owned.children[pid]
+            else:
+                survivors.append({"pid": pid, "pgid": pid, "state": state})
+        if owned.spawns_in_flight:
+            survivors.append({"pid": None, "pgid": None,
+                              "state": "spawn interrupted before its PID was recorded"})
+    return survivors
+
+
+def describe_survivors(survivors: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"PID {item['pid']} (process group {item['pgid']}, {item['state']})" if item["pid"] is not None
+        else f"PID unknown ({item['state']})"
+        for item in survivors
+    )
+
+
+def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[dict[str, Any]]:
+    """Unlock only when every owned child is proven gone; otherwise retain.
+
+    Retention means no LOCK_UN and no close: the stream is parked for the rest
+    of this process so the lock stays held even if a surviving child has
+    closed its inherited copy. Returns the survivors (empty after release).
+    """
+    if capability is not None:
+        capability.deactivate()
+    survivors = unproven_children()
+    # A reaped child whose group still answers (macOS returns EPERM while the
+    # group's last members are zombies awaiting reaping by init) gets a short,
+    # bounded chance to be proven gone. A running or unknown child gets none.
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while (survivors and time.monotonic() < deadline
+           and all(item["pid"] is not None and item["state"].startswith("exited") for item in survivors)):
+        time.sleep(0.02)
+        survivors = unproven_children()
+    if survivors:
+        _RETAINED_LOCKS.append(stream)
+        return survivors
+    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return []
+
+
+def release_retained_locks() -> list[dict[str, Any]]:
+    """Release retained locks once every owned child is proven gone."""
+    survivors = unproven_children()
+    if survivors:
+        return survivors
+    while _RETAINED_LOCKS:
+        stream = _RETAINED_LOCKS.pop()
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+    return []
+
+
+def retained_lock_message(path: Path, survivors: list[dict[str, Any]]) -> str:
+    return (f"{path} is intentionally still held (no unlock, descriptor retained) because owned "
+            f"child process(es) could not be proven gone: {describe_survivors(survivors)}. The lock is "
+            "released only when they exit; inspect or terminate them, then recover the execution "
+            "journal before retrying")
+
+
+def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_output: bool = False,
+                 started: Callable[[int, int], None] | None = None,
+                 **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    """subprocess.run for an owned child with interrupt-safe creation and verified cleanup.
+
+    The child stays registered in ``_OWNED`` until it is proven gone. Cleanup
+    that cannot be verified raises ``OwnedChildCleanupIncomplete`` so callers
+    keep the child's journal identity and the lock owner retains the lock.
+    """
+    if capture_output:
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    owner: list[subprocess.Popen[Any] | None] = [None]
+    try:
+        child = _spawn_with_deferred_sigint(owner, argv, **kwargs)
+        if started is not None:
+            try:
+                started(child.pid, child.pid)
+            except BaseException as persistence:
+                _cleanup_owned_child_after_interrupt(child, persistence)
+                if getattr(persistence, "_oxidex_owned_child_cleanup", None) != "verified":
+                    if isinstance(persistence, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    raise OwnedChildCleanupIncomplete(
+                        "owned child cleanup remains incomplete after child journal failure",
+                    ) from persistence
+                raise
+        try:
+            stdout, stderr = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                stdout, stderr = _bounded_timeout_cleanup(child)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as cleanup:
+                stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"owned child timeout cleanup warning: {cleanup}")
+            exc.output, exc.stderr = stdout, stderr
+            raise
+        _require_ownership_release(child, "successful command completion")
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+    except (KeyboardInterrupt, SystemExit) as interruption:
+        if (owner[0] is not None
+                and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
+            _cleanup_owned_child_after_interrupt(owner[0], interruption)
+        raise
+    finally:
+        if owner[0] is not None:
+            _settle(owner[0])
 
 
 def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
@@ -745,12 +1107,18 @@ def _group_live(pgid: int, *, proc_root: Path = Path("/proc")) -> bool:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # macOS refuses signal-zero to a group whose remaining members are
+        # zombies awaiting reaping; only the kernel member view may say so.
+        if _zombie_only_group(pgid):
+            return False
+        raise
     if sys.platform.startswith("linux"):
         states = _procfs_group_states(pgid, proc_root)
         if not states:
             return True
         return any(state not in {"Z", "X", "x"} for state in states)
-    return True
+    return not _zombie_only_group(pgid)
 
 
 def _refresh_owned_descendants(child: subprocess.Popen[str]) -> dict[int, str]:
@@ -803,6 +1171,10 @@ def _signal_owned_group(child: subprocess.Popen[str], signal_value: signal.Signa
         os.killpg(child.pid, signal_value)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # A zombie-only group cannot be signalled on macOS and needs no signal.
+        if not _zombie_only_group(child.pid):
+            raise
 
 
 def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
@@ -1030,7 +1402,7 @@ def _spawn_with_deferred_sigint(
             raise OSError("owned child creation requires inherited file descriptors")
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
-        child = subprocess.Popen(argv, **kwargs)
+        child = _spawn(argv, **kwargs)
         setattr(child, "_oxidex_ownership_read_fd", read_fd)
         owner[0] = child
     except BaseException as failure:
@@ -1066,6 +1438,8 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
     The production branch deliberately leaves inherited descriptors open. The
     host-lock descriptor is inheritable, so a supervisor dying while this child
     is live cannot let another rehearsal acquire the shared lock prematurely.
+    The child stays registered in ``_OWNED`` until it is proven gone, so the
+    lock owner never explicitly unlocks while it may still be live.
     """
     if run is subprocess.run:
         owner: list[subprocess.Popen[str] | None] = [None]
@@ -1094,12 +1468,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                         stdout = partial_stdout
                     if not stderr:
                         stderr = partial_stderr
+                _settle(child)
                 record = {"argv": argv, "exit": None, "stdout": stdout,
                           "stderr": stderr + str(exc), "state": "timeout",
                           "pid": child.pid, "pgid": child.pid}
                 if cleanup_error is not None:
                     record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
                 return record
+            _settle(child)
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
             _require_ownership_release(child, "successful command completion")
@@ -1121,6 +1497,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             except OSError as cleanup:
                 stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
                 cleanup_error = str(cleanup)
+            _settle(child)
             record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
                       "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
             if cleanup_error is not None:
@@ -1186,9 +1563,10 @@ def _native_identity(materialization: Mapping[str, Any], source_root: Path, rele
 
 def _verify_checkout_head(checkout: Path, expected_commit: str,
                           run: Callable[..., subprocess.CompletedProcess[str]]) -> None:
+    runner = _tracked_run if run is subprocess.run else run
     try:
-        result = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
-                     text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+        result = runner(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
+                        text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused("cannot verify owned checkout HEAD") from exc
     if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
@@ -1199,14 +1577,15 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                native: tuple[Path, Path, Path], perl: str, native_probe: dict[str, Any], config: dict[str, Any],
                run: Callable[..., subprocess.CompletedProcess[str]],
                stage_guard: Callable[[str, str, str], None] | None = None) -> bool:
-    state = journal["releases"][release]["stages"][stage]
+    # Journals initialized before the release-test stage existed lack its slot.
+    state = journal["releases"][release]["stages"].setdefault(stage, "pending")
     if state == "passed" or state == "unsupported":
         return True
     if state != "pending":
         raise Refused(f"{release} {stage} is not safely runnable after interruption or failure")
-    if stage == "write" and stage not in config["commands"]:
+    if stage in OPTIONAL_COMMANDS and stage not in config["commands"]:
         journal["releases"][release]["stages"][stage] = "unsupported"
-        journal["releases"][release]["reports"][stage] = {"reason": "no generated write acceptance command configured"}
+        journal["releases"][release]["reports"][stage] = {"reason": f"no {stage} command configured"}
         _event(journal, "stage_unsupported", release=release, stage=stage)
         _store_journal(run_dir, journal)
         return True
@@ -1323,49 +1702,12 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
-        timeout = kwargs.pop("timeout", None)
         kwargs.pop("capture_output", None)
-        owner: list[subprocess.Popen[str] | None] = [None]
-        try:
-            child = _spawn_with_deferred_sigint(
-                owner, argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True, close_fds=False, **kwargs,
-            )
-            journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
-            try:
-                _store_journal(run_dir, journal)
-            except BaseException as persistence:
-                _cleanup_owned_child_after_interrupt(child, persistence)
-                if getattr(persistence, "_oxidex_owned_child_cleanup", None) != "verified":
-                    if isinstance(persistence, KeyboardInterrupt):
-                        raise
-                    raise OwnedChildCleanupIncomplete(
-                        "owned child cleanup remains incomplete after native child journal failure",
-                    ) from persistence
-                raise
-            try:
-                stdout, stderr = child.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired as exc:
-                try:
-                    stdout, stderr = _bounded_timeout_cleanup(child)
-                except KeyboardInterrupt:
-                    raise
-                except BaseException as cleanup:
-                    stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
-                    if hasattr(exc, "add_note"):
-                        exc.add_note(f"native timeout cleanup warning: {cleanup}")
-                exc.output, exc.stderr = stdout, stderr
-                raise
-        except KeyboardInterrupt as interruption:
-            if (owner[0] is not None
-                    and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
-                _cleanup_owned_child_after_interrupt(owner[0], interruption)
-            raise
-        child = owner[0]
-        if child is None:
-            raise OSError("native child creation did not return an owned process")
-        _require_ownership_release(child, "successful native command completion")
-        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+        def started(pid: int, pgid: int) -> None:
+            journal["active"]["child"] = {"pid": pid, "pgid": pgid}
+            _store_journal(run_dir, journal)
+        return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True, close_fds=False, started=started, **kwargs)
     try:
         if stage_guard is not None:
             stage_guard(release, "native", "before")
@@ -1397,44 +1739,108 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     return report
 
 
+class _HeldHostLock:
+    """Borrow an owner-held flock without ever acquiring an arbitrary raw FD."""
+
+    def __init__(self, path: Path, stream: Any):
+        raise Refused("host lock capability must be issued by lock acquisition")
+
+    @classmethod
+    def acquire(cls, path: Path, stream: Any) -> "_HeldHostLock":
+        """Issue a capability only after this stream acquires the configured flock."""
+        path = path.absolute()
+        if stream.closed or path.is_symlink() or not path.is_file():
+            raise Refused("host lock is not an open configured regular file")
+        try:
+            held = os.fstat(stream.fileno())
+            current = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise Refused("host lock is not an open configured regular file") from exc
+        if (not __import__("stat").S_ISREG(current.st_mode)
+                or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+            raise Refused("host lock stream differs from configured lease")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            current = os.stat(path, follow_symlinks=False)
+            if (path.is_symlink() or not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("host lock changed during acquisition")
+        except BaseException:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            raise
+        self = object.__new__(cls)
+        self.path = path.absolute()
+        self.stream = stream
+        self.owner_pid = os.getpid()
+        self.active = True
+        self._borrow_lock = threading.Lock()
+        return self
+
+    @contextmanager
+    def borrow(self, configured: Path):
+        configured = configured.absolute()
+        with self._borrow_lock:
+            if not self.active or self.owner_pid != os.getpid() or self.stream.closed:
+                raise Refused("external host lock is not held by a live owner")
+            if configured.is_symlink() or not configured.is_file() or configured != self.path:
+                raise Refused("external host lock differs from configured lease")
+            try:
+                held = os.fstat(self.stream.fileno())
+                current = os.stat(configured, follow_symlinks=False)
+            except OSError as exc:
+                raise Refused("external host lock is not held by a live owner") from exc
+            if (not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("external host lock differs from configured lease")
+            yield
+
+    def deactivate(self) -> None:
+        # An owner cannot release its flock until every in-process borrower
+        # has left the critical section.
+        with self._borrow_lock:
+            self.active = False
+
+
 class _HostLock:
-    def __init__(self, path: Path): self.path, self.file = path, None
+    def __init__(self, path: Path):
+        self.path, self.file, self.capability = path, None, None
     def __enter__(self):
         if self.path.is_symlink():
             raise Refused("version rehearsal host lock must not be a symbolic link")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open("a+")
         os.set_inheritable(self.file.fileno(), True)
-        try: fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc: self.file.close(); raise Refused("version rehearsal host lock is already held") from exc
+        try:
+            self.capability = _HeldHostLock.acquire(self.path, self.file)
+        except BlockingIOError as exc:
+            self.file.close()
+            raise Refused("version rehearsal host lock is already held") from exc
+        except BaseException:
+            self.file.close()
+            raise
         return self
     def __exit__(self, *_):
-        if self.file: fcntl.flock(self.file.fileno(), fcntl.LOCK_UN); self.file.close()
+        if self.file:
+            stream, self.file = self.file, None
+            survivors = release_or_retain(stream, self.capability)
+            if survivors:
+                raise LockRetained("version rehearsal host lock "
+                                   + retained_lock_message(self.path, survivors), survivors)
+            stream.close()
 
 
-def _external_host_lock(config: Mapping[str, Any], descriptor: int | None):
+def _external_host_lock(config: Mapping[str, Any], descriptor: _HeldHostLock | None):
     if descriptor is None:
         return _HostLock(Path(config["host_lock"]))
-    if type(descriptor) is not int or descriptor < 0:
-        raise Refused("external host lock descriptor is malformed")
-    try:
-        held = os.fstat(descriptor)
-        configured = os.stat(config["host_lock"], follow_symlinks=False)
-    except (OSError, BlockingIOError) as exc:
-        raise Refused("external host lock descriptor is not a held configured lease") from exc
-    if not __import__("stat").S_ISREG(configured.st_mode) or (held.st_dev, held.st_ino) != (configured.st_dev, configured.st_ino):
-        raise Refused("external host lock descriptor differs from configured lease")
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, BlockingIOError) as exc:
-        raise Refused("external host lock descriptor is not held exclusively") from exc
-    return nullcontext()
+    if not isinstance(descriptor, _HeldHostLock):
+        raise Refused("external host lock is not held by a live owner")
+    return descriptor.borrow(Path(config["host_lock"]))
 
 
 def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: Path, *,
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
             checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout,
-            host_lock_fd: int | None = None,
+            host_lock_fd: _HeldHostLock | None = None,
             stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
     journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
@@ -1475,7 +1881,7 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run,
                                      stage_guard)
                 if native is None: return journal
-                for stage in ("generate", "build", "read", "write"):
+                for stage in ("generate", "build", "test", "read", "write"):
                     if not _run_stage(run_dir, journal, release, stage, owned, target, _native_identity(materialization, source_root, release),
                                       config["perls"][release], native, config, run, stage_guard): return journal
                 statuses = journal["releases"][release]["stages"]
@@ -1500,6 +1906,8 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         journal["phase"] = "complete"
         journal["scope"]["write_acceptance"] = "unsupported_for_one_or_more_releases" if any(
             row["stages"]["write"] == "unsupported" for row in journal["releases"].values()) else "passed_per_release"
+        journal["scope"]["release_tests"] = "unsupported_for_one_or_more_releases" if any(
+            row["stages"].get("test") != "passed" for row in journal["releases"].values()) else "passed_per_release"
         journal["scope"]["parity"] = "unproven_without_all_per-release_read_and_write_acceptance" if any(
             row["stages"]["write"] != "passed" for row in journal["releases"].values()) else "per-version-read-write-rehearsed; no-promotion"
         _event(journal, "execution_complete", promotion="forbidden")
@@ -1508,14 +1916,24 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
 
 
 def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
-            host_lock_fd: int | None = None) -> dict[str, Any]:
+            host_lock_fd: _HeldHostLock | None = None) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
     journal, _, config = _load_journal(
         run_dir, archive_cache, source_root, allow_legacy_recovery=True,
     )
     with _external_host_lock(config, host_lock_fd):
-        if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
+        if journal.get("phase") != "running":
             raise Refused("only a running execution can be recovered as interrupted")
+        if journal.get("active") is None:
+            # Interrupted between stages (after checkout_completed or
+            # stage_passed, before the next stage started): nothing was in
+            # flight and no child was spawned, so only the phase changes.
+            journal["phase"] = "interrupted"
+            _event(journal, "interrupted_between_stages")
+            _store_journal(run_dir, journal)
+            return journal
+        if not isinstance(journal.get("active"), dict):
+            raise Refused("running execution journal has a malformed active stage")
         active = journal["active"]
         child = active.get("child")
         if isinstance(child, dict):

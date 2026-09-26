@@ -11,10 +11,11 @@ use crate::core::formatters::composite_image_exposure_times::format_composite_im
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_conversion::{
-    apply_tile_offsets_value_conv, exif_raw_conv_drops_entry, gps_coordinate_degrees,
+    ExifMainResidualPort, apply_tile_offsets_value_conv, exif_main_entry_forms,
+    exif_main_residual_port, exif_raw_conv_drops_entry, gps_coordinate_degrees,
     raw_bytes_to_tag_value,
 };
-use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY, ValueChannel};
 #[cfg(test)]
 use crate::exiftool_tables::engine_reports;
 use crate::exiftool_tables::session::{MemberVal, Session};
@@ -24,7 +25,7 @@ use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
     ByteOrder, find_entry_position_at, ifd_entry_count, parse_ifd,
 };
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
@@ -881,6 +882,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
+        let opcode_residual = matches!(*tag_id, 0xC740 | 0xC741 | 0xC74E);
         if let Some(engine) = engine.as_deref_mut() {
             match engine.route_entry(
                 entry_index,
@@ -890,8 +892,9 @@ fn process_tiff_ifd_tags_indexed<'a>(
                 exif_dir_engine::Owner::Silent,
                 metadata,
                 |name| format!("{ifd_name}:{name}"),
-                |_, _| true,
+                |_, _| !opcode_residual,
             ) {
+                exif_dir_engine::Owner::Engine if opcode_residual => {}
                 exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
                 exif_dir_engine::Owner::Hand => {}
             }
@@ -912,7 +915,10 @@ fn process_tiff_ifd_tags_indexed<'a>(
         // MakerNote tables whose values are not ColorMap payloads.
         let tag_value = if tag_name.rsplit(':').next() == Some("ColorMap") {
             TagValue::Binary(bytes.to_vec())
-        } else if tag_name.rsplit(':').next() == Some("CompositeImageExposureTimes") {
+        } else if tag_name.rsplit(':').next() == Some("CompositeImageExposureTimes")
+            && exif_main_residual_port(*tag_id)
+                == Some(ExifMainResidualPort::CompositeImageExposureTimes)
+        {
             // Exif.pm 0xa462 has no static byte layout for `find_table` to
             // carry: its RawConv (Exif.pm:3079-3095) is a Perl closure that
             // switches field type mid-buffer -- seven rational64u fields,
@@ -943,7 +949,36 @@ fn process_tiff_ifd_tags_indexed<'a>(
             (_, value) => value,
         };
         let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
-        metadata.insert(tag_name, tag_value);
+        if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                forms.print,
+                forms.value,
+                Some(forms.stored),
+                SHIM_DEFAULT_PRIORITY,
+                "",
+                Instance::default(),
+            );
+        } else if matches!(
+            tag_name.rsplit(':').next(),
+            Some("OpcodeList1" | "OpcodeList2" | "OpcodeList3")
+        ) {
+            // `%opcodeInfo` applies equally when a DNG stores an OpcodeList
+            // in IFD0: ConvertBinary retains the exact UNDEFINED payload and
+            // PrintOpcode supplies only its display form.
+            let binary = TagValue::Binary(bytes.to_vec());
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                tag_value,
+                binary.clone(),
+                Some(binary),
+                SHIM_DEFAULT_PRIORITY,
+                "",
+                Instance::default(),
+            );
+        } else {
+            metadata.insert(tag_name, tag_value);
+        }
     }
 
     // Parse GeoTiff keys if directory tag is present
@@ -1070,8 +1105,8 @@ mod document_name_tests {
 /// table does not report: the 0x927c MakerNote row and its dispatch, the
 /// `omitted` (withheld-conversion) ids, the offset class, `Unknown` and
 /// untranscribed ids -- plus [`EXIF_IFD_HAND_KEPT`]; `SubDirectory` edge ids
-/// report nothing when [`EXIF_IFD_SILENCE_EDGES`] is set (0xa005 stays the
-/// hand's pointer). An engine-reported entry whose absence is the engine's
+/// report nothing unless requested (decision D-3; 0xa005 stays the hand's
+/// pointer). An engine-reported entry whose absence is the engine's
 /// own (`DirEngineRows::undecoded`: a refusal ExifTool does not make) falls
 /// back to its hand arm; one ExifTool refuses too (an overlapping or
 /// out-of-block value, an entry past the warning budget) or whose value the
@@ -1200,26 +1235,18 @@ fn parse_exif_subifd_with_optional_options(
 /// STRING, and for a signed 0/-1 that string is `-0` (C's `%.10g` keeps the
 /// sign), which `"$val C"` interpolates verbatim -- `-0 C`, as pinned
 /// ExifTool prints it for OlympusOM-1.jpg and four other OM bodies. The
-/// compiled expression receives the number and prints it with `perl_num`,
-/// Perl's default stringification, which is `0` for a negative-zero NV
-/// (Perl's own `print -1e-300*1e-300` prints `0`); making `perl_num` print
-/// `-0` would break every computed zero instead. The hand arm prints the
-/// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
-/// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
+/// generated arm (`conv::exif_main::arm_9400` / `pc_9400`, #850) receives
+/// the value as a number, and Perl's default stringification of a
+/// negative-zero NV is `0` (Perl's own `print -1e-300*1e-300` prints `0`);
+/// printing `-0` there would break every computed zero instead. The hand arm
+/// prints the rational's sign (`exiftool_compat` rule 16b), so it keeps the
+/// row. Re-measured by the Task 18 knockout (0x9400 off this list, against
+/// the #850 arm): the engine prints `0 C` (`-n`: `0`) where pinned 13.59
+/// prints `-0 C` (`-0`) for OlympusE-M1MarkIII, OM-1, OM-1MarkII, OM-3 and
+/// OM-5 in combined-samples -- 5 files differing in both `-j` and
+/// `-j --no-print-conv` -- and `ambient_temperature_channels_match_the_hand_arm`
+/// fails. Sorted.
 const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
-
-/// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
-/// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
-/// sub-directory tag is processed, never reported unless requested by name
-/// or with the `MakerNotes` option). Decision D-3 of slice E-2, its own
-/// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
-/// ApplicationNotes, an XMP edge, was a census EXTRA).
-///
-/// A request-aware caller may restore the physical edge row by passing
-/// [`ReadOptions`]: ExifTool reports an edge requested by name (Exif.pm:7104
-/// `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default listing remains
-/// silent. The legacy wrapper intentionally supplies no request.
-const EXIF_IFD_SILENCE_EDGES: bool = true;
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
 /// family 1, as the hand arm (`lookup_tag_name(id, "ExifIFD")`) keys it.
@@ -1363,7 +1390,19 @@ fn parse_exif_directory_with_session(
             // of two priority-0 copies).
             let mut priority = SHIM_DEFAULT_PRIORITY;
             if let Some(engine) = engine.as_mut() {
-                let silence = EXIF_IFD_SILENCE_EDGES && *tag_id != INTEROPERABILITY_IFD_POINTER;
+                // `SubDirectory` edge ids (other than the 0xa005 pointer)
+                // report nothing in the ExifIFD, as in ExifTool
+                // (Exif.pm:7103-7104: a sub-directory tag is processed, never
+                // reported unless requested by name or with the `MakerNotes`
+                // option). Decision D-3 of slice E-2: before it the hand arm
+                // reported them (DJI_XT2.jpg's 0x02bc ApplicationNotes, an XMP
+                // edge, was a census EXTRA). A request-aware caller restores
+                // the physical edge row by passing [`ReadOptions`]: ExifTool
+                // reports an edge requested by name (Exif.pm:7104
+                // `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default
+                // listing remains silent. The legacy wrapper supplies no
+                // request.
+                let silence = *tag_id != INTEROPERABILITY_IFD_POINTER;
                 let requested_edge = options
                     .is_some_and(|options| requested_subdir_edge(engine.table(), *tag_id, options));
                 match engine.route_entry(
@@ -1426,12 +1465,43 @@ fn parse_exif_directory_with_session(
             // decode it.
             let tag_value = if let Some(value) = special_value {
                 value
-            } else if base_name == "CompositeImageExposureTimes" {
+            } else if base_name == "CompositeImageExposureTimes"
+                && exif_main_residual_port(*tag_id)
+                    == Some(ExifMainResidualPort::CompositeImageExposureTimes)
+            {
                 TagValue::String(format_composite_image_exposure_times(bytes, byte_order))
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            metadata.insert_occurrence(tag_name, tag_value, priority, "", Instance::default());
+            if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
+                metadata.insert_occurrence_with_forms(
+                    tag_name,
+                    forms.print,
+                    forms.value,
+                    Some(forms.stored),
+                    priority,
+                    "",
+                    Instance::default(),
+                );
+            } else if matches!(base_name, "OpcodeList1" | "OpcodeList2" | "OpcodeList3") {
+                // Exif.pm 13.59's `%opcodeInfo` declares `ConvertBinary => 1`:
+                // the UNDEFINED payload remains the ValueConv/stored form,
+                // while `PrintOpcode` supplies the display string. Keep both
+                // channels so `--no-print-conv` and copy/write paths never
+                // have to reconstruct bytes from the rendered opcode names.
+                let binary = TagValue::Binary(bytes.to_vec());
+                metadata.insert_occurrence_with_forms(
+                    tag_name,
+                    tag_value,
+                    binary.clone(),
+                    Some(binary),
+                    priority,
+                    "",
+                    Instance::default(),
+                );
+            } else {
+                metadata.insert_occurrence(tag_name, tag_value, priority, "", Instance::default());
+            }
         }
 
         // Engine rows whose entry the hand walk never reached (`parse_ifd`
@@ -3327,42 +3397,34 @@ pub(crate) fn parse_ifd1_with_session(
     // `enabled()` re-checks Gate A and the allowlist at runtime. Without the
     // `("Exif", "Main")` line in `enabled_ifd.rs` this is `None` and IFD1 is
     // read by the hand collector alone, as before the slice.
-    let Some(table) = find_ifd_table("Exif", "Main").filter(|table| table.enabled()) else {
-        let mut collected = MetadataMap::new();
-        collect_ifd1_thumbnail(
-            reader,
-            ifd1_offset,
-            byte_order,
-            tiff_base,
-            Ifd1Hand::Thumbnail,
-            None,
-            None,
-            metadata,
-            &mut collected,
-        );
-        metadata.merge(collected);
-        return;
-    };
+    let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
 
     // The engine reads `tiff_data`, the residual reads `reader`: for one
     // APP1 payload they are the same bytes at the same offsets.
     debug_assert!(
-        match (
-            usize::try_from(ifd1_offset)
-                .ok()
-                .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
-            reader.read(ifd1_offset, 2).ok(),
-        ) {
-            (Some(slice), Some(read)) => slice == read,
-            _ => true,
-        },
+        table.is_none()
+            || match (
+                usize::try_from(ifd1_offset)
+                    .ok()
+                    .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
+                reader.read(ifd1_offset, 2).ok(),
+            ) {
+                (Some(slice), Some(read)) => slice == read,
+                _ => true,
+            },
         "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
     );
 
-    let Some(physical_indices) = parse_ifd(reader, ifd1_offset, byte_order)
-        .ok()
-        .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries))
-    else {
+    // The table off, or an IFD1 whose entries do not parse or whose physical
+    // entry slots cannot be mapped: the hand collector alone reads IFD1
+    // ([`Ifd1Hand::Thumbnail`]). The entries are parsed only when the table
+    // is in force.
+    let (Some(table), Some(physical_indices)) = (
+        table,
+        table
+            .and_then(|_| parse_ifd(reader, ifd1_offset, byte_order).ok())
+            .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries)),
+    ) else {
         let mut collected = MetadataMap::new();
         collect_ifd1_thumbnail(
             reader,
@@ -4128,10 +4190,6 @@ fn parse_makernote_with_session(
     // self-describing (Nikon AFInfo's byte order, for one).
     let model = metadata.get_string("IFD0:Model").map(str::to_string);
 
-    if make.is_empty() {
-        return;
-    }
-
     // `MakerNoteGoogle` is selected by its `HDRP\x02`/`HDRP\x03` signature
     // (see `claimed_before_samsung1a`), not by a numeric TIFF directory. Its
     // encrypted/gzipped envelope is the one GCamera's XMP HDRP property uses,
@@ -4181,7 +4239,8 @@ fn parse_makernote_with_session(
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
-    if let Err(e) = dispatch_makernote_with_context_and_values_and_session(
+    let mut structured_rows = Vec::new();
+    if let Err(e) = dispatch_makernote_with_context_and_values_and_session_and_occurrences(
         &make,
         model.as_deref(),
         ctx,
@@ -4190,6 +4249,7 @@ fn parse_makernote_with_session(
         cond_ctx,
         &mut makernote_tags,
         &mut value_forms,
+        &mut structured_rows,
     ) {
         // A MakerNote that fails to parse must not fail the file -- ExifTool
         // warns and goes on reading the rest of it -- but it must not be
@@ -4206,7 +4266,17 @@ fn parse_makernote_with_session(
     // `Composite:PreviewImage` over whichever `PreviewImageStart`/
     // `PreviewImageLength` pair this MakerNote produced. See
     // `derive_makernote_preview_image`.
-    derive_makernote_preview_image(ctx, &makernote_tags, metadata);
+    let mut preview_tags = makernote_tags.clone();
+    extend_preview_dependencies(&mut preview_tags, &structured_rows);
+    derive_makernote_preview_image(ctx, &preview_tags, metadata);
+
+    // Structured generated rows already own their physical occurrences.
+    // Record them atomically, in traversal order, before the explicitly
+    // residual map rows below. The latter therefore cannot mutate a
+    // generated occurrence's stored/value/print triplet.
+    for (key, occurrence) in structured_rows {
+        metadata.record_occurrence(key, occurrence);
+    }
 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
@@ -4270,6 +4340,40 @@ fn parse_makernote_with_session(
     }
     for (tag_name, value) in value_forms {
         metadata.set_value_form(tag_name, value);
+    }
+}
+
+fn extend_preview_dependencies(
+    preview_tags: &mut HashMap<String, String>,
+    structured_rows: &[(String, crate::core::TagOccurrence)],
+) {
+    for (key, occurrence) in structured_rows {
+        let bare = bare_tag_name(key);
+        if matches!(
+            bare,
+            PREVIEW_IMAGE | PREVIEW_IMAGE_START | PREVIEW_IMAGE_LENGTH | PREVIEW_IMAGE_VALID
+        ) && let Some(value) =
+            preview_dependency_text(occurrence.project(ValueChannel::ValueConv).as_ref())
+        {
+            preview_tags.insert(key.clone(), value);
+        }
+    }
+}
+
+/// Convert only the scalar forms used by MakerNote preview dependencies.
+/// This is a private dependency view, not another metadata projection.
+fn preview_dependency_text(value: &TagValue) -> Option<String> {
+    match value {
+        TagValue::String(value) => Some(value.clone()),
+        TagValue::Integer(value) => Some(value.to_string()),
+        TagValue::Float(value) => Some(value.to_string()),
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } if *denominator != 0 => {
+            Some((f64::from(*numerator) / f64::from(*denominator)).to_string())
+        }
+        _ => None,
     }
 }
 
@@ -4683,6 +4787,388 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     let mut members = HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
     parse_makernote_with_session(ctx, byte_order, &mut session, &mut cond_ctx, metadata);
+}
+
+#[cfg(test)]
+mod makernote_structured_tests {
+    use super::*;
+    use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
+
+    fn olympus_duplicate_pressure_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+
+        // Olympus::Main at 12, pointing to CameraSettings at 40.
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&40u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(40, 0);
+
+        // Two physical 0x0900 ManometerPressure entries. Both must survive
+        // as independent canonical occurrences in traversal order.
+        note.extend_from_slice(&2u16.to_le_bytes());
+        for stored in [1013u16, 999u16] {
+            note.extend_from_slice(&0x0900u16.to_le_bytes());
+            note.extend_from_slice(&3u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&stored.to_le_bytes());
+            note.extend_from_slice(&[0, 0]);
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_generated_and_residual_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+
+        // Main: residual Quality, residual CameraType, then the generated
+        // CameraSettings edge. The delayed Quality conversion must observe
+        // the CameraType member while retaining this physical order.
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&0x0201u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&[0, 0]);
+        note.extend_from_slice(&0x0207u16.to_le_bytes());
+        note.extend_from_slice(&2u16.to_le_bytes());
+        note.extend_from_slice(&6u32.to_le_bytes());
+        note.extend_from_slice(&56u32.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&64u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(56, 0);
+        note.extend_from_slice(b"D4322\0");
+        note.resize(64, 0);
+
+        note.extend_from_slice(&2u16.to_le_bytes());
+        for stored in [1013u16, 999u16] {
+            note.extend_from_slice(&0x0900u16.to_le_bytes());
+            note.extend_from_slice(&3u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&stored.to_le_bytes());
+            note.extend_from_slice(&[0, 0]);
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_declined_then_reported_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&40u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(40, 0);
+
+        note.extend_from_slice(&2u16.to_le_bytes());
+        // The generated scalar conversion declines this array-shaped first
+        // occurrence. A later physical entry with the same source ID must
+        // still be visited and reported exactly once.
+        note.extend_from_slice(&0x0900u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&2u32.to_le_bytes());
+        note.extend_from_slice(&1013u16.to_le_bytes());
+        note.extend_from_slice(&999u16.to_le_bytes());
+        note.extend_from_slice(&0x0900u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&888u16.to_le_bytes());
+        note.extend_from_slice(&[0, 0]);
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_low_priority_shutter_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x1000u16.to_le_bytes());
+        note.extend_from_slice(&10u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&30u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.extend_from_slice(&1i32.to_le_bytes());
+        note.extend_from_slice(&3i32.to_le_bytes());
+        note
+    }
+
+    #[test]
+    fn signature_only_minolta2_routes_without_ifd0_make() {
+        const NOTE_OFFSET: usize = 96;
+        const PAYLOAD_OFFSET: usize = 32;
+        let payload = b"camera-parameters\0\xff";
+        for signature in [b"CAMER\0", b"MINOL\0"] {
+            let mut note = signature.to_vec();
+            note.extend_from_slice(&[0, 0]);
+            note.extend_from_slice(&1u16.to_le_bytes());
+            note.extend_from_slice(&0x2050u16.to_le_bytes());
+            note.extend_from_slice(&7u16.to_le_bytes());
+            note.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            note.extend_from_slice(&((NOTE_OFFSET + PAYLOAD_OFFSET) as u32).to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.resize(PAYLOAD_OFFSET, 0);
+            note.extend_from_slice(payload);
+
+            let mut tiff = vec![0; NOTE_OFFSET];
+            tiff.extend_from_slice(&note);
+            let ctx = MakerNoteContext::in_tiff(&tiff, NOTE_OFFSET, note.len(), 0);
+            let mut metadata = MetadataMap::new();
+            parse_makernote(&ctx, ByteOrder::BigEndian, &mut metadata);
+
+            let rows = metadata.occurrences_for("Olympus:CameraParameters");
+            assert_eq!(
+                rows.len(),
+                1,
+                "signature-only routing must not require Make"
+            );
+            assert_eq!(
+                rows[0].project(ValueChannel::Stored).as_ref(),
+                &TagValue::Binary(payload.to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn olympus_generated_forms_are_atomic_per_occurrence() {
+        let note = olympus_duplicate_pressure_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        let rows = metadata.occurrences_for("Olympus:ManometerPressure");
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            assert!(
+                rows.is_empty(),
+                "engine-off attribution must remove the owner"
+            );
+            return;
+        }
+
+        assert_eq!(rows.len(), 2, "one row per physical CameraSettings entry");
+        for (row, stored, value, print) in [
+            (&rows[0], 1013, 101.3, "101.3 kPa"),
+            (&rows[1], 999, 99.9, "99.9 kPa"),
+        ] {
+            assert_eq!(row.id, oxidex_tags::TagId::Numeric(0x0900));
+            assert_eq!(&*row.group0, "MakerNotes");
+            assert_eq!(&*row.group1, "Olympus");
+            assert_eq!(row.origin.module, Some("Olympus"));
+            assert_eq!(row.origin.table, Some("CameraSettings"));
+            assert_eq!(
+                row.project(ValueChannel::Stored).as_ref(),
+                &TagValue::Integer(stored)
+            );
+            assert_eq!(
+                row.project(ValueChannel::ValueConv).as_ref(),
+                &TagValue::Float(value)
+            );
+            assert_eq!(
+                row.project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string(print)
+            );
+            assert_eq!(row.priority, 1, "actual emitted priority must be ordinary");
+        }
+        assert_eq!(rows[0].order + 1, rows[1].order);
+        assert_eq!(
+            metadata.get_string("Olympus:ManometerPressure"),
+            Some("99.9 kPa"),
+            "equal-priority later physical occurrence wins"
+        );
+    }
+
+    #[test]
+    fn olympus_generated_owner_is_exact_once() {
+        let note = olympus_duplicate_pressure_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+        let count = metadata.occurrences_for("Olympus:ManometerPressure").len();
+        let expected = if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            0
+        } else {
+            2
+        };
+        assert_eq!(count, expected, "generated owner must be exact once");
+
+        let declined_note = olympus_declined_then_reported_note();
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let mut residual_tags = HashMap::new();
+        let mut residual_values = HashMap::new();
+        let mut structured = Vec::new();
+        dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+            "OLYMPUS",
+            None,
+            &MakerNoteContext::detached(&declined_note),
+            ByteOrder::LittleEndian,
+            &mut session,
+            &mut cond_ctx,
+            &mut residual_tags,
+            &mut residual_values,
+            &mut structured,
+        )
+        .expect("declined first occurrence does not abort the directory");
+        assert!(!residual_tags.contains_key("Olympus:ManometerPressure"));
+        assert!(!residual_values.contains_key("Olympus:ManometerPressure"));
+        let owned: Vec<_> = structured
+            .iter()
+            .filter(|(key, _)| key == "Olympus:ManometerPressure")
+            .collect();
+        let expected = if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            0
+        } else {
+            1
+        };
+        assert_eq!(owned.len(), expected);
+        if let Some((_, occurrence)) = owned.first() {
+            assert_eq!(
+                occurrence.project(ValueChannel::Stored).as_ref(),
+                &TagValue::Integer(888)
+            );
+            assert_eq!(
+                occurrence.project(ValueChannel::ValueConv).as_ref(),
+                &TagValue::Float(88.8)
+            );
+            assert_eq!(
+                occurrence.project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string("88.8 kPa")
+            );
+        }
+    }
+
+    #[test]
+    fn olympus_source_priority_zero_row_loses_to_existing_standard_occurrence() {
+        let note = olympus_low_priority_shutter_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        metadata.insert_occurrence(
+            "ExifIFD:ShutterSpeedValue",
+            TagValue::Float(2.0),
+            1,
+            "ExifIFD",
+            Instance::default(),
+        );
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            assert!(
+                metadata
+                    .occurrences_for("Olympus:ShutterSpeedValue")
+                    .is_empty()
+            );
+            return;
+        }
+
+        let olympus = metadata.occurrences_for("Olympus:ShutterSpeedValue");
+        assert_eq!(olympus.len(), 1, "one physical Olympus::Main 0x1000 row");
+        assert_eq!(olympus[0].id, oxidex_tags::TagId::Numeric(0x1000));
+        assert_eq!(olympus[0].origin.module, Some("Olympus"));
+        assert_eq!(olympus[0].origin.table, Some("Main"));
+        assert_eq!(olympus[0].priority, 0, "source Priority => 0");
+        assert_eq!(
+            olympus[0].project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_rational(1, 3)
+        );
+
+        let winner =
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "ShutterSpeedValue")
+                .expect("bare request sees both source-backed occurrences");
+        assert_eq!(&*winner.group1, "ExifIFD");
+        assert_eq!(winner.priority, 1);
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "ShutterSpeedValue")
+                .count(),
+            2,
+            "the losing Olympus occurrence remains retained"
+        );
+    }
+
+    #[test]
+    fn olympus_residual_camera_type_and_quality_follow_generated_rows() {
+        let note = olympus_generated_and_residual_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        assert_eq!(metadata.get_string("Olympus:CameraType"), Some("SP510UZ"));
+        assert_eq!(metadata.get_string("Olympus:Quality"), Some("HQ (Normal)"));
+        let generated = metadata.occurrences_for("Olympus:ManometerPressure");
+        let camera_type = metadata.occurrences_for("Olympus:CameraType");
+        let quality = metadata.occurrences_for("Olympus:Quality");
+        assert_eq!(generated.len(), 2);
+        assert_eq!(camera_type.len(), 1);
+        assert_eq!(quality.len(), 1);
+        assert!(generated[1].order < camera_type[0].order);
+        assert!(camera_type[0].order < quality[0].order);
+    }
+
+    #[test]
+    fn olympus_structured_preview_dependencies_reach_derivation() {
+        fn dependency(key: &str, value: i64) -> (String, TagOccurrence) {
+            let mut occurrence = TagOccurrence::from_insert_shim(key, TagValue::Integer(value), 0);
+            occurrence.value = Some(TagValue::Integer(value));
+            occurrence.print = Some(TagValue::Integer(value));
+            (key.to_string(), occurrence)
+        }
+
+        let tiff: Vec<u8> = (0..32).collect();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 0, tiff.len(), 100);
+        let rows = vec![
+            dependency("Olympus:PreviewImageStart", 108),
+            dependency("Olympus:PreviewImageLength", 3),
+            dependency("Olympus:PreviewImageValid", 1),
+        ];
+        let mut dependencies = HashMap::new();
+        extend_preview_dependencies(&mut dependencies, &rows);
+        let mut metadata = MetadataMap::new();
+        derive_makernote_preview_image(&ctx, &dependencies, &mut metadata);
+
+        assert_eq!(
+            metadata.get("Olympus:PreviewImage"),
+            Some(&TagValue::Binary(vec![8, 9, 10]))
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5181,6 +5667,50 @@ mod exif_subifd_tests {
         );
     }
 
+    /// AmbientTemperature's every channel through the ExifIFD walk with the
+    /// generated table in force equals the hand arm's (table off): one
+    /// occurrence, the same priority, and the same print, ValueConv and
+    /// stored projections -- the stored form is what the PNG `eXIf` rebuild
+    /// and `copy_metadata` serialize -- for the signed 0/-1 of OlympusOM-1.jpg
+    /// and an ordinary value.
+    #[test]
+    fn ambient_temperature_channels_match_the_hand_arm() {
+        use crate::core::tag_occurrence::ValueChannel;
+        const SRATIONAL: u16 = 10;
+        let at = tail_at(1);
+        for bytes in [
+            [0u32.to_le_bytes(), u32::MAX.to_le_bytes()].concat(),
+            [43i32.to_le_bytes(), 2i32.to_le_bytes()].concat(),
+            [(-7i32).to_le_bytes(), 2i32.to_le_bytes()].concat(),
+        ] {
+            let data = exif_block(&[(0x9400, SRATIONAL, 1, at)], &bytes);
+            let engine = walk_exif(&data, None, exif_main(), &[]);
+            let hand = walk_exif(&data, None, None, &[]);
+            let engine = engine.occurrences_for("ExifIFD:AmbientTemperature");
+            let hand = hand.occurrences_for("ExifIFD:AmbientTemperature");
+            assert_eq!((engine.len(), hand.len()), (1, 1), "{bytes:?}");
+            assert_eq!(engine[0].priority, hand[0].priority, "{bytes:?}");
+            for channel in [
+                ValueChannel::PrintConv,
+                ValueChannel::ValueConv,
+                ValueChannel::Stored,
+            ] {
+                let print = |occurrence: &crate::core::tag_occurrence::TagOccurrence| {
+                    crate::core::exiftool_compat::format_tag_value(
+                        "ExifIFD:AmbientTemperature",
+                        occurrence.project(channel).as_ref(),
+                    )
+                };
+                assert_eq!(print(engine[0]), print(hand[0]), "{bytes:?} {channel:?}");
+            }
+            assert_eq!(
+                engine[0].project(ValueChannel::Stored),
+                hand[0].project(ValueChannel::Stored),
+                "{bytes:?} stored"
+            );
+        }
+    }
+
     /// Decision D-3: a `SubDirectory` edge id in the ExifIFD reports nothing
     /// (Exif.pm:7103-7104), as pinned ExifTool's `-a -G1` over the census
     /// shows for DJI_XT2.jpg's 0x02bc ApplicationNotes; the hand arm alone
@@ -5255,11 +5785,10 @@ mod exif_subifd_tests {
     /// under the same keys, with the engine on and off.
     #[test]
     fn replay_keeps_the_hand_walks_order_on_canon_jpg() {
-        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
-        else {
-            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("Canon.jpg") else {
             return;
         };
+        let jpeg = std::fs::read(&path).expect("read pinned t/images/Canon.jpg fixture");
         let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
         let reader = TestReader::new(tiff.clone());
         let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
@@ -5306,11 +5835,10 @@ mod exif_subifd_tests {
     /// bytes behind the placeholder.
     #[test]
     fn engine_rows_carry_the_hand_arms_stored_value() {
-        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
-        else {
-            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("Canon.jpg") else {
             return;
         };
+        let jpeg = std::fs::read(&path).expect("read pinned t/images/Canon.jpg fixture");
         let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
         let reader = TestReader::new(tiff.clone());
         let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
@@ -5463,13 +5991,11 @@ mod ifd1_tests {
 
     #[test]
     fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Apple/AppleQT-200.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Apple/AppleQT-200.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("AppleQT-200 parses");
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("AppleQT-200 parses");
 
         assert_eq!(metadata.get_integer("IFD1:StripOffsets"), Some(796));
         assert_eq!(metadata.get_integer("IFD1:RowsPerStrip"), Some(60));
@@ -5741,13 +6267,12 @@ mod ifd1_tests {
     /// `exiftool -b -ThumbnailTIFF` (47952 bytes), so pin its shape.
     #[test]
     fn leica_r9_dmr_thumbnail_tiff_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Leica/LeicaR9-DigitalBackDMR.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaR9-DigitalBackDMR.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("Leica R9 DMR parses");
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("Leica R9 DMR parses");
         let Some(TagValue::Binary(tiff)) = metadata.get("IFD1:ThumbnailTIFF") else {
             panic!("IFD1:ThumbnailTIFF must be emitted");
         };
@@ -5943,6 +6468,45 @@ mod ifd1_tests {
         );
         assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
         assert!(metadata.get("IFD1:Compression").is_none());
+    }
+
+    /// An IFD1 whose entry count runs past the data: `parse_ifd` refuses it,
+    /// so `parse_ifd1_with_session` takes its hand-collector fallback
+    /// (`Ifd1Hand::Thumbnail`), whose own `parse_ifd` refuses it too -- no
+    /// IFD1 row, and no panic, with the generated table in force.
+    #[test]
+    fn a_truncated_ifd1_takes_the_hand_fallback_and_emits_nothing() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // IFD0: no entries
+        data.extend_from_slice(&14u32.to_le_bytes()); // IFD1 at 14
+        data.extend_from_slice(&40u16.to_le_bytes()); // 40 entries, 0 present
+        data.extend_from_slice(&[0u8; 6]);
+        let reader = TestReader::new(data.clone());
+        let mut metadata = MetadataMap::new();
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
+        assert!(
+            crate::exiftool_tables::find_ifd_table("Exif", "Main")
+                .is_some_and(|table| table.enabled()),
+            "the generated Exif::Main table is in force"
+        );
+        assert!(
+            metadata
+                .all_occurrences()
+                .all(|(key, _)| !key.starts_with("IFD1:")),
+            "no IFD1 row from a directory neither producer can parse"
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -6443,6 +7007,24 @@ mod ifd1_tests {
         assert_eq!(metadata.get_string("IFD1:Artist"), Some("Me"));
         assert_eq!(metadata.get_string("IFD1:Copyright"), Some("(c) Me"));
         assert_eq!(metadata.occurrences_for("IFD1:Make").len(), 1);
+        assert_eq!(metadata.occurrences_for("IFD1:Copyright").len(), 1);
+
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[(
+                TAG_COPYRIGHT,
+                ASCII,
+                22,
+                b"Photographer \0Editor \0".to_vec(),
+            )],
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get_string("IFD1:Copyright"),
+            Some("Photographer\nEditor")
+        );
+        assert_eq!(metadata.occurrences_for("IFD1:Copyright").len(), 1);
 
         let mut metadata = MetadataMap::new();
         run_two(
@@ -6511,10 +7093,9 @@ mod ifd1_tests {
             "Canon/CanonXL_H1.jpg",
             "Samsung/SamsungGT-S5620.jpg",
         ] {
-            let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name);
-            if !path.exists() {
+            let Some(path) = crate::test_support::pinned_combined_fixture_path(name) else {
                 continue;
-            }
+            };
             let metadata = crate::core::operations::read_metadata(&path).expect("parses");
             assert_eq!(ifd1_keys(&metadata), Vec::<String>::new(), "{name}");
         }
@@ -6619,10 +7200,9 @@ mod ifd1_tests {
         ];
         let mut ran = 0;
         for (name, expected) in cases {
-            let Some(path) = crate::test_support::pinned_fixture_path(name).or_else(|| {
-                Some(std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name))
-                    .filter(|p| p.exists())
-            }) else {
+            let Some(path) = crate::test_support::pinned_fixture_path(name)
+                .or_else(|| crate::test_support::pinned_combined_fixture_path(name))
+            else {
                 continue;
             };
             let metadata = crate::core::operations::read_metadata(&path).expect("parses");
@@ -6659,11 +7239,11 @@ mod ifd1_tests {
     /// says 350 and IFD1 72 (ExifTool `-XResolution` -> 350).
     #[test]
     fn olympus_air_bare_requests_answer_ifd0() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Olympus/OlympusAIR-A01.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT)
-            .join("Olympus/OlympusAIR-A01.jpg");
+        };
         let metadata = crate::core::operations::read_metadata(&path).expect("parses");
         for (name, group) in [
             ("XResolution", "IFD0"),
@@ -7741,15 +8321,13 @@ mod makernote_preview_image_tests {
     /// extract)`.
     #[test]
     fn pinned_pentax_optio_rz10_reports_its_preview_image() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptioRZ10.jpg",
-        );
-        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Pentax/PentaxOptioRZ10.jpg")
+        else {
             return;
         };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned PentaxOptioRZ10.jpg fixture");
         let preview = metadata
             .get("Pentax:PreviewImage")
             .expect("Pentax PreviewImage");
@@ -7768,15 +8346,13 @@ mod makernote_preview_image_tests {
     /// `[File] PreviewImage`.
     #[test]
     fn pinned_samsung_digimax_370_reports_its_makernote_as_the_preview() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungDigimax370.jpg",
-        );
-        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungDigimax370.jpg")
+        else {
             return;
         };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned SamsungDigimax370.jpg fixture");
         let preview = metadata
             .get(PREVIEW_IMAGE_FILE_TAG)
             .expect("File:PreviewImage");

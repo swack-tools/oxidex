@@ -1,13 +1,34 @@
-"""Behavioral tests for release receipt shape and semantic validation."""
+"""Behavioral tests for release receipt shape and semantic validation.
+
+Tree-scan binding of the positive fixtures
+------------------------------------------
+A real finalization receipt must record the version-literal and version-field
+scans (``git grep`` over every tracked file) of the tree it releases, and the
+validator recomputes both scans live and rejects any mismatch. Committing those
+live values into the positive fixtures made every unrelated PR that added a
+version literal anywhere (a test, a doc) stale the fixtures and fail CI on every
+other open PR. So the committed fixtures carry obviously-placeholder scan values
+(``"1" * 64``, ``"2" * 64``, counts of 1), and ``fixture("finalization")``
+binds an in-memory copy to the checkout's live scans at test time -- writing a
+bound copy of the reconciliation record to a temp file and re-pointing
+``version_reconciliation.path``/``sha256`` at it. The validator itself is
+unchanged: ``RawFixtureTreeBindingTests`` proves the placeholders are rejected,
+and ``TreeScanIndependenceTests`` proves a receipt bound to one tree is rejected
+once an unrelated version literal is added, while a freshly bound one passes.
+There is nothing to refresh after an unrelated change.
+"""
 
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import os
 import pathlib
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from tools.ci import validate_release_receipt as validator
 
@@ -21,10 +42,97 @@ TEMPLATES = {
 }
 SHA = "a" * 40
 VERSION = "2.0.0-beta.1"
+RECONCILIATION_FIXTURE = FIXTURES / "version-reconciliation-verified.json"
+# The committed placeholders. They are schema-valid on purpose, so validating
+# the raw fixture isolates the semantic tree-scan binding (see
+# RawFixtureTreeBindingTests); they must never be refreshed to live values.
+PLACEHOLDER_SCAN = {
+    "scan_sha256": "1" * 64,
+    "tracked_files": 1,
+    "matching_lines": 1,
+    "fields_scan_sha256": "2" * 64,
+    "fields_tracked_files": 1,
+    "fields_matching_lines": 1,
+    "reconciled_files": 1,
+    "reconciled_lines": 1,
+    "reconciled_field_files": 1,
+    "reconciled_field_lines": 1,
+}
+LITERAL_SCAN_FIELDS = frozenset(
+    {"scan_sha256", "tracked_files", "matching_lines", "reconciled_files", "reconciled_lines"}
+)
+_BOUND_DIR: tempfile.TemporaryDirectory | None = None
+
+
+def setUpModule() -> None:
+    global _BOUND_DIR
+    _BOUND_DIR = tempfile.TemporaryDirectory(prefix="receipt-bound-")
+
+
+def tearDownModule() -> None:
+    global _BOUND_DIR
+    if _BOUND_DIR is not None:
+        _BOUND_DIR.cleanup()
+        _BOUND_DIR = None
+
+
+def raw_fixture(kind: str) -> dict:
+    return json.loads((FIXTURES / f"{kind}-verified.json").read_text(encoding="utf-8"))
+
+
+def live_scan_binding() -> dict:
+    """The ten reconciliation fields, computed by the validator's own scanners."""
+
+    literal = validator._version_literal_scan()
+    fields = validator._version_fields_scan()
+    return {
+        "scan_sha256": literal["sha256"],
+        "tracked_files": literal["tracked_files"],
+        "matching_lines": literal["matching_lines"],
+        "fields_scan_sha256": fields["sha256"],
+        "fields_tracked_files": fields["tracked_files"],
+        "fields_matching_lines": fields["matching_lines"],
+        "reconciled_files": literal["tracked_files"],
+        "reconciled_lines": literal["matching_lines"],
+        "reconciled_field_files": fields["tracked_files"],
+        "reconciled_field_lines": fields["matching_lines"],
+    }
+
+
+def bind_to_scan(payload: dict, binding: dict, workdir: pathlib.Path) -> dict:
+    """Bind a finalization receipt (and its reconciliation record) to ``binding``.
+
+    Writes the bound reconciliation record to ``workdir`` and re-points the
+    receipt's path/sha256 at it, so the nested hash chain stays consistent.
+    """
+
+    record = json.loads(RECONCILIATION_FIXTURE.read_text(encoding="utf-8"))
+    record.update(binding)
+    path = workdir / "version-reconciliation-verified.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    payload["version_reconciliation"].update(binding)
+    payload["version_reconciliation"]["path"] = str(path)
+    payload["version_reconciliation"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return payload
 
 
 def fixture(kind: str) -> dict:
-    return json.loads((FIXTURES / f"{kind}-verified.json").read_text(encoding="utf-8"))
+    payload = raw_fixture(kind)
+    if kind == "finalization":
+        assert _BOUND_DIR is not None, "module fixture not set up"
+        bind_to_scan(payload, live_scan_binding(), pathlib.Path(_BOUND_DIR.name))
+    return payload
+
+
+def _clear_scan_caches() -> None:
+    validator._version_literal_scan.cache_clear()
+    validator._version_fields_scan.cache_clear()
+
+
+def _git(*args: str, env: dict | None = None, stdin: bytes | None = None) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=REPO, env=env, input=stdin, check=True, capture_output=True
+    ).stdout.decode().strip()
 
 
 class ReleaseReceiptValidationTests(unittest.TestCase):
@@ -406,6 +514,166 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
             self.assertEqual(
                 validator.main(["--kind", "parity", "--receipt", str(path)]), 2
             )
+
+
+def _error_paths(errors: list[str]) -> set[str]:
+    return {error.split(": ", 1)[0] for error in errors}
+
+
+class RawFixtureTreeBindingTests(unittest.TestCase):
+    """The production path binds to the live tree scan; placeholders never pass."""
+
+    def test_committed_fixtures_carry_placeholders_and_a_consistent_hash_chain(self):
+        record = json.loads(RECONCILIATION_FIXTURE.read_text(encoding="utf-8"))
+        final = raw_fixture("finalization")["version_reconciliation"]
+        for field, value in PLACEHOLDER_SCAN.items():
+            with self.subTest(field=field):
+                self.assertEqual(record[field], value)
+                self.assertEqual(final[field], value)
+        self.assertEqual(final["path"], RECONCILIATION_FIXTURE.relative_to(REPO).as_posix())
+        self.assertEqual(
+            final["sha256"], hashlib.sha256(RECONCILIATION_FIXTURE.read_bytes()).hexdigest()
+        )
+
+    def test_raw_fixture_is_rejected_exactly_for_its_tree_scan_binding(self):
+        payload = raw_fixture("finalization")
+        self.assertEqual(validator.validate_schema("finalization", payload), [])
+        errors = validator.validate_receipt(
+            "finalization", payload, expected_version=VERSION, expected_sha=SHA
+        )
+        self.assertEqual(
+            _error_paths(errors),
+            {f"version_reconciliation.{field}" for field in PLACEHOLDER_SCAN},
+            errors,
+        )
+
+    def test_cli_rejects_placeholder_binding_and_accepts_live_binding(self):
+        argv = ["--kind", "finalization", "--version", VERSION, "--candidate-sha", SHA]
+        raw = FIXTURES / "finalization-verified.json"
+        self.assertEqual(validator.main([*argv, "--receipt", str(raw)]), 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "receipt.json"
+            path.write_text(json.dumps(fixture("finalization")), encoding="utf-8")
+            self.assertEqual(validator.main([*argv, "--receipt", str(path)]), 0)
+
+    def test_production_scans_match_the_documented_gate_commands(self):
+        # Recompute both scans the way references/gates.md tells an operator
+        # to, independently of the validator's helpers, so binding the
+        # fixtures to the validator's own scan is not self-referential.
+        gates = (
+            REPO / ".claude/skills/oxidex-release-finalization/references/gates.md"
+        ).read_text(encoding="utf-8")
+        documented = (
+            (r"(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?",
+             validator._version_literal_scan),
+            (r"\[package\]|version[[:space:]]*=|VERSION|__version__",
+             validator._version_fields_scan),
+        )
+        # Both full-tree greps run concurrently; each takes seconds.
+        greps = [
+            subprocess.Popen(
+                ["git", "grep", "-n", "-I", "-E", pattern, "--", ".",
+                 ":(exclude)tools/ci/testdata/release_receipts/**"],
+                cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            for pattern, _ in documented
+        ]
+        results = [(grep.communicate(), grep.returncode) for grep in greps]
+        for (pattern, scanner), ((stdout, stderr), returncode) in zip(documented, results):
+            with self.subTest(pattern=pattern):
+                self.assertIn(pattern, gates)
+                self.assertIn(returncode, (0, 1), stderr)
+                lines = stdout.splitlines()
+                self.assertGreater(len(lines), 0)
+                self.assertEqual(
+                    scanner(),
+                    {
+                        "sha256": hashlib.sha256(stdout).hexdigest(),
+                        "matching_lines": len(lines),
+                        "tracked_files": len({line.split(b":", 1)[0] for line in lines}),
+                    },
+                )
+
+
+class TreeScanIndependenceTests(unittest.TestCase):
+    """An unrelated version literal no longer stales the positive fixtures.
+
+    The "other PR" is simulated without touching the checkout: a copy of the
+    git index gains one extra tracked file whose blob lives in a throwaway
+    object directory, marked assume-unchanged so ``git grep`` reads it from the
+    object store. The validator's real scanners run unmodified against it; the
+    scan delta assertions prove the simulated file was actually seen.
+    """
+
+    ADDED_PATH = "docs/unrelated-note-from-another-pr.md"
+    ADDED_TEXT = b"This note mentions release 9.8.7 in passing.\n"
+
+    def setUp(self):
+        # Scans are cached per process; whatever this test leaves behind must
+        # be recomputed by anything that runs after it.
+        self.addCleanup(_clear_scan_caches)
+        tmp = tempfile.TemporaryDirectory(prefix="receipt-tree-")
+        self.addCleanup(tmp.cleanup)
+        self.tmp = pathlib.Path(tmp.name)
+
+    def _tree_with_added_file(self) -> dict:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", self.ADDED_PATH],
+            cwd=REPO, capture_output=True,
+        )
+        self.assertNotEqual(tracked.returncode, 0, f"{self.ADDED_PATH} is already tracked")
+        index = (REPO / _git("rev-parse", "--git-path", "index")).resolve()
+        objects = (REPO / _git("rev-parse", "--git-path", "objects")).resolve()
+        (self.tmp / "objects").mkdir()
+        (self.tmp / "index").write_bytes(index.read_bytes())
+        env = {
+            "GIT_INDEX_FILE": str(self.tmp / "index"),
+            "GIT_OBJECT_DIRECTORY": str(self.tmp / "objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects),
+        }
+        child = {**os.environ, **env}
+        oid = _git("hash-object", "-w", "--stdin", env=child, stdin=self.ADDED_TEXT)
+        _git("update-index", "--add", "--cacheinfo", f"100644,{oid},{self.ADDED_PATH}", env=child)
+        _git("update-index", "--assume-unchanged", "--", self.ADDED_PATH, env=child)
+        return env
+
+    def validate(self, payload: dict) -> list[str]:
+        return validator.validate_receipt(
+            "finalization", payload, expected_version=VERSION, expected_sha=SHA
+        )
+
+    def test_unrelated_version_literal_keeps_fixture_valid_and_stale_receipt_fails(self):
+        status_before = _git("status", "--porcelain")
+        before = live_scan_binding()
+        (self.tmp / "before").mkdir()
+        stale = bind_to_scan(raw_fixture("finalization"), before, self.tmp / "before")
+        self.assertEqual(self.validate(copy.deepcopy(stale)), [])
+
+        with mock.patch.dict(os.environ, self._tree_with_added_file()):
+            _clear_scan_caches()
+            after = live_scan_binding()
+            # The simulated PR really reached the production scanner: one more
+            # file and line in the literal scan, the field scan untouched.
+            self.assertEqual(after["tracked_files"], before["tracked_files"] + 1)
+            self.assertEqual(after["matching_lines"], before["matching_lines"] + 1)
+            self.assertNotEqual(after["scan_sha256"], before["scan_sha256"])
+            for field in PLACEHOLDER_SCAN.keys() - LITERAL_SCAN_FIELDS:
+                self.assertEqual(after[field], before[field], field)
+
+            # A receipt recorded against the earlier tree is stale and rejected.
+            errors = self.validate(copy.deepcopy(stale))
+            self.assertEqual(
+                _error_paths(errors),
+                {f"version_reconciliation.{field}" for field in LITERAL_SCAN_FIELDS},
+                errors,
+            )
+            # The positive fixture binds at test time, so it needs no refresh.
+            self.assertEqual(self.validate(fixture("finalization")), [])
+            self.assertEqual(
+                validator.validate_schema("finalization", fixture("finalization")), []
+            )
+
+        self.assertEqual(_git("status", "--porcelain"), status_before)
 
 
 if __name__ == "__main__":

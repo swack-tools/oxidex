@@ -172,7 +172,11 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
     }
     for (key, occurrence) in map.all_occurrences() {
         let normalized_key = normalize_tag_family(&key);
-        normalized.insert_renamed_occurrence(normalized_key, occurrence);
+        if occurrence.origin.module.is_some() && occurrence.origin.table.is_some() {
+            normalized.record_occurrence(normalized_key, occurrence.clone());
+        } else {
+            normalized.insert_renamed_occurrence(normalized_key, occurrence);
+        }
     }
     normalized
 }

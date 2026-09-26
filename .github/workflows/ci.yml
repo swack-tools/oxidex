@@ -324,6 +324,13 @@ jobs:
           # order, so a runner image shipping its own exiftool cannot
           # quietly win the lookup.
           echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
+          # The capability half of "verified": a .docx must read as DOCX.
+          FT=$(/tmp/exiftool-src/exiftool -s3 -FileType /tmp/exiftool-src/t/images/OOXML.docx)
+          [ "$FT" = "DOCX" ] || { echo "::error::OOXML.docx reads as '$FT', expected DOCX"; exit 1; }
+          # This job has the pinned oracle, so an oracle-graded test that
+          # finds it unverified must fail here, never skip
+          # (exiftool_oracle::REQUIRE_ENV).
+          echo "OXIDEX_REQUIRE_EXIFTOOL_ORACLE=1" >> "$GITHUB_ENV"
       # Only on a miss, and only once the step above has proved the tree is
       # the right release -- default `success()` semantics are load-bearing
       # here, so a failed verify never persists a bad tree. Reuses the
@@ -515,7 +522,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           CHANGED=$(git diff --name-only HEAD^1 HEAD)
-          if printf '%s\n' "$CHANGED" | grep -qE '^(src/|\.cargo/|oxidex-tags[^/]*/|Cargo\.(toml|lock)$|build\.rs$|\.exiftool-version$|scripts/instrument\.py$|tools/ci/read_regression_gate\.py$|tools/exiftool-tables/(corpus_read_receipt\.py|capture_corpus_sources\.pl|catalog_corpus_reads\.py|runtime_evidence_inputs\.py|native_write_matrix\.py|verify_quicktime_userdata_reader\.py|quicktime_baseline\.py)$|docs/public/measurements/catalog-(corpus-observed|source)-[0-9.]+\.json$|\.github/(workflows/ci\.yml|actions/pinned-exiftool/))'; then
+          if printf '%s\n' "$CHANGED" | grep -qE '^(src/|\.cargo/|oxidex-tags[^/]*/|Cargo\.(toml|lock)$|build\.rs$|rust-toolchain(\.toml)?$|\.exiftool-version$|scripts/instrument\.py$|tools/ci/read_regression_gate\.py$|tools/exiftool-tables/(corpus_read_receipt\.py|capture_corpus_sources\.pl|catalog_corpus_reads\.py|runtime_evidence_inputs\.py|native_write_matrix\.py|verify_quicktime_userdata_reader\.py|quicktime_baseline\.py)$|docs/public/measurements/catalog-(corpus-observed|source)-[0-9.]+\.json$|\.github/(workflows/ci\.yml|actions/pinned-exiftool/))'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -649,7 +656,8 @@ jobs:
           python3 tools/exiftool-tables/verify_subdirs.py \
             src/exiftool_tables/binary/mod.rs \
             "$EXIFTOOL_SOURCE/lib" \
-            --exiftool "$EXIFTOOL_SOURCE/exiftool"
+            --exiftool "$EXIFTOOL_SOURCE/exiftool" \
+            --perl "$OXIDEX_TABLES_PERL"
       # Step 14 (tag-machinery overhaul): tier 1 above is binary/ (the split
       # binary tables);
       # tier 2 is everything downstream of it that regen.sh never touches --
