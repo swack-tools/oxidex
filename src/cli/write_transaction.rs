@@ -104,8 +104,53 @@ pub struct WritePlan {
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
 const ALL_DATES: &[&str] = &["DateTimeOriginal", "CreateDate", "ModifyDate"];
 
-fn tag_name(tag: &str) -> &str {
-    tag.rsplit(':').next().unwrap_or(tag)
+/// The field a date request addresses, as far as it is known before any
+/// file is opened: `(group, name)`, lower-cased, with ExifTool's other names
+/// for the EXIF dates folded in (`DateTime` is `ModifyDate`,
+/// `DateTimeDigitized` is `CreateDate`) and the `EXIF` family resolved to
+/// the directory ExifTool writes the date in (`EXIF:CreateDate` is
+/// `ExifIFD:CreateDate`). `group` is `None` for an ungrouped request, which
+/// may land in any group (a shift of `CreateDate` shifts `PDF:CreateDate` in
+/// a PDF), and stays `exif` for a family request naming another tag.
+fn date_address(tag: &str) -> (Option<String>, String) {
+    let (group, name) = match tag.rsplit_once(':') {
+        Some((group, name)) => (Some(group.to_ascii_lowercase()), name),
+        None => (None, tag),
+    };
+    let name = match name.to_ascii_lowercase().as_str() {
+        "datetime" => "modifydate".to_string(),
+        "datetimedigitized" => "createdate".to_string(),
+        other => other.to_string(),
+    };
+    let group = group.map(|group| match (group.as_str(), name.as_str()) {
+        ("exif", "modifydate") => "ifd0".to_string(),
+        ("exif", "datetimeoriginal" | "createdate") => "exififd".to_string(),
+        _ => group,
+    });
+    (group, name)
+}
+
+/// EXIF directories the `EXIF` family spans.
+const EXIF_DIRECTORIES: &[&str] = &["ifd0", "ifd1", "exififd", "gps", "interopifd", "subifd"];
+
+/// Whether two requests may address the same field ([`date_address`]): the
+/// same name, and groups that are equal, or one of them ungrouped or the
+/// `EXIF` family spanning the other's directory. Requests naming two
+/// different directories (`ExifIFD:CreateDate`, `IFD0:CreateDate`) are two
+/// fields, which ExifTool writes independently.
+fn may_address_same_field(a: &str, b: &str) -> bool {
+    let ((group_a, name_a), (group_b, name_b)) = (date_address(a), date_address(b));
+    if name_a != name_b {
+        return false;
+    }
+    match (group_a.as_deref(), group_b.as_deref()) {
+        (None, _) | (_, None) => true,
+        (Some(a), Some(b)) => {
+            a == b
+                || (a == "exif" && EXIF_DIRECTORIES.contains(&b))
+                || (b == "exif" && EXIF_DIRECTORIES.contains(&a))
+        }
+    }
 }
 
 impl WritePlan {
@@ -177,16 +222,20 @@ impl WritePlan {
                     .to_string(),
             );
         }
+        // A set and a shift of one field cannot both be applied; requests
+        // naming two different fields can (13.59: an `ExifIFD:CreateDate`
+        // shift beside an `IFD0:CreateDate` set writes both), so the
+        // addresses are compared, not the leaf names.
         for (shift_tag, _, _) in &plan.shifts {
             let shifted: Vec<&str> = if shift_tag.eq_ignore_ascii_case("AllDates") {
                 ALL_DATES.to_vec()
             } else {
-                vec![tag_name(shift_tag)]
+                vec![shift_tag.as_str()]
             };
             if let Some((set_tag, _)) = plan.sets.iter().find(|(set_tag, _)| {
                 shifted
                     .iter()
-                    .any(|name| name.eq_ignore_ascii_case(tag_name(set_tag)))
+                    .any(|shifted| may_address_same_field(shifted, set_tag))
             }) {
                 return Err(format!(
                     "'{set_tag}' is both set and shifted ({shift_tag}); give one request per tag"

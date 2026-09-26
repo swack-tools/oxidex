@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 /// `[IFD0]` Make/Model/Artist/..., `[ExifIFD]` ExifVersion/DateTimeOriginal.
 const JPEG: &str = "tests/fixtures/jpeg/simple/synthetic_001.jpg";
 /// `[IFD0] Make: TestCamera`, `Model: TM`, plus XMP.
@@ -392,4 +395,114 @@ fn oracle_removes_a_pdf_date_as_the_map_removal_does() {
             );
         }
     }
+}
+
+// --- PRRT_kwDOQNbr5M6mOo02: shift/set conflicts compare addresses ---------
+
+/// An `ExifIFD:CreateDate` shift and an `IFD0:CreateDate` set name two
+/// fields; 13.59 on t/images/Canon.jpg writes both (`[ExifIFD] CreateDate
+/// 2004:12:04 06:46:52`, `[IFD0] CreateDate 2020:01:02 03:04:05`). oxidex
+/// compared leaf names and refused. One field set and shifted is still
+/// refused.
+#[test]
+fn a_shift_and_a_set_of_different_directories_both_apply() {
+    let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
+        eprintln!("skipping: pinned t/images/Canon.jpg not available");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, &canon, "canon.jpg");
+    let o = oxidex(&[
+        "-ExifIFD:CreateDate+=1:0:0 0:0:0",
+        "-IFD0:CreateDate=2020:01:02 03:04:05",
+        s(&file),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(out(&o), "    1 image files updated\n");
+    // The shifted ExifIFD date is checked in the bytes: oxidex's reader
+    // surfaces only one of two same-named CreateDates (the oracle test
+    // below reads both back with ExifTool).
+    let bytes = fs::read(&file).unwrap();
+    let holds = |text: &[u8]| bytes.windows(text.len()).any(|window| window == text);
+    assert!(
+        holds(b"2004:12:04 06:46:52\0"),
+        "ExifIFD:CreateDate not shifted"
+    );
+    assert_eq!(
+        get(&file, "IFD0:CreateDate").as_deref(),
+        Some("2020:01:02 03:04:05")
+    );
+
+    for (shift, set) in [
+        (
+            "-ExifIFD:CreateDate+=1:0:0 0:0:0",
+            "-ExifIFD:CreateDate=2020:01:02 03:04:05",
+        ),
+        (
+            "-EXIF:CreateDate+=1:0:0 0:0:0",
+            "-ExifIFD:CreateDate=2020:01:02 03:04:05",
+        ),
+        (
+            "-CreateDate+=1:0:0 0:0:0",
+            "-IFD0:CreateDate=2020:01:02 03:04:05",
+        ),
+        (
+            "-ExifIFD:DateTimeDigitized+=1:0:0 0:0:0",
+            "-EXIF:CreateDate=2020:01:02 03:04:05",
+        ),
+        (
+            "-DateTimeOriginal+=1:0:0 0:0:0",
+            "-EXIF:DateTimeOriginal=2020:01:02 03:04:05",
+        ),
+        (
+            "-AllDates+=1:0:0 0:0:0",
+            "-ExifIFD:DateTimeOriginal=2020:01:02 03:04:05",
+        ),
+    ] {
+        let file = copy_into(&dir, &canon, "same.jpg");
+        let before = sha(&file);
+        let o = oxidex(&[shift, set, s(&file)]);
+        assert_eq!(o.status.code(), Some(1), "{shift} {set}: {}", out(&o));
+        assert!(
+            err(&o).contains("both set and shifted"),
+            "{shift} {set}: {}",
+            err(&o)
+        );
+        assert_eq!(sha(&file), before, "{shift} {set}");
+    }
+}
+
+#[test]
+fn oracle_writes_a_shift_and_a_set_of_different_directories() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
+        eprintln!("skipping: pinned t/images/Canon.jpg not available");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let args = [
+        "-ExifIFD:CreateDate+=1:0:0 0:0:0",
+        "-IFD0:CreateDate=2020:01:02 03:04:05",
+    ];
+    let theirs = copy_into(&dir, &canon, "theirs.jpg");
+    oracle_write(oracle, &args, &theirs);
+    let ours = copy_into(&dir, &canon, "ours.jpg");
+    let o = oxidex(&[args[0], args[1], s(&ours)]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    // Both files read back by the oracle, which reports both directories'
+    // CreateDate (oxidex's reader keeps one of the two).
+    for key in ["ExifIFD:CreateDate", "IFD0:CreateDate"] {
+        assert_eq!(
+            oracle_value(oracle, &ours, key),
+            oracle_value(oracle, &theirs, key),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        oracle_value(oracle, &theirs, "ExifIFD:CreateDate"),
+        "2004:12:04 06:46:52"
+    );
 }
