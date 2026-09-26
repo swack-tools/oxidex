@@ -833,12 +833,13 @@ def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
             return "running"
     except OSError as exc:
         return f"exit status cannot be observed: {exc}"
-    inherited = _inherited_ownership_state(child)
-    if inherited is not None:
-        return inherited
-    lineage = _lineage_unverified(child)
-    if lineage is not None:
-        return lineage
+    # Both uncertainties are reported together: the descriptor holder may
+    # exit before a hidden descendant does, so an unverified lineage must
+    # still reach the durable marker while inherited ownership remains.
+    reasons = [reason for reason in (_inherited_ownership_state(child), _lineage_unverified(child))
+               if reason is not None]
+    if reasons:
+        return "; ".join(reasons)
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
@@ -1029,6 +1030,15 @@ def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_outpu
                 if hasattr(exc, "add_note"):
                     exc.add_note(f"owned child timeout cleanup warning: {cleanup}")
             exc.output, exc.stderr = stdout, stderr
+            raise
+        except OSError as failure:
+            # Reading the child's output failed after it was spawned: the
+            # child may still run, so it gets the same verified cleanup.
+            _cleanup_owned_child_after_interrupt(child, failure)
+            if getattr(failure, "_oxidex_owned_child_cleanup", None) != "verified":
+                raise OwnedChildCleanupIncomplete(
+                    "owned child cleanup remains incomplete after a post-spawn read failure",
+                ) from failure
             raise
         escaped = _finish_lineage(child)
         _require_ownership_release(child, "successful command completion")
@@ -1523,6 +1533,9 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
                 or _ownership_probe_live(child)):
             cleanup_failures.append("owned child process group is still live after bounded cleanup")
             emergency_needed = True
+        elif _lineage_unverified(child) is not None:
+            cleanup_failures.append("owned child lineage was not proven empty after bounded cleanup")
+            emergency_needed = True
         if _catchable_termination_unverifiable(child):
             cleanup_failures.append(
                 "owned child cleanup cannot be verified after catchable termination",
@@ -1541,6 +1554,9 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
             if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
                     or _ownership_probe_live(child)):
                 cleanup_failures.append("owned child process group is still live after emergency cleanup")
+                cleanup_incomplete = True
+            elif _lineage_unverified(child) is not None:
+                cleanup_failures.append("owned child lineage was not proven empty after emergency cleanup")
                 cleanup_incomplete = True
             if _catchable_termination_unverifiable(child):
                 cleanup_failures.append(
@@ -1573,7 +1589,8 @@ def _emergency_cleanup_after_timeout_failure(
     try:
         _refresh_owned_descendants(child)
         incomplete = (child.poll() is None or _group_live(child.pid) or bool(_live_owned_descendants(child))
-                      or _ownership_probe_live(child) or _catchable_termination_unverifiable(child))
+                      or _ownership_probe_live(child) or _catchable_termination_unverifiable(child)
+                      or _lineage_unverified(child) is not None)
     except BaseException as inspection:
         failures.append(f"owned child cleanup could not be verified: {inspection}")
         incomplete = True
@@ -1838,7 +1855,13 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        child.wait()
+        try:
+            child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
+        except subprocess.TimeoutExpired as unreaped:
+            # It stays registered (and so unproven) for the lock owner.
+            raise OwnedChildCleanupIncomplete(
+                f"owned command supervisor {child.pid} could not be reaped after a failed start handshake",
+            ) from unreaped
     # Read the supervisor's final verdict (or learn it has none) before the
     # handle is dropped: an unproven lineage keeps the child registered.
     _lineage_unverified(child)
