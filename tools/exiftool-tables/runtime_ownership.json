@@ -6,7 +6,7 @@
     "residual": 64,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "23363b289313be89de531194b784aaa36bdd5919cc56e7286ae8542ac9abbc7f",
+  "fragment_inputs_sha256": "19f56fe5ed56111aac0657041f13c6aa9359cacf15558143a97a5ed26cfc4e3c",
   "rows": [
     {
       "field": {
@@ -229,7 +229,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::EXIF_IFD_HAND_KEPT",
       "table": "Main"
     },
@@ -409,7 +409,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -424,7 +424,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -439,7 +439,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -454,7 +454,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -469,7 +469,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -484,7 +484,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -499,7 +499,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "d7fad1266b695b6cfe9c2a61b9af7cbcae1c5207aa02304a27fef14260740504",
+      "source_sha256": "a8266ea2adb8b81180f274b9166e446167c96f2eeeb79d00113feeeef04d7052",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },

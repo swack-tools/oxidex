@@ -40,6 +40,7 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
+use crate::writers::exif_surgical::RequestDeletions;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
@@ -1699,14 +1700,14 @@ pub(crate) fn resolve_write_key_for(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
-    resolve_write_key_in_request(path, tag_name, baseline, false)
+    resolve_write_key_in_request(path, tag_name, baseline, RequestDeletions::default())
 }
 
 /// [`resolve_write_key_for`] for one request of a transaction whose other
-/// requests delete the EXIF maker note (`makernote_deleted`: a planned
-/// `-MakerNotes:All=`, `-ExifIFD:All=` or `-EXIF:All=` deletion,
-/// `core::write_transaction::plan_changes`). Pinned 13.59 then edits no
-/// maker-note copy of a bare name, whichever order the arguments came in
+/// requests delete what `deletions` says (planned `-MakerNotes:All=`,
+/// `-ExifIFD:All=` or `-EXIF:All=` deletions,
+/// `core::write_transaction::request_deletions`). Pinned 13.59 then edits no
+/// deleted copy of a bare name, whichever order the arguments came in
 /// (`-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
 /// -MakerNotes:All=` on t/images/Canon.jpg both leave `[ExifIFD]
 /// WhiteBalance` 1 and no maker note).
@@ -1714,7 +1715,7 @@ pub(crate) fn resolve_write_key_in_request(
     path: &Path,
     tag_name: &str,
     baseline: &MetadataMap,
-    makernote_deleted: bool,
+    deletions: RequestDeletions,
 ) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
@@ -1788,7 +1789,7 @@ pub(crate) fn resolve_write_key_in_request(
     // Whether the file's EXIF carries a maker note, scanned only when a name
     // with a maker-note candidate asks (`write_request::makernote_may_hold`).
     let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
-        deleted: makernote_deleted,
+        deletions,
         ..file_makernote_census(&reader, format, surgical)
     };
     let canonical = canonical_write_tag_name(tag_name);
@@ -1836,6 +1837,11 @@ pub(crate) fn resolve_write_key_in_request(
     if ungrouped {
         crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
     }
+    crate::writers::write_request::ensure_makernote_entry_not_named(
+        tag_name,
+        &key,
+        &makernote_block,
+    )?;
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
@@ -2011,6 +2017,20 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
 pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     let metadata = read_metadata(path)?;
     resolve_write_address(path, tag_name, &metadata)
+}
+
+/// [`resolve_write_tag`] for one set of a request whose other requests
+/// delete what `deletions` says (`core::write_transaction::
+/// request_deletions`): the address the transaction writes it at.
+pub(crate) fn resolve_write_tag_in_request(
+    path: &Path,
+    tag_name: &str,
+    deletions: RequestDeletions,
+) -> Result<String> {
+    let metadata = read_metadata(path)?;
+    let (key, addressed) = resolve_write_key_in_request(path, tag_name, &metadata, deletions)?;
+    addressed?;
+    Ok(key)
 }
 
 /// Whether `tag_name` names an EXIF-family group in a PDF: ExifTool keeps no

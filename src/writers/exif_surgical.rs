@@ -2398,77 +2398,142 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
 /// The TIFF magic an EXIF block (JPEG APP1, PNG eXIf) carries.
 pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 
+/// What the rest of a request deletes before a bare name is judged, as
+/// `core::write_transaction::request_deletions` plans it: pinned 13.59
+/// applies a group deletion and a bare set of one command line together,
+/// in either argument order (`-MakerNotes:All= -WhiteBalance#=1` and
+/// `-WhiteBalance#=1 -MakerNotes:All=` on t/images/Canon.jpg both leave
+/// `[ExifIFD] WhiteBalance` 1 and no maker note).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RequestDeletions {
+    /// Every EXIF maker note goes (`MakerNotes:All`, `ExifIFD:All`,
+    /// `EXIF:All`/`IFD0:All`, planned as a real deletion).
+    pub makernotes: bool,
+    /// A JPEG's CIFF segments go too: `MakerNotes:All` only (the JPEG
+    /// writer's `jpeg_without_ciff`; 13.59 on a Writer.jpg carrying
+    /// ExifTool.jpg's CIFF APP0: `-MakerNotes:All= -FocalLength#=50` leaves
+    /// `[ExifIFD] FocalLength` 50 alone, `-EXIF:All=` keeps the CIFF).
+    pub ciff: bool,
+    /// Every EXIF block goes (`EXIF:All`/`IFD0:All`): what is written after
+    /// is one new block, so several blocks are no longer several copies.
+    pub exif_blocks: bool,
+}
+
+impl RequestDeletions {
+    /// What the planned group deletion `key` deletes.
+    pub(crate) fn of(key: &str) -> Self {
+        match group_removal(key) {
+            Some(GroupRemoval::MakerNotes) => Self {
+                makernotes: true,
+                ciff: true,
+                exif_blocks: false,
+            },
+            Some(GroupRemoval::ExifIfd) => Self {
+                makernotes: true,
+                ..Self::default()
+            },
+            Some(GroupRemoval::Carrier) => Self {
+                makernotes: true,
+                ciff: false,
+                exif_blocks: true,
+            },
+            _ => Self::default(),
+        }
+    }
+
+    /// Both deletions' effects.
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            makernotes: self.makernotes || other.makernotes,
+            ciff: self.ciff || other.ciff,
+            exif_blocks: self.exif_blocks || other.exif_blocks,
+        }
+    }
+}
+
 /// What the EXIF blocks of a file carry, for the bare-name resolver
 /// (`write_request::makernote_may_hold`, `ensure_not_also_updated`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct MakerNoteCensus {
     /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
     pub blocks: usize,
-    /// Blocks whose maker note may hold tags ExifTool edits: an ExifIFD
-    /// MakerNote (0x927C) that is not read as one value (not
-    /// `tiff_helpers::makernote_value_holds_no_tags`: a SilverFast `LSI1`
-    /// note, a text note, a Samsung `STMN` binary, a JPEG preview), or an
-    /// IFD0 `DNGPrivateData` carrying an Adobe `MakN` record. A block the
-    /// scan cannot walk counts, as does any block when the count cannot be
-    /// made at all -- absence is what callers rely on, so it is proven.
+    /// Maker-note entries of those blocks, every kind: each ExifIFD
+    /// MakerNote (0x927C) and each IFD0 `DNGPrivateData` with an Adobe
+    /// `MakN` record.
+    pub notes: usize,
+    /// The ones of [`notes`](Self::notes) that may hold tags ExifTool edits:
+    /// every such entry, not every block holding one (an ExifIFD may carry
+    /// two 0x927C entries -- `apple-plus-nikon-note.jpg`, pinned 13.59
+    /// writes both), except a 0x927C read as one value or as a JPEG
+    /// preview (`tiff_helpers::makernote_value_holds_no_tags`: a SilverFast
+    /// `LSI1` note, a text note, a Samsung `STMN` binary, a Minolta3 note, a
+    /// JPEG). A block the scan cannot walk counts as one, as does any count
+    /// that cannot be made at all -- absence is what callers rely on.
     pub tag_bearing: usize,
-    /// The request deletes every EXIF maker note before the bare write is
-    /// judged (`-MakerNotes:All=`, `-ExifIFD:All=`, `-EXIF:All=` planned as
-    /// a real deletion): pinned 13.59 then has no maker-note copy to edit,
-    /// in either argument order.
-    pub deleted: bool,
+    /// What the rest of the request deletes ([`RequestDeletions`]).
+    pub deletions: RequestDeletions,
 }
 
 impl MakerNoteCensus {
     /// A census that proves nothing: every block may hold anything.
     pub(crate) const UNKNOWN: Self = Self {
         blocks: usize::MAX,
+        notes: usize::MAX,
         tag_bearing: usize::MAX,
-        deleted: false,
+        deletions: RequestDeletions {
+            makernotes: false,
+            ciff: false,
+            exif_blocks: false,
+        },
     };
 }
 
-/// Counts the EXIF blocks `blocks` and the ones carrying a tag-bearing
-/// maker note ([`MakerNoteCensus`]).
+/// Counts the EXIF blocks `blocks` and their maker-note entries
+/// ([`MakerNoteCensus`]).
 pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCensus {
-    let tag_bearing = blocks
-        .iter()
-        .filter(|block| match scan_entries_with_magics(block, magics) {
-            Ok(scan) => {
-                let ifd0_text = |tag_id: u16| {
-                    scan.entries
-                        .iter()
-                        .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
-                        .map(|entry| {
-                            String::from_utf8_lossy(&entry.value)
-                                .trim_end_matches(['\0', ' '])
-                                .to_string()
-                        })
-                        .unwrap_or_default()
-                };
-                let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
-                scan.entries.iter().any(|entry| {
-                    (entry.ifd == IfdKind::ExifIfd
-                        && entry.tag_id == MAKERNOTE
-                        && !crate::core::tiff_helpers::makernote_value_holds_no_tags(
-                            &entry.value,
-                            &make,
-                            &model,
-                        ))
-                        || (entry.ifd == IfdKind::Ifd0
-                            && entry.tag_id == DNG_PRIVATE_DATA
-                            && entry.value.starts_with(b"Adobe\0")
-                            && entry.value.windows(4).any(|w| w == b"MakN"))
-                })
-            }
-            Err(_) => true,
-        })
-        .count();
-    MakerNoteCensus {
+    let mut census = MakerNoteCensus {
         blocks: blocks.len(),
-        tag_bearing,
-        deleted: false,
+        ..MakerNoteCensus::default()
+    };
+    for block in blocks {
+        let Ok(scan) = scan_entries_with_magics(block, magics) else {
+            census.notes += 1;
+            census.tag_bearing += 1;
+            continue;
+        };
+        let ifd0_text = |tag_id: u16| {
+            scan.entries
+                .iter()
+                .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
+                .map(|entry| {
+                    String::from_utf8_lossy(&entry.value)
+                        .trim_end_matches(['\0', ' '])
+                        .to_string()
+                })
+                .unwrap_or_default()
+        };
+        let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
+        for entry in &scan.entries {
+            if entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE {
+                census.notes += 1;
+                if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
+                    &entry.value,
+                    &make,
+                    &model,
+                ) {
+                    census.tag_bearing += 1;
+                }
+            } else if entry.ifd == IfdKind::Ifd0
+                && entry.tag_id == DNG_PRIVATE_DATA
+                && entry.value.starts_with(b"Adobe\0")
+                && entry.value.windows(4).any(|w| w == b"MakN")
+            {
+                census.notes += 1;
+                census.tag_bearing += 1;
+            }
+        }
     }
+    census
 }
 
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a

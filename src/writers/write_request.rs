@@ -606,7 +606,7 @@ pub(crate) fn ensure_not_also_updated(
     // `Warning: Multiple APP1 EXIF records`, then both written); oxidex
     // writes one.
     let census = makernote_block();
-    if census.blocks > 1 {
+    if census.blocks > 1 && !census.deletions.exif_blocks {
         return Err(use_exif_only(format!(
             "the file carries {} EXIF blocks, each of which ExifTool writes {name} to, \
              and oxidex writes one",
@@ -718,6 +718,42 @@ fn candidate_lives_in(g0: &str, g1: &str, group: &str) -> bool {
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("XMP-")))
 }
 
+/// Refuses a request naming a maker-note entry itself --
+/// `-ExifIFD:MakerNoteCanon=`, `-EXIF:MakerNoteCanon=`,
+/// `-MakerNotes:MakerNoteCanon=` (a `MakerNotes::Main` entry name) -- in a
+/// file that carries a maker note: pinned 13.59 deletes the note such a
+/// name selects (t/images/Canon.jpg: all three delete its MakerNoteCanon),
+/// which oxidex neither does nor can tell apart from a note the name does
+/// not select, and which the no-op check (reading rows, which name no such
+/// entry) used to report `unchanged`. A file with no maker note is left to
+/// that check (13.59: `unchanged`).
+pub(crate) fn ensure_makernote_entry_not_named(
+    tag: &str,
+    key: &str,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
+) -> Result<()> {
+    use super::generated_makernote_groups::MAKERNOTE_ROOTS;
+    let Some((group, name)) = key.split_once(':') else {
+        return Ok(());
+    };
+    let name = name.strip_suffix('#').unwrap_or(name);
+    let named = ["ExifIFD", "EXIF", "MakerNotes"]
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+        && MAKERNOTE_ROOTS
+            .iter()
+            .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
+    if named && makernote_block().notes > 0 {
+        return Err(refuse(
+            tag,
+            "it names a maker-note entry, which ExifTool deletes or replaces whole where \
+             the file's note is that entry; oxidex does not edit a maker note by name \
+             (use -MakerNotes:All= to delete it)",
+        ));
+    }
+    Ok(())
+}
+
 /// Why pinned ExifTool may also write `name` in the file's maker note, or
 /// `None` when it provably cannot: the name has no writable `MakerNotes`
 /// candidate ([`MAKERNOTE_CANDIDATES`], the pinned `FindTagInfo` over every
@@ -753,15 +789,24 @@ pub(crate) fn makernote_may_hold(
     if groups.is_empty() {
         return None;
     }
-    let decoded = super::exif_surgical::makernote_row_groups(baseline);
+    let mut decoded = super::exif_surgical::makernote_row_groups(baseline);
     let census = makernote_block();
     // A request that deletes the EXIF maker note leaves no copy there to
-    // edit; a CIFF segment (a separate APP0 maker-note block) survives it.
+    // edit; a CIFF segment (a separate APP0 maker-note block) survives it
+    // unless the deletion is `MakerNotes:All`, which takes CIFF too.
+    let deletions = census.deletions;
     let ciff = decoded.contains("CIFF") || decoded.contains("CanonRaw");
-    if census.deleted && !ciff {
+    if deletions.makernotes && (!ciff || deletions.ciff) {
         return None;
     }
-    let tag_bearing = if census.deleted {
+    if deletions.makernotes {
+        // Only the CIFF segment's rows remain: its root's groups.
+        let ciff_root = MAKERNOTE_ROOTS.iter().find(|root| root.entry == "CIFF");
+        decoded.retain(|group| {
+            ciff_root.is_some_and(|root| root.closure.contains(&group.as_str())) || group == "CIFF"
+        });
+    }
+    let tag_bearing = if deletions.makernotes {
         0
     } else {
         census.tag_bearing
@@ -957,14 +1002,14 @@ mod tests {
     fn no_note() -> MakerNoteCensus {
         MakerNoteCensus {
             blocks: 1,
-            tag_bearing: 0,
-            deleted: false,
+            ..MakerNoteCensus::default()
         }
     }
 
     /// One EXIF block whose maker note bears tags.
     fn one_note() -> MakerNoteCensus {
         MakerNoteCensus {
+            notes: 1,
             tag_bearing: 1,
             ..no_note()
         }
@@ -1173,22 +1218,29 @@ mod tests {
         // Two tag-bearing notes (two EXIF APP1s) cannot be told apart by
         // rows, even when one of them was decoded.
         let two = || MakerNoteCensus {
-            blocks: 2,
+            blocks: 1,
+            notes: 2,
             tag_bearing: 2,
-            deleted: false,
+            ..MakerNoteCensus::default()
         };
         assert!(makernote_may_hold("WhiteBalance", &canon, &two).is_some());
         // A request that deletes the EXIF maker note leaves nothing to
         // edit (pinned 13.59: `-MakerNotes:All= -WhiteBalance#=1`), but a
         // CIFF segment survives it.
-        let deleted = || MakerNoteCensus {
-            deleted: true,
+        let exif_ifd_all = || MakerNoteCensus {
+            deletions: super::super::exif_surgical::RequestDeletions::of("ExifIFD:All"),
             ..one_note()
         };
-        assert!(makernote_may_hold("WhiteBalance", &canon, &deleted).is_none());
+        assert!(makernote_may_hold("WhiteBalance", &canon, &exif_ifd_all).is_none());
         let mut ciff = canon.clone();
         ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
-        assert!(makernote_may_hold("FocalLength", &ciff, &deleted).is_some());
+        assert!(makernote_may_hold("FocalLength", &ciff, &exif_ifd_all).is_some());
+        // `MakerNotes:All` takes the CIFF segment too.
+        let makernotes_all = || MakerNoteCensus {
+            deletions: super::super::exif_surgical::RequestDeletions::of("MakerNotes:All"),
+            ..one_note()
+        };
+        assert!(makernote_may_hold("FocalLength", &ciff, &makernotes_all).is_none());
     }
 
     /// Candidates come from the pinned `FindTagInfo` capture, never from
@@ -1249,11 +1301,37 @@ mod tests {
         let empty = MetadataMap::new();
         let two = || MakerNoteCensus {
             blocks: 2,
-            tag_bearing: 0,
-            deleted: false,
+            ..MakerNoteCensus::default()
         };
         let err = ensure_not_also_updated("Artist", "IFD0:Artist", &empty, &two).unwrap_err();
         assert!(err.to_string().contains("2 EXIF blocks"), "{err}");
+        // Unless the request deletes every EXIF block first.
+        let recreated = || MakerNoteCensus {
+            deletions: super::super::exif_surgical::RequestDeletions::of("EXIF:All"),
+            ..two()
+        };
+        assert!(ensure_not_also_updated("Artist", "IFD0:Artist", &empty, &recreated).is_ok());
+    }
+
+    /// A maker-note entry named directly is refused where the file carries
+    /// a note (13.59 deletes it: `-ExifIFD:MakerNoteCanon=` on Canon.jpg).
+    #[test]
+    fn a_named_maker_note_entry_is_refused() {
+        for key in [
+            "ExifIFD:MakerNoteCanon",
+            "EXIF:MakerNoteCanon",
+            "MakerNotes:MakerNoteNikon",
+        ] {
+            assert!(
+                ensure_makernote_entry_not_named(key, key, &one_note).is_err(),
+                "{key}"
+            );
+            assert!(
+                ensure_makernote_entry_not_named(key, key, &no_note).is_ok(),
+                "{key}"
+            );
+        }
+        assert!(ensure_makernote_entry_not_named("X", "ExifIFD:WhiteBalance", &one_note).is_ok());
     }
 
     /// Only a same-named row a candidate can be is one ExifTool also
