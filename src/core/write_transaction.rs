@@ -43,8 +43,8 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, metadata_holds, plan_group_deletion, read_metadata,
-    removal_is_no_op, remove_field, resolve_write_key_for, write_metadata_transaction,
+    exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata, removal_is_no_op,
+    remove_field, resolve_write_key_for, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -213,8 +213,12 @@ fn is_file_system_fact(key: &str) -> bool {
 /// refused.
 ///
 /// A PDF Info field the reader surfaces under two spellings
-/// (`PDF:CreateDate` / `PDF:CreationDate`) is one field: dropping one
-/// spelling while the other stays is not a deletion of it.
+/// (`PDF:CreateDate` / `PDF:CreationDate`) is one field: removing either
+/// spelling deletes the field -- under ExifTool's name for it, the first of
+/// [`field_spellings`] (13.59 knows no tag `PDF:CreationDate`) -- unless the
+/// other spelling is itself a set of the field (assigned, or changed), which
+/// then replaces it. The untouched alias the reader left in the map is not a
+/// reason to keep the date: that silently skipped the deletion.
 pub(crate) fn changes_between(
     baseline: &MetadataMap,
     desired: &MetadataMap,
@@ -254,10 +258,24 @@ pub(crate) fn changes_between(
         return changes;
     }
     for (key, _) in baseline.iter() {
-        if desired.contains_key(key) || is_descriptive(key) || metadata_holds(desired, key) {
+        if desired.contains_key(key) || is_descriptive(key) {
             continue;
         }
-        changes.push(TagChange::delete(key.clone()));
+        let spellings = field_spellings(key);
+        let set_under_alias = spellings.iter().any(|alias| {
+            *alias != key.as_str()
+                && desired.get(alias).is_some_and(|value| {
+                    desired.is_assigned(alias) || baseline.get(alias) != Some(value)
+                })
+        });
+        if set_under_alias {
+            continue;
+        }
+        let field = spellings.first().copied().unwrap_or(key.as_str());
+        let deletion = TagChange::delete(field);
+        if !changes.contains(&deletion) {
+            changes.push(deletion);
+        }
     }
     changes
 }
@@ -911,15 +929,44 @@ mod tests {
         );
     }
 
+    /// Codex thread PRRT_kwDOQNbr5M6mOo0z (#957): removing either spelling
+    /// of a PDF Info date from a read map deletes the field, under ExifTool's
+    /// tag name (13.59 has no `PDF:CreationDate` tag); the alias the reader
+    /// left behind no longer suppresses it. A set under the other spelling
+    /// replaces the field instead.
     #[test]
     fn a_pdf_info_field_is_one_field_under_two_spellings() {
-        let baseline = map(&[
-            ("PDF:CreateDate", s("2024:01:01 00:00:00")),
-            ("PDF:CreationDate", s("2024:01:01 00:00:00")),
-        ]);
-        let mut desired = map(&[("PDF:CreateDate", s("2024:01:01 00:00:00"))]);
-        desired.mark_read_complete();
-        assert!(changes_between(&baseline, &desired, true).is_empty());
+        let date = || s("2024:01:01 00:00:00");
+        let baseline = map(&[("PDF:CreateDate", date()), ("PDF:CreationDate", date())]);
+        let read = |rows: &[(&str, TagValue)]| {
+            let mut read = map(rows);
+            read.mark_read_complete();
+            read
+        };
+        let deleted = vec![TagChange::delete("PDF:CreateDate")];
+        for kept in ["PDF:CreateDate", "PDF:CreationDate"] {
+            assert_eq!(
+                changes_between(&baseline, &read(&[(kept, date())]), true),
+                deleted,
+                "only {kept} left"
+            );
+        }
+        assert_eq!(changes_between(&baseline, &read(&[]), true), deleted);
+        // Unchanged, both spellings: nothing.
+        assert!(changes_between(&baseline, &baseline_read(&baseline), true).is_empty());
+        // The field set under its other spelling: that set, no deletion.
+        let mut desired = read(&[("PDF:CreationDate", date())]);
+        desired.insert("PDF:CreationDate", s("2020:01:01 00:00:00"));
+        assert_eq!(
+            changes_between(&baseline, &desired, true),
+            vec![TagChange::set("PDF:CreationDate", s("2020:01:01 00:00:00"))]
+        );
+    }
+
+    fn baseline_read(baseline: &MetadataMap) -> MetadataMap {
+        let mut read = baseline.clone();
+        read.mark_read_complete();
+        read
     }
 
     #[test]

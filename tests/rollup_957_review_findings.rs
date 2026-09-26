@@ -22,6 +22,9 @@ use tempfile::TempDir;
 const JPEG: &str = "tests/fixtures/jpeg/simple/synthetic_001.jpg";
 /// `[IFD0] Make: TestCamera`, `Model: TM`, plus XMP.
 const JPEG_XMP: &str = "tests/fixtures/jpeg/sample_with_exif_xmp.jpg";
+/// Info `/CreationDate` and `/ModDate`, read as `PDF:CreateDate` /
+/// `PDF:CreationDate` and `PDF:ModifyDate` / `PDF:ModDate`.
+const PDF: &str = "tests/fixtures/pdf/sample.pdf";
 
 fn copy_into(dir: &TempDir, fixture: &Path, name: &str) -> PathBuf {
     let path = dir.path().join(name);
@@ -333,4 +336,60 @@ fn a_file_list_write_refuses_a_read_only_target() {
     let o = oxidex(&["-IFD0:Artist=x", s(&sub)]);
     assert_eq!(o.status.code(), Some(1), "{}", out(&o));
     assert_eq!(sha(&inside), before, "the read-only file was replaced");
+}
+
+// --- PRRT_kwDOQNbr5M6mOo0z: a named removal takes every spelling ----------
+
+/// A PDF read holds `PDF:CreateDate` and `PDF:CreationDate` for one Info
+/// field. Removing either from the map deleted nothing (the other spelling
+/// "held" the field); 13.59's `-PDF:CreateDate=` removes the date.
+#[test]
+fn removing_either_spelling_of_a_pdf_date_deletes_it() {
+    let dir = TempDir::new().unwrap();
+    for (removed, field) in [
+        ("PDF:CreateDate", "PDF:CreateDate"),
+        ("PDF:CreationDate", "PDF:CreateDate"),
+        ("PDF:ModifyDate", "PDF:ModifyDate"),
+        ("PDF:ModDate", "PDF:ModifyDate"),
+    ] {
+        let pdf = copy_into(&dir, Path::new(PDF), "a.pdf");
+        let mut map = read_metadata(&pdf).unwrap();
+        assert!(map.remove(removed).is_some(), "{removed}");
+        write_metadata(&pdf, &map).unwrap_or_else(|e| panic!("{removed}: {e}"));
+        let after = read_metadata(&pdf).unwrap();
+        assert!(after.get(field).is_none(), "{removed}: {field} kept");
+        assert!(after.get(removed).is_none(), "{removed} kept");
+    }
+
+    // The C ABI's removal, on the handle's map.
+    let pdf = copy_into(&dir, Path::new(PDF), "b.pdf");
+    let handle = Handle::read(&pdf);
+    handle.remove("PDF:CreateDate");
+    assert_eq!(handle.write(&pdf), EXIFTOOL_OK);
+    assert_eq!(get(&pdf, "PDF:CreateDate"), None);
+    assert!(get(&pdf, "PDF:ModifyDate").is_some());
+}
+
+#[test]
+fn oracle_removes_a_pdf_date_as_the_map_removal_does() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    for field in ["PDF:CreateDate", "PDF:ModifyDate"] {
+        let theirs = copy_into(&dir, Path::new(PDF), "theirs.pdf");
+        oracle_write(oracle, &[&format!("-{field}=")], &theirs);
+        let ours = copy_into(&dir, Path::new(PDF), "ours.pdf");
+        let mut map = read_metadata(&ours).unwrap();
+        map.remove(field);
+        write_metadata(&ours, &map).unwrap();
+        for key in ["PDF:CreateDate", "PDF:ModifyDate"] {
+            assert_eq!(
+                get(&ours, key).is_some(),
+                !oracle_value(oracle, &theirs, key).is_empty(),
+                "removing {field}: {key}"
+            );
+        }
+    }
 }
