@@ -660,10 +660,7 @@ fn uneditable_exif_carriers_are_refused_untouched() {
 /// The warnings pinned ExifTool 13.59's `-validate` gives for `path`, or
 /// `None` when no usable oracle is resolved (the test then skips the check).
 fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
-    if !exiftool_oracle::available() {
-        return None;
-    }
-    let oracle = exiftool_oracle::shared().ok()?;
+    let oracle = exiftool_oracle::graded()?;
     let out = oracle
         .command()
         .args(["-a", "-s3", "-validate", "-Warning"])
@@ -693,10 +690,7 @@ fn validate_warnings(path: &Path) -> Option<BTreeSet<String>> {
 /// structural damage -- a directory placed out of order, an orphaned table,
 /// a short directory -- that one misses.
 fn assert_validate_parity(original: &[u8], name: &str, args: &[&str], ours: &Path, label: &str) {
-    let Some(oracle) = exiftool_oracle::available()
-        .then(exiftool_oracle::shared)
-        .and_then(Result::ok)
-    else {
+    let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping -validate parity ({label}): no usable ExifTool oracle");
         return;
     };
@@ -1983,6 +1977,235 @@ fn carrier_removals_drop_a_malformed_exif_carrier() {
                     ["IHDR", "IDAT", "IEND"],
                     "{label} {group}"
                 );
+            }
+        }
+    }
+}
+
+/// eXIf payloads with no TIFF byte-order mark besides the `byte-order`
+/// fixture's `XX`: empty, one byte, and `XX` behind an improper `Exif\0\0`
+/// header. Pinned ExifTool 13.59 treats all of them alike: "Invalid eXIf
+/// chunk" (PNG.pm 13.59:1374-1383).
+fn byte_order_less_payloads() -> [(&'static str, Vec<u8>); 3] {
+    [
+        ("empty", Vec::new()),
+        ("one-byte", b"I".to_vec()),
+        (
+            "exif-header",
+            [b"Exif\0\0".as_slice(), b"XX*\0\x08\0\0\0\0\0\0\0\0\0"].concat(),
+        ),
+    ]
+}
+
+/// Pinned ExifTool 13.59 run with `args` on a copy of `original` named
+/// `name`: its output bytes and its stdout + stderr, or `None` when no
+/// usable oracle is resolved (the caller then skips the comparison).
+fn oracle_edit(original: &[u8], name: &str, args: &[&str]) -> Option<(Vec<u8>, String)> {
+    let oracle = exiftool_oracle::graded()?;
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), name, original);
+    let out = oracle
+        .command()
+        .arg("-overwrite_original")
+        .args(args)
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "oracle {args:?} failed: {out:?}");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some((std::fs::read(&path).unwrap(), said))
+}
+
+/// Pinned ExifTool 13.59's `-a -G1 -s -EXIF:all` read-back of `path`.
+fn oracle_exif_rows(path: &Path) -> Vec<String> {
+    let oracle = exiftool_oracle::required();
+    let out = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-EXIF:all"])
+        .arg(path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A set in a malformed eXIf chunk is refused, the file byte-identical, with
+/// a message naming the fault -- never the word "invalid", which the CLI
+/// reports as a bad *value* ("Invalid value for ExifIFD:ISO"). Tip e4edc55c
+/// replaced each chunk with a fresh `II` block (and its `ExifIFD:ISO=200`
+/// wrote no ISO); 53f3f0da refused with a scanner error. The oracle's own
+/// result is pinned beside each refusal, as the reason it is not copied:
+///
+/// - no byte-order mark: ExifTool warns "Invalid eXIf chunk", keeps the
+///   chunk and adds a second, new `MM` eXIf chunk. This writer's new-block
+///   output is not ExifTool's (a fresh `ExifIFD:ISO=200` lacks the
+///   YCbCrPositioning / ExifVersion / ComponentsConfiguration / ColorSpace
+///   entries ExifTool adds), and it refuses any later EXIF edit of a PNG
+///   with two eXIf chunks;
+/// - TIFF magic 43: ExifTool edits the chunk in place as classic TIFF and
+///   keeps the 43, a block this reader does not read -- the tag just
+///   written would not read back;
+/// - shorter than a TIFF header: ExifTool writes nothing either ("1 image
+///   files unchanged", exit 0); this CLI has no "unchanged" outcome for a
+///   set, and a success that wrote nothing is a silent no-op.
+#[test]
+fn a_set_in_a_malformed_exif_chunk_is_refused_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    for (label, payload) in malformed_exif_payloads()
+        .into_iter()
+        .chain(byte_order_less_payloads())
+    {
+        let original = png(&[(b"eXIf", payload.clone())], &[]);
+        let fault = match label {
+            "short" => "(3 bytes) is too short for a TIFF header",
+            "magic" => "magic number 43, not 42",
+            _ => "does not start with a TIFF byte-order mark",
+        };
+        for (key, value, arg, name) in [
+            (
+                "IFD0:Artist",
+                TagValue::new_string("you"),
+                "-IFD0:Artist=you",
+                "Artist",
+            ),
+            (
+                "ExifIFD:ISO",
+                TagValue::new_integer(200),
+                "-ExifIFD:ISO=200",
+                "ISO",
+            ),
+        ] {
+            let path = write(dir.path(), "bad.png", &original);
+            let error = modify_tag(&path, key, value).unwrap_err().to_string();
+            assert!(error.contains(fault), "{label} {key}: {error}");
+            assert!(
+                !error.to_lowercase().contains("invalid"),
+                "{label} {key}: {error}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original, "{label} {key}");
+            assert_validate_parity(&original, "bad.png", &[arg], &path, label);
+
+            let Some((theirs, said)) = oracle_edit(&original, "bad.png", &[arg]) else {
+                eprintln!("skipping the oracle's {arg} ({label}): no usable ExifTool oracle");
+                continue;
+            };
+            let exif: Vec<Vec<u8>> = chunks(&theirs)
+                .into_iter()
+                .filter(|(kind, _)| kind == "eXIf")
+                .map(|(_, data)| data)
+                .collect();
+            match label {
+                "short" => {
+                    assert_eq!(theirs, original, "{label} {key}");
+                    assert!(said.contains("1 image files unchanged"), "{said}");
+                }
+                "magic" => {
+                    assert_eq!(exif.len(), 1, "{label} {key}");
+                    assert_eq!(exif[0][..4], payload[..4], "{label} {key}: magic kept");
+                    let theirs_path = write(dir.path(), "theirs.png", &theirs);
+                    assert!(
+                        oracle_exif_rows(&theirs_path)
+                            .iter()
+                            .any(|row| row.split_whitespace().nth(1) == Some(name)),
+                        "{label} {key}: the oracle reads its own edit back"
+                    );
+                    assert!(
+                        read_metadata(&theirs_path).unwrap().get(key).is_none(),
+                        "{label} {key}: this reader now reads a magic-43 block"
+                    );
+                }
+                _ => {
+                    assert_eq!(exif.len(), 2, "{label} {key}: {said}");
+                    assert_eq!(exif[0], payload, "{label} {key}: first chunk kept");
+                    assert_eq!(&exif[1][..4], b"MM\0\x2a", "{label} {key}");
+                }
+            }
+        }
+    }
+}
+
+/// The removals on a malformed eXIf chunk give pinned ExifTool 13.59's
+/// output byte for byte, and draw no `-validate` warning its own edit does
+/// not: `IFD0:Artist` changes nothing (the oracle warns about a chunk with no
+/// byte-order mark and writes nothing); `EXIF:All` and `-all=` drop the
+/// chunk; `IFD0:All` drops it too except when it is `II`/`MM`-led and
+/// shorter than a TIFF header. 53f3f0da kept an empty or one-byte chunk on
+/// `IFD0:All`, which the oracle deletes before it looks for an IFD0
+/// (PNG.pm 13.59:1365, 1376-1380).
+#[test]
+fn removals_on_a_malformed_exif_chunk_match_the_oracle() {
+    let dir = tempfile::tempdir().unwrap();
+    for (label, payload) in malformed_exif_payloads()
+        .into_iter()
+        .chain(byte_order_less_payloads())
+    {
+        let original = png(&[(b"eXIf", payload.clone())], &[]);
+        for arg in ["-IFD0:Artist=", "-EXIF:All=", "-IFD0:All=", "-all="] {
+            let path = write(dir.path(), "bad.png", &original);
+            match arg {
+                "-all=" => clear_all_metadata(&path),
+                _ => remove_tag(&path, &arg[1..arg.len() - 1]),
+            }
+            .unwrap_or_else(|e| panic!("{label} {arg}: {e}"));
+            let ours = std::fs::read(&path).unwrap();
+            let Some((theirs, _)) = oracle_edit(&original, "bad.png", &[arg]) else {
+                eprintln!("skipping the oracle's {arg} ({label}): no usable ExifTool oracle");
+                continue;
+            };
+            assert_eq!(ours, theirs, "{label} {arg}: not the oracle's output");
+            assert_validate_parity(&original, "bad.png", &[arg], &path, label);
+        }
+    }
+}
+
+/// A carrier-wide removal on a PNG with two eXIf chunks deletes them without
+/// parsing either, byte for byte as pinned ExifTool 13.59 does: `EXIF:All`
+/// drops every chunk, `IFD0:All` every one but an `II`/`MM` chunk too short
+/// for a TIFF header, and `-all=` all of them. 9857fdd4 refused all but the
+/// last with "more than one eXIf chunk" -- a refusal about writing a second
+/// IFD0, when a deletion writes none -- and `-IFD0:All=` on two short chunks
+/// was already the oracle's no-op. `-validate` parity with the oracle's own
+/// edit too.
+#[test]
+fn carrier_removals_drop_every_exif_chunk_of_a_multi_chunk_png() {
+    let dir = tempfile::tempdir().unwrap();
+    let valid = Tiff {
+        ifd0: vec![(0x013B, 2, 3, b"me\0".to_vec())],
+        exif: None,
+        interop: None,
+        gps: None,
+        ifd1: None,
+    }
+    .build(Order::Mm);
+    let shapes: Vec<(&str, Vec<u8>)> = malformed_exif_payloads()
+        .into_iter()
+        .chain(byte_order_less_payloads())
+        .chain([("valid", valid)])
+        .collect();
+    for (a, first) in &shapes {
+        for (b, second) in &shapes {
+            let label = format!("{a}+{b}");
+            let original = png(&[(b"eXIf", first.clone()), (b"eXIf", second.clone())], &[]);
+            for arg in ["-EXIF:All=", "-IFD0:All=", "-all="] {
+                let path = write(dir.path(), "multi.png", &original);
+                match arg {
+                    "-all=" => clear_all_metadata(&path),
+                    _ => remove_tag(&path, &arg[1..arg.len() - 1]),
+                }
+                .unwrap_or_else(|e| panic!("{label} {arg}: {e}"));
+                let ours = std::fs::read(&path).unwrap();
+                let Some((theirs, _)) = oracle_edit(&original, "multi.png", &[arg]) else {
+                    eprintln!("skipping the oracle's {arg} ({label}): no oracle may grade output");
+                    continue;
+                };
+                assert_eq!(ours, theirs, "{label} {arg}: not the oracle's output");
+                assert_validate_parity(&original, "multi.png", &[arg], &path, &label);
             }
         }
     }
