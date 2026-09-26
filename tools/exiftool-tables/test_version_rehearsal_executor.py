@@ -2437,6 +2437,7 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaises(executor.OwnedChildCleanupIncomplete):
                 executor._verify_checkout_head(self.root, "0" * 40, subprocess.run)
 
+    @_without_lineage_supervisor
     def test_native_timeout_marker_bypass_preserves_active_journal(self):
         self.initialize(self.config())
         journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
@@ -3075,6 +3076,7 @@ class ExecutorTests(unittest.TestCase):
                 except ChildProcessError:
                     pass
 
+    @_without_lineage_supervisor
     def test_cleanup_fails_closed_when_term_handler_spawns_escaped_descendant(self):
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
@@ -3157,6 +3159,7 @@ class ExecutorTests(unittest.TestCase):
 
                 executor._close_ownership_probe(child)
 
+    @_without_lineage_supervisor
     def test_interrupt_cleanup_fails_closed_when_term_handler_closes_marker_before_escape(self):
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
