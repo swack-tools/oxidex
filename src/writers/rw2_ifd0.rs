@@ -79,16 +79,18 @@ const PERMANENT: &[u16] = &[0x013b, 0x8298];
 enum Spelling {
     /// `IFD0:<Name>`: the family-1 group of both tables' IFD0.
     Ifd0,
-    /// `EXIF:<Name>` (the family-0 group of `PanasonicRaw::Main`, GROUPS
-    /// :71) or a bare name: every table naming the tag.
-    Broad,
+    /// `EXIF:<Name>`: the family-0 group of `PanasonicRaw::Main` (GROUPS
+    /// :71) and `Exif::Main`.
+    Family,
+    /// A bare name: every table of every module naming the tag.
+    Bare,
 }
 
 fn spelling(key: &str) -> Option<(Spelling, &str)> {
     let (spelling, name) = match key.split_once(':') {
-        None => (Spelling::Broad, key),
+        None => (Spelling::Bare, key),
         Some((group, name)) if group.eq_ignore_ascii_case("IFD0") => (Spelling::Ifd0, name),
-        Some((group, name)) if group.eq_ignore_ascii_case("EXIF") => (Spelling::Broad, name),
+        Some((group, name)) if group.eq_ignore_ascii_case("EXIF") => (Spelling::Family, name),
         Some(_) => return None,
     };
     (!name.is_empty() && !name.eq_ignore_ascii_case("all")).then_some((spelling, name))
@@ -180,26 +182,39 @@ impl Rw2 {
         }
     }
 
-    /// Whether the embedded IFD0 already holds `value` for `tag`, byte for
-    /// byte as the planner would encode it: only then does ExifTool leave
-    /// `Doc1:IFD0` as it is.
-    fn embedded_holds(&self, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
+    /// Whether pinned ExifTool 13.59 leaves the embedded EXIF as it is for
+    /// `IFD0:<tag>` = `value`: its IFD0 already holds `value`, byte for byte
+    /// as the planner would encode it, and no other of its directories holds
+    /// the tag -- ExifTool moves such a copy into IFD0 (`-v2` of
+    /// `-IFD0:ISO=80` on a JpgFromRaw whose IFD0 and ExifIFD both hold ISO
+    /// 80: "- ExifIFD:ISO = '80'"; evidence `probe-review-956.txt`).
+    fn embedded_unchanged(&self, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
         let Some(Some(scan)) = &self.embedded else {
             return false;
         };
         scan.entries
             .iter()
-            .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag.id)
-            .is_some_and(|entry| {
-                tag_value_to_field_for_key(key, value, Some(entry.field_type)).is_ok_and(
-                    |(field_type, count, native)| {
-                        field_type == entry.field_type
-                            && count == entry.count
-                            && native_to_byte_order(field_type, &native, scan.byte_order)
-                                == entry.value
-                    },
-                )
-            })
+            .all(|entry| entry.ifd == IfdKind::Ifd0 || entry.tag_id != tag.id)
+            && holds(scan, IfdKind::Ifd0, key, tag, value)
+    }
+
+    /// Whether the outer IFD0 holds `value` for `tag`.
+    fn outer_holds(&self, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
+        holds(&self.outer, IfdKind::Ifd0, key, tag, value)
+    }
+
+    /// ExifTool's refusal of a `PanasonicRaw::Main` tag no writable table of
+    /// the group names: "Sorry, EXIF:SensorWidth doesn't exist or isn't
+    /// writable", exit 1, file unchanged.
+    fn not_writable(&self, verb: &str, key: &str, name: &str) -> ExifToolError {
+        self.refused(
+            verb,
+            key,
+            format!(
+                "PanasonicRaw IFD0 tag {name} is not writable (pinned ExifTool 13.59: \
+                 \"{key} doesn't exist or isn't writable\")"
+            ),
+        )
     }
 
     fn refused(&self, verb: &str, key: &str, why: String) -> ExifToolError {
@@ -211,13 +226,17 @@ impl Rw2 {
     }
 
     /// The refusal of the set `key` = `value` (`name` in `spelling`), if
-    /// this writer cannot make it as ExifTool does.
+    /// this writer cannot make it as ExifTool does. `same_value`: an
+    /// explicit set to the value the reader reports (`IFD0:ISO=80` over an
+    /// ISO of 80), which ExifTool still writes wherever an entry is absent
+    /// or holds another value.
     fn check_set(
         &self,
         key: &str,
         spelling: Spelling,
         name: &str,
         value: &TagValue,
+        same_value: bool,
     ) -> Option<ExifToolError> {
         let outer_tags: Vec<&IfdTag> = panasonic_tags(name);
         let writable: Vec<&IfdTag> = outer_tags
@@ -232,7 +251,14 @@ impl Rw2 {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        if spelling == Spelling::Broad {
+        if spelling == Spelling::Family
+            && writable.is_empty()
+            && !outer_tags.is_empty()
+            && exif.is_none()
+        {
+            return Some(self.not_writable("Writing", key, name));
+        }
+        if spelling != Spelling::Ifd0 {
             // An `Exif::Main` tag outside IFD0 is the embedded-document
             // check's and the planner's; here only what reaches a
             // `PanasonicRaw::Main` entry this writer does not write.
@@ -260,7 +286,7 @@ impl Rw2 {
             .collect();
         let embedded = exif.filter(|_| self.embedded.is_some());
         if let Some(exif) = embedded
-            && !self.embedded_holds(key, exif, value)
+            && !self.embedded_unchanged(key, exif, value)
         {
             let also = if outer.is_empty() {
                 String::new()
@@ -282,11 +308,10 @@ impl Rw2 {
                 return None; // no table names it: the planner's refusal
             }
             if exif.is_none() {
-                return Some(self.refused(
-                    "Writing",
-                    key,
-                    format!("PanasonicRaw IFD0 tag {name} is not writable"),
-                ));
+                return Some(self.not_writable("Writing", key, name));
+            }
+            if same_value {
+                return None; // ExifTool writes nothing either
             }
             let place = if embedded.is_some() {
                 "the embedded JpgFromRaw's IFD0 (PanasonicRaw 0x002e), which already holds \
@@ -306,6 +331,30 @@ impl Rw2 {
                     } else {
                         format!("holds {name} only when the camera wrote it")
                     }
+                ),
+            ));
+        }
+        if same_value {
+            // ExifTool writes every outer entry it would for any value: one
+            // absent is created (`-IFD0:ISO=80` over 0x0017 = 80 adds 0x0037;
+            // evidence `probe-review-956.txt`), one holding another value is
+            // rewritten. Neither is made here.
+            let changed: Vec<&IfdTag> = outer
+                .iter()
+                .copied()
+                .filter(|tag| !self.outer_holds(key, tag, value))
+                .collect();
+            if changed.is_empty() {
+                return None;
+            }
+            return Some(self.refused(
+                "Writing",
+                key,
+                format!(
+                    "pinned ExifTool 13.59 writes PanasonicRaw IFD0 tag {} ({name}) in the \
+                     outer IFD0, creating it where absent, although another entry already \
+                     holds this value; this writer does not write it",
+                    ids(&changed)
                 ),
             ));
         }
@@ -358,15 +407,18 @@ impl Rw2 {
                 ),
             ));
         }
-        if spelling == Spelling::Ifd0 && !present.is_empty() && exif.is_none() {
-            return Some(self.refused(
-                "Removing",
-                key,
-                format!(
-                    "PanasonicRaw IFD0 tag {name} is not writable (pinned ExifTool 13.59: \
-                     \"doesn't exist or isn't writable\")"
-                ),
-            ));
+        // `IFD0:` and `EXIF:` name only `PanasonicRaw::Main` and
+        // `Exif::Main` here, so a tag neither declares writable is refused by
+        // ExifTool, file unchanged, exit 1. A bare name reaches every
+        // module's tables, and pinned ExifTool 13.59 exits 0 with the file
+        // unchanged for `-SensorWidth=` ("0 image files updated", evidence
+        // `probe-review-956.txt`): not refused here.
+        if spelling != Spelling::Bare
+            && !outer_tags.is_empty()
+            && outer_tags.iter().all(|tag| tag.writable.is_none())
+            && exif.is_none()
+        {
+            return Some(self.not_writable("Removing", key, name));
         }
         if spelling == Spelling::Ifd0
             && let Some(exif) = exif
@@ -418,19 +470,21 @@ pub(crate) fn refuse_rw2_ifd0_edits(
         }
     }
     for (key, value, spelling, name) in sets {
-        if let Some(refusal) = rw2.check_set(key, spelling, name, value) {
+        if let Some(refusal) = rw2.check_set(key, spelling, name, value, false) {
             return Err(refusal);
         }
     }
     Ok(())
 }
 
-/// [`refuse_rw2_ifd0_edits`] for the explicit sets (`assigned`) whose value
-/// is the file's own (`baseline`'s): the map cannot tell those from carried
-/// rows, so they reach no other check. `IFD0:Make=Panasonic` where the
-/// outer Make is Panasonic but the embedded one is not is a change pinned
-/// ExifTool 13.59 makes in the JpgFromRaw, and was reported done unchanged.
-/// Reads the file only when there is such a set.
+/// [`refuse_rw2_ifd0_edits`] for the explicit `IFD0:` sets (`assigned`)
+/// whose value is the file's own (`baseline`'s): the map cannot tell those
+/// from carried rows, so they reach no other check, and every destination
+/// ExifTool writes is checked as for any set. `IFD0:Make=Panasonic` where the
+/// embedded Make is not Panasonic is a change pinned ExifTool 13.59 makes in
+/// the JpgFromRaw; `IFD0:ISO=80` over an outer 0x0017 of 80 creates 0x0037.
+/// Both were reported done unchanged. Reads the file only when there is such
+/// a set.
 pub(crate) fn refuse_rw2_same_value_sets(
     path: &std::path::Path,
     baseline: &MetadataMap,
@@ -461,24 +515,31 @@ pub(crate) fn refuse_rw2_same_value_sets(
         return Ok(());
     };
     for (key, value) in same.iter() {
-        let Some((_, name)) = spelling(key) else {
+        let Some((spelling, name)) = spelling(key) else {
             continue;
         };
-        if let Some(exif) = exif_tag(name)
-            && rw2.embedded.is_some()
-            && !rw2.embedded_holds(key, exif, value)
-        {
-            return Err(rw2.refused(
-                "Writing",
-                key,
-                "pinned ExifTool 13.59 writes it into the IFD0 of the embedded JpgFromRaw \
-                 (PanasonicRaw 0x002e), which holds a different value, and this writer does \
-                 not edit that JPEG"
-                    .to_string(),
-            ));
+        if let Some(refusal) = rw2.check_set(key, spelling, name, value, true) {
+            return Err(refusal);
         }
     }
     Ok(())
+}
+
+/// Whether `scan`'s directory `ifd` holds `value` for `tag`, byte for byte
+/// as the planner would encode it under `key`.
+fn holds(scan: &ExifScan, ifd: IfdKind, key: &str, tag: &IfdTag, value: &TagValue) -> bool {
+    scan.entries
+        .iter()
+        .find(|entry| entry.ifd == ifd && entry.tag_id == tag.id)
+        .is_some_and(|entry| {
+            tag_value_to_field_for_key(key, value, Some(entry.field_type)).is_ok_and(
+                |(field_type, count, native)| {
+                    field_type == entry.field_type
+                        && count == entry.count
+                        && native_to_byte_order(field_type, &native, scan.byte_order) == entry.value
+                },
+            )
+        })
 }
 
 /// Post-condition of a write to a Panasonic RAW/RW2/RWL file: the outer

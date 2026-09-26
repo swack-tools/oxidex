@@ -110,6 +110,29 @@ fn with_embedded_make(original: &[u8], make: &[u8; 10]) -> Vec<u8> {
     b
 }
 
+/// t/images Panasonic.rw2 with an ISO of 80 in the JpgFromRaw's own IFD0
+/// too (Exif 0x8827, SHORT): the ExifIFD pointer record moves into the
+/// YCbCrPositioning slot and ISO takes the pointer's, so the records stay in
+/// order and the IFD keeps its size (YCbCrPositioning is dropped). Its
+/// ExifIFD still holds ISO 80.
+fn with_embedded_ifd0_iso(original: &[u8]) -> Vec<u8> {
+    let mut b = original.to_vec();
+    let tiff = embedded_tiff(&b);
+    let records = ifd0_records(&b, tiff);
+    let slot = |tag: u16| records.iter().find(|(_, t)| *t == tag).unwrap().0;
+    let (ycbcr, exif) = (slot(0x0213), slot(0x8769));
+    assert_eq!(exif, ycbcr + 12);
+    let pointer = b[exif..exif + 12].to_vec();
+    b[ycbcr..ycbcr + 12].copy_from_slice(&pointer);
+    let mut iso = Vec::new();
+    iso.extend(0x8827u16.to_le_bytes());
+    iso.extend(3u16.to_le_bytes());
+    iso.extend(1u32.to_le_bytes());
+    iso.extend(80u32.to_le_bytes());
+    b[exif..exif + 12].copy_from_slice(&iso);
+    b
+}
+
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();
@@ -341,8 +364,7 @@ fn rw2_ifd0_edits_exiftool_makes_outside_the_jpgfromraw_stay_exact() {
 /// Read-back rows of pinned ExifTool 13.59 for `path` (`-a -G3:1 -s`), less
 /// the file-system rows and the ones that are positions in the file, which
 /// ExifTool's full re-layout moves and an in-place edit does not.
-fn oracle_rows(path: &Path) -> Vec<String> {
-    let oracle = exiftool_oracle::shared().unwrap();
+fn oracle_rows(oracle: &exiftool_oracle::Oracle, path: &Path) -> Vec<String> {
     let out = oracle
         .command()
         .args(["-a", "-G3:1", "-s", "-all", "-Warning"])
@@ -371,16 +393,16 @@ fn oracle_rows(path: &Path) -> Vec<String> {
 
 /// `ours` (oxidex's edit of `original` by `arg`) reads back, under pinned
 /// ExifTool 13.59, as the oracle's own edit of `original` does. Skipped
-/// when no usable oracle is resolved.
+/// (loudly, and a failure under `OXIDEX_REQUIRE_EXIFTOOL`) when no oracle may
+/// grade (`exiftool_oracle::graded`).
 fn assert_oracle_parity(original: &[u8], ours: &[u8], arg: &str, label: &str) {
-    if !exiftool_oracle::available() || exiftool_oracle::shared().is_err() {
-        eprintln!("skipping oracle parity ({label}): no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping oracle parity ({label}): no grading ExifTool oracle");
         return;
-    }
+    };
     let dir = tempfile::tempdir().unwrap();
     let reference = write(dir.path(), "oracle.rw2", original);
-    let status = exiftool_oracle::shared()
-        .unwrap()
+    let status = oracle
         .command()
         .args(["-q", "-q", "-overwrite_original", arg])
         .arg(&reference)
@@ -389,8 +411,80 @@ fn assert_oracle_parity(original: &[u8], ours: &[u8], arg: &str, label: &str) {
     assert!(status.success(), "{label}: oracle {arg} failed");
     let ours = write(dir.path(), "ours.rw2", ours);
     assert_eq!(
-        oracle_rows(&ours),
-        oracle_rows(&reference),
+        oracle_rows(oracle, &ours),
+        oracle_rows(oracle, &reference),
         "{label}: {arg} reads back unlike the oracle's edit"
     );
+}
+
+/// A removal or set of a `PanasonicRaw::Main` tag no writable table of the
+/// group declares (`SensorWidth`) is refused under `EXIF:` as under `IFD0:`:
+/// pinned ExifTool 13.59 answers "Sorry, EXIF:SensorWidth doesn't exist or
+/// isn't writable", exit 1, file unchanged. de92d7c4 checked only the
+/// `IFD0:` spelling and exited 0 for `-EXIF:SensorWidth=` (review of #956).
+/// A bare `-SensorWidth=` reaches every module's tables, and there the
+/// oracle exits 0 with the file unchanged ("0 image files updated"), so
+/// it stays a no-op success.
+#[test]
+fn rw2_non_writable_panasonicraw_tags_are_refused_under_every_group_spelling() {
+    let Some(original) = sample() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let no_jpeg = without_jpg_from_raw(&original);
+    for (label, file) in [("Panasonic.rw2", &original), ("no JpgFromRaw", &no_jpeg)] {
+        for arg in [
+            "-EXIF:SensorWidth=",
+            "-exif:sensorwidth=",
+            "-IFD0:SensorWidth=",
+            "-EXIF:SensorWidth=5",
+            "-IFD0:SensorWidth=5",
+        ] {
+            assert_cli_refused(dir.path(), file, label, arg, &["not writable"]);
+        }
+        for arg in ["-SensorWidth=", "-sensorwidth="] {
+            let (code, text, after) = cli(dir.path(), file, arg);
+            assert_eq!(code, Some(0), "{label} {arg}: {text}");
+            assert!(after == *file, "{label} {arg}: file changed");
+        }
+    }
+}
+
+/// An explicit `IFD0:` set to the value the reader already reports is
+/// checked against every destination pinned ExifTool 13.59 writes, not only
+/// the embedded IFD0 (review of #956). `-IFD0:ISO=80` over an outer 0x0017
+/// of 80 still adds outer 0x0037 = 80 (`PanasonicRaw::Main` declares both
+/// writable); where the JpgFromRaw's IFD0 already holds ISO 80 ExifTool also
+/// removes its ExifIFD copy. de92d7c4 reported both done with the file
+/// unchanged; refused by name now. `-IFD0:Make=Panasonic`, which every
+/// directory already holds, stays a no-op that reads back as the oracle's.
+#[test]
+fn rw2_same_value_ifd0_sets_check_every_outer_destination() {
+    let Some(original) = sample() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let no_jpeg = without_jpg_from_raw(&original);
+    let embedded_iso = with_embedded_ifd0_iso(&original);
+    for (label, file) in [
+        ("no JpgFromRaw", &no_jpeg),
+        ("embedded IFD0 ISO 80", &embedded_iso),
+        ("Panasonic.rw2", &original),
+    ] {
+        for arg in ["-IFD0:ISO=80", "-ifd0:iso=80"] {
+            assert_cli_refused(dir.path(), file, label, arg, &["PanasonicRaw"]);
+        }
+        let path = write(dir.path(), "lib.rw2", file);
+        let err = modify_tag(&path, "IFD0:ISO", TagValue::new_integer(80))
+            .expect_err("IFD0:ISO=80 reported done");
+        assert!(err.to_string().contains("PanasonicRaw"), "{label}: {err}");
+        assert!(std::fs::read(&path).unwrap() == *file, "{label}: touched");
+    }
+    for (label, file) in [("no JpgFromRaw", &no_jpeg), ("Panasonic.rw2", &original)] {
+        let arg = "-IFD0:Make=Panasonic";
+        let (code, text, after) = cli(dir.path(), file, arg);
+        assert_eq!(code, Some(0), "{label} {arg}: {text}");
+        assert!(after == *file, "{label} {arg}: file changed");
+        assert_oracle_parity(file, &after, arg, label);
+    }
 }
