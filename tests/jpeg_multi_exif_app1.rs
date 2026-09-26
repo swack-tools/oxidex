@@ -38,6 +38,9 @@ const ERR_TAG_NOT_WRITTEN: i32 = 7;
 const REASON: &str =
     "the file has 2 EXIF APP1 blocks; ExifTool writes every one, oxidex writes one";
 
+/// The same refusal of a bare name by #960's request resolver.
+const BARE_NAME_REASON: &str = "the file carries 2 EXIF blocks, each of which ExifTool writes";
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jpeg/multi_exif_app1")
@@ -234,25 +237,49 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-/// `message` is the multi-block refusal of `key`, and `debug` shows the
-/// typed `TagsNotWritten` variant.
-fn assert_refusal(label: &str, message: &str, debug: Option<&str>, key: &str) {
-    let expected = format!("Cannot write tag '{key}': {REASON}");
-    assert!(
-        message.contains(&expected),
-        "{label}: expected the refusal {expected:?}, got {message:?}"
-    );
-    if let Some(debug) = debug {
-        assert!(
-            debug.starts_with("TagsNotWritten"),
-            "{label}: expected a TagsNotWritten error, got {debug}"
-        );
+/// Why `message` is not the multi-block refusal of `key` (and, given
+/// `debug`, not the typed `TagsNotWritten` variant), or `None` when it is.
+/// #960's request resolver refuses a bare name on such a file before the
+/// transaction, in its own wording ([`BARE_NAME_REASON`]) and under the name
+/// as the request spelled it; its CLI also drops a trailing `#` before
+/// naming the key. Either is this refusal.
+fn refusal_problem(label: &str, message: &str, debug: Option<&str>, key: &str) -> Option<String> {
+    let plain = key.trim_end_matches('#');
+    let bare = plain.rsplit_once(':').map_or(plain, |(_, name)| name);
+    let named =
+        |key: &str, reason: &str| message.contains(&format!("Cannot write tag '{key}': {reason}"));
+    let refused = named(key, REASON)
+        || named(plain, REASON)
+        || [key, plain, bare]
+            .iter()
+            .any(|key| named(key, BARE_NAME_REASON));
+    if !refused {
+        return Some(format!(
+            "{label}: expected the refusal of {key:?} ({REASON:?}), got {message:?}"
+        ));
     }
+    match debug {
+        Some(debug) if !debug.starts_with("TagsNotWritten") => Some(format!(
+            "{label}: expected a TagsNotWritten error, got {debug}"
+        )),
+        _ => None,
+    }
+}
+
+/// Every problem found, reported together.
+fn assert_no_problems(problems: Vec<String>) {
+    assert!(
+        problems.is_empty(),
+        "{} problem(s):\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
 }
 
 #[test]
 fn library_refuses_every_exif_write_and_leaves_the_file_unchanged() {
     let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
     for name in FIXTURES {
         let original = std::fs::read(fixture(name)).unwrap();
         for case in cases() {
@@ -262,25 +289,30 @@ fn library_refuses_every_exif_write_and_leaves_the_file_unchanged() {
                 Lib::Set(key, value) => modify_tag(&path, key, value()),
                 Lib::Remove(key) => remove_tag(&path, key),
             };
-            let err = result.expect_err(&format!("{label}: expected a refusal"));
-            assert_refusal(
-                &label,
-                &err.to_string(),
-                Some(&format!("{err:?}")),
-                case.lib_names,
-            );
-            assert_eq!(
-                std::fs::read(&path).unwrap(),
-                original,
-                "{label}: the file changed"
-            );
+            match result {
+                // A deletion of a tag in neither block: ExifTool leaves the
+                // file unchanged; #960 does too, before the transaction.
+                Ok(_) if case.oracle == Oracle::Unchanged => {}
+                Ok(_) => problems.push(format!("{label}: expected a refusal, got Ok")),
+                Err(err) => problems.extend(refusal_problem(
+                    &label,
+                    &err.to_string(),
+                    Some(&format!("{err:?}")),
+                    case.lib_names,
+                )),
+            }
+            if std::fs::read(&path).unwrap() != original {
+                problems.push(format!("{label}: the file changed"));
+            }
         }
     }
+    assert_no_problems(problems);
 }
 
 #[test]
 fn a_read_map_write_names_each_changed_exif_key() {
     let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
     for name in FIXTURES {
         let original = std::fs::read(fixture(name)).unwrap();
         let path = copy(dir.path(), name);
@@ -290,17 +322,26 @@ fn a_read_map_write_names_each_changed_exif_key() {
         assert_eq!(std::fs::read(&path).unwrap(), original, "{name}: no-op");
         map.insert("IFD0:Artist", TagValue::new_string("x"));
         map.remove("IFD0:Software");
-        let err = write_metadata(&path, &map).unwrap_err();
-        let message = err.to_string();
-        assert_refusal(name, &message, Some(&format!("{err:?}")), "IFD0:Artist");
-        assert_refusal(name, &message, None, "IFD0:Software");
-        assert_eq!(std::fs::read(&path).unwrap(), original, "{name}: changed");
+        match write_metadata(&path, &map) {
+            Ok(_) => problems.push(format!("{name}: expected a refusal, got Ok")),
+            Err(err) => {
+                let message = err.to_string();
+                let debug = format!("{err:?}");
+                problems.extend(refusal_problem(name, &message, Some(&debug), "IFD0:Artist"));
+                problems.extend(refusal_problem(name, &message, None, "IFD0:Software"));
+            }
+        }
+        if std::fs::read(&path).unwrap() != original {
+            problems.push(format!("{name}: the file changed"));
+        }
     }
+    assert_no_problems(problems);
 }
 
 #[test]
 fn cli_refuses_every_exif_write_and_leaves_the_file_unchanged() {
     let dir = tempfile::tempdir().unwrap();
+    let mut problems = Vec::new();
     for name in FIXTURES {
         let original = std::fs::read(fixture(name)).unwrap();
         for case in cases() {
@@ -313,23 +354,26 @@ fn cli_refuses_every_exif_write_and_leaves_the_file_unchanged() {
                 .unwrap();
             let stderr = String::from_utf8_lossy(&out.stderr);
             let stdout = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                !out.status.success(),
-                "{label}: exit {:?}, stdout {stdout:?}",
-                out.status
-            );
-            assert!(
-                !stdout.contains("image files updated"),
-                "{label}: reported an update: {stdout:?}"
-            );
-            assert_refusal(&label, &stderr, None, case.cli_names);
-            assert_eq!(
-                std::fs::read(&path).unwrap(),
-                original,
-                "{label}: the file changed"
-            );
+            if stdout.contains("1 image files updated") {
+                problems.push(format!("{label}: reported an update: {stdout:?}"));
+            }
+            // A deletion of a tag in neither block may instead be ExifTool's
+            // own no-op ("0 image files updated", "1 image files unchanged").
+            let unchanged = case.oracle == Oracle::Unchanged
+                && out.status.success()
+                && stdout.contains("1 image files unchanged");
+            if !unchanged {
+                if out.status.success() {
+                    problems.push(format!("{label}: exit {:?}, stdout {stdout:?}", out.status));
+                }
+                problems.extend(refusal_problem(&label, &stderr, None, case.cli_names));
+            }
+            if std::fs::read(&path).unwrap() != original {
+                problems.push(format!("{label}: the file changed"));
+            }
         }
     }
+    assert_no_problems(problems);
 }
 
 #[test]
@@ -364,7 +408,11 @@ fn c_abi_refuses_an_exif_set_and_a_deletion() {
                 code, ERR_TAG_NOT_WRITTEN,
                 "{name} {label}: code {code}, {message}"
             );
-            assert_refusal(&format!("{name} {label}"), &message, None, key);
+            assert_no_problems(
+                refusal_problem(&format!("{name} {label}"), &message, None, key)
+                    .into_iter()
+                    .collect(),
+            );
             assert_eq!(std::fs::read(&path).unwrap(), original, "{name} {label}");
         }
     }
