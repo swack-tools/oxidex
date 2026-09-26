@@ -969,16 +969,15 @@ fn tiff_entries(tiff: &[u8]) -> Vec<(u16, u16, u32, Vec<u8>)> {
 }
 
 /// Review finding (E-2, found while fixing the PNG writer): `-TagsFromFile`
-/// copied an engine row's printed value, so a binary tag's `(Binary data 4
-/// bytes, ...)` placeholder reached the writer as text and the copy failed
-/// ("expected Binary but got String"), where control b4808958 copied the
-/// bytes. `copy_metadata` copies the stored form: the 4 bytes of a crafted
-/// source's DeviceSettingDescription (the shape of DJI_FC300X.jpg's)
-/// arrive as the 4 bytes (pinned `exiftool-pinned.sh -v3` on the result:
-/// `Tag 0xa40b (4 bytes, undef[4])`, `01 02 03 04`), and ColorSpace as its
-/// SHORT (`-n` 1).
+/// handed a binary tag's `(Binary data 4 bytes, ...)` placeholder to the
+/// writer as text. A copy now converts what pinned 13.59 copies -- the value
+/// as it prints it, or a binary tag's data -- and copies only what 13.59
+/// copies (#957 round 8): Exif.pm's 0xa40b DeviceSettingDescription has no
+/// `Writable`, so pinned 13.59 `-TagsFromFile SRC -ExifIFD:DeviceSettingDescription
+/// -ExifIFD:ColorSpace` onto t/images/Nikon.jpg writes no 0xa40b and
+/// ColorSpace as its SHORT (`-n` 2).
 #[test]
-fn copy_metadata_copies_stored_values() {
+fn copy_metadata_copies_what_exiftool_copies() {
     let Some(path) = fixtures::pinned_t_images_fixture_path("Nikon.jpg") else {
         return;
     };
@@ -1024,10 +1023,7 @@ fn copy_metadata_copies_stored_values() {
     let written = std::fs::read(dst.path()).expect("read back");
     let entries = tiff_entries(&tiff_block_of(&written));
     assert!(
-        entries.iter().any(|(tag, ty, count, value)| *tag == 0xa40b
-            && *ty == 7
-            && *count == 4
-            && value == &[1, 2, 3, 4]),
+        !entries.iter().any(|(tag, ..)| *tag == 0xa40b),
         "{entries:?}"
     );
     let copied = read_metadata(dst.path()).expect("the destination parses");
