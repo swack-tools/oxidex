@@ -239,6 +239,17 @@ pub fn batch_process_requests(
 /// Input order of the top-level paths does not affect the resulting counts
 /// (each is independent), but the returned file list preserves it.
 ///
+/// A path that does not exist is neither a directory nor rejected up front
+/// (PRRT_kwDOQNbr5M6mTOLD): it falls through to the plain-file branch below
+/// exactly as `Path::is_dir` already answers `false` for it, so it becomes
+/// one more entry [`batch_read`]/[`batch_write`] will fail on and count as a
+/// per-file error -- the same "ordinary multi-file processing" outcome a
+/// missing path among several plain files has always had. An early `Err`
+/// here would abort the whole command before any real directory in the mix
+/// was ever read, which pinned 13.59 does not do: `exiftool realdir
+/// missing.jpg` still reads `realdir` and reports the miss as one `files
+/// could not be read`.
+///
 /// # Returns
 ///
 /// `(files, unidentified, directories_scanned)`, ready to feed to
@@ -250,12 +261,6 @@ pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>
     let mut directories_scanned = 0usize;
 
     for path in paths {
-        if !path.exists() {
-            return Err(ExifToolError::from(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Path does not exist: {}", path.display()),
-            )));
-        }
         if path.is_dir() {
             let (dir_files, dir_unidentified, dir_count) = collect_files(path, recursive)?;
             files.extend(dir_files);
@@ -264,7 +269,9 @@ pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>
         } else {
             // Named explicitly on the command line: processed as given, not
             // filtered by extension (see `handle_multi_file_processing`'s
-            // doc comment in `src/main.rs`).
+            // doc comment in `src/main.rs`) -- including one that turns out
+            // not to exist at all, left for the per-file read/write attempt
+            // to fail and count instead of aborting collection here.
             files.push(path.clone());
         }
     }
@@ -322,18 +329,29 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     } else if path.is_dir() {
         // Directory - walk and collect files
         let walker = if recursive {
-            WalkDir::new(path)
-                .follow_links(false) // Avoid symlink loops
-                .into_iter()
+            WalkDir::new(path).follow_links(false) // Avoid symlink loops
         } else {
             directories_scanned = 1;
-            WalkDir::new(path)
-                .max_depth(1)
-                .follow_links(false)
-                .into_iter()
+            WalkDir::new(path).max_depth(1).follow_links(false)
         };
 
-        for entry in walker {
+        // `filter_entry` prunes a directory entry it rejects along with
+        // everything under it, before the walk ever descends into it -- so a
+        // dot-prefixed subdirectory (PRRT_kwDOQNbr5M6mTOLF) is neither
+        // counted nor read from, matching ExifTool's own default `-r`
+        // (`exiftool:4358-4359`, `next if $file =~ /^\./ and $recurse ==
+        // 1`): only `-r.` (`$recurse == 2`, which oxidex does not have a
+        // separate flag for) would include it. The root itself (depth 0) is
+        // exempt, so a hidden directory named explicitly on the command line
+        // is still scanned.
+        for entry in walker.into_iter().filter_entry(|entry| {
+            entry.depth() == 0
+                || !entry.file_type().is_dir()
+                || !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+        }) {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().is_dir() {

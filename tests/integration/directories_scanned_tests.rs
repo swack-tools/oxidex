@@ -477,3 +477,150 @@ fn plain_file_arguments_have_no_directories_scanned_line() {
         assert!(stderr(&ours).is_empty() || !stderr(&ours).contains("directories scanned"));
     }
 }
+
+// --- Codex review threads on PR #965 ---------------------------------------
+//
+// Three P2 findings against 206f336c, verified against the pinned oracle
+// (see PR #965's review threads, `chatgpt-codex-connector`):
+//
+// 1. `PRRT_kwDOQNbr5M6mTOK-`: a mixed-argument expansion that finds no files
+//    at all (every directory among the arguments empty or unsupported, no
+//    plain file argument) printed the human-readable summary straight to
+//    stdout even under `-j`/`-csv`, unlike every other read path in this CLI,
+//    which keeps stdout clean for structured output
+//    (`handle_batch_processing`'s single-directory path included).
+// 2. `PRRT_kwDOQNbr5M6mTOLD`: `collect_paths` aborted the whole command the
+//    moment any one top-level argument did not exist, so `oxidex realdir
+//    missing.jpg` never read `realdir` at all. Ordinary multi-file
+//    processing (no directory in the mix) instead counts a missing path as
+//    one more per-file error and keeps going -- pinned 13.59 does the same
+//    for a directory mixed with a missing path.
+// 3. `PRRT_kwDOQNbr5M6mTOLF`: a recursive (`-r`) walk counted (and read
+//    files from) a dot-prefixed subdirectory such as `.git`. ExifTool's
+//    default `-r` (`exiftool:4358`, `$recurse == 1`) never descends into a
+//    directory whose name starts with `.` -- only `-r.` does.
+
+#[test]
+fn structured_output_stays_clean_when_mixed_expansion_finds_nothing() {
+    let oracle = require_oracle!();
+    for flag in ["-j", "-csv"] {
+        let their_a = TempDir::new().expect("temp dir");
+        let their_b = TempDir::new().expect("temp dir");
+        let our_a = TempDir::new().expect("temp dir");
+        let our_b = TempDir::new().expect("temp dir");
+
+        let theirs = run_oracle(
+            oracle,
+            &[
+                flag,
+                their_a.path().to_str().unwrap(),
+                their_b.path().to_str().unwrap(),
+            ],
+        );
+        let ours = run_oxidex(&[
+            flag,
+            our_a.path().to_str().unwrap(),
+            our_b.path().to_str().unwrap(),
+        ]);
+
+        // The oracle puts its summary on stderr and leaves stdout either
+        // empty (`-j`) or header-only (`-csv`); either way, stdout never
+        // carries the `directories scanned`/`image files` vocabulary. oxidex
+        // already keeps stdout free of it for a *single* empty directory
+        // (`handle_batch_processing`) -- this pins the same for a mixed,
+        // multi-argument expansion that also finds nothing.
+        assert!(
+            !stdout(&theirs).contains("directories scanned")
+                && !stdout(&theirs).contains("image files"),
+            "{flag}: oracle stdout unexpectedly carries the summary: {}",
+            stdout(&theirs)
+        );
+        assert!(
+            !stdout(&ours).contains("directories scanned")
+                && !stdout(&ours).contains("image files"),
+            "{flag}: oxidex must not print the human-readable summary to stdout \
+             when structured output was requested, got: {}",
+            stdout(&ours)
+        );
+    }
+}
+
+#[test]
+fn a_missing_path_in_a_mixed_batch_does_not_abort_the_real_directory() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    if copy_jpeg("Canon.jpg", their_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    if copy_jpeg("Canon.jpg", our_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    let missing = "does-not-exist-oxidex-965.jpg";
+
+    let theirs = run_oracle(oracle, &[their_dir.path().to_str().unwrap(), missing]);
+    let ours = run_oxidex(&[our_dir.path().to_str().unwrap(), missing]);
+
+    assert_eq!(theirs.status.code(), Some(1), "oracle: {}", stderr(&theirs));
+    assert_eq!(
+        ours.status.code(),
+        Some(1),
+        "oxidex must still exit 1 (the missing path is a real error): {}",
+        stderr(&ours)
+    );
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+        "    1 files could not be read".to_string(),
+    ];
+    assert_eq!(summary_lines(&stdout(&theirs)), expected);
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "the real directory's file must still be read despite the missing path; got: {}",
+        stdout(&ours)
+    );
+}
+
+#[test]
+fn recursive_walk_prunes_hidden_subdirectories_like_exiftool() {
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    for root in [their_root.path(), our_root.path()] {
+        std::fs::create_dir_all(root.join("visible")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        if copy_jpeg("Canon.jpg", &root.join("visible"), "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &root.join(".hidden"), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(oracle, &["-r", their_root.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.path().to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk must skip `.hidden` entirely (not descend, not count, not read its \
+         files), matching ExifTool's default recursion; got: {}",
+        stdout(&ours)
+    );
+    // The hidden file's own tag must never have been read.
+    assert!(
+        !stdout(&ours).contains("QV-3000EX"),
+        "Casio.jpg must not have been read"
+    );
+}

@@ -182,18 +182,26 @@ fn handle_multi_file_processing(
     // (`exiftool`:2076, `$countDir and not $totWr`) is the read-style `0
     // image files read` line, never `image files updated`, matching what
     // `batch_process_requests` already does for a single empty/unsupported
-    // directory.
+    // directory. And, like every other read path here (PRRT_kwDOQNbr5M6mTOK-:
+    // this branch used to print it unconditionally, uniquely contaminating
+    // `-j`/`-csv` stdout with human-readable text -- the single-directory
+    // path below never did, because its summary print already sits behind
+    // this same guard), a structured-output read stays silent rather than
+    // printing this human-readable summary at all.
     if expanded.is_empty() {
-        let stats = batch_processor::BatchStats {
-            files_read: 0,
-            files_updated: 0,
-            files_unchanged: 0,
-            write_mode: false,
-            errors: 0,
-            unidentified,
-            directories_scanned,
-        };
-        stats.print();
+        let is_read_mode = modifications.is_empty();
+        if !(is_read_mode && (args.json || args.csv)) {
+            let stats = batch_processor::BatchStats {
+                files_read: 0,
+                files_updated: 0,
+                files_unchanged: 0,
+                write_mode: false,
+                errors: 0,
+                unidentified,
+                directories_scanned,
+            };
+            stats.print();
+        }
         return;
     }
 
