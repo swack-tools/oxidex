@@ -2343,6 +2343,13 @@ class _HeldHostLock:
         if (not __import__("stat").S_ISREG(current.st_mode)
                 or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
             raise Refused("host lock stream differs from configured lease")
+        if __import__("stat").S_IMODE(current.st_mode) == 0:
+            # The unproven-lineage fallback removes every permission bit when
+            # its marker cannot be written. Root (or CAP_DAC_OVERRIDE) can
+            # still open such a file, so acquisition checks the mode itself.
+            raise Refused(f"host lock {path} has had its permissions removed as an unproven owned-lineage "
+                          "refusal (the marker could not be written). Verify the prior run's command and "
+                          "its session have exited, then restore the lock file's mode")
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             current = os.stat(path, follow_symlinks=False)
