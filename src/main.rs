@@ -200,39 +200,53 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
         .map(|(tag_name, _)| tag_name.clone())
         .collect();
 
-    // Apply each modification
-    for (tag_name, value) in &modifications {
-        if value.is_empty() {
-            // Empty value = delete tag (ExifTool -TAG= syntax)
-            if let Err(e) = remove_tag(file, tag_name) {
-                eprintln!("Error: Failed to remove tag '{}': {}", tag_name, e);
-                process::exit(1);
-            }
-        } else {
-            // Non-empty value = modify tag, typed as the tag's registry entry
-            // declares. Wrapping every value as a String here is what made
-            // Integer/Rational/DateTime tags unsettable from the CLI.
-            let tag_value = match parse_cli_tag_value_os(tag_name, value) {
-                Ok(tag_value) => tag_value,
-                Err(e) => {
-                    eprintln!("Error: Invalid value for {}: {}", tag_name, e);
-                    process::exit(1);
+    // Apply each modification to a private copy, committed only when every
+    // one succeeds: a later refusal left the earlier requests written
+    // (review of #964, PRRT_kwDOQNbr5M6mTRDU). Pinned ExifTool 13.59 writes
+    // a command whole or not at all.
+    let staged = stage_command(file);
+    let target = staged.path();
+    let applied = (|| -> Result<(), ()> {
+        // Apply each modification
+        for (tag_name, value) in &modifications {
+            if value.is_empty() {
+                // Empty value = delete tag (ExifTool -TAG= syntax)
+                if let Err(e) = remove_tag(target, tag_name) {
+                    eprintln!("Error: Failed to remove tag '{}': {}", tag_name, e);
+                    return Err(());
                 }
-            };
+            } else {
+                // Non-empty value = modify tag, typed as the tag's registry entry
+                // declares. Wrapping every value as a String here is what made
+                // Integer/Rational/DateTime tags unsettable from the CLI.
+                let tag_value = match parse_cli_tag_value_os(tag_name, value) {
+                    Ok(tag_value) => tag_value,
+                    Err(e) => {
+                        eprintln!("Error: Invalid value for {}: {}", tag_name, e);
+                        return Err(());
+                    }
+                };
 
-            // Call modify_tag from core operations
-            if let Err(e) = modify_tag_among(file, tag_name, tag_value, &command_sets) {
-                // Format error message based on error type
-                let error_msg = format!("{}", e);
-                if error_msg.contains("invalid") || error_msg.contains("Invalid") {
-                    eprintln!("Error: Invalid value for {}: {}", tag_name, e);
-                } else {
-                    eprintln!("Error: Failed to modify tag '{}': {}", tag_name, e);
+                // Call modify_tag from core operations
+                if let Err(e) = modify_tag_among(target, tag_name, tag_value, &command_sets) {
+                    // Format error message based on error type
+                    let error_msg = format!("{}", e);
+                    if error_msg.contains("invalid") || error_msg.contains("Invalid") {
+                        eprintln!("Error: Invalid value for {}: {}", tag_name, e);
+                    } else {
+                        eprintln!("Error: Failed to modify tag '{}': {}", tag_name, e);
+                    }
+                    return Err(());
                 }
-                process::exit(1);
             }
         }
+        Ok(())
+    })();
+    if applied.is_err() {
+        drop(staged);
+        process::exit(1);
     }
+    commit_command(staged, file);
 
     // Restore original modification time if requested
     if let Some(mtime) = original_mtime {
@@ -248,6 +262,46 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
     // Print success message (matching ExifTool format)
     println!("    1 image files updated");
+}
+
+/// A private copy of `file` beside it (same directory, so the final rename
+/// stays on one filesystem; same extension, and `fs::copy` keeps the
+/// permissions) that a command's requests are applied to in turn.
+fn stage_command(file: &std::path::Path) -> tempfile::NamedTempFile {
+    let dir = file
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let suffix = file
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    let staged = tempfile::Builder::new()
+        .prefix(".oxidex-command-")
+        .suffix(&suffix)
+        .tempfile_in(dir)
+        .and_then(|staged| std::fs::copy(file, staged.path()).map(|_| staged));
+    match staged {
+        Ok(staged) => staged,
+        Err(e) => {
+            PathLine::new("Error: Cannot stage a copy of '")
+                .path(file)
+                .text(&format!("': {e}"))
+                .eprint();
+            process::exit(1);
+        }
+    }
+}
+
+/// Replaces `file` with the staged copy every request succeeded on.
+fn commit_command(staged: tempfile::NamedTempFile, file: &std::path::Path) {
+    if let Err(e) = staged.persist(file) {
+        PathLine::new("Error: Cannot replace '")
+            .path(file)
+            .text(&format!("': {}", e.error))
+            .eprint();
+        process::exit(1);
+    }
 }
 
 /// Handles read operations (displaying metadata)
@@ -637,26 +691,37 @@ fn handle_date_shift_operation(file: &std::path::Path, args: &CliArgs) {
         }
     }
 
-    // Apply each date shift operation
-    for (tag_pattern, op_str, offset_or_value) in &date_shifts {
-        // Parse operation type
-        let operation = match op_str.as_str() {
-            "+=" => ShiftOperation::Add,
-            "-=" => ShiftOperation::Subtract,
-            "=" => ShiftOperation::Set,
-            _ => {
-                eprintln!("Error: Invalid date shift operation '{}'", op_str);
-                eprintln!("Supported operations: +=, -=, =");
-                process::exit(1);
-            }
-        };
+    // All or nothing, as for tag writes (`stage_command`).
+    let staged = stage_command(file);
+    let target = staged.path();
+    let applied = (|| -> Result<(), ()> {
+        // Apply each date shift operation
+        for (tag_pattern, op_str, offset_or_value) in &date_shifts {
+            // Parse operation type
+            let operation = match op_str.as_str() {
+                "+=" => ShiftOperation::Add,
+                "-=" => ShiftOperation::Subtract,
+                "=" => ShiftOperation::Set,
+                _ => {
+                    eprintln!("Error: Invalid date shift operation '{}'", op_str);
+                    eprintln!("Supported operations: +=, -=, =");
+                    return Err(());
+                }
+            };
 
-        // Apply the date shift
-        if let Err(e) = shift_metadata_dates(file, tag_pattern, offset_or_value, operation) {
-            eprintln!("Error: Failed to shift dates for '{}': {}", tag_pattern, e);
-            process::exit(1);
+            // Apply the date shift
+            if let Err(e) = shift_metadata_dates(target, tag_pattern, offset_or_value, operation) {
+                eprintln!("Error: Failed to shift dates for '{}': {}", tag_pattern, e);
+                return Err(());
+            }
         }
+        Ok(())
+    })();
+    if applied.is_err() {
+        drop(staged);
+        process::exit(1);
     }
+    commit_command(staged, file);
 
     // Restore original modification time if requested
     if let Some(mtime) = original_mtime {

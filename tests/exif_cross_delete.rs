@@ -130,12 +130,22 @@ fn exif_rows(oracle: &Oracle, path: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The tag names `args` write (`-IFD0:CreateDate=x` -> `CreateDate`).
+/// The tag names `args` write (`-IFD0:CreateDate=x` -> `CreateDate`, a
+/// shift `-ModifyDate+=1` -> `ModifyDate`, `AllDates` -> its three dates).
 fn written_names(args: &[&str]) -> Vec<String> {
     args.iter()
-        .map(|arg| {
+        .flat_map(|arg| {
             let key = arg.trim_start_matches('-').split('=').next().unwrap();
-            key.rsplit(':').next().unwrap().to_string()
+            let name = key.rsplit(':').next().unwrap().trim_end_matches(['+', '-']);
+            if name.eq_ignore_ascii_case("AllDates") {
+                vec![
+                    "DateTimeOriginal".to_string(),
+                    "CreateDate".to_string(),
+                    "ModifyDate".to_string(),
+                ]
+            } else {
+                vec![name.to_string()]
+            }
         })
         .collect()
 }
@@ -419,6 +429,93 @@ fn an_exififd_qualifier_the_generated_writer_lacks_is_refused_by_name() {
             source.image
         );
         assert_eq!(std::fs::read(&path).unwrap(), before, "{}", source.image);
+    }
+}
+
+/// PNG.png with CreateDate and ModifyDate in both IFD0 and ExifIFD of its
+/// `eXIf` chunk.
+const PNG_BOTH: Source = Source {
+    image: "PNG.png",
+    setup: &[
+        "-IFD0:ModifyDate=2003:03:03 03:03:03",
+        "-ExifIFD:ModifyDate=2004:04:04 04:04:04",
+        "-IFD0:CreateDate=2001:01:01 01:01:01",
+        "-ExifIFD:CreateDate=2002:02:02 02:02:02",
+    ],
+};
+
+/// A date shift moves nothing: it shifts every copy of the tag in IFD0 and
+/// ExifIFD, whichever of the two (if either) the request names -- the
+/// `%crossDelete` branch keeps a copy it would delete when the new value is
+/// a shift (WriteExif.pl 13.59:1259, "delete tag if cross-deleting and this
+/// isn't a date/time shift"). Review of #964 (PRRT_kwDOQNbr5M6mTAHI): at
+/// 4d361b97 a TIFF or PNG shift deleted the copy the reader reports no row
+/// for; before, it was left unshifted, as a JPEG's still was.
+#[test]
+fn a_date_shift_shifts_both_copies() {
+    // (ExifTool.tif holds no CreateDate: a shift of one is a no-op there,
+    // which this base still reports as an error -- #957 makes it
+    // `unchanged` -- so the family-0 case shifts ModifyDate on it.)
+    let cases: Vec<(Source, &[&str])> = [
+        (CANON_BOTH, &["-EXIF:CreateDate-=0:0:1 0"][..]),
+        (TIFF_BOTH, &["-EXIF:ModifyDate-=0:0:1 0"][..]),
+        (PNG_BOTH, &["-EXIF:CreateDate-=0:0:1 0"][..]),
+    ]
+    .into_iter()
+    .flat_map(|(source, family0)| {
+        [
+            (source, &["-AllDates+=1:0:0"][..]),
+            (source, &["-ModifyDate+=1:0:0"][..]),
+            (source, &["-IFD0:ModifyDate+=1:0:0"][..]),
+            (source, family0),
+        ]
+    })
+    .chain([
+        (CANON, &["-IFD0:CreateDate+=1:0:0"][..]),
+        (CANON, &["-ExifIFD:ModifyDate+=1:0:0"][..]),
+    ])
+    .collect();
+    assert_matches_oracle(&cases);
+}
+
+/// A command whose later request is refused writes nothing: the CLI applies
+/// its `-TAG=VALUE` requests one at a time, and at 4d361b97
+/// `-IFD0:CreateDate=<d> -IFD0:Artist=New` on a file whose ExifIFD holds
+/// Artist (a copy this writer cannot delete) wrote CreateDate and then
+/// reported "nothing was written" (review of #964, PRRT_kwDOQNbr5M6mTRDU).
+/// Pinned ExifTool 13.59 writes the whole command or none of it.
+#[test]
+fn a_refused_request_leaves_the_whole_command_unwritten() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no graded ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let create = format!("-IFD0:CreateDate={DATE}");
+    let shift = "-AllDates+=1:0:0";
+    let cases: [(Source, &[&str]); 3] = [
+        (CANON_BOTH_ARTIST, &[create.as_str(), "-IFD0:Artist=New"]),
+        (CANON_BOTH_ARTIST, &["-IFD0:Software=x", "-Artist=New"]),
+        (CANON_BOTH, &[shift, "-EXIF:BogusDate+=1"]),
+    ];
+    for (index, (source, args)) in cases.into_iter().enumerate() {
+        let Some(path) = materialize(oracle, source, dir.path(), &format!("p{index}")) else {
+            eprintln!("skipping: pinned fixture {} is absent", source.image);
+            return;
+        };
+        let before = std::fs::read(&path).unwrap();
+        let output = oxidex()
+            .arg("-overwrite_original")
+            .args(args)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?}: not refused");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{args:?}: partly written"
+        );
     }
 }
 

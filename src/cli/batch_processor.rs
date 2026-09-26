@@ -448,12 +448,30 @@ fn apply_modifications(
         .iter()
         .map(|(tag_name, _)| tag_name.clone())
         .collect();
+    // Applied to a private copy, committed only when every one succeeds (a
+    // later refusal left the earlier ones written; review of #964).
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let suffix = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    let staged = tempfile::Builder::new()
+        .prefix(".oxidex-command-")
+        .suffix(&suffix)
+        .tempfile_in(dir)?;
+    fs::copy(path, staged.path())?;
     for (tag_name, value_str) in modifications {
         // Parse the string into the type the tag declares, not into whatever
         // type the value's own shape suggests.
         let tag_value = parse_cli_tag_value_os(tag_name, value_str)?;
-        modify_tag_among(path, tag_name, tag_value, &command_sets)?;
+        modify_tag_among(staged.path(), tag_name, tag_value, &command_sets)?;
     }
+    staged
+        .persist(path)
+        .map_err(|error| ExifToolError::from(error.error))?;
 
     // Restore file times if requested
     if let Some(metadata) = original_metadata

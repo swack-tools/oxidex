@@ -131,13 +131,12 @@ pub fn resolve_exif_targets(pattern: &str) -> Option<Vec<ExifDateTag>> {
         _ => return None,
     };
 
-    let family_ok = match family {
-        None => true,
-        Some("exif") => true,
-        Some("ifd0") => tag == ExifDateTag::ModifyDate,
-        Some("exififd") => tag != ExifDateTag::ModifyDate,
-        Some(_) => false,
-    };
+    // Naming either of IFD0/ExifIFD shifts the tag's copies in both: pinned
+    // ExifTool 13.59's `%crossDelete` keeps (and shifts) the copy in the
+    // other directory when the new value is a shift (WriteExif.pl
+    // 13.59:1259), so `-IFD0:CreateDate+=1` on t/images Canon.jpg shifts
+    // its ExifIFD CreateDate.
+    let family_ok = matches!(family, None | Some("exif" | "ifd0" | "exififd"));
     if family_ok { Some(vec![tag]) } else { None }
 }
 
@@ -448,6 +447,18 @@ pub fn shift_metadata_dates(
     if format == FileFormat::JPEG {
         return shift_jpeg_dates(path, tag_pattern, &spec);
     }
+    // A TIFF's or PNG's EXIF dates shift in place too, every IFD0/ExifIFD
+    // copy of each: the map route below sees only the copy the reader
+    // reports, and its write moved the other one away as a set would
+    // (review of #964, PRRT_kwDOQNbr5M6mTAHI). The map route then shifts
+    // the file's other date rows (XMP, ...) as before.
+    if matches!(format, FileFormat::TIFF | FileFormat::PNG)
+        && let Some(targets) = resolve_exif_targets(tag_pattern)
+        && let Some(shifted) =
+            crate::writers::exif_inplace::shift_tiff_png_exif_dates(path, &targets, &spec)?
+    {
+        return shift_map_dates_after_exif(path, tag_pattern, &spec, Some(shifted));
+    }
     shift_map_dates(path, tag_pattern, &spec)
 }
 
@@ -473,6 +484,17 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
 
 /// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
 fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    shift_map_dates_after_exif(path, tag_pattern, spec, None)
+}
+
+/// [`shift_map_dates`]; `exif_shifted` is the number of IFD0/ExifIFD values
+/// already shifted in place, whose rows are then left alone.
+fn shift_map_dates_after_exif(
+    path: &Path,
+    tag_pattern: &str,
+    spec: &ShiftSpec,
+    exif_shifted: Option<usize>,
+) -> Result<()> {
     let mut metadata = read_metadata(path)?;
     let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
 
@@ -489,7 +511,10 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
         } else {
             key_matches_pattern(&key, tag_pattern)
         };
-        if !matches {
+        let exif_row = key
+            .split_once(':')
+            .is_some_and(|(group, _)| matches!(group, "IFD0" | "ExifIFD" | "EXIF"));
+        if !matches || (exif_shifted.is_some() && exif_row) {
             continue;
         }
         let Some(dt) = metadata.get(&key).and_then(|v| v.as_datetime()).copied() else {
@@ -507,6 +532,9 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
     }
 
     if modified == 0 {
+        if exif_shifted.is_some_and(|shifted| shifted > 0) {
+            return Ok(());
+        }
         return Err(ExifToolError::parse_error(format!(
             "Tag '{}' not found in metadata",
             tag_pattern
@@ -752,8 +780,17 @@ mod tests {
             resolve_exif_targets("IFD0:ModifyDate"),
             Some(vec![ExifDateTag::ModifyDate])
         );
-        // Wrong group for the tag: DateTimeOriginal lives in ExifIFD, not IFD0
-        assert_eq!(resolve_exif_targets("IFD0:DateTimeOriginal"), None);
+        // The other directory's name selects the tag too: a shift covers its
+        // copies in both IFD0 and ExifIFD (WriteExif.pl 13.59:1259).
+        assert_eq!(
+            resolve_exif_targets("IFD0:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("ExifIFD:ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(resolve_exif_targets("IFD1:ModifyDate"), None);
         // Unknown group
         assert_eq!(resolve_exif_targets("XMP:CreateDate"), None);
     }
