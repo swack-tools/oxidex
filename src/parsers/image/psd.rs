@@ -688,8 +688,12 @@ impl FormatParser for PSDParser {
 
 /// Parses metadata from PSD files.
 pub fn parse_psd_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = PSDParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PSDParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Reads an ExifTool `var_ustr32` value: a 4-byte big-endian character count

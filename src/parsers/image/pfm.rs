@@ -188,8 +188,12 @@ impl FormatParser for PFMParser {
 /// This is a convenience wrapper around [`PFMParser`] that provides a
 /// functional API matching the other format parsers.
 pub fn parse_pfm_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = PFMParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PFMParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

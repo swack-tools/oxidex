@@ -757,132 +757,136 @@ fn convert_compact_date(value: &str) -> String {
 pub fn parse_realmedia_metadata(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size();
-    let data = reader.read(0, size as usize).map_err(|e| e.to_string())?;
-    if !data.starts_with(RMF_SIGNATURE) {
-        return Err("invalid RealMedia signature".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    // Real.pm:593-596: skip the rest of the `.RMF` header.
-    let Some(header_size) = be_u32(data, 4).map(|value| value as usize) else {
-        return Err("truncated RealMedia header".to_string());
-    };
-    if header_size < 8 {
-        return Err("bad RealMedia header size".to_string());
-    }
-    let mut pos = header_size;
-    let mut dir_count: HashMap<[u8; 4], u32> = HashMap::new();
-    let mut stream_mime: Option<String> = None;
-
-    while pos + CHUNK_HEADER_LEN <= data.len() {
-        let mut id = [0u8; 4];
-        id.copy_from_slice(&data[pos..pos + 4]);
-        if id == [0, 0, 0, 0] {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size();
+        let data = reader.read(0, size as usize).map_err(|e| e.to_string())?;
+        if !data.starts_with(RMF_SIGNATURE) {
+            return Err("invalid RealMedia signature".to_string());
         }
-        let Some(chunk_size) = be_u32(data, pos + 4) else {
-            break;
+
+        let mut metadata = MetadataMap::new();
+        // Real.pm:593-596: skip the rest of the `.RMF` header.
+        let Some(header_size) = be_u32(data, 4).map(|value| value as usize) else {
+            return Err("truncated RealMedia header".to_string());
         };
-        // Real.pm:607: "stop normal parsing at DATA tag".
-        if &id == b"DATA" {
-            break;
+        if header_size < 8 {
+            return Err("bad RealMedia header size".to_string());
         }
-        if chunk_size & 0x8000_0000 != 0 || chunk_size < CHUNK_HEADER_LEN as u32 {
-            break;
-        }
-        let chunk_size = chunk_size as usize;
-        let body_start = pos + CHUNK_HEADER_LEN;
-        let body_end = body_start + (chunk_size - CHUNK_HEADER_LEN);
-        if body_end > data.len() {
-            break;
-        }
-        let body = &data[body_start..body_end];
+        let mut pos = header_size;
+        let mut dir_count: HashMap<[u8; 4], u32> = HashMap::new();
+        let mut stream_mime: Option<String> = None;
 
-        // Real.pm:631-635: the second and later chunks of one id report under
-        // a numbered family-1 group (`Real-MDPR`, then `Real-MDPR2`).
-        let seen = dir_count.entry(id).or_insert(0);
-        *seen += 1;
-        let suffix = if *seen > 1 {
-            seen.to_string()
-        } else {
-            String::new()
-        };
+        while pos + CHUNK_HEADER_LEN <= data.len() {
+            let mut id = [0u8; 4];
+            id.copy_from_slice(&data[pos..pos + 4]);
+            if id == [0, 0, 0, 0] {
+                break;
+            }
+            let Some(chunk_size) = be_u32(data, pos + 4) else {
+                break;
+            };
+            // Real.pm:607: "stop normal parsing at DATA tag".
+            if &id == b"DATA" {
+                break;
+            }
+            if chunk_size & 0x8000_0000 != 0 || chunk_size < CHUNK_HEADER_LEN as u32 {
+                break;
+            }
+            let chunk_size = chunk_size as usize;
+            let body_start = pos + CHUNK_HEADER_LEN;
+            let body_end = body_start + (chunk_size - CHUNK_HEADER_LEN);
+            if body_end > data.len() {
+                break;
+            }
+            let body = &data[body_start..body_end];
 
-        match &id {
-            b"PROP" => process_serial_data(
-                body,
-                PROPERTIES,
-                &format!("Real-PROP{suffix}"),
-                &mut stream_mime,
-                &mut metadata,
-            ),
-            b"MDPR" => {
-                // `RealStreamMime` is deleted after each chunk (Real.pm:642),
-                // so a stream with no MIME field cannot inherit the last one's.
-                stream_mime = None;
-                process_serial_data(
+            // Real.pm:631-635: the second and later chunks of one id report under
+            // a numbered family-1 group (`Real-MDPR`, then `Real-MDPR2`).
+            let seen = dir_count.entry(id).or_insert(0);
+            *seen += 1;
+            let suffix = if *seen > 1 {
+                seen.to_string()
+            } else {
+                String::new()
+            };
+
+            match &id {
+                b"PROP" => process_serial_data(
                     body,
-                    MEDIA_PROPS,
-                    &format!("Real-MDPR{suffix}"),
+                    PROPERTIES,
+                    &format!("Real-PROP{suffix}"),
                     &mut stream_mime,
                     &mut metadata,
-                );
+                ),
+                b"MDPR" => {
+                    // `RealStreamMime` is deleted after each chunk (Real.pm:642),
+                    // so a stream with no MIME field cannot inherit the last one's.
+                    stream_mime = None;
+                    process_serial_data(
+                        body,
+                        MEDIA_PROPS,
+                        &format!("Real-MDPR{suffix}"),
+                        &mut stream_mime,
+                        &mut metadata,
+                    );
+                }
+                b"CONT" => process_serial_data(
+                    body,
+                    CONTENT_DESCR,
+                    &format!("Real-CONT{suffix}"),
+                    &mut stream_mime,
+                    &mut metadata,
+                ),
+                b"RJMD" => process_real_meta(body, 0, body.len(), "", &mut metadata),
+                _ => {}
             }
-            b"CONT" => process_serial_data(
-                body,
-                CONTENT_DESCR,
-                &format!("Real-CONT{suffix}"),
-                &mut stream_mime,
-                &mut metadata,
-            ),
-            b"RJMD" => process_real_meta(body, 0, body.len(), "", &mut metadata),
-            _ => {}
+            pos = body_end;
         }
-        pos = body_end;
-    }
 
-    // Real.pm:661-678, the trailing `RMJE` footer pointing back at an `RJMD`
-    // block.
-    if size >= FOOTER_PROBE_BACK {
-        let probe_at = size - FOOTER_PROBE_BACK;
-        if let Ok(probe) = reader.read(probe_at, 12)
-            && probe.starts_with(b"RMJE")
-            && let Some(meta_size) = be_u32(probe, 8).map(u64::from)
-        {
-            // `$raf->Seek(-$metaSize-12, 1)` from the position after the
-            // 12-byte probe.
-            let after_probe = probe_at + 12;
-            if after_probe >= meta_size + 12 {
-                let meta_at = after_probe - meta_size - 12;
-                if let Ok(block) = reader.read(meta_at, meta_size as usize)
-                    && block.starts_with(b"RJMD")
-                    && block.len() > 8
-                {
-                    process_real_meta(block, 8, block.len() - 8, "", &mut metadata);
+        // Real.pm:661-678, the trailing `RMJE` footer pointing back at an `RJMD`
+        // block.
+        if size >= FOOTER_PROBE_BACK {
+            let probe_at = size - FOOTER_PROBE_BACK;
+            if let Ok(probe) = reader.read(probe_at, 12)
+                && probe.starts_with(b"RMJE")
+                && let Some(meta_size) = be_u32(probe, 8).map(u64::from)
+            {
+                // `$raf->Seek(-$metaSize-12, 1)` from the position after the
+                // 12-byte probe.
+                let after_probe = probe_at + 12;
+                if after_probe >= meta_size + 12 {
+                    let meta_at = after_probe - meta_size - 12;
+                    if let Ok(block) = reader.read(meta_at, meta_size as usize)
+                        && block.starts_with(b"RJMD")
+                        && block.len() > 8
+                    {
+                        process_real_meta(block, 8, block.len() - 8, "", &mut metadata);
+                    }
                 }
             }
         }
-    }
 
-    // Real.pm:679-688, the ID3v1 tag.
-    if size >= ID3V1_LEN as u64
-        && let Ok(tail) = reader.read(size - ID3V1_LEN as u64, ID3V1_LEN)
-        && tail.starts_with(b"TAG")
-    {
-        let _ = crate::parsers::audio::mp3::parse_id3v1(tail, &mut metadata);
-        // Real.pm:684-688 enters the `ID3::v1` *table* directly through
-        // `ProcessDirectory`; it never calls `ID3::ProcessID3`, which is
-        // where ExifTool mints `ID3Version` and `ID3TagSize`. The shared
-        // reader emits them for its MP3/MPC callers, which do go through
-        // `ProcessID3`, so they are withdrawn here rather than reported for a
-        // RealMedia file the oracle reports them for.
-        for key in ["ID3Version", "MP3:ID3Version", "ID3TagSize"] {
-            metadata.remove(key);
+        // Real.pm:679-688, the ID3v1 tag.
+        if size >= ID3V1_LEN as u64
+            && let Ok(tail) = reader.read(size - ID3V1_LEN as u64, ID3V1_LEN)
+            && tail.starts_with(b"TAG")
+        {
+            let _ = crate::parsers::audio::mp3::parse_id3v1(tail, &mut metadata);
+            // Real.pm:684-688 enters the `ID3::v1` *table* directly through
+            // `ProcessDirectory`; it never calls `ID3::ProcessID3`, which is
+            // where ExifTool mints `ID3Version` and `ID3TagSize`. The shared
+            // reader emits them for its MP3/MPC callers, which do go through
+            // `ProcessID3`, so they are withdrawn here rather than reported for a
+            // RealMedia file the oracle reports them for.
+            for key in ["ID3Version", "MP3:ID3Version", "ID3TagSize"] {
+                metadata.remove(key);
+            }
         }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

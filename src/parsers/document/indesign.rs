@@ -56,121 +56,126 @@ fn u64_le(data: &[u8], offset: usize) -> Option<u64> {
 pub fn parse_indesign_metadata(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    // InDesign.pm:41-42.
-    let head = reader.read(0, 16).map_err(|error| error.to_string())?;
-    if head != &MASTER_PAGE_GUID[..] {
-        return Err("not an InDesign master page".to_string());
-    }
-
-    // InDesign.pm:48-58: two full master pages, the second also GUID-tagged.
-    let first = reader
-        .read(0, MASTER_PAGE_LEN)
-        .map_err(|error| error.to_string())?;
-    let second = reader
-        .read(MASTER_PAGE_LEN as u64, MASTER_PAGE_LEN)
-        .map_err(|error| error.to_string())?;
-    if first.len() < MASTER_PAGE_LEN || second.len() < MASTER_PAGE_LEN {
-        return Err("unexpected end of file in InDesign master pages".to_string());
-    }
-    if !second.starts_with(&MASTER_PAGE_GUID[..]) {
-        return Err("second InDesign master page is invalid".to_string());
-    }
-
-    // InDesign.pm:54, `SetByteOrder('II')` -- the *headers* are always
-    // little-endian; only the stream length word at InDesign.pm:64-72 varies.
-    let sequence_first = u64_le(&first, 264).ok_or("short InDesign master page")?;
-    let sequence_second = u64_le(&second, 264).ok_or("short InDesign master page")?;
-    // InDesign.pm:62, `$seq2 > $seq1 ? \$buf2 : \$buff`.
-    let current = if sequence_second > sequence_first {
-        &second
-    } else {
-        &first
-    };
-
-    // InDesign.pm:64-72.
-    let stream_big_endian = match current[24] {
-        1 => false,
-        2 => true,
-        _ => return Err("invalid InDesign stream byte order".to_string()),
-    };
-
-    // InDesign.pm:73-75.
-    let pages = u32_le(current, 280).ok_or("short InDesign master page")?;
-    if pages < 2 {
-        return Err("invalid InDesign page count".to_string());
-    }
-    let mut pos = u64::from(pages) * MASTER_PAGE_LEN as u64;
-
-    let mut metadata = MetadataMap::new();
-    // InDesign.pm:101-228, the contiguous-object walk.
-    loop {
-        let Ok(header) = reader.read(pos, OBJECT_HEADER_LEN) else {
-            break;
-        };
-        // InDesign.pm:103-105: anything that is not an object header ends the
-        // walk; all-null is ordinary padding, anything else is a warning
-        // ExifTool issues without changing a tag.
-        if header.len() != OBJECT_HEADER_LEN || !header.starts_with(&OBJECT_HEADER_GUID[..]) {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        // InDesign.pm:41-42.
+        let head = reader.read(0, 16).map_err(|error| error.to_string())?;
+        if head != &MASTER_PAGE_GUID[..] {
+            return Err("not an InDesign master page".to_string());
         }
-        pos += OBJECT_HEADER_LEN as u64;
 
-        let mut len = u32_le(&header, 24).ok_or("short InDesign object header")?;
+        // InDesign.pm:48-58: two full master pages, the second also GUID-tagged.
+        let first = reader
+            .read(0, MASTER_PAGE_LEN)
+            .map_err(|error| error.to_string())?;
+        let second = reader
+            .read(MASTER_PAGE_LEN as u64, MASTER_PAGE_LEN)
+            .map_err(|error| error.to_string())?;
+        if first.len() < MASTER_PAGE_LEN || second.len() < MASTER_PAGE_LEN {
+            return Err("unexpected end of file in InDesign master pages".to_string());
+        }
+        if !second.starts_with(&MASTER_PAGE_GUID[..]) {
+            return Err("second InDesign master page is invalid".to_string());
+        }
 
-        // InDesign.pm:134-199.
-        if len > MIN_XMP_STREAM {
-            let Ok(peek) = reader.read(pos, MIN_XMP_STREAM as usize) else {
+        // InDesign.pm:54, `SetByteOrder('II')` -- the *headers* are always
+        // little-endian; only the stream length word at InDesign.pm:64-72 varies.
+        let sequence_first = u64_le(&first, 264).ok_or("short InDesign master page")?;
+        let sequence_second = u64_le(&second, 264).ok_or("short InDesign master page")?;
+        // InDesign.pm:62, `$seq2 > $seq1 ? \$buf2 : \$buff`.
+        let current = if sequence_second > sequence_first {
+            &second
+        } else {
+            &first
+        };
+
+        // InDesign.pm:64-72.
+        let stream_big_endian = match current[24] {
+            1 => false,
+            2 => true,
+            _ => return Err("invalid InDesign stream byte order".to_string()),
+        };
+
+        // InDesign.pm:73-75.
+        let pages = u32_le(current, 280).ok_or("short InDesign master page")?;
+        if pages < 2 {
+            return Err("invalid InDesign page count".to_string());
+        }
+        let mut pos = u64::from(pages) * MASTER_PAGE_LEN as u64;
+
+        let mut metadata = MetadataMap::new();
+        // InDesign.pm:101-228, the contiguous-object walk.
+        loop {
+            let Ok(header) = reader.read(pos, OBJECT_HEADER_LEN) else {
                 break;
             };
-            if peek.len() != MIN_XMP_STREAM as usize {
+            // InDesign.pm:103-105: anything that is not an object header ends the
+            // walk; all-null is ordinary padding, anything else is a warning
+            // ExifTool issues without changing a tag.
+            if header.len() != OBJECT_HEADER_LEN || !header.starts_with(&OBJECT_HEADER_GUID[..]) {
                 break;
             }
-            if let Some(declared) = xmp_stream_length(&peek, stream_big_endian) {
-                // InDesign.pm:138: the four-byte length word is not part of
-                // the XMP.
-                let xmp_len = len - 4;
-                // InDesign.pm:156, `$raf->Seek(-52, 1)` -- back up over the
-                // 52 bytes of XMP already peeked at, leaving the length word
-                // consumed.
-                let Ok(xmp) = reader.read(pos + 4, xmp_len as usize) else {
+            pos += OBJECT_HEADER_LEN as u64;
+
+            let mut len = u32_le(&header, 24).ok_or("short InDesign object header")?;
+
+            // InDesign.pm:134-199.
+            if len > MIN_XMP_STREAM {
+                let Ok(peek) = reader.read(pos, MIN_XMP_STREAM as usize) else {
                     break;
                 };
-                if xmp.len() != xmp_len as usize {
+                if peek.len() != MIN_XMP_STREAM as usize {
                     break;
                 }
-                // InDesign.pm:166-173: a declared length shorter than the
-                // stream truncates the XMP; a longer one is a read error and
-                // ExifTool parses nothing.
-                let usable = match declared.cmp(&xmp_len) {
-                    std::cmp::Ordering::Less => &xmp[..declared as usize],
-                    std::cmp::Ordering::Equal => &xmp[..],
-                    std::cmp::Ordering::Greater => break,
-                };
-                insert_xmp(usable, &mut metadata);
-                // InDesign.pm:196, `$len = 0` -- the whole stream is consumed.
-                pos += u64::from(len);
-                len = 0;
-            } else {
-                // InDesign.pm:198, `$len -= 56`.
-                pos += u64::from(MIN_XMP_STREAM);
-                len -= MIN_XMP_STREAM;
+                if let Some(declared) = xmp_stream_length(&peek, stream_big_endian) {
+                    // InDesign.pm:138: the four-byte length word is not part of
+                    // the XMP.
+                    let xmp_len = len - 4;
+                    // InDesign.pm:156, `$raf->Seek(-52, 1)` -- back up over the
+                    // 52 bytes of XMP already peeked at, leaving the length word
+                    // consumed.
+                    let Ok(xmp) = reader.read(pos + 4, xmp_len as usize) else {
+                        break;
+                    };
+                    if xmp.len() != xmp_len as usize {
+                        break;
+                    }
+                    // InDesign.pm:166-173: a declared length shorter than the
+                    // stream truncates the XMP; a longer one is a read error and
+                    // ExifTool parses nothing.
+                    let usable = match declared.cmp(&xmp_len) {
+                        std::cmp::Ordering::Less => &xmp[..declared as usize],
+                        std::cmp::Ordering::Equal => &xmp[..],
+                        std::cmp::Ordering::Greater => break,
+                    };
+                    insert_xmp(usable, &mut metadata);
+                    // InDesign.pm:196, `$len = 0` -- the whole stream is consumed.
+                    pos += u64::from(len);
+                    len = 0;
+                } else {
+                    // InDesign.pm:198, `$len -= 56`.
+                    pos += u64::from(MIN_XMP_STREAM);
+                    len -= MIN_XMP_STREAM;
+                }
             }
-        }
-        // InDesign.pm:212-215, skip whatever is left of the stream.
-        pos += u64::from(len);
+            // InDesign.pm:212-215, skip whatever is left of the stream.
+            pos += u64::from(len);
 
-        // InDesign.pm:216-220: every object ends with a trailer, and a
-        // missing one ends the walk.
-        let Ok(trailer) = reader.read(pos, OBJECT_HEADER_LEN) else {
-            break;
-        };
-        if trailer.len() != OBJECT_HEADER_LEN || !trailer.starts_with(&OBJECT_TRAILER_GUID[..]) {
-            break;
+            // InDesign.pm:216-220: every object ends with a trailer, and a
+            // missing one ends the walk.
+            let Ok(trailer) = reader.read(pos, OBJECT_HEADER_LEN) else {
+                break;
+            };
+            if trailer.len() != OBJECT_HEADER_LEN || !trailer.starts_with(&OBJECT_TRAILER_GUID[..])
+            {
+                break;
+            }
+            pos += OBJECT_HEADER_LEN as u64;
         }
-        pos += OBJECT_HEADER_LEN as u64;
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// InDesign.pm:136's XMP test:

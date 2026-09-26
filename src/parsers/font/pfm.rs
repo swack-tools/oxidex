@@ -207,9 +207,13 @@ impl FormatParser for PrinterFontMetricsParser {
 pub fn parse_printer_font_metrics(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    PrinterFontMetricsParser
-        .parse(reader)
-        .map_err(|error| error.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        PrinterFontMetricsParser
+            .parse(reader)
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[cfg(test)]

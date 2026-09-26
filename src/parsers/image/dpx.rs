@@ -123,7 +123,11 @@ impl FormatParser for DPXParser {
 
 /// Parses metadata from a DPX file.
 pub fn parse_dpx_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    DPXParser.parse(reader).map_err(|error| error.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        DPXParser.parse(reader).map_err(|error| error.to_string())
+    })
 }
 
 #[cfg(test)]

@@ -942,8 +942,12 @@ impl FormatParser for MxfParser {
 
 /// Convenience function to parse MXF metadata from a reader.
 pub fn parse_mxf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MxfParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MxfParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

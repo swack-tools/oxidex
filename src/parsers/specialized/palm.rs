@@ -83,54 +83,58 @@ const CODE_PAGE: PerlCitation = citation("MOBI", "CodePage", "Palm.pm:152-161");
 
 /// Extract Palm database / Mobipocket metadata.
 pub fn parse_palm_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < PDB_HEADER_LEN as u64 {
-        return Err("Palm file is too short for the 86-byte header".to_string());
-    }
-    let header = reader
-        .read(0, PDB_HEADER_LEN)
-        .map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < PDB_HEADER_LEN as u64 {
+            return Err("Palm file is too short for the 86-byte header".to_string());
+        }
+        let header = reader
+            .read(0, PDB_HEADER_LEN)
+            .map_err(|error| error.to_string())?;
 
-    // Palm.pm:294-295, `return 0 unless $type`.
-    let type_creator = &header[TYPE_CREATOR_OFFSET..TYPE_CREATOR_OFFSET + 8];
-    let is_mobipocket = palm_type(type_creator)
-        .ok_or("unrecognised Palm type/creator pair")?
-        .eq("Mobipocket");
+        // Palm.pm:294-295, `return 0 unless $type`.
+        let type_creator = &header[TYPE_CREATOR_OFFSET..TYPE_CREATOR_OFFSET + 8];
+        let is_mobipocket = palm_type(type_creator)
+            .ok_or("unrecognised Palm type/creator pair")?
+            .eq("Mobipocket");
 
-    let mut metadata = MetadataMap::new();
-    read_palm_header(&header, &mut metadata)?;
+        let mut metadata = MetadataMap::new();
+        read_palm_header(&header, &mut metadata)?;
 
-    // Palm.pm:305, `return 1 unless $type eq 'Mobipocket' and Get16u(\$buff, 76)`
-    // -- the second test is the record count, i.e. whether there is a first
-    // record to seek to at all.
-    let record_count = u16::from_be_bytes([header[76], header[77]]);
-    if !is_mobipocket || record_count == 0 {
-        return Ok(metadata);
-    }
+        // Palm.pm:305, `return 1 unless $type eq 'Mobipocket' and Get16u(\$buff, 76)`
+        // -- the second test is the record count, i.e. whether there is a first
+        // record to seek to at all.
+        let record_count = u16::from_be_bytes([header[76], header[77]]);
+        if !is_mobipocket || record_count == 0 {
+            return Ok(metadata);
+        }
 
-    // Palm.pm:309-313. A truncated MOBI header is an ExifTool *warning*, not
-    // a failure: the Palm header tags already extracted still stand.
-    let offset = u64::from(u32::from_be_bytes([
-        header[78], header[79], header[80], header[81],
-    ]));
-    let Ok(mobi) = reader.read(offset, MOBI_HEADER_LEN) else {
-        return Ok(metadata);
-    };
-    if mobi.len() < MOBI_HEADER_LEN {
-        return Ok(metadata);
-    }
-    // Palm.pm:314-317, `substr($buff, 16, 4) eq 'MOBI'`.
-    if &mobi[16..20] != b"MOBI" {
-        return Ok(metadata);
-    }
+        // Palm.pm:309-313. A truncated MOBI header is an ExifTool *warning*, not
+        // a failure: the Palm header tags already extracted still stand.
+        let offset = u64::from(u32::from_be_bytes([
+            header[78], header[79], header[80], header[81],
+        ]));
+        let Ok(mobi) = reader.read(offset, MOBI_HEADER_LEN) else {
+            return Ok(metadata);
+        };
+        if mobi.len() < MOBI_HEADER_LEN {
+            return Ok(metadata);
+        }
+        // Palm.pm:314-317, `substr($buff, 16, 4) eq 'MOBI'`.
+        if &mobi[16..20] != b"MOBI" {
+            return Ok(metadata);
+        }
 
-    let code_page = read_mobi_header(&mobi, &mut metadata)?;
-    // Palm.pm:322-323: an unrecognised code page falls back to UTF-8.
-    let encoding = Encoding::for_code_page(code_page);
+        let code_page = read_mobi_header(&mobi, &mut metadata)?;
+        // Palm.pm:322-323: an unrecognised code page falls back to UTF-8.
+        let encoding = Encoding::for_code_page(code_page);
 
-    read_book_name(reader, offset, &mobi, encoding, &mut metadata);
-    read_exth(reader, offset, &mobi, encoding, &mut metadata);
+        read_book_name(reader, offset, &mobi, encoding, &mut metadata);
+        read_exth(reader, offset, &mobi, encoding, &mut metadata);
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Palm.pm:302-303: `Palm::Main` over the 86-byte database header, big-endian

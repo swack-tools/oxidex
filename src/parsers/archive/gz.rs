@@ -243,9 +243,13 @@ impl FormatParser for GZParser {
 pub fn parse_gz_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    GZParser
-        .parse(reader)
-        .map_err(|e| format!("GZIP parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        GZParser
+            .parse(reader)
+            .map_err(|e| format!("GZIP parse error: {}", e))
+    })
 }
 
 #[cfg(test)]

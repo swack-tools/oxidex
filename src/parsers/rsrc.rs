@@ -149,92 +149,96 @@ impl FileReader for MemReader {
 
 /// Extract metadata from a Mac OS resource file (RSRC or DFONT).
 pub fn parse_rsrc_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let layout = validate_rsrc(reader).ok_or("not a valid Mac OS resource file")?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let layout = validate_rsrc(reader).ok_or("not a valid Mac OS resource file")?;
 
-    let mut metadata = MetadataMap::new();
-    // RSRC.pm:95, `$et->SetFileType('RSRC')`; overridden below on sfnt/POST.
-    let mut file_type = "RSRC";
+        let mut metadata = MetadataMap::new();
+        // RSRC.pm:95, `$et->SetFileType('RSRC')`; overridden below on sfnt/POST.
+        let mut file_type = "RSRC";
 
-    let map = reader
-        .read(u64::from(layout.map_off), layout.map_len as usize)
-        .map_err(|e| e.to_string())?;
-    let mr = EndianReader::big_endian(map);
+        let map = reader
+            .read(u64::from(layout.map_off), layout.map_len as usize)
+            .map_err(|e| e.to_string())?;
+        let mr = EndianReader::big_endian(map);
 
-    // RSRC.pm:101-204: the type-list / reference-list walk.
-    for i in 0..u32::from(layout.num_types) {
-        // `my $off = $typeOff + 2 + 8 * $i` (RSRC.pm:102).
-        let off = u32::from(layout.type_off) + 2 + 8 * i;
-        // `last if $off + 8 > $mapLen` (RSRC.pm:103).
-        if off + 8 > layout.map_len {
-            break;
-        }
-        let off = off as usize;
-        let res_type: [u8; 4] = match map.get(off..off + 4) {
-            Some(b) => [b[0], b[1], b[2], b[3]],
-            None => break,
-        };
-        let res_num = mr.u16_at(off + 4).unwrap_or(0);
-        let ref_off = u32::from(mr.u16_at(off + 6).unwrap_or(0)) + u32::from(layout.type_off);
-
-        for j in 0..=u32::from(res_num) {
-            // `my $roff = $refOff + 12 * $j` (RSRC.pm:109).
-            let roff = ref_off + 12 * j;
-            if roff + 12 > layout.map_len {
+        // RSRC.pm:101-204: the type-list / reference-list walk.
+        for i in 0..u32::from(layout.num_types) {
+            // `my $off = $typeOff + 2 + 8 * $i` (RSRC.pm:102).
+            let off = u32::from(layout.type_off) + 2 + 8 * i;
+            // `last if $off + 8 > $mapLen` (RSRC.pm:103).
+            if off + 8 > layout.map_len {
                 break;
             }
-            let roff = roff as usize;
-            let id = mr.u16_at(roff).unwrap_or(0);
-            // 24-bit resource data offset (RSRC.pm:113).
-            let res_off = u64::from(mr.u32_at(roff + 4).unwrap_or(0) & 0x00ff_ffff)
-                + u64::from(layout.dat_off);
+            let off = off as usize;
+            let res_type: [u8; 4] = match map.get(off..off + 4) {
+                Some(b) => [b[0], b[1], b[2], b[3]],
+                None => break,
+            };
+            let res_num = mr.u16_at(off + 4).unwrap_or(0);
+            let ref_off = u32::from(mr.u16_at(off + 6).unwrap_or(0)) + u32::from(layout.type_off);
 
-            match &res_type {
-                b"sfnt" => {
-                    // The resource data must be readable at all: a failed
-                    // read (or one past the 100MB cap) warns and hits `next`
-                    // (RSRC.pm:124-131) before the sfnt branch, so neither
-                    // tags nor the file-type override happen. Once read,
-                    // `OverrideFileType('DFONT')` fires even when
-                    // `ProcessOTF` rejects the block -- ExifTool only warns
-                    // "Unrecognized sfnt resource format" (RSRC.pm:152-161).
-                    if let Some(data) = read_resource(reader, res_off) {
-                        if let Some(tags) = extract_sfnt_name_tags(data) {
-                            for (key, value) in tags {
-                                metadata.insert(key, value);
+            for j in 0..=u32::from(res_num) {
+                // `my $roff = $refOff + 12 * $j` (RSRC.pm:109).
+                let roff = ref_off + 12 * j;
+                if roff + 12 > layout.map_len {
+                    break;
+                }
+                let roff = roff as usize;
+                let id = mr.u16_at(roff).unwrap_or(0);
+                // 24-bit resource data offset (RSRC.pm:113).
+                let res_off = u64::from(mr.u32_at(roff + 4).unwrap_or(0) & 0x00ff_ffff)
+                    + u64::from(layout.dat_off);
+
+                match &res_type {
+                    b"sfnt" => {
+                        // The resource data must be readable at all: a failed
+                        // read (or one past the 100MB cap) warns and hits `next`
+                        // (RSRC.pm:124-131) before the sfnt branch, so neither
+                        // tags nor the file-type override happen. Once read,
+                        // `OverrideFileType('DFONT')` fires even when
+                        // `ProcessOTF` rejects the block -- ExifTool only warns
+                        // "Unrecognized sfnt resource format" (RSRC.pm:152-161).
+                        if let Some(data) = read_resource(reader, res_off) {
+                            if let Some(tags) = extract_sfnt_name_tags(data) {
+                                for (key, value) in tags {
+                                    metadata.insert(key, value);
+                                }
                             }
+                            file_type = "DFONT";
                         }
-                        file_type = "DFONT";
                     }
-                }
-                b"vers" if id == 1 => {
-                    // RSRC.pm:49 names it; RSRC.pm:142-151 decodes it.
-                    if let Some(version) = read_resource(reader, res_off)
-                        .and_then(|data| decode_vers_long_string(&data))
-                    {
-                        metadata.insert("RSRC:ApplicationVersion", TagValue::String(version));
+                    b"vers" if id == 1 => {
+                        // RSRC.pm:49 names it; RSRC.pm:142-151 decodes it.
+                        if let Some(version) = read_resource(reader, res_off)
+                            .and_then(|data| decode_vers_long_string(&data))
+                        {
+                            metadata.insert("RSRC:ApplicationVersion", TagValue::String(version));
+                        }
                     }
-                }
-                b"POST" if id == 0x01f5 => {
-                    // The Main table keys only `POST_0x01f5` (RSRC.pm:44-47),
-                    // and `next unless $tagInfo` (RSRC.pm:141) skips every
-                    // other POST id before the override at RSRC.pm:196-198
-                    // can run; the data read must succeed too
-                    // (RSRC.pm:124-131). The PostScript sub-document itself
-                    // is deliberately not parsed -- see the module doc.
-                    if read_resource(reader, res_off).is_some() {
-                        file_type = "DFONT";
+                    b"POST" if id == 0x01f5 => {
+                        // The Main table keys only `POST_0x01f5` (RSRC.pm:44-47),
+                        // and `next unless $tagInfo` (RSRC.pm:141) skips every
+                        // other POST id before the override at RSRC.pm:196-198
+                        // can run; the data read must succeed too
+                        // (RSRC.pm:124-131). The PostScript sub-document itself
+                        // is deliberately not parsed -- see the module doc.
+                        if read_resource(reader, res_off).is_some() {
+                            file_type = "DFONT";
+                        }
                     }
-                }
-                _ => {
-                    // 8BIM / usro / STR / STR# / TEXT: counted gaps, see the
-                    // module doc for the RSRC.pm citations.
+                    _ => {
+                        // 8BIM / usro / STR / STR# / TEXT: counted gaps, see the
+                        // module doc for the RSRC.pm citations.
+                    }
                 }
             }
         }
-    }
 
-    metadata.insert("FileType", TagValue::new_string(file_type));
-    Ok(metadata)
+        metadata.insert("FileType", TagValue::new_string(file_type));
+        Ok(metadata)
+    })
 }
 
 /// Read one resource's data: a big-endian u32 length at `res_off`, then that

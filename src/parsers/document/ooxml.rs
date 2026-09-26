@@ -768,10 +768,14 @@ fn count_xml_elements(xml: &str, element_name: &str) -> usize {
 pub fn parse_docx_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = DocxParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("DOCX parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = DocxParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("DOCX parse error: {}", e))
+    })
 }
 
 /// Standalone function to parse XLSX metadata
@@ -781,10 +785,14 @@ pub fn parse_docx_metadata(
 pub fn parse_xlsx_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = XlsxParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("XLSX parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = XlsxParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("XLSX parse error: {}", e))
+    })
 }
 
 /// Standalone function to parse PPTX metadata
@@ -794,10 +802,14 @@ pub fn parse_xlsx_metadata(
 pub fn parse_pptx_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = PptxParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("PPTX parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PptxParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("PPTX parse error: {}", e))
+    })
 }
 
 /// Adds DOCX-specific tag aliases to metadata (Worker 20 requirements)

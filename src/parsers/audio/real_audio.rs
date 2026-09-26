@@ -85,52 +85,56 @@ impl SerialEmissionSink for MetadataSink<'_> {
 pub fn parse_real_audio_metadata(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let header = reader.read(0, 8).map_err(|error| error.to_string())?;
-    if !header.starts_with(RA_SIGNATURE) {
-        return Err("missing RealAudio '.ra\\xfd' signature".to_string());
-    }
-    // Real.pm:565: `unpack('x4nn', $buff)`.
-    let version = u16::from_be_bytes([header[4], header[5]]);
-    let mut metadata = MetadataMap::new();
-    if version != 4 {
-        return Ok(metadata);
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let header = reader.read(0, 8).map_err(|error| error.to_string())?;
+        if !header.starts_with(RA_SIGNATURE) {
+            return Err("missing RealAudio '.ra\\xfd' signature".to_string());
+        }
+        // Real.pm:565: `unpack('x4nn', $buff)`.
+        let version = u16::from_be_bytes([header[4], header[5]]);
+        let mut metadata = MetadataMap::new();
+        if version != 4 {
+            return Ok(metadata);
+        }
 
-    // Perl IO's Read succeeds with a positive short read.  FileReader is
-    // exact-length, so request only the bytes actually available while still
-    // preserving ProcessReal's 512-byte upper bound.
-    let available = reader.size().saturating_sub(8).min(BODY_READ_LEN as u64) as usize;
-    let body = reader
-        .read(8, available)
-        .map_err(|error| error.to_string())?;
-    if body.is_empty() {
-        // Native warns and returns after a zero-byte body read.  This parser's
-        // Result has no warning channel; preserving its prior output behavior
-        // means returning the header-only map without invented AudioV4 rows.
-        return Ok(metadata);
-    }
+        // Perl IO's Read succeeds with a positive short read.  FileReader is
+        // exact-length, so request only the bytes actually available while still
+        // preserving ProcessReal's 512-byte upper bound.
+        let available = reader.size().saturating_sub(8).min(BODY_READ_LEN as u64) as usize;
+        let body = reader
+            .read(8, available)
+            .map_err(|error| error.to_string())?;
+        if body.is_empty() {
+            // Native warns and returns after a zero-byte body read.  This parser's
+            // Result has no warning channel; preserving its prior output behavior
+            // means returning the header-only map without invented AudioV4 rows.
+            return Ok(metadata);
+        }
 
-    let table = find_serial_table("Real", "AudioV4")
-        .expect("generated Real::AudioV4 descriptor must accompany its opted-in carrier");
-    let mut members = HashMap::new();
-    let mut ctx = Ctx::new(&mut members);
-    let mut sink = MetadataSink {
-        metadata: &mut metadata,
-    };
-    let _result = process_serial_directory(
-        table,
-        SerialDir {
-            data: body,
-            dir_start: 0,
-            dir_len: body.len(),
-            base: 0,
-            data_pos: 8,
-            byte_order: ByteOrder::Big,
-        },
-        &mut ctx,
-        &mut sink,
-    );
-    Ok(metadata)
+        let table = find_serial_table("Real", "AudioV4")
+            .expect("generated Real::AudioV4 descriptor must accompany its opted-in carrier");
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = MetadataSink {
+            metadata: &mut metadata,
+        };
+        let _result = process_serial_directory(
+            table,
+            SerialDir {
+                data: body,
+                dir_start: 0,
+                dir_len: body.len(),
+                base: 0,
+                data_pos: 8,
+                byte_order: ByteOrder::Big,
+            },
+            &mut ctx,
+            &mut sink,
+        );
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

@@ -52,79 +52,83 @@ const CHUNK_TYPE_COVER_ART: u32 = 11;
 /// Extract Audible metadata by walking ExifTool's declared TOC and chunk
 /// layout.
 pub fn parse_aa_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("AA file is too short for the 16-byte header".to_string());
-    }
-    let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
-    if &header[4..8] != MAGIC {
-        return Err("invalid AA magic number".to_string());
-    }
-    let declared_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    if u64::from(declared_size) != reader.size() {
-        return Err("AA header file-size field does not match the real file size".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    let toc_entry_count = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
-    let toc_bytes = TOC_ENTRY_LEN.saturating_mul(toc_entry_count);
-    if toc_bytes > MAX_TOC_BYTES {
-        return Ok(metadata);
-    }
-    let Ok(toc) = reader.read(HEADER_LEN as u64, toc_bytes as usize) else {
-        return Ok(metadata);
-    };
-
-    for entry in toc.chunks_exact(TOC_ENTRY_LEN as usize) {
-        let chunk_type = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
-        if !matches!(
-            chunk_type,
-            CHUNK_TYPE_METADATA | CHUNK_TYPE_CHAPTERS | CHUNK_TYPE_COVER_ART
-        ) {
-            continue;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("AA file is too short for the 16-byte header".to_string());
         }
-        let offset = u64::from(u32::from_be_bytes([entry[4], entry[5], entry[6], entry[7]]));
-        let length = u64::from(u32::from_be_bytes([
-            entry[8], entry[9], entry[10], entry[11],
-        ]));
-        if length == 0 {
-            continue;
+        let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
+        if &header[4..8] != MAGIC {
+            return Err("invalid AA magic number".to_string());
+        }
+        let declared_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        if u64::from(declared_size) != reader.size() {
+            return Err("AA header file-size field does not match the real file size".to_string());
         }
 
-        if chunk_type == CHUNK_TYPE_CHAPTERS {
-            if length < 4 {
-                continue;
-            }
-            if let Ok(count_bytes) = reader.read(offset, 4) {
-                let count = u32::from_be_bytes([
-                    count_bytes[0],
-                    count_bytes[1],
-                    count_bytes[2],
-                    count_bytes[3],
-                ]);
-                metadata.insert(
-                    "Audible:ChapterCount",
-                    TagValue::new_integer(i64::from(count)),
-                );
-            }
-            continue;
+        let mut metadata = MetadataMap::new();
+        let toc_entry_count = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
+        let toc_bytes = TOC_ENTRY_LEN.saturating_mul(toc_entry_count);
+        if toc_bytes > MAX_TOC_BYTES {
+            return Ok(metadata);
         }
-
-        if length > MAX_CHUNK_LEN {
-            continue;
-        }
-        let Ok(chunk) = reader.read(offset, length as usize) else {
-            // Audible.pm:227: a short read here aborts the whole walk.
-            break;
+        let Ok(toc) = reader.read(HEADER_LEN as u64, toc_bytes as usize) else {
+            return Ok(metadata);
         };
 
-        if chunk_type == CHUNK_TYPE_COVER_ART {
-            parse_cover_art(chunk, offset, &mut metadata);
-        } else {
-            parse_metadata_dictionary(chunk, &mut metadata);
-        }
-    }
+        for entry in toc.chunks_exact(TOC_ENTRY_LEN as usize) {
+            let chunk_type = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
+            if !matches!(
+                chunk_type,
+                CHUNK_TYPE_METADATA | CHUNK_TYPE_CHAPTERS | CHUNK_TYPE_COVER_ART
+            ) {
+                continue;
+            }
+            let offset = u64::from(u32::from_be_bytes([entry[4], entry[5], entry[6], entry[7]]));
+            let length = u64::from(u32::from_be_bytes([
+                entry[8], entry[9], entry[10], entry[11],
+            ]));
+            if length == 0 {
+                continue;
+            }
 
-    Ok(metadata)
+            if chunk_type == CHUNK_TYPE_CHAPTERS {
+                if length < 4 {
+                    continue;
+                }
+                if let Ok(count_bytes) = reader.read(offset, 4) {
+                    let count = u32::from_be_bytes([
+                        count_bytes[0],
+                        count_bytes[1],
+                        count_bytes[2],
+                        count_bytes[3],
+                    ]);
+                    metadata.insert(
+                        "Audible:ChapterCount",
+                        TagValue::new_integer(i64::from(count)),
+                    );
+                }
+                continue;
+            }
+
+            if length > MAX_CHUNK_LEN {
+                continue;
+            }
+            let Ok(chunk) = reader.read(offset, length as usize) else {
+                // Audible.pm:227: a short read here aborts the whole walk.
+                break;
+            };
+
+            if chunk_type == CHUNK_TYPE_COVER_ART {
+                parse_cover_art(chunk, offset, &mut metadata);
+            } else {
+                parse_metadata_dictionary(chunk, &mut metadata);
+            }
+        }
+
+        Ok(metadata)
+    })
 }
 
 /// Audible.pm:229-234: an 8-byte-prefixed sub-record naming a length and an

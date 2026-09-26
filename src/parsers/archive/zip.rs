@@ -730,10 +730,14 @@ impl FormatParser for ZipParser {
 pub fn parse_zip_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = ZipParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("ZIP parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = ZipParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("ZIP parse error: {}", e))
+    })
 }
 
 /// Records every ZIP member's `ZIP:Zip*` tags into `metadata`.

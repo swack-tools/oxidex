@@ -916,7 +916,11 @@ fn read_section(payload: &[u8], collector: &mut Collector) {
 /// Returns an error string if the file does not carry the LFP signature or
 /// cannot be read.
 pub fn parse_lytro_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    LytroParser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        LytroParser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]
