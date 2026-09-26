@@ -345,6 +345,9 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     // `rw2_ifd0`, which answer `false` for any other file).
     let file_bytes = fs::read(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
+    // Refusals of one request, by its position: a later group deletion can
+    // still cancel the request (see below), and its refusal with it.
+    let mut request_refusals: Vec<(usize, &'a str, TagNotWritten)> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
     for (at, change) in changes.iter().enumerate() {
@@ -363,8 +366,26 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             match plan_group_deletion(path, change.tag(), group) {
                 Ok(Some(key)) => groups.push((at, key)),
-                Ok(None) => {} // provably nothing to delete
-                Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
+                // Provably nothing of the group in the file -- but ExifTool's
+                // group deletion also removes every value set in the group
+                // before it (Writer.pl `RemoveNewValuesForGroup`): 13.59's
+                // `-XMP:Title=x -XMP:All=` on a file without XMP is
+                // `unchanged`. So the earlier requests it covers go too;
+                // dropping the deletion alone left them to be written (or
+                // refused) as if it had not been asked (#957,
+                // PRRT_kwDOQNbr5M6mQbb-).
+                Ok(None) => {
+                    pending.retain(|earlier| {
+                        !group_covers(group, earlier.request.requested)
+                            && !group_covers(group, &earlier.request.key)
+                    });
+                    request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
+                }
+                // Kept at its place among the requests' refusals; no later
+                // deletion cancels a deletion's own refusal.
+                Err(ExifToolError::TagsNotWritten { tags }) => {
+                    request_refusals.extend(tags.into_iter().map(|tag| (at, "", tag)));
+                }
                 Err(other) => return Err(other),
             }
             continue;
@@ -386,7 +407,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             Ok(true) => continue,
             Ok(false) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
-                refused.extend(tags);
+                request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
                 continue;
             }
             Err(other) => return Err(other),
@@ -401,10 +422,15 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 addressed,
                 at,
             }),
-            Err(ExifToolError::TagsNotWritten { tags }) => refused.extend(tags),
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
+            }
             Err(other) => return Err(other),
         }
     }
+    // In request order (a stable sort keeps one request's refusals in order).
+    request_refusals.sort_by_key(|(at, _, _)| *at);
+    refused.extend(request_refusals.into_iter().map(|(_, _, tag)| tag));
 
     // The last request for a field replaces every earlier one.
     let replaced: Vec<bool> = (0..pending.len())
@@ -464,6 +490,37 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         baseline,
         steps: steps.into_iter().map(|(_, step)| step).collect(),
     })
+}
+
+/// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
+/// (the requested spelling, or the address it resolved to): a tag of that
+/// group; for the XMP (XML) family, any `XMP-*` (`XML-*`) group, and an
+/// `XMP:Name` request the namespace of whose tag is the deleted one
+/// (`XMP:Title` is `XMP-dc:Title`, which 13.59's `-XMP-dc:All=` cancels).
+/// An ungrouped name, or a namespace the registry does not tell, is not
+/// covered: its request stays, and is written or refused by name.
+fn group_covers(group: &str, tag: &str) -> bool {
+    let Some((tag_group, _)) = tag.rsplit_once(':') else {
+        return false;
+    };
+    if tag_group.eq_ignore_ascii_case(group) {
+        return true;
+    }
+    let (group_lower, tag_lower) = (group.to_ascii_lowercase(), tag_group.to_ascii_lowercase());
+    match group_lower.split_once('-') {
+        None if group_lower == "xmp" || group_lower == "xml" => {
+            tag_lower.starts_with(&format!("{group_lower}-"))
+        }
+        Some((family, _)) if (family == "xmp" || family == "xml") && tag_lower == family => {
+            crate::tag_db::tag_registry::get_tag_descriptor(tag).is_some_and(|descriptor| {
+                matches!(descriptor.id(), oxidex_tags::TagId::Named(id)
+                if id.split_once(':').is_some_and(|(namespace, _)| {
+                    namespace.eq_ignore_ascii_case(group)
+                }))
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Runs a [`Plan`] on the private copy at `path`; returns the number of sets
