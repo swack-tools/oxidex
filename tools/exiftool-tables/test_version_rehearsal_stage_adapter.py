@@ -1127,6 +1127,7 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(leader.is_file(), "adapter group leader did not start")
         child = int(pid.read_text())
         group = int(leader.read_text())
+        self.assertEqual(group, outcome["pgid"], "the checked group must be the command's own group")
         import version_rehearsal_executor as executor
         for _ in range(20):
             if not executor._pid_live(child):
@@ -1165,6 +1166,7 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("cleanup_error", outcome)
         self.assertTrue(leader.is_file(), "late adapter group leader did not start")
         group = int(leader.read_text())
+        self.assertEqual(group, outcome["pgid"], "the checked group must be the command's own group")
         import version_rehearsal_executor as executor
         if pid.is_file():
             child = int(pid.read_text())

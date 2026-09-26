@@ -930,6 +930,38 @@ class ExecutorTests(unittest.TestCase):
             signal.signal(signal.SIGCHLD, previous)
         self.assertEqual((record["state"], record["exit"]), ("ok", 0), record)
 
+    def test_unverified_lineage_retention_survives_the_owner_process(self):
+        """A lineage nobody can see must keep the host lock refused after its owner exits.
+
+        When the only evidence of a possibly live command is the supervisor's
+        missing verdict, no process holds the lock's description, so parking
+        the stream in-process ends with the process. A durable marker next to
+        the lock must keep every later owner (and standalone recovery) out.
+        """
+        child = executor._spawn([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        child.wait(timeout=30)
+        verdict = "exited; its lineage supervisor never proved every descendant gone"
+        with patch.object(executor, "_lineage_unverified", return_value=verdict):
+            with self.assertRaises(executor.LockRetained):
+                with executor._HostLock(self.lock):
+                    pass
+        # The owner process ends: its parked stream closes and the flock is free.
+        for stream in list(executor._RETAINED_LOCKS):
+            executor._RETAINED_LOCKS.remove(stream)
+            stream.close()
+        self.assertEqual(_contend(self.lock), "acquired")
+        with self.assertRaisesRegex(executor.Refused, "unproven"):
+            with executor._HostLock(self.lock):
+                pass
+        lease = qualification.TransitionLease(
+            lease=self.lock, run_id="after-unverified", owner_receipt=self.root / "owner.json",
+            heartbeat_receipt=self.root / "heartbeat.jsonl", expiry_receipt=self.root / "expiry.json",
+            release_receipt=self.root / "release.json")
+        with self.assertRaisesRegex(executor.Refused, "unproven"):
+            with lease:
+                pass
+
     @_without_lineage_supervisor
     def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
         """Incomplete ownership release must reach the lock owner's release decision.
