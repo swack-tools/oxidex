@@ -536,11 +536,10 @@ fn non_utf8_filename_read_write_round_trip() {
 /// reference file from the same argv bytes, and the XP entries must match.
 #[test]
 fn oracle_writes_the_same_xp_bytes_for_non_utf8_values() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     for (label, value, _) in XP_ACCEPTED {
         let dir = tempfile::tempdir().unwrap();
         let mut arg = b"-IFD0:XPTitle=".to_vec();

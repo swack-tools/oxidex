@@ -687,11 +687,10 @@ fn direct_write_of_a_code_point_above_the_bmp_keeps_its_low_16_bits() {
 /// must read both files back as the same text.
 #[test]
 fn oracle_writes_the_same_xp_bytes() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     let et = |args: &[&std::ffi::OsStr]| {
         let out = oracle.command().args(args).output().unwrap();
         assert!(
