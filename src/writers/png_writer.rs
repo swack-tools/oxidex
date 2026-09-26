@@ -207,6 +207,7 @@ fn is_exif_key(key: &str) -> bool {
     EXIF_KEY_PREFIXES
         .iter()
         .any(|prefix| key.starts_with(prefix))
+        || crate::writers::exif_surgical::chain_key_dir(key).is_some()
 }
 
 /// The EXIF-family rows of a map.

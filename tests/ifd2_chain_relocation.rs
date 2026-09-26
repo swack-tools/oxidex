@@ -523,6 +523,55 @@ fn every_edit_class_keeps_the_chain_as_the_oracle_does() {
     }
 }
 
+/// [`Preview::Trailer`] whose IFD2 also has a JPEGInterchangeFormat pair
+/// (0x0201/0x0202) locating the same trailer preview -- LeicaTL2's
+/// JpgFromRaw shape, which ExifTool refuses to rewrite ("Error reading
+/// JpgFromRaw data in IFD2").
+fn jpgfromraw_jpeg(order: Order) -> Vec<u8> {
+    let mut jpeg = leica_jpeg(order, Preview::Trailer);
+    let (at, start, len, _) = jpeg_preview_pointer(&jpeg).unwrap();
+    let ifd2 = {
+        let t = &jpeg[at..];
+        let rd32 = |p: usize| {
+            let b = [t[p], t[p + 1], t[p + 2], t[p + 3]];
+            match order {
+                Order::Ii => u32::from_le_bytes(b),
+                Order::Mm => u32::from_be_bytes(b),
+            }
+        };
+        let rd16 = |p: usize| {
+            let b = [t[p], t[p + 1]];
+            match order {
+                Order::Ii => u16::from_le_bytes(b),
+                Order::Mm => u16::from_be_bytes(b),
+            }
+        };
+        let next = |p: usize| rd32(p + 2 + 12 * rd16(p) as usize) as usize;
+        at + next(next(rd32(4) as usize))
+    };
+    // Replace ImageWidth/ImageHeight with JPEGInterchangeFormat/Length.
+    let row = |tag: u16, value: u32| {
+        [
+            order.u16(tag).as_slice(),
+            &order.u16(4),
+            &order.u32(1),
+            &order.u32(value),
+        ]
+        .concat()
+    };
+    jpeg[ifd2 + 2..ifd2 + 14].copy_from_slice(&row(0x0201, start as u32));
+    jpeg[ifd2 + 14..ifd2 + 26].copy_from_slice(&row(0x0202, len as u32));
+    // Keep the rows sorted: 0x0103, 0x0111, 0x0117, 0x0201, 0x0202.
+    let rows: Vec<Vec<u8>> = (0..5)
+        .map(|k| jpeg[ifd2 + 2 + 12 * k..ifd2 + 14 + 12 * k].to_vec())
+        .collect();
+    let sorted = [&rows[2], &rows[3], &rows[4], &rows[0], &rows[1]].map(|r| r.clone());
+    for (k, r) in sorted.iter().enumerate() {
+        jpeg[ifd2 + 2 + 12 * k..ifd2 + 14 + 12 * k].copy_from_slice(r);
+    }
+    jpeg
+}
+
 /// Chain data outside the block that ExifTool will not re-point -- IFD2's
 /// strip outside a PNG's `eXIf` chunk, a JPEG IFD2's JpgFromRaw after the
 /// image -- is refused by the oracle ("Error reading ... data in IFD2") on
@@ -536,48 +585,7 @@ fn chain_data_outside_the_block_is_refused_as_the_oracle_refuses() {
     let dir = tempfile::tempdir().unwrap();
     for order in [Order::Ii, Order::Mm] {
         let png = png_with(&leica_tiff(order, &loadable_preview(), Some(5000)));
-        // A JPEG IFD2 whose 0x0201/0x0202 pair locates the trailer preview.
-        let mut jpeg = leica_jpeg(order, Preview::Trailer);
-        let (at, start, len, _) = jpeg_preview_pointer(&jpeg).unwrap();
-        let ifd2 = {
-            let t = &jpeg[at..];
-            let rd32 = |p: usize| {
-                let b = [t[p], t[p + 1], t[p + 2], t[p + 3]];
-                match order {
-                    Order::Ii => u32::from_le_bytes(b),
-                    Order::Mm => u32::from_be_bytes(b),
-                }
-            };
-            let rd16 = |p: usize| {
-                let b = [t[p], t[p + 1]];
-                match order {
-                    Order::Ii => u16::from_le_bytes(b),
-                    Order::Mm => u16::from_be_bytes(b),
-                }
-            };
-            let next = |p: usize| rd32(p + 2 + 12 * rd16(p) as usize) as usize;
-            at + next(next(rd32(4) as usize))
-        };
-        // Replace ImageWidth/ImageHeight with JPEGInterchangeFormat/Length.
-        let row = |tag: u16, value: u32| {
-            [
-                order.u16(tag).as_slice(),
-                &order.u16(4),
-                &order.u32(1),
-                &order.u32(value),
-            ]
-            .concat()
-        };
-        jpeg[ifd2 + 2..ifd2 + 14].copy_from_slice(&row(0x0201, start as u32));
-        jpeg[ifd2 + 14..ifd2 + 26].copy_from_slice(&row(0x0202, len as u32));
-        // Keep the rows sorted: 0x0103, 0x0111, 0x0117, 0x0201, 0x0202.
-        let rows: Vec<Vec<u8>> = (0..5)
-            .map(|k| jpeg[ifd2 + 2 + 12 * k..ifd2 + 14 + 12 * k].to_vec())
-            .collect();
-        let sorted = [&rows[2], &rows[3], &rows[4], &rows[0], &rows[1]].map(|r| r.clone());
-        for (k, r) in sorted.iter().enumerate() {
-            jpeg[ifd2 + 2 + 12 * k..ifd2 + 14 + 12 * k].copy_from_slice(r);
-        }
+        let jpeg = jpgfromraw_jpeg(order);
         for (name, original) in [("outside.png", png), ("jpgfromraw.jpg", jpeg)] {
             for (class, edit) in EDITS {
                 let label = format!("{order:?} {name} {class}");
@@ -621,6 +629,227 @@ fn leica_samples_match_the_oracle() {
             if let Some(outputs) = outputs.filter(|_| !matches!(class, "IFD1:All" | "EXIF:All")) {
                 assert_preview_pointer(&original, &outputs, &label);
             }
+        }
+    }
+}
+
+/// A write through the public library writer `write_exif_to_jpeg`, which
+/// runs no CLI post-condition: the metadata map read back from `original`,
+/// with `IFD0:Artist` set to `artist`.
+fn public_write(dir: &Path, original: &[u8], artist: &str) -> oxidex::error::Result<Vec<u8>> {
+    let path = write(dir, "public.jpg", original);
+    let mut map = oxidex::core::operations::read_metadata(&path).unwrap();
+    map.insert(
+        "IFD0:Artist",
+        oxidex::core::tag_value::TagValue::new_string(artist),
+    );
+    let reader = oxidex::io::buffered_reader::BufferedReader::from_bytes(original);
+    oxidex::writers::jpeg_writer::write_exif_to_jpeg(&reader, &map)
+}
+
+/// Codex on #954 (ifd_chain.rs:491). An edit that grows the EXIF block past
+/// the old trailer-preview offset (carried verbatim until re-pointed) made
+/// the re-scan of the new block take IFD2's 0x0111 for in-block data, so
+/// the preview was not re-pointed: the public `write_exif_to_jpeg` returned
+/// a PreviewImageStart inside the APP1, and the CLI's post-condition
+/// refused an edit the oracle makes. Inside/outside is now the original
+/// layout's call. At 16fcb986 the CLI refused, and the public writer left
+/// the pointer in the block.
+#[test]
+fn a_block_grown_past_the_old_preview_offset_still_re_points_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // Longer than everything between the APP1 and the preview.
+    let artist = "a".repeat(700);
+    let edit = format!("-IFD0:Artist={artist}");
+    for order in [Order::Ii, Order::Mm] {
+        for preview in [Preview::Trailer, Preview::TrailerUnloadable] {
+            let original = leica_jpeg(order, preview);
+            let label = format!("{order:?} {preview:?}");
+            let (at, start, len, _) = jpeg_preview_pointer(&original).unwrap();
+            let preview_bytes = original[at + start..at + start + len].to_vec();
+
+            // The public writer points at the preview, now after the EOI.
+            let out = public_write(dir.path(), &original, &artist)
+                .unwrap_or_else(|e| panic!("{label}: public writer: {e}"));
+            let (at2, start2, len2, eoi2) = jpeg_preview_pointer(&out).unwrap();
+            // The new block reaches past the old preview offset.
+            let new_block = usize::from(u16::from_be_bytes([out[4], out[5]])) - 8;
+            assert!(
+                new_block > start,
+                "{label}: fixture does not grow past {start}"
+            );
+            assert_eq!(
+                at2 + start2,
+                eoi2,
+                "{label}: public writer's PreviewImageStart"
+            );
+            assert_eq!(
+                &out[at2 + start2..at2 + start2 + len2],
+                &preview_bytes[..],
+                "{label}"
+            );
+
+            // The CLI makes the oracle's edit.
+            let Some(oracle) = oracle() else {
+                eprintln!("skipping the oracle half: no usable ExifTool oracle");
+                continue;
+            };
+            let outputs = assert_matches_oracle(
+                oracle,
+                dir.path(),
+                &format!("grown-{preview:?}.jpg"),
+                &original,
+                &[edit.as_str()],
+                &label,
+            )
+            .unwrap_or_else(|| panic!("{label}: the oracle refused"));
+            assert_preview_pointer(&original, &outputs, &label);
+        }
+    }
+}
+
+/// Codex on #954 (jpeg_writer.rs:185). Chain data outside the APP1 other
+/// than IFD2's preview (here IFD2's JpgFromRaw pair) is refused by ExifTool
+/// and was refused by the CLI's post-condition only: the public
+/// `write_exif_to_jpeg` accepted it and copied its offset stale. The public
+/// writer refuses it itself now; at 16fcb986 it returned Ok.
+#[test]
+fn the_public_writer_refuses_chain_data_it_cannot_re_point() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let original = jpgfromraw_jpeg(order);
+        for artist in ["x", "a much longer artist than the one before"] {
+            let err = public_write(dir.path(), &original, artist)
+                .expect_err("JpgFromRaw after the image must be refused");
+            assert!(
+                err.to_string().contains("locates data outside"),
+                "{order:?} {artist}: {err}"
+            );
+        }
+    }
+}
+
+/// Codex on #954 (exif_surgical.rs:2982). A JPEG whose header ends in an
+/// EOI with no SOS: `transform_exif` searches the EOI from the EOI marker
+/// and re-points an unloadable IFD2 preview there, but the verifier only
+/// looked for an SOS and refused the correct edit. Both now take the same
+/// boundary (`jpeg_scan_boundary`). (Pinned ExifTool 13.59 refuses to
+/// write any JPEG without a scan -- "Corrupted JPEG image" -- chain or
+/// not; oxidex writes one at tip too, a separate difference.) At 16fcb986
+/// the edit was refused by the verifier.
+#[test]
+fn a_jpeg_without_a_scan_re_points_and_verifies_at_its_eoi() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = leica_tiff(order, &loadable_preview(), Some(7_000_000));
+        let mut original = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        original.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        original.extend(b"Exif\0\0");
+        original.extend(&tiff);
+        original.extend([0xFF, 0xD9]);
+        let path = write(dir.path(), "noscan.jpg", &original);
+        let ran = oxidex(&[LONG_ARTIST], &path);
+        assert!(
+            ran.status.success(),
+            "{order:?}: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        let out = std::fs::read(&path).unwrap();
+        // IFD2's PreviewImageStart: the end of the (last) EOI, TIFF-relative.
+        let at = 12;
+        let t = &out[at..];
+        let rd = |p: usize, n: usize| -> usize {
+            let b = &t[p..p + n];
+            let mut v = 0usize;
+            for i in 0..n {
+                let byte = match order {
+                    Order::Ii => b[n - 1 - i],
+                    Order::Mm => b[i],
+                };
+                v = (v << 8) | usize::from(byte);
+            }
+            v
+        };
+        let next = |p: usize| rd(p + 2 + 12 * rd(p, 2), 4);
+        let ifd2 = next(next(rd(4, 4)));
+        let start = (0..rd(ifd2, 2))
+            .map(|k| ifd2 + 2 + 12 * k)
+            .find(|&r| rd(r, 2) == 0x0111)
+            .map(|r| rd(r + 8, 4))
+            .unwrap();
+        assert_eq!(
+            at + start,
+            out.len(),
+            "{order:?}: PreviewImageStart at the EOI's end"
+        );
+    }
+}
+
+/// Codex on #954 (exif_surgical.rs:1411). An `IFD2:` set or removal (or a
+/// surfaced IFD2 row dropped from the map) beside another edit reported
+/// success with the chain carried unchanged. The writers never edit the
+/// chain, so -- as for IFD1 -- such a write is refused, file untouched; a
+/// removal naming nothing IFD2 holds stays a no-op. (Pinned ExifTool 13.59
+/// writes no IFD2 tag in a JPEG either: it reports these edits unchanged,
+/// `IFD2:All` "Not a deletable group".) At 16fcb986 every refused case here
+/// reported success.
+#[test]
+fn edits_of_the_chain_past_ifd1_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for order in [Order::Ii, Order::Mm] {
+        for (name, original) in [
+            ("trailer.jpg", leica_jpeg(order, Preview::Trailer)),
+            ("inblock.jpg", leica_jpeg(order, Preview::InBlock)),
+            (
+                "inblock.png",
+                png_with(&leica_tiff(order, &loadable_preview(), None)),
+            ),
+        ] {
+            for args in [
+                &["-IFD2:ImageWidth=5", "-IFD0:Artist=x"][..],
+                &["-IFD2:ImageWidth=", "-IFD0:Artist=x"],
+                &["-IFD2:All=", "-IFD0:Artist=x"],
+                &["-IFD2:ImageWidth=5"],
+            ] {
+                let path = write(dir.path(), name, &original);
+                let ran = oxidex(args, &path);
+                assert!(
+                    !ran.status.success(),
+                    "{order:?} {name} {args:?}: reported success"
+                );
+                assert!(
+                    std::fs::read(&path).unwrap() == original,
+                    "{order:?} {name} {args:?}: refused but changed"
+                );
+            }
+            // Naming nothing IFD2 holds: a no-op beside a real edit.
+            let path = write(dir.path(), name, &original);
+            let ran = oxidex(&["-IFD2:GPSAltitude=", "-IFD0:Artist=x"], &path);
+            assert!(
+                ran.status.success(),
+                "{order:?} {name}: {}",
+                String::from_utf8_lossy(&ran.stderr)
+            );
+
+            // A surfaced IFD2 row dropped from the map (library path).
+            let path = write(dir.path(), name, &original);
+            let mut map = oxidex::core::operations::read_metadata(&path).unwrap();
+            let Some(key) = map.keys().find(|key| key.starts_with("IFD2:")).cloned() else {
+                continue; // the reader surfaces no IFD2 row for this carrier
+            };
+            map.remove(&key);
+            map.insert(
+                "IFD0:Artist",
+                oxidex::core::tag_value::TagValue::new_string("x"),
+            );
+            assert!(
+                oxidex::core::operations::write_metadata(&path, &map).is_err(),
+                "{order:?} {name}: dropping {key} reported success"
+            );
+            assert!(
+                std::fs::read(&path).unwrap() == original,
+                "{order:?} {name}"
+            );
         }
     }
 }

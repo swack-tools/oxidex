@@ -74,6 +74,9 @@ pub(crate) const MAX_CHAIN_DIRS: usize = 64;
 /// PreviewImageStart/Length in a JPEG) and JPEGInterchangeFormat/Length.
 pub(crate) const OFFSET_PAIRS: [(u16, u16); 2] = [(0x0111, 0x0117), (0x0201, 0x0202)];
 
+/// The MakerNote tag, refused in a chain directory ([`scan_chain`]).
+const MAKERNOTE: u16 = 0x927C;
+
 /// Tags that locate a directory or data this module does not model when met
 /// in a chain directory: the `%Exif::Main` pointers `exif_surgical` does not
 /// relocate (its table-derived `UNMODELLED_POINTER_TAGS` and
@@ -162,6 +165,41 @@ impl IfdChain {
                 })
             })
             .collect()
+    }
+}
+
+impl IfdChain {
+    /// The record for `tag` in directory `dir` (0 = IFD2), whatever its
+    /// value locates now: a write may carry an out-of-block offset verbatim
+    /// into a block grown past it, which a fresh scan then takes for
+    /// in-block data. Inside/outside is decided from the original layout.
+    pub(crate) fn record(&self, dir: usize, tag: u16) -> Option<(usize, &ChainRecord)> {
+        let dir = self.dirs.get(dir)?;
+        dir.records
+            .iter()
+            .position(|r| r.tag_id == tag)
+            .map(|i| (dir.table_at + 2 + 12 * i, &dir.records[i]))
+    }
+}
+
+impl ChainRecord {
+    /// The record's first value as stored in its field (SHORT or LONG,
+    /// `exif_surgical::inline_unsigned`).
+    pub(crate) fn raw_value(&self, order: ByteOrder) -> usize {
+        crate::writers::exif_surgical::inline_unsigned(
+            self.field_type,
+            self.count,
+            &self.field,
+            order,
+        )
+    }
+}
+
+fn block_order(tiff: &[u8]) -> ByteOrder {
+    if tiff.starts_with(b"MM") {
+        ByteOrder::BigEndian
+    } else {
+        ByteOrder::LittleEndian
     }
 }
 
@@ -258,8 +296,25 @@ fn scan_dir(
         let mut refuse = |what: String| {
             why.get_or_insert(format!("IFD{index} tag 0x{tag_id:04X} {what}"));
         };
-        let value = if !(1..=13).contains(&field_type) {
-            refuse(format!("has unknown field type {field_type}"));
+        let value = if !(1..=12).contains(&field_type) {
+            // Type 13 (IFD) is a 4-byte offset to a sub-directory, which a
+            // re-layout would leave behind; `type_size` has no size for it
+            // (nor for anything past it), so it would also be taken for a
+            // one-byte inline value and its old offset copied verbatim.
+            refuse(if field_type == 13 {
+                "is an IFD (type 13) pointer to a sub-directory this writer does not \
+                 relocate"
+                    .to_string()
+            } else {
+                format!("has unknown field type {field_type}")
+            });
+            ChainValue::Inline
+        } else if tag_id == MAKERNOTE {
+            // A MakerNote's own offsets address the block; the main
+            // serializer pins the ExifIFD one at its original offset, which a
+            // chain relocation would not. ExifTool rewrites a maker note by
+            // its vendor's layout; this writer cannot, so it refuses.
+            refuse("is a MakerNote, whose internal offsets a relocation would break".to_string());
             ChainValue::Inline
         } else if is_unmodelled_pointer(tag_id) {
             refuse("locates a directory or data this writer does not relocate".to_string());
@@ -487,8 +542,20 @@ pub(crate) fn preview_tail_pointer(
     ) else {
         return Ok(None);
     };
-    let (Some((start, len)), Some(_)) = (before.outside_preview(), after.outside_preview()) else {
+    // Chain data outside the block other than this preview: ExifTool
+    // refuses the write, and so does the public writer itself (not only the
+    // CLI's post-condition), before any offset is copied stale.
+    refuse_unmovable_outside(before_block, after_block, true)?;
+    // Inside or outside is the ORIGINAL layout's call: a grown block can
+    // reach past the verbatim-copied old offset.
+    let Some((start, len)) = before.outside_preview() else {
         return Ok(None);
+    };
+    let Some((record_at, record)) = after.record(0, 0x0111) else {
+        return Err(ExifToolError::unsupported_format(
+            "Cannot re-point the IFD2 PreviewImage after this write: the rewritten IFD2 has \
+             no PreviewImageStart record; nothing was written",
+        ));
     };
     if is_sony(before_block) {
         return Err(ExifToolError::unsupported_format(
@@ -497,12 +564,6 @@ pub(crate) fn preview_tail_pointer(
              written",
         ));
     }
-    let record = after.dirs[0]
-        .records
-        .iter()
-        .position(|r| r.tag_id == 0x0111)
-        .expect("outside_preview found the 0x0111 record");
-    let field_type = after.dirs[0].records[record].field_type;
     let held = orig.0.checked_add(start).and_then(|from| {
         original
             .get(from..from.checked_add(len)?)
@@ -510,8 +571,8 @@ pub(crate) fn preview_tail_pointer(
             .map(|_| from)
     });
     Ok(Some(TailPointer {
-        field_at: out.0 + after.dirs[0].table_at + 2 + 12 * record + 8,
-        wide: field_type != 3,
+        field_at: out.0 + record_at + 8,
+        wide: record.field_type != 3,
         big_endian: &after_block[..2] == b"MM",
         base: out.0,
         target: match held {
@@ -580,34 +641,27 @@ pub(crate) fn verify_preview_repoint(
             .checked_add(at)
             .and_then(|from| file.get(from..from.checked_add(len)?))
     }
-    let outside = |chain: &IfdChain| -> Vec<(usize, u16, usize, usize)> {
-        chain
-            .dirs
-            .iter()
-            .enumerate()
-            .flat_map(|(i, dir)| {
-                dir.records.iter().filter_map(move |r| match r.value {
-                    ChainValue::Outside { at, len } => Some((i, r.tag_id, at, len)),
-                    _ => None,
-                })
-            })
-            .collect()
-    };
-    let (was, now) = (outside(&before), outside(&after));
-    if was.len() != now.len() {
-        return Err(failed(
-            "the directory chain past IFD1 no longer locates the same data outside the \
-             EXIF block"
-                .to_string(),
-        ));
-    }
-    for ((dir, tag, at, len), (dir2, tag2, at2, len2)) in was.into_iter().zip(now) {
-        if (dir, tag, len) != (dir2, tag2, len2) {
+    // Every locator the ORIGINAL chain had outside its block, read back
+    // from the same record of the rewritten chain by its stored value (a
+    // fresh scan of the output could take a grown block for its target).
+    let order = block_order(after_block);
+    for (dir, record) in before
+        .dirs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, d)| d.records.iter().map(move |r| (i, r)))
+    {
+        let ChainValue::Outside { at, len } = record.value else {
+            continue;
+        };
+        let tag = record.tag_id;
+        let Some((_, now)) = after.record(dir, tag) else {
             return Err(failed(format!(
-                "IFD{} tag 0x{tag:04X} of the chain past IFD1 changed",
+                "IFD{} tag 0x{tag:04X} of the chain past IFD1 is gone",
                 dir + 2
             )));
-        }
+        };
+        let at2 = now.raw_value(order);
         let held = located(original, orig.0, at, len);
         let preview = dir == 0 && tag == 0x0111;
         match held {

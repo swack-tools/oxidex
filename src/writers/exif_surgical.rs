@@ -756,9 +756,44 @@ struct PlacedEntry {
 }
 
 /// Whether `key` names a class of entry the surgical writers carry raw and
-/// can neither add nor edit: IFD1, InteropIFD, MakerNotes.
+/// can neither add nor edit: IFD1, InteropIFD, MakerNotes, and the
+/// directory chain past IFD1 (`IFD2:`, `IFD3:`, ... -- [`chain_key_dir`]).
 pub(crate) fn is_carried_only_key(key: &str) -> bool {
-    key.starts_with("IFD1:") || key.starts_with("InteropIFD:") || key.starts_with("MakerNotes:")
+    key.starts_with("IFD1:")
+        || key.starts_with("InteropIFD:")
+        || key.starts_with("MakerNotes:")
+        || chain_key_dir(key).is_some()
+}
+
+/// The directory of the chain past IFD1 (0 = IFD2) that a group-qualified
+/// key `IFD<n>:<name>`, n >= 2, names. The writers carry that chain
+/// verbatim ([`super::ifd_chain`]) and never edit it, so a set or a
+/// removal naming one of its entries is refused, as for IFD1.
+pub(crate) fn chain_key_dir(key: &str) -> Option<usize> {
+    let (group, _) = key.split_once(':')?;
+    let n: usize = group.strip_prefix("IFD")?.parse().ok()?;
+    n.checked_sub(2)
+}
+
+/// Whether the chain key `key` (`IFD<n>:All`, or a tag of that directory)
+/// names an entry `chain` holds.
+fn chain_key_names_entry(key: &str, chain: &IfdChain) -> bool {
+    let (Some(dir), Some((_, name))) = (chain_key_dir(key), key.split_once(':')) else {
+        return false;
+    };
+    let Some(dir) = chain.dirs.get(dir) else {
+        return false;
+    };
+    if name.eq_ignore_ascii_case("all") {
+        return !dir.records.is_empty();
+    }
+    // The tag id the name has in `Exif::Main` (the table every IFD of the
+    // chain is read with); a name it lacks names nothing.
+    let unqualified = format!("IFD0:{name}");
+    get_tag_descriptor(key)
+        .or_else(|| get_tag_descriptor(&unqualified))
+        .and_then(descriptor_tag_id)
+        .is_some_and(|tag_id| dir.records.iter().any(|r| r.tag_id == tag_id))
 }
 
 /// Whether a named removal `key` names an entry of a raw-carried class that
@@ -789,6 +824,12 @@ fn removal_names_carried_entry(key: &str, scan: &ExifScan, original_map: &Metada
     }
     if original_map.contains_key(key) {
         return true;
+    }
+    if chain_key_dir(key).is_some() {
+        return scan
+            .ifd1_next
+            .as_ref()
+            .is_some_and(|chain| chain_key_names_entry(key, chain));
     }
     let Some((group, name)) = key.split_once(':') else {
         return false;
@@ -829,8 +870,8 @@ fn removal_names_carried_entry(key: &str, scan: &ExifScan, original_map: &Metada
 pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
     ExifToolError::unsupported_format(format!(
         "Editing tag '{}' is not yet supported: it belongs to an unsurfaced IFD \
-         class (InteropIFD/IFD1/MakerNote) that this writer always raw-carries \
-         and cannot add to or edit",
+         class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain past IFD1) that this \
+         writer always raw-carries and cannot add to or edit",
         key
     ))
 }
@@ -1362,8 +1403,8 @@ fn plan_exif_write_inner(
     }) {
         return Err(ExifToolError::unsupported_format(format!(
             "Removing tag '{}' is not yet supported: it belongs to an \
-             unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
-             writer always raw-carries",
+             unsurfaced IFD class (InteropIFD/IFD1/MakerNote, or the IFD2+ chain \
+             past IFD1) that this writer always raw-carries",
             key
         )));
     }
@@ -1406,6 +1447,18 @@ fn plan_exif_write_inner(
                  (IFD2, next-IFD offset {}) that this writer cannot relocate exactly \
                  ({why}), and re-laying the block out would drop or corrupt it",
                 chain.first
+            )));
+        }
+        // A surfaced row of the chain dropped from the map is a deletion this
+        // writer cannot make (it carries the chain verbatim): refused, as a
+        // dropped IFD1 row is. (A named removal is refused above.)
+        if let Some(key) = original_map
+            .keys()
+            .find(|key| chain_key_dir(key).is_some() && !desired.contains_key(key.as_str()))
+        {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Removing tag '{key}' is not yet supported: it belongs to the directory \
+                 chain past IFD1 (IFD2 on), which this writer always raw-carries"
             )));
         }
         plan.chain = Some(chain.clone());
@@ -2737,8 +2790,9 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
 }
 
 /// Key prefixes the EXIF writers plan: IFD0/ExifIFD/GPS/IFD1/InteropIFD
-/// rows, the family spelling `EXIF:`, and `MakerNotes:`.
-fn is_planned_key(key: &str) -> bool {
+/// rows, the family spelling `EXIF:`, `MakerNotes:`, and the chain past
+/// IFD1 (`IFD2:` on, which the planner refuses to edit).
+pub(crate) fn is_planned_key(key: &str) -> bool {
     [
         "IFD0:",
         "ExifIFD:",
@@ -2750,6 +2804,7 @@ fn is_planned_key(key: &str) -> bool {
     ]
     .iter()
     .any(|prefix| key.starts_with(prefix))
+        || chain_key_dir(key).is_some()
 }
 
 /// Every planned row of `desired` is its `baseline` value and no planned
@@ -2970,16 +3025,25 @@ pub(crate) fn jpeg_exif_block_at(file_bytes: &[u8]) -> Option<(usize, usize)> {
         })
 }
 
-/// Where a JPEG's entropy-coded data starts: the end of its first SOS
-/// segment, from which ExifTool reads on to the EOI (`Writer.pl`
-/// 13.59:6061-6099). `None` without an SOS.
+/// Where a JPEG's EOI is searched from: the end of its first SOS segment
+/// (the entropy-coded data, from which ExifTool reads on to the EOI,
+/// `Writer.pl` 13.59:6061-6099), or the EOI marker itself when the header
+/// ends in one without a scan -- the same boundary `transform_exif` and the
+/// legacy writer hand the trailer re-pointing
+/// ([`jpeg_scan_boundary`]). `None` with neither.
 pub(crate) fn jpeg_scan_start(file_bytes: &[u8]) -> Option<usize> {
     let reader = SliceReader(file_bytes);
-    parse_segments(&reader)
-        .ok()?
-        .iter()
-        .find(|s| s.marker == 0xFFDA)
-        .map(|s| s.offset as usize + 4 + s.data.len())
+    jpeg_scan_boundary(&parse_segments(&reader).ok()?)
+}
+
+/// [`jpeg_scan_start`] over parsed segments: the first SOS or EOI segment
+/// decides it (a scan's header end, or the EOI marker's offset).
+pub(crate) fn jpeg_scan_boundary(segments: &[crate::parsers::jpeg::Segment<'_>]) -> Option<usize> {
+    segments.iter().find_map(|s| match s.marker {
+        0xFFDA => Some(s.offset as usize + 4 + s.data.len()),
+        0xFFD9 => Some(s.offset as usize),
+        _ => None,
+    })
 }
 
 /// Where a JPEG's first `Exif\0\0` APP1 block's TIFF header starts.
@@ -3568,6 +3632,42 @@ pub(crate) fn verify_exif_write(
         .filter(|(key, value)| is_exif(key) && baseline.get(key.as_str()) != Some(value))
         .flat_map(|(key, _)| key_addresses(key))
         .collect();
+
+    // (c0) an edit of the chain past IFD1 -- a set, a named removal of an
+    // entry it holds, or a surfaced row dropped from the map -- cannot have
+    // been made: the writers carry the chain verbatim. A write that kept
+    // the chain with such an edit pending reported success for nothing.
+    if !carrier_deleted
+        && let Some(chain) = original
+            .filter(|tiff| !tiff.is_empty())
+            .and_then(|tiff| crate::writers::ifd_chain::chain_of(tiff, magics))
+        && crate::writers::ifd_chain::chain_of(output, magics).is_some()
+    {
+        let edit = desired
+            .iter()
+            .find(|(key, value)| {
+                chain_key_dir(key).is_some() && baseline.get(key.as_str()) != Some(value)
+            })
+            .map(|(key, _)| key.clone())
+            .or_else(|| {
+                removed
+                    .iter()
+                    .find(|key| chain_key_names_entry(key, &chain))
+                    .cloned()
+            })
+            .or_else(|| {
+                baseline
+                    .keys()
+                    .find(|key| chain_key_dir(key).is_some() && !desired.contains_key(key.as_str()))
+                    .cloned()
+            });
+        if let Some(key) = edit {
+            return Err(refused(format!(
+                "'{key}' edits the directory chain past IFD1 (IFD2 on), which is carried \
+                 unchanged"
+            )));
+        }
+    }
 
     // (c) the directory chain past IFD1 (IFD2 and on, with the data its
     // records locate) is still reachable from IFD1 and carries the same
@@ -5711,6 +5811,70 @@ mod tests {
                 EXIF_BLOCK_MAGICS,
             )
             .unwrap();
+        }
+    }
+
+    /// Codex on #954 (ifd_chain.rs:266 and :305). An IFD2 record of type 13
+    /// (IFD) is a 4-byte pointer to a sub-directory, which `type_size` has
+    /// no size for: the chain scan took it for a one-byte inline value, so a
+    /// re-layout copied the old offset and left the sub-directory behind. An
+    /// out-of-line MakerNote in IFD2 was relocated, breaking the offsets
+    /// inside it (the main serializer pins ExifIFD's). Both are refused.
+    #[test]
+    fn a_chain_with_an_ifd_pointer_or_a_maker_note_is_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let w16 = |v: u16| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            let w32 = |v: u32| match bo {
+                ByteOrder::LittleEndian => v.to_le_bytes(),
+                ByteOrder::BigEndian => v.to_be_bytes(),
+            };
+            // IFD0 {ImageWidth} @8 -> IFD1 {Compression} @26 -> IFD2 {one
+            // record} @44 (ends 62), then 18 bytes a record may locate.
+            let block = |tag: u16, typ: u16, count: u32, value: u32| {
+                let mut t = match bo {
+                    ByteOrder::LittleEndian => b"II".to_vec(),
+                    ByteOrder::BigEndian => b"MM".to_vec(),
+                };
+                t.extend(w16(42));
+                t.extend(w32(8));
+                for (next, tag, typ, count, value) in [
+                    (26u32, 0x0100u16, 4u16, 1u32, 7u32),
+                    (44, 0x0103, 4, 1, 6),
+                    (0, tag, typ, count, value),
+                ] {
+                    t.extend(w16(1));
+                    t.extend([w16(tag).as_slice(), &w16(typ), &w32(count), &w32(value)].concat());
+                    t.extend(w32(next));
+                }
+                assert_eq!(t.len(), 62);
+                // A sub-IFD at 62: {ImageWidth 3}, no next.
+                t.extend(w16(1));
+                t.extend([w16(0x0100).as_slice(), &w16(4), &w32(1), &w32(3)].concat());
+                t.extend(w32(0));
+                t
+            };
+            let empty = MetadataMap::new();
+            for (what, t) in [
+                ("an IFD (type 13) pointer", block(0x014A, 13, 1, 62)),
+                ("an IFD-typed ExifIFD pointer", block(0x8769, 13, 1, 62)),
+                ("an IFD-typed unknown tag", block(0xC000, 13, 1, 62)),
+                ("a MakerNote", block(0x927C, 7, 18, 62)),
+            ] {
+                let scan = scan_exif_entries(&t).unwrap();
+                let chain = scan.ifd1_next.clone().unwrap();
+                assert!(chain.refusal.is_some(), "{bo:?} {what}: carried: {chain:?}");
+                let err =
+                    plan_exif_write_with_removals(&scan, &empty, &empty, &["IFD0:Artist".into()])
+                        .unwrap_err();
+                assert!(
+                    err.to_string()
+                        .contains("IFD1 links to a further directory"),
+                    "{bo:?} {what}: {err}"
+                );
+            }
         }
     }
 

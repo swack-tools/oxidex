@@ -181,8 +181,17 @@ pub(crate) fn write_exif_to_jpeg_with_removals(
     // absolute offsets of any AFCP trailer in it (AFCP.pm 13.59:205-217)
     // and re-point a Leica IFD2 PreviewImage after the image as ExifTool
     // re-points it (Writer.pl 13.59:6177-6226).
+    // The EOI is searched from the same boundary `transform_exif` and the
+    // verifier use (`exif_surgical::jpeg_scan_boundary`): the scan data, or,
+    // with no scan, the EOI marker, which `reconstruct_jpeg` re-emits last --
+    // then the moved region starts there when the output ends with it.
     let tail_start = file_size - raw_tail.len();
-    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, tail_start, tail_start, output)
+    let (moved_from, scan_from) = match crate::writers::exif_surgical::jpeg_scan_boundary(&segments)
+    {
+        Some(eoi) if sos_index.is_none() && output.ends_with(&file_bytes[eoi..]) => (eoi, eoi),
+        _ => (tail_start, tail_start),
+    };
+    crate::writers::jpeg_trailer::rebase_trailer_offsets(file_bytes, moved_from, scan_from, output)
 }
 
 /// Checks if a segment is an EXIF APP1 segment.
@@ -518,7 +527,7 @@ fn legacy_deletes(
 ) -> bool {
     !plan.legacy_removed.is_empty()
         || baseline.iter().any(|(key, _)| {
-            [
+            ([
                 "IFD0:",
                 "ExifIFD:",
                 "GPS:",
@@ -529,6 +538,7 @@ fn legacy_deletes(
             ]
             .iter()
             .any(|prefix| key.starts_with(prefix))
+                || crate::writers::exif_surgical::chain_key_dir(key).is_some())
                 && !plan.legacy_metadata.contains_key(key)
         })
 }
