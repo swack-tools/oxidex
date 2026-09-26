@@ -386,6 +386,58 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
+**Delete build directories you will not need again.** A separate
+`CARGO_TARGET_DIR` per worktree keeps parallel builds from colliding, but each
+one grows to 20–50 GB, and a single release push once left about 1 TB of them
+behind. Build output can always be regenerated, so delete a target directory
+once you are confident nothing will use it again:
+- its worktree is removed;
+- its branch has merged or been closed;
+- the one-off measurement it served has been recorded, together with the
+  binary's fingerprint and sha256.
+
+Keep it while its binary is still evidence someone may re-check, or while a
+live agent or an open PR still builds there. Delete only directories you
+created, by exact path, never by glob across other agents' directories.
+
+A scratch clone or bundle is not build output: it can hold the only copy of
+a commit graph. Delete one only after proving that every ref it carries is
+reachable from `origin`. For a clone, run
+`git rev-list --all --not --remotes=origin` in the clone. For a bundle, list
+its heads with `git bundle list-heads` and check each one with
+`git merge-base --is-ancestor <sha> origin/<branch>`, or check that
+`git branch -r --contains <sha>` names a remote branch. Anything unreachable
+must be pushed or archived first.
+
+A worktree is removable only when all of these hold:
+- it has no uncommitted or untracked files (`git status --porcelain` is empty);
+- it has no commits missing from `origin`
+  (`git rev-list HEAD --not --remotes=origin` prints nothing);
+- its ignored files hold nothing worth keeping. `git worktree remove` deletes
+  ignored files without asking, and `git status` does not show them, so list
+  them with `git status --porcelain --ignored`. `HANDOFF.md` is ignored, and it
+  is the resume record, so copy it and any ignored evidence to
+  `~/oxidex-ops/evidence/<run>/` before removing the worktree, unless the
+  maintainer has said it is disposable.
+
+Use `git worktree remove`, never `rm -rf`.
+
+**The stash is shared by every worktree.** `refs/stash` belongs to the
+repository, not to a worktree. A bare `git stash pop` or `git stash apply`
+therefore takes whatever was stashed last in any worktree, possibly another
+agent's work-in-progress from a different branch. It has already happened
+here once. Git kept the other stash only because the pop conflicted. Prefer a
+WIP commit on your own branch, or a patch file in your evidence directory,
+over the stash. If you must stash, give it a message naming your branch
+(`git stash push -m "<branch>: <why>"`), and record its object ID at once
+(`git rev-parse stash@{0}` right after the push). To apply it later, use that
+recorded ID: `git stash apply <sha>`. `stash@{N}` is a reflog position, and
+another agent's push renumbers it between your `git stash list` and your
+`apply`. If you didn't record the ID, find the entry with `git stash list`,
+resolve it with `git rev-parse stash@{N}`, re-read its message with
+`git log -1 --format=%s <sha>`, and only then apply that ID. Never run a bare
+`pop`, `apply` or `drop`, never apply by position, and never `git stash clear`.
+
 ## How work lands
 
 Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
@@ -415,8 +467,10 @@ only path to `main` (see "Release engineering"). `refactor/tag-machinery` and
 **Keep the branch on the current tip.** Other sessions land competing fixes
 often. Before starting, and again before merging, fetch and bring the branch
 up to `origin/refactor/tag-machinery` (not `origin/main`). Rebase only before
-the first push; once a branch is pushed, merge the tip with a signed merge,
-because a pushed branch must not be force-pushed. To decide whether upstream
+the first push. Once a branch is pushed, merge the tip with a signed merge,
+because a pushed branch must not be force-pushed. The one exception is a layer
+of a GitHub stack, which stays linear by rebasing (see "Stacking dependent
+PRs"). To decide whether upstream
 already fixed the defect, reproduce it against the fetched
 `origin/refactor/tag-machinery` itself (a clean base worktree or a binary
 built from it), never against your own branch, which contains your fix. Then
@@ -428,26 +482,77 @@ report it superseded and stop rather than landing an empty change.
 
 Stack instead of queueing when review loops pile up or too many PRs are open
 at once, and in particular when a branch depends on a PR that has not landed.
-Open the dependent PR now, with the parent's `staging/...` branch as its base,
-rather than parking finished work until the parent merges. CI and the PR
-reviewer then see only the child's own diff and start immediately; a queued
-branch instead waits out every one of the parent's review rounds and then
-takes one large conflict at the end.
+Open the dependent PR now rather than parking finished work until the parent
+merges. CI and the PR reviewer then see only the child's own diff and start
+immediately. A queued branch instead waits out every one of the parent's
+review rounds and then takes one large conflict at the end.
 
-- **Keep children current.** Each time the parent's head moves, merge it into
-  every child with a signed merge (`git merge -S --no-ff origin/<parent>`), not
-  a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
-  favour of the parent's structure.
-- **Land only on the integration branch.** Never merge a child into its parent
-  branch. After the parent squash-merges into `refactor/tag-machinery`:
+**Use GitHub's native stacks** (the `gh stack` extension, `github/gh-stack`,
+in public preview; install it with `gh extension install github/gh-stack`).
+A stack is a chain of PRs, each based on the branch below it. GitHub shows the
+chain, merges it bottom-up, and retargets the next layer to the trunk after
+each merge. Its merge requirements:
+- every layer below is approved and green;
+- the stack has a linear history.
+
+So stacked branches are kept current by rebasing, not by merge commits.
+
+- **The trunk is `refactor/tag-machinery`, never `main`.** `gh stack init` and
+  `gh stack link` default to the repository's default branch, which is `main`,
+  so always pass `--base refactor/tag-machinery`. A stack whose bottom targets
+  `main` is a release promotion, and only the release skills may make one.
+- **Creating a stack.**
+  - One agent owning every layer in one worktree:
+    `gh stack init --base refactor/tag-machinery <branch>`, then `gh stack add
+    <next>` for each layer, `gh stack push`, and
+    `gh stack submit --auto --open`. Then edit each PR body to name the
+    instrument beside every number.
+  - Layers owned by different agents in different worktrees: open each PR with
+    `gh pr create --base <branch below>`, then link them with
+    `gh stack link --base refactor/tag-machinery <bottom-PR> … <top-PR>`.
+    `link` tracks nothing locally, so it works across worktrees.
+- **Keep the stack linear by rebasing.** This is the one exception to
+  "a pushed branch must not be force-pushed". It applies only to `staging/*`
+  branches that are layers of a GitHub stack, and never to
+  `refactor/tag-machinery` or `main`, whose rulesets reject force-pushes anyway.
+  - When a lower layer or the trunk moves, rebase each layer above it in order,
+    bottom to top.
+  - One worktree owning the whole stack: `gh stack rebase` (or
+    `--upstack` / `--downstack`), then `gh stack push`. `gh stack rebase` checks
+    out each layer in turn, so it fails if another worktree has one of them
+    checked out.
+  - Across worktrees: each layer's owner runs
+    `git rebase --onto origin/<layer below> <old base sha> <branch>`, then
+    `git push --force-with-lease=<branch>:<sha it last pushed> origin <branch>`.
+    Never use a bare `--force`.
+  - `commit.gpgsign=true` re-signs every rebased commit. Never use the
+    website's "Rebase stack" button: GitHub makes those commits unsigned.
+  - Resolve conflicts in favour of the lower layer's structure.
+  - Re-run the layer's gates on the rebased head before pushing, and update
+    `HANDOFF.md` with the new SHAs.
+- **Existing merge-based stacks.** Stacks opened before this rule (child PRs
+  kept current with `git merge -S --no-ff`) stay as they are until they land.
+  Don't rewrite branches that were already reviewed. Keep them current as
+  before: merge the parent's new head into each child with a signed merge.
+  After the parent squash-merges into `refactor/tag-machinery`:
   1. retarget the child first (`gh pr edit <n> --base refactor/tag-machinery`);
   2. then merge the new tip into it and push.
 
   The order matters. Retargeting is a PR `edited` event, which CI's
   `pull_request` trigger does not subscribe to, so only the push that follows
   starts a CI run against the new base. If the tip merge was already pushed
-  before retargeting, re-run CI explicitly. Then squash-merge under the rules
-  in "How work lands", which apply unchanged to every PR in the stack.
+  before retargeting, re-run CI explicitly.
+- **Landing.** Every layer still meets "How work lands" on its own:
+  - CI green;
+  - no unresolved review thread;
+  - its central claim independently verified.
+
+  Merge from the bottom with `gh stack merge <pr> --squash`. It lands that PR
+  and every unmerged PR below it, in order, so run it only when every layer up
+  to `<pr>` has cleared those rules. Then run `gh stack sync --prune`.
+  - Auto-merge is not supported for stacks.
+  - A merge through the API must use the asynchronous stack-merge endpoint.
+  - Never merge a child into its parent branch.
 - **Keep unapproved work out of any automatic integration queue.** The
   multi-host fleet is stopped. Its train, however, treats every unclaimed,
   non-withdrawn `staging/*` ref as a landing candidate
@@ -462,8 +567,9 @@ takes one large conflict at the end.
 - **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
   review round, one defect blocking all of it, and no way to verify each
   change's central claim on its own.
-- **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
-  child's PR body, so a successor knows the retarget order.
+- **Record the stack.** List the bottom-to-top chain, and whether it is a
+  `gh stack` or merge-based, in `HANDOFF.md` and in each PR body, so a
+  successor knows the order.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
