@@ -2,7 +2,9 @@
 """Compare runner benchmark results: the median of each metric per runner.
 
 Reads the <runner>-<run>.json files written by the Runner benchmark workflow
-and prints a markdown report for the run summary.
+and prints a markdown report for the run summary, with one column per runner
+and each runner's ratio to the github-hosted baseline. Any number of runners
+is supported; a result carrying `price_per_hour` also gets a cost row.
 
     python3 summarize.py <results dir>
 """
@@ -12,7 +14,8 @@ import json
 import statistics
 import sys
 
-GH, SELF = "github-hosted", "self-hosted"
+# The baseline every other runner is compared against, when present.
+BASELINE = "github-hosted"
 
 # (key, label) in the order the workflow runs them. Seconds, lower is better.
 PHASES = [
@@ -31,6 +34,7 @@ SYNTHETIC = [
     ("cpu_6t", "CPU, 6 threads (events/s)"),
     ("cpu_8t", "CPU, 8 threads (events/s)"),
     ("cpu_12t", "CPU, 12 threads (events/s)"),
+    ("cpu_16t", "CPU, 16 threads (events/s)"),
     ("mem_read_1t", "Memory read, 1 thread (MiB/s)"),
     ("mem_write_1t", "Memory write, 1 thread (MiB/s)"),
     ("mem_read_4t", "Memory read, 4 threads (MiB/s)"),
@@ -62,11 +66,11 @@ def fmt(value):
     return f"{value:,.1f}" if value < 100 else f"{value:,.0f}"
 
 
-def relative(gh, self_hosted, higher_is_better):
-    """Self-hosted relative to GitHub-hosted; above 1 means self-hosted did better."""
-    if not gh or not self_hosted:
+def relative(base, other, higher_is_better):
+    """`other` relative to the baseline; above 1 means `other` did better."""
+    if not base or not other:
         return ""
-    ratio = self_hosted / gh if higher_is_better else gh / self_hosted
+    ratio = other / base if higher_is_better else base / other
     return f"{ratio:.2f}×"
 
 
@@ -87,39 +91,77 @@ def total_seconds(result):
     return None if None in seconds else sum(seconds)
 
 
+def ordered_runners(runs):
+    """The baseline first, then the rest in name order."""
+    names = sorted(runs)
+    if BASELINE in names:
+        names.remove(BASELINE)
+        names.insert(0, BASELINE)
+    return names
+
+
+def table(names, rows):
+    """Print one markdown table: a value column per runner, then a relative
+    column per non-baseline runner. `rows` yields (label, [(value, cell)...],
+    higher_is_better)."""
+    others = names[1:] if names and names[0] == BASELINE else []
+    header = ["Test"] + names + [f"{n} vs {BASELINE}" for n in others]
+    print("| " + " | ".join(header) + " |")
+    print("|---|" + "---:|" * (len(header) - 1))
+    for label, values, higher in rows:
+        cells = [cell for _, cell in values]
+        base = values[0][0] if others else None
+        rel = [relative(base, v, higher) for v, _ in values[1:]] if others else []
+        print("| " + " | ".join([label] + cells + rel) + " |")
+
+
 def main():
     runs = load(sys.argv[1] if len(sys.argv) > 1 else "results")
-    gh_runs, self_runs = runs.get(GH, []), runs.get(SELF, [])
+    names = ordered_runners(runs)
 
     print("## Runner benchmark\n")
+    counts = ", ".join(f"{len(runs[n])} × {n}" for n in names)
     print(
-        f"Medians of {len(gh_runs)} GitHub-hosted and {len(self_runs)} self-hosted "
-        "runs. **Self-hosted relative** above 1.00× means the self-hosted runner "
-        "did better.\n"
+        f"Medians of {counts}. A relative value above 1.00× means that runner "
+        f"did better than {BASELINE}.\n"
     )
 
     print("### ci.yml phases, cold, in seconds (lower is better)\n")
-    print("| Phase | GitHub-hosted | Self-hosted | Self-hosted relative |")
-    print("|---|---:|---:|---:|")
-    for key, label in PHASES:
-        g, g_cell = phase_cell(gh_runs, key)
-        s, s_cell = phase_cell(self_runs, key)
-        print(f"| {label} | {g_cell} | {s_cell} | {relative(g, s, False)} |")
-    g = median(total_seconds(r) for r in gh_runs)
-    s = median(total_seconds(r) for r in self_runs)
-    cells = [fmt(g), fmt(s), relative(g, s, False)]
-    print("| **All phases** | " + " | ".join(f"**{c}**" if c else "" for c in cells) + " |")
+    rows = [(label, [phase_cell(runs[n], key) for n in names], False)
+            for key, label in PHASES]
+    totals = []
+    for n in names:
+        t = median(total_seconds(r) for r in runs[n])
+        totals.append((t, f"**{fmt(t)}**"))
+    rows.append(("**All phases**", totals, False))
+    table(names, rows)
+
+    priced = [n for n in names
+              if median(r.get("price_per_hour") for r in runs[n]) is not None]
+    if priced:
+        print("\n### Cost of all phases, at list price (lower is better)\n")
+        print("| Runner | $/hour | All phases (s) | $ per run of all phases |")
+        print("|---|---:|---:|---:|")
+        for n in priced:
+            price = median(r.get("price_per_hour") for r in runs[n])
+            t = median(total_seconds(r) for r in runs[n])
+            cost = price * t / 3600 if t else None
+            print(f"| {n} | {price:.4f} | {fmt(t)} | "
+                  f"{'–' if cost is None else f'{cost:.4f}'} |")
 
     print("\n### Synthetic (higher is better)\n")
-    print("| Test | GitHub-hosted | Self-hosted | Self-hosted relative |")
-    print("|---|---:|---:|---:|")
+    rows = []
     for key, label in SYNTHETIC:
-        g = median(r.get(key) for r in gh_runs)
-        s = median(r.get(key) for r in self_runs)
-        print(f"| {label} | {fmt(g)} | {fmt(s)} | {relative(g, s, True)} |")
+        values = []
+        for n in names:
+            v = median(r.get(key) for r in runs[n])
+            values.append((v, fmt(v)))
+        rows.append((label, values, True))
+    table(names, rows)
 
     print("\n### Environment\n")
-    for runner, results in sorted(runs.items()):
+    for runner in names:
+        results = runs[runner]
         models = ", ".join(sorted({r.get("cpu_model") or "?" for r in results}))
         systems = ", ".join(sorted({r.get("os") or "?" for r in results}))
         nprocs = ", ".join(sorted({str(r.get("nproc")) for r in results}))

@@ -1,15 +1,19 @@
 name: Runner benchmark
 
-# Throwaway benchmark for deciding whether ci.yml jobs should use the
-# swack-tools self-hosted runner. Runs synthetic CPU, memory and disk tests and
-# ci.yml's heaviest phases, cold, three times on GitHub-hosted ubuntu-latest
-# (4 vCPU / 16 GB for this public repo) and three times on the self-hosted
-# runner (an i7-8700K: all 12 CPUs and 16 GB, shared with another runner), then
-# compares the medians in the run summary.
+# Throwaway benchmark for choosing the IONOS node type for ci.yml's runners.
+# Runs synthetic CPU, memory and disk tests and ci.yml's heaviest phases,
+# cold, three times on each runner, then compares the medians in the run
+# summary:
+#   github-hosted          ubuntu-latest, 4 vCPU / 16 GB (free for this repo)
+#   ionos-bench-vcpu       IONOS shared-vCPU node, 8 cores / 16 GB / SSD 100 GB
+#   ionos-bench-dedicated  IONOS dedicated-core AMD EPYC node, same size
+# Each IONOS scale set holds one whole-node pod at a time (maxRunners 1), so
+# its three runs are sequential and never share the node. price_per_hour is
+# the node's IONOS list price (cores + RAM + SSD), for the cost table.
 #
 # Lives only on bench/runner-comparison, branched from refactor/tag-machinery;
 # delete the branch when done. Push-triggered on that branch alone, so only
-# people with write access can put jobs on the self-hosted runner.
+# people with write access can put jobs on the IONOS runners.
 on:
   push:
     branches: [bench/runner-comparison]
@@ -33,11 +37,18 @@ jobs:
         runner:
           - name: github-hosted
             labels: '"ubuntu-latest"'
-          - name: self-hosted
-            labels: '["self-hosted", "swack-tools"]'
+            price_per_hour: 'null'
+          - name: ionos-bench-vcpu
+            labels: '"ionos-bench-vcpu"'
+            # 8 x 0.013 vCPU + 16 GB x 0.0022 + 100 GB SSD x 0.08 / 720 h
+            price_per_hour: '0.1502'
+          - name: ionos-bench-dedicated
+            labels: '"ionos-bench-dedicated"'
+            # 8 x 0.054 core (Turin) + 16 GB x 0.0071 + 100 GB SSD x 0.08 / 720 h
+            price_per_hour: '0.5567'
         run: [1, 2, 3]
     runs-on: ${{ fromJSON(matrix.runner.labels) }}
-    # Cold builds take a while on the self-hosted runner.
+    # Cold builds, and the IONOS runs queue behind each other.
     timeout-minutes: 120
     env:
       RESULTS: results/${{ matrix.runner.name }}-${{ matrix.run }}.json
@@ -48,16 +59,16 @@ jobs:
       # Untimed setup, identical on both runners.
       - name: Install system packages
         run: |
-          # GitHub-hosted runs jobs as `runner`, the self-hosted runner as root.
+          # Every runner runs jobs as `runner`; the root check is kept for other runners.
           SUDO=; [ "$(id -u)" -eq 0 ] || SUDO=sudo
           $SUDO apt-get update -qq
           # sysbench and fio for the synthetic tests. libssl-dev (openssl-sys)
-          # and Archive::Zip (ExifTool) are missing from the self-hosted image.
+          # and Archive::Zip (ExifTool) are already in the IONOS image.
           $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             sysbench fio libssl-dev pkg-config libarchive-zip-perl >/dev/null
       - name: Install pinned Rust toolchain
         run: |
-          # The self-hosted image has no rustup.
+          # The IONOS image already carries rustup and the pinned toolchain.
           if ! command -v rustup >/dev/null; then
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -91,7 +102,7 @@ jobs:
       - name: Start memory sampler
         run: |
           # Highest memory use of this job's cgroup across the phases, page
-          # cache included. On self-hosted that cgroup is the whole container.
+          # cache included. On IONOS that cgroup is the whole runner pod.
           cg=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup | head -1)
           echo 0 > "$RUNNER_TEMP/mem-peak"
           # $0 and $1 belong to the inner bash, hence the single quotes.
@@ -120,9 +131,10 @@ jobs:
           [ -f "$RESULTS" ] || echo '{}' > "$RESULTS"
           [ -f "$PHASES" ] || echo '{}' > "$PHASES"
           jq --arg runner "${{ matrix.runner.name }}" --argjson run "${{ matrix.run }}" \
+            --argjson price "${{ matrix.runner.price_per_hour }}" \
             --slurpfile phases "$PHASES" \
             --arg peak "$(cat "$RUNNER_TEMP/mem-peak" 2>/dev/null || echo 0)" \
-            '.runner = $runner | .run = $run | .phases = $phases[0]
+            '.runner = $runner | .run = $run | .price_per_hour = $price | .phases = $phases[0]
              | .phases_peak_mem_gib = (($peak | tonumber? // 0)
                  | if . > 0 then . / 1073741824 else null end)' \
             "$RESULTS" > "$RESULTS.tmp"
