@@ -173,6 +173,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     let declared_tag_name = match tag_name {
         "GPSDestBearing" => "GPS:GPSDestBearing",
         "DateTimeOriginal" => "EXIF:DateTimeOriginal",
+        "ModifyDate" => "EXIF:ModifyDate",
         "CreateDate" => "ExifIFD:CreateDate",
         "ExposureTime" => "EXIF:ExposureTime",
         "BrightnessValue" => "EXIF:BrightnessValue",

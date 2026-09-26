@@ -106,6 +106,11 @@ pub struct WritePlan {
     /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
     /// then applied first and cleared with the rest.
     copy_before_clear: bool,
+    /// How many of `sets` precede `-TagsFromFile` in the argument order:
+    /// they are applied before the copy, the rest after it, as ExifTool
+    /// applies a command's requests in order (13.59: `-TagsFromFile SRC
+    /// -Make -IFD0:Make=` deletes the copied Make).
+    sets_before_copy: usize,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
@@ -171,10 +176,34 @@ impl WritePlan {
         // a later `-all=` remove the values assigned before it.
         let mut warnings = Vec::new();
         let mut sets = Vec::new();
+        let mut sets_before_copy = 0;
         for (at, tag, value) in &raw_sets {
-            let (mut warned, defined) = partition_defined(&[(tag.clone(), value.clone())]);
+            // ExifTool's `AllDates` shortcut (Shortcuts.pm): the three EXIF
+            // dates, in its order, each under the shortcut's group if any.
+            let (group, name) = match tag.rsplit_once(':') {
+                Some((group, name)) => (Some(group), name),
+                None => (None, tag.as_str()),
+            };
+            let expanded: Vec<(String, OsString)> = if name.eq_ignore_ascii_case("AllDates") {
+                ["DateTimeOriginal", "CreateDate", "ModifyDate"]
+                    .iter()
+                    .map(|date| {
+                        let tag = group.map_or_else(|| date.to_string(), |g| format!("{g}:{date}"));
+                        (tag, value.clone())
+                    })
+                    .collect()
+            } else {
+                vec![(tag.clone(), value.clone())]
+            };
+            let (mut warned, defined) = partition_defined(&expanded);
             warnings.append(&mut warned);
             if clear_at.is_none_or(|clear| *at > clear) {
+                if args
+                    .tags_from_file_position
+                    .is_some_and(|copy| args.tags_from_file.is_some() && *at < copy)
+                {
+                    sets_before_copy += defined.len();
+                }
                 sets.extend(defined);
             }
         }
@@ -211,6 +240,7 @@ impl WritePlan {
                     (args.tags_from_file_position, clear_at),
                     (Some(copy), Some(clear)) if copy <= clear
                 ),
+            sets_before_copy,
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -223,10 +253,13 @@ impl WritePlan {
         // ExifTool's warning (13.59, `-TagsFromFile src -XPTitle -NoSuchTag=x`:
         // `Warning: Tag 'NoSuchTag' is not defined`, then the copy), never a
         // reason to refuse the copy.
-        if plan.copy_from.is_some() && (!plan.shifts.is_empty() || !plan.sets.is_empty()) {
+        // A copy with sets is applied in argument order (`sets_before_copy`);
+        // with a date shift it is refused: the shift runs before every set
+        // and copy, whatever its place.
+        if plan.copy_from.is_some() && !plan.shifts.is_empty() {
             return Err(
-                "Combining -TagsFromFile with -TAG=VALUE or a date shift is not \
-                 supported yet; run them as separate commands"
+                "Combining -TagsFromFile with a date shift is not supported yet; run \
+                 them as separate commands"
                     .to_string(),
             );
         }
@@ -303,6 +336,12 @@ pub fn write_plan_file(
             if plan.clear_all && !plan.copy_before_clear {
                 clear()?;
             }
+            // The sets given before `-TagsFromFile`, then the copy, then the
+            // rest, in argument order.
+            let (before_copy, after_copy) = plan
+                .sets
+                .split_at(plan.sets_before_copy.min(plan.sets.len()));
+            proven_sets += apply_sets(scratch, before_copy, plan.raw_values)?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 copy = Some(copy_metadata_report(src, scratch, filters).map_err(|e| {
@@ -321,17 +360,24 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            proven_sets = apply_sets(scratch, &plan.sets, plan.raw_values)?;
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values)?;
             Ok(())
         },
     )?;
-    if outcome == WriteOutcome::Unchanged && plan.sets_only() && proven_sets > 0 {
+    let proven_copies = copy.as_ref().map_or(0, |report| report.copied);
+    if outcome == WriteOutcome::Unchanged
+        && !plan.clear_all
+        && plan.shifts.is_empty()
+        && proven_sets + proven_copies > 0
+    {
         // Nothing was rewritten, yet the transaction's read-back proved a set
         // in effect (and every other request in effect or a no-op): the
         // request is what the file holds, which ExifTool reports as an
-        // update. A request made only of deletions and no-ops stays
-        // `unchanged` (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you`
-        // on a PDF). The `--backup` copy still accompanies an update.
+        // update -- a copied tag is such a set too (13.59: `-TagsFromFile
+        // SRC -Make` onto the same Make is `1 image files updated`). A
+        // request made only of deletions and no-ops stays `unchanged`
+        // (13.59: `-XPTitle=` with no XPTitle; `-IFD0:Artist=you` on a PDF).
+        // The `--backup` copy still accompanies an update.
         if let Some(commit) = on_commit.take() {
             commit()?;
         }
