@@ -1231,6 +1231,17 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 &out,
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
             )?;
+            // Every maker-note value still reads back, the data it locates
+            // outside the MakerNote included (`writers::makernote_guard`).
+            // Never on a whole clear or a carrier removal (a deleted carrier
+            // is not read), and a no-op returned above.
+            if !crate::writers::exif_surgical::removes_carrier(removed) {
+                crate::writers::makernote_guard::verify_makernote_preserved(
+                    crate::writers::makernote_guard::Carrier::block(file_bytes),
+                    crate::writers::makernote_guard::Carrier::block(&out),
+                    crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                )?;
+            }
         }
         write_atomic(path, &out)?;
         return Ok(());
@@ -1353,6 +1364,19 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                         before,
                         after,
                         &file_bytes[header..],
+                    )?;
+                }
+                // Every maker-note value still reads back, the data it
+                // locates outside the MakerNote included -- here in the whole
+                // file, so a preview in the JPEG trailer that a longer EXIF
+                // segment would shift away is caught too
+                // (`writers::makernote_guard`). Never on a whole clear or a
+                // carrier removal (a deleted carrier is not read), and a no-op
+                // returned above.
+                if !crate::writers::exif_surgical::removes_carrier(removed) {
+                    crate::writers::makernote_guard::verify_jpeg_makernotes(
+                        file_bytes,
+                        &serialized_bytes,
                     )?;
                 }
             }

@@ -4790,6 +4790,43 @@ fn parse_interop_directory(
     );
 }
 
+/// The rows the MakerNote at `tiff[value_offset..value_offset + value_len]`
+/// decodes to on its own: the same dispatcher and decoders the reader runs,
+/// over a context whose enclosing block is `tiff` (so a decoder reaches
+/// value data past the note's byte count exactly as it does when reading
+/// the file) and whose TIFF base is 0 (so `IsOffset` rows come back
+/// relative to the TIFF header).
+///
+/// `make` and `model` select the vendor decoder as `IFD0:Make`/`IFD0:Model`
+/// do in a full read; they are passed rather than re-read so two blocks can
+/// be decoded under the same identity and compared. The seeded rows are not
+/// part of the result.
+///
+/// This is the writers' check that an EXIF rewrite left every maker-note
+/// value readable and unchanged (`writers::makernote_guard`).
+pub(crate) fn makernote_readback(
+    tiff: &[u8],
+    value_offset: usize,
+    value_len: usize,
+    byte_order: ByteOrder,
+    make: &str,
+    model: Option<&str>,
+) -> MetadataMap {
+    let ctx = MakerNoteContext::in_tiff(tiff, value_offset, value_len, 0);
+    let mut metadata = MetadataMap::new();
+    metadata.insert("IFD0:Make", TagValue::new_string(make));
+    if let Some(model) = model {
+        metadata.insert("IFD0:Model", TagValue::new_string(model));
+    }
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
+    parse_makernote_with_session(&ctx, byte_order, &mut session, &mut cond_ctx, &mut metadata);
+    metadata.remove("IFD0:Make");
+    metadata.remove("IFD0:Model");
+    metadata
+}
+
 #[cfg(test)]
 fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
     let mut session = Session::new();

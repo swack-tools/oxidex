@@ -7,6 +7,10 @@
 pub mod atomic_writer;
 pub mod exif_inplace;
 pub mod exif_surgical;
+// Keeps maker-note data outside the MakerNote through a surgical EXIF rewrite.
+pub(crate) mod makernote_guard;
+// Generated from the pinned ExifTool's IsOffset/OffsetPair inventory.
+pub(crate) mod makernote_offset_pairs;
 // Source-selected addresses remain internal until public file parity is proved.
 pub(crate) mod generated_public_write;
 pub(crate) mod generated_setnewvalue_address_rules;

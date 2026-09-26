@@ -86,6 +86,27 @@ fn read_odd(reader: &dyn FileReader, offset: u64, little_endian: bool) -> Option
     Some(buff)
 }
 
+/// `ReadODD` over bytes held in memory: the OriginalDecisionData block at
+/// `offset` of `file`, or `None` as [`read_odd`] returns it. For the EXIF
+/// writers' check that a rewrite left the block where the maker note's
+/// `OriginalDecisionDataOffset` locates it (`writers::makernote_guard`).
+pub(crate) fn odd_block(file: &[u8], offset: u64, little_endian: bool) -> Option<Vec<u8>> {
+    struct Bytes<'a>(&'a [u8]);
+    impl crate::core::FileReader for Bytes<'_> {
+        fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+            let start = usize::try_from(offset).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+            start
+                .checked_add(length)
+                .and_then(|end| self.0.get(start..end))
+                .ok_or_else(|| std::io::ErrorKind::UnexpectedEof.into())
+        }
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+    }
+    read_odd(&Bytes(file), offset, little_endian)
+}
+
 /// Adds `Composite:OriginalDecisionData` when the Canon maker note reported
 /// an `OriginalDecisionDataOffset` and the block there reads as ExifTool's
 /// `ReadODD` requires.
