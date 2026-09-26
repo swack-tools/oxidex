@@ -547,12 +547,32 @@ So stacked branches are kept current by rebasing, not by merge commits.
   - no unresolved review thread;
   - its central claim independently verified.
 
-  Merge from the bottom with `gh stack merge <pr> --squash`. It lands that PR
-  and every unmerged PR below it, in order, so run it only when every layer up
-  to `<pr>` has cleared those rules. Then run `gh stack sync --prune`.
-  - Auto-merge is not supported for stacks.
-  - A merge through the API must use the asynchronous stack-merge endpoint.
-  - Never merge a child into its parent branch.
+  How it lands depends on the kind of stack:
+  - **GitHub stack.** Merge from the bottom with `gh stack merge <pr> --squash`.
+    It lands that PR and every unmerged PR below it, in order, so run it only
+    once every layer up to `<pr>` has cleared the rules above.
+  - **Merge-based stack** (not linked on GitHub). Squash-merge each PR on its
+    own, bottom first, with `gh pr merge <n> --squash
+    --match-head-commit <sha>`. Then retarget and update the next child as
+    described under "Existing merge-based stacks".
+
+  Auto-merge is not supported for stacks, and an API merge must use the
+  asynchronous stack-merge endpoint. Never merge a child into its parent
+  branch.
+- **After a partial merge.** `gh stack sync` is not just cleanup: it also
+  rebases and force-pushes every remaining layer, which would publish heads
+  nobody has gated. So after lower layers land:
+  1. Rebase the remaining layers onto the new trunk, bottom to top
+     (`gh stack rebase` in a single-worktree stack; `git rebase --onto` per
+     owner across worktrees).
+  2. Re-run each layer's gates on its rebased head.
+  3. Push each layer with `--force-with-lease=<branch>:<sha>`.
+  4. Delete merged local branches by hand, or run `gh stack sync --prune`
+     only once nothing remains to rebase.
+
+  A stack linked with `gh stack link` has no local tracking, so skip
+  `gh stack sync` for it. Each owner fetches and resets their own worktree
+  to the pushed head.
 - **Keep unapproved work out of any automatic integration queue.** The
   multi-host fleet is stopped. Its train, however, treats every unclaimed,
   non-withdrawn `staging/*` ref as a landing candidate
