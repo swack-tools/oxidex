@@ -801,3 +801,55 @@ fn pdf_exif_group_writes_need_a_real_exif_address() {
     );
     assert_eq!(sha(&file), before);
 }
+
+/// PNG chunk with a correct CRC (mirrors `library_write_codex_threads`'s
+/// helper of the same name).
+fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut crc = 0xffff_ffffu32;
+    for byte in kind.iter().chain(data) {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+    chunk.extend_from_slice(kind);
+    chunk.extend_from_slice(data);
+    chunk.extend_from_slice(&(!crc).to_be_bytes());
+    chunk
+}
+
+/// Maintainer decision on PR #951 review comment 4098201945: a PNG text
+/// chunk whose literal keyword is `XMP` is not a writable `PNG:XMP`, matching
+/// pinned 13.59 exactly (measured directly against the oracle on this same
+/// chunk: `-PNG:XMP=world` and `-PNG:XMP=` both print `Warning: Sorry,
+/// PNG:XMP doesn't exist or isn't writable` / `Nothing to do.`, exit 1, bytes
+/// untouched). oxidex used to edit the chunk instead
+/// (`a_literal_xmp_text_chunk_is_verified_as_the_chunk_written` in
+/// `library_write_codex_threads`, before this decision superseded it).
+#[test]
+fn a_literal_xmp_text_chunk_is_refused_like_exiftool() {
+    let dir = TempDir::new().unwrap();
+    let mut bytes = fs::read(PNG_TEXT).unwrap();
+    let iend = bytes.windows(4).rposition(|w| w == b"IEND").unwrap() - 4;
+    bytes.splice(iend..iend, png_chunk(b"tEXt", b"XMP\0hello"));
+    let file = dir.path().join("xmp.png");
+    fs::write(&file, &bytes).unwrap();
+    let before = sha(&file);
+
+    for args in [vec!["-PNG:XMP=world"], vec!["-PNG:XMP="]] {
+        let o = run(&file, &args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", err(&o));
+        assert_eq!(out(&o), "", "{args:?}");
+        assert_eq!(
+            err(&o),
+            "Warning: Sorry, PNG:XMP doesn't exist or isn't writable\nNothing to do.\n",
+            "{args:?}"
+        );
+        assert_eq!(sha(&file), before, "{args:?}: file changed");
+    }
+}

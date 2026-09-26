@@ -29,7 +29,9 @@ use crate::core::write_transaction::{
     ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
 };
 use crate::error::ExifToolError;
-use crate::writers::write_request::{canonical_request_tag, undefined_tag_warning};
+use crate::writers::write_request::{
+    canonical_request_tag, sorry_not_writable, undefined_tag_warning,
+};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -298,6 +300,41 @@ fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<usize, Stri
         .map_err(|e| describe_set_failure(&e, sets))
 }
 
+/// When every refused tag is one ExifTool itself names this way
+/// (`write_request::sorry_not_writable` -- currently the PNG `XMP`
+/// literal-text-chunk case), the CLI must echo ExifTool's own `Warning:
+/// <reason>` / `Nothing to do.` shape instead of oxidex's `Failed to ...`
+/// wrapping below: [`finish_write`] (`main.rs`) prints this verbatim, with
+/// none of oxidex's own `Error:` prefix, because it *is* ExifTool's own
+/// warning text, not oxidex's diagnosis of a failure.
+///
+/// [`finish_write`]: crate::cli
+fn sorry_refusal_message(refused: &[crate::error::TagNotWritten]) -> Option<String> {
+    if refused.is_empty()
+        || !refused
+            .iter()
+            .all(|tag| tag.reason == sorry_not_writable(&tag.tag))
+    {
+        return None;
+    }
+    let mut message = refused
+        .iter()
+        .map(|tag| format!("Warning: {}", tag.reason))
+        .collect::<Vec<_>>()
+        .join("\n");
+    message.push_str("\nNothing to do.");
+    Some(message)
+}
+
+/// Whether [`describe_set_failure`] produced ExifTool's own warning text
+/// (see [`sorry_refusal_message`]) rather than oxidex's `Failed to ...`
+/// wrapping -- the two need different framing in `main.rs`'s `finish_write`:
+/// ExifTool's own words are printed as-is, oxidex's diagnosis gets an
+/// `Error:` prefix.
+pub fn is_exiftool_refusal_message(message: &str) -> bool {
+    message.starts_with("Warning: Sorry, ") && message.ends_with("\nNothing to do.")
+}
+
 /// The CLI's message for a failed `-TAG=` transaction: which request failed,
 /// and why. A refusal names each tag it refused; any other error is
 /// attributed to the one request when there is only one.
@@ -310,6 +347,9 @@ fn describe_set_failure(err: &ExifToolError, sets: &[(String, OsString)]) -> Str
     };
     let refused = err.tags_not_written();
     if !refused.is_empty() {
+        if let Some(message) = sorry_refusal_message(refused) {
+            return message;
+        }
         return refused
             .iter()
             .map(|tag| format!("Failed to {} tag '{}': {}", verb(&tag.tag), tag.tag, tag))

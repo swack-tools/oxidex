@@ -106,6 +106,21 @@ pub fn exiftool_tag_exists(name: &str) -> bool {
         .is_ok()
 }
 
+/// ExifTool 13.59's fixed wording for a name `SetNewValue` finds no writable
+/// candidate for at all (Writer.pl:584): `Sorry, <tag> doesn't exist or isn't
+/// writable`. Shared by [`undefined_tag_warning`]'s `PDF:CreationDate`/
+/// `PDF:ModDate` case (name-based, decided before any file opens) and
+/// `core::operations::resolve_write_key_for`'s `PNG:XMP` case (data-dependent:
+/// only when the file's `PNG:XMP` names a literal `XMP`-keyword text chunk,
+/// which pinned 13.59 also refuses this way -- see `write_transaction.rs`'s
+/// `png_xmp_packets`). Both are "ExifTool itself says so", so the CLI must
+/// echo ExifTool's own `Warning: <this>` / `Nothing to do.` shape rather than
+/// oxidex's own "Failed to ..." wrapping (`cli::write_transaction::
+/// describe_set_failure`).
+pub(crate) fn sorry_not_writable(tag: &str) -> String {
+    format!("Sorry, {tag} doesn't exist or isn't writable")
+}
+
 /// ExifTool's warning for a `-TAG=` whose name it does not define, spelled
 /// exactly as `SetNewValue` spells it (Writer.pl:584), or `None` when the name
 /// is defined or is not a plain name this check applies to.
@@ -130,7 +145,7 @@ pub fn undefined_tag_warning(tag: &str) -> Option<String> {
         && group.eq_ignore_ascii_case("PDF")
         && (name.eq_ignore_ascii_case("CreationDate") || name.eq_ignore_ascii_case("ModDate"))
     {
-        return Some(format!("Sorry, {tag} doesn't exist or isn't writable"));
+        return Some(sorry_not_writable(tag));
     }
     let name = plain_name(tag)?;
     if exiftool_tag_exists(name) {

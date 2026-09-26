@@ -1614,7 +1614,24 @@ pub(crate) fn resolve_write_key_for(
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
     };
-    let addressed = ensure_writer_addresses(tag_name, &key, format, surgical);
+    // `PNG:XMP` is oxidex's own key for the raw-packet route
+    // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
+    // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
+    // literal keyword is `XMP` (the reader reports it under this key exactly
+    // then, per `write_transaction::png_xmp_packets`'s doc): 13.59 answers
+    // `-PNG:XMP=world` and `-PNG:XMP=` alike on such a file with `Sorry,
+    // PNG:XMP doesn't exist or isn't writable` / `Nothing to do.`, file
+    // untouched (maintainer decision on PR #951 review comment 4098201945,
+    // superseding the literal-chunk edit this route used to perform). A
+    // packet write where no literal chunk exists is unaffected.
+    let addressed = if png && key == "PNG:XMP" && baseline.contains_key("PNG:XMP") {
+        Err(ExifToolError::tag_not_written(
+            tag_name,
+            crate::writers::write_request::sorry_not_writable(tag_name),
+        ))
+    } else {
+        ensure_writer_addresses(tag_name, &key, format, surgical)
+    };
     Ok((key, addressed))
 }
 
