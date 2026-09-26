@@ -326,10 +326,6 @@ fn covered_tags_reproduce_the_bug_reports_exact_commands() {
 
     let file = write_fixture(dir.path(), "bare.jpg");
     let out = run_oxidex(&[os("-FocalLength=50.0 mm"), file.as_os_str().to_owned()]);
-    // The bare (groupless) form's own write-target resolution is a separate,
-    // pre-existing gap unrelated to PrintConvInv (see the PR description);
-    // this only pins that the *value* is no longer refused for the reason
-    // the bug report named.
     assert!(
         out.status.success(),
         "bare form: {}",
@@ -338,5 +334,201 @@ fn covered_tags_reproduce_the_bug_reports_exact_commands() {
     assert!(
         !String::from_utf8_lossy(&out.stderr).contains("Not a floating point number"),
         "bare form must not reproduce the reported PrintConvInv failure"
+    );
+}
+
+/// Codex review finding on PR #963 (comment 4112327516, P1): the bare-name
+/// aliases added to `parse_cli_tag_value`'s type-resolution table let the
+/// *value* parse correctly, but `core::operations::canonical_write_tag_name`
+/// had no entry for these tags, so the surgical writer could not find a
+/// write target for the bare (groupless) key -- the CLI reported "1 image
+/// files updated" while silently writing nothing. Confirmed against the
+/// oracle: `-FocalLength=50.0 mm` (no group) lands under `[ExifIFD]` there,
+/// exactly like the explicit `-ExifIFD:FocalLength=` form.
+#[test]
+fn bare_tag_names_actually_write_under_exififd() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+
+    let cases: &[(&str, &str, &str)] = &[
+        ("FocalLength", "FocalLength", "50.0 mm"),
+        (
+            "FocalLengthIn35mmFormat",
+            "FocalLengthIn35mmFormat",
+            "75 mm",
+        ),
+        ("SubjectDistance", "SubjectDistance", "3.5 m"),
+        ("AmbientTemperature", "AmbientTemperature", "20 C"),
+    ];
+    for (write_tag, leaf, value) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = write_fixture(dir.path(), "ours.jpg");
+        let theirs = write_fixture(dir.path(), "theirs.jpg");
+        let arg = format!("-{write_tag}={value}");
+
+        let out = run_oxidex(&[os(&arg), ours.as_os_str().to_owned()]);
+        assert!(
+            out.status.success(),
+            "{arg}: oxidex write failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let out = oracle_write(oracle, &arg, &theirs);
+        assert!(
+            out.status.success(),
+            "{arg}: oracle write failed (test assumption wrong): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let ours_read = oxidex_read(&ours, leaf, false);
+        let theirs_read = oracle_read(oracle, &theirs, leaf, false);
+        assert!(
+            ours_read.is_some(),
+            "{arg}: bare form did not actually write the tag (silent no-op)"
+        );
+        assert_eq!(
+            ours_read, theirs_read,
+            "{arg}: oxidex and the oracle disagree"
+        );
+    }
+}
+
+/// Codex review finding (comment 4112327521, P2): ExifTool tag and group
+/// names are case-insensitive, but this file's own leaf-name dispatch used
+/// exact-case comparisons, so `-ExifIFD:focallength=` or
+/// `-exififd:FocalLength=` fell through to the generic string/rational path
+/// with the unit still attached and was refused. Confirmed against the
+/// oracle: both spellings below succeed there exactly like the canonical
+/// one.
+#[test]
+fn case_insensitive_spellings_match_the_oracle() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+
+    let cases: &[(&str, &str)] = &[
+        ("ExifIFD:focallength", "FocalLength"),
+        ("exififd:FocalLength", "FocalLength"),
+        ("ExifIFD:SUBJECTDISTANCE", "SubjectDistance"),
+        ("ExifIFD:ambienttemperature", "AmbientTemperature"),
+    ];
+    for (write_tag, leaf) in cases {
+        let value = match *leaf {
+            "SubjectDistance" => "3.5 m",
+            "AmbientTemperature" => "20 C",
+            _ => "50 mm",
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let ours = write_fixture(dir.path(), "ours.jpg");
+        let theirs = write_fixture(dir.path(), "theirs.jpg");
+        let arg = format!("-{write_tag}={value}");
+
+        let out = run_oxidex(&[os(&arg), ours.as_os_str().to_owned()]);
+        assert!(
+            out.status.success(),
+            "{arg}: oxidex write failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let out = oracle_write(oracle, &arg, &theirs);
+        assert!(
+            out.status.success(),
+            "{arg}: oracle write failed (test assumption wrong): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        assert_eq!(
+            oxidex_read(&ours, leaf, false),
+            oracle_read(oracle, &theirs, leaf, false),
+            "{arg}: oxidex and the oracle disagree"
+        );
+    }
+}
+
+/// Codex review finding (comment 4112327507, P2): stripping the unit must
+/// not bypass the tag's own native-range check. `FocalLength` is
+/// `rational64u` (unsigned) and `FocalLengthIn35mmFormat` is `int16u`
+/// (0..=65535); confirmed against the oracle that each refuses a value
+/// outside its own range with the unit still attached.
+#[test]
+fn out_of_range_values_are_refused_like_the_oracle() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+
+    let cases: &[(&str, &str)] = &[
+        ("ExifIFD:FocalLength", "-1 mm"),
+        ("ExifIFD:FocalLengthIn35mmFormat", "70000 mm"),
+        ("ExifIFD:FocalLengthIn35mmFormat", "-1 mm"),
+    ];
+    for (write_tag, value) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = write_fixture(dir.path(), "ours.jpg");
+        let theirs = write_fixture(dir.path(), "theirs.jpg");
+        let arg = format!("-{write_tag}={value}");
+
+        let out = run_oxidex(&[os(&arg), ours.as_os_str().to_owned()]);
+        assert!(
+            !out.status.success(),
+            "{arg}: oxidex must refuse a value outside the tag's native range"
+        );
+        let out = oracle_write(oracle, &arg, &theirs);
+        assert!(
+            !out.status.success(),
+            "{arg}: the oracle unexpectedly accepted this value (test assumption wrong)"
+        );
+    }
+}
+
+/// Codex review finding (comment 4112327528, P2): `#` normalization in
+/// `main.rs` only ran in the non-empty-value (modify) branch, so
+/// `-ExifIFD:FocalLength#=` (ExifTool's delete syntax with the raw suffix)
+/// called `remove_tag` with the literal, nonexistent name
+/// `"ExifIFD:FocalLength#"` and left the real tag in place while still
+/// reporting success. Confirmed against the oracle: it deletes the tag.
+#[test]
+fn hash_suffixed_deletion_actually_removes_the_tag() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let ours = write_fixture(dir.path(), "ours.jpg");
+    let theirs = write_fixture(dir.path(), "theirs.jpg");
+
+    for path in [&ours, &theirs] {
+        let out = run_oxidex(&[
+            os("-ExifIFD:FocalLength=50 mm"),
+            path.as_os_str().to_owned(),
+        ]);
+        assert!(out.status.success());
+    }
+    assert!(oxidex_read(&ours, "FocalLength", false).is_some());
+
+    let out = run_oxidex(&[os("-ExifIFD:FocalLength#="), ours.as_os_str().to_owned()]);
+    assert!(
+        out.status.success(),
+        "delete: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = oracle_write(oracle, "-ExifIFD:FocalLength#=", &theirs);
+    assert!(
+        out.status.success(),
+        "oracle delete failed (test assumption wrong): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        oxidex_read(&ours, "FocalLength", false),
+        None,
+        "-ExifIFD:FocalLength#= must actually delete the tag, not silently no-op"
+    );
+    assert_eq!(
+        oracle_read(oracle, &theirs, "FocalLength", false),
+        None,
+        "test assumption wrong: the oracle did not delete it either"
     );
 }
