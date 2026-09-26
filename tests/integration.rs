@@ -229,6 +229,9 @@ mod jxl_json_tests;
 #[path = "integration/recursive_extension_coverage.rs"]
 mod recursive_extension_coverage;
 
+#[path = "integration/directories_scanned_tests.rs"]
+mod directories_scanned_tests;
+
 // No qualcomm/google/microsoft MakerNote test modules: those three suites were
 // deleted rather than declared. Every tag name they asserted appears in zero
 // ExifTool 13.59 source files, so declaring them would have pinned invented

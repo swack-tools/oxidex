@@ -52,6 +52,18 @@ pub struct BatchStats {
     /// extension absent from ExifTool's own `%fileTypeLookup`-derived
     /// table), not merely omitted from a list someone forgot to extend.
     pub unidentified: usize,
+    /// Number of directories this run walked: one for each directory named
+    /// on the command line, plus (when `-r` is set) one more for every
+    /// subdirectory descended into -- exactly `$countDir` in ExifTool's
+    /// `ScanDir` (`exiftool:4421`, 13.59), which increments once per call
+    /// regardless of whether that directory held any files at all. A plain
+    /// file argument never contributes to this count. Printed first in the
+    /// summary, before every other line (`exiftool:2067`), whenever it is
+    /// non-zero -- including a `0 image files read` line for a directory
+    /// scan that matched nothing, which is ExifTool's own fallback
+    /// (`exiftool:2076`: `$countDir and not $totWr`) rather than the usual
+    /// `image files updated`/`read` count.
+    pub directories_scanned: usize,
 }
 
 impl BatchStats {
@@ -64,6 +76,7 @@ impl BatchStats {
             write_mode: false,
             errors: 0,
             unidentified: 0,
+            directories_scanned: 0,
         }
     }
 
@@ -77,6 +90,12 @@ impl BatchStats {
 
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
+        // `directories scanned` always leads the summary when this run
+        // walked at least one directory (`exiftool`:2067, 13.59), before the
+        // read/write counts below.
+        if self.directories_scanned > 0 {
+            println!("{:5} directories scanned", self.directories_scanned);
+        }
         // A write run prints what exiftool:2071-2074 (13.59) prints for one:
         // `updated` whenever a write was attempted (even `0`), `unchanged`
         // and `weren't updated due to errors` when non-zero, and no read
@@ -101,7 +120,10 @@ impl BatchStats {
         // ExifTool's summary is `printf("%5d image files read\n", ...)`
         // (`exiftool`:2071-2077, 13.59): the count is right-aligned in five
         // columns, so ten or more files print `   12 ...`, not `    12 ...`.
-        if self.files_read > 0 {
+        // A directory scan that matched no files still gets this line at
+        // `0` (`exiftool`:2076, `$countDir and not $totWr`) -- e.g. an empty
+        // directory, or one holding only unrecognized extensions.
+        if self.files_read > 0 || self.directories_scanned > 0 {
             println!("{:5} image files read", self.files_read);
         }
         if self.files_updated > 0 {
@@ -174,7 +196,7 @@ pub fn batch_process_requests(
     }
 
     // Collect all files to process
-    let (files, unidentified) = collect_files(path, args.recursive)?;
+    let (files, unidentified, directories_scanned) = collect_files(path, args.recursive)?;
 
     if files.is_empty() {
         PathLine::new("Warning: No supported image files found in ")
@@ -182,6 +204,7 @@ pub fn batch_process_requests(
             .eprint();
         let mut stats = BatchStats::new();
         stats.unidentified = unidentified;
+        stats.directories_scanned = directories_scanned;
         return Ok(stats);
     }
 
@@ -203,7 +226,57 @@ pub fn batch_process_requests(
         batch_read(files, args)?
     };
     stats.unidentified = unidentified;
+    stats.directories_scanned = directories_scanned;
     Ok(stats)
+}
+
+/// Expands a command line that mixes explicit file arguments with directory
+/// arguments into one file list, the way ExifTool's `ProcessFiles` does
+/// (`exiftool`:4258-4260, 13.59): an explicit file is processed as given, with
+/// no extension filtering (matching `main.rs::handle_multi_file_processing`'s
+/// existing explicit-file semantics), while a directory argument is walked
+/// with [`collect_files`] and contributes to the `directories scanned` count.
+/// Input order of the top-level paths does not affect the resulting counts
+/// (each is independent), but the returned file list preserves it.
+///
+/// A path that does not exist is neither a directory nor rejected up front
+/// (PRRT_kwDOQNbr5M6mTOLD): it falls through to the plain-file branch below
+/// exactly as `Path::is_dir` already answers `false` for it, so it becomes
+/// one more entry [`batch_read`]/[`batch_write`] will fail on and count as a
+/// per-file error -- the same "ordinary multi-file processing" outcome a
+/// missing path among several plain files has always had. An early `Err`
+/// here would abort the whole command before any real directory in the mix
+/// was ever read, which pinned 13.59 does not do: `exiftool realdir
+/// missing.jpg` still reads `realdir` and reports the miss as one `files
+/// could not be read`.
+///
+/// # Returns
+///
+/// `(files, unidentified, directories_scanned)`, ready to feed to
+/// [`batch_read`]/[`batch_write`] and to attach to the resulting
+/// [`BatchStats`].
+pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>, usize, usize)> {
+    let mut files = Vec::new();
+    let mut unidentified = 0usize;
+    let mut directories_scanned = 0usize;
+
+    for path in paths {
+        if path.is_dir() {
+            let (dir_files, dir_unidentified, dir_count) = collect_files(path, recursive)?;
+            files.extend(dir_files);
+            unidentified += dir_unidentified;
+            directories_scanned += dir_count;
+        } else {
+            // Named explicitly on the command line: processed as given, not
+            // filtered by extension (see `handle_multi_file_processing`'s
+            // doc comment in `src/main.rs`) -- including one that turns out
+            // not to exist at all, left for the per-file read/write attempt
+            // to fail and count instead of aborting collection here.
+            files.push(path.clone());
+        }
+    }
+
+    Ok((files, unidentified, directories_scanned))
 }
 
 /// Collects all identifiable files from the given path, and counts (without
@@ -216,14 +289,32 @@ pub fn batch_process_requests(
 ///
 /// # Returns
 ///
-/// `(files, unidentified)`: the files to attempt, and a count of files this
-/// walk declined to queue because [`is_supported_file`] could not recognize
-/// their extension. That count is never dropped -- see
-/// [`BatchStats::unidentified`] -- it travels back up through
-/// [`batch_process`] into the stats the caller prints.
-fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> {
+/// `(files, unidentified, directories_scanned)`: the files to attempt, a
+/// count of files this walk declined to queue because [`is_supported_file`]
+/// could not recognize their extension, and the number of directories this
+/// walk visited (see [`BatchStats::directories_scanned`]). `unidentified` is
+/// never dropped -- see [`BatchStats::unidentified`] -- it travels back up
+/// through [`batch_process`] into the stats the caller prints, and neither is
+/// `directories_scanned`.
+///
+/// A lone file argument scans zero directories. A directory argument always
+/// scans at least the directory itself -- even when it is empty or holds
+/// only unrecognized extensions -- exactly as ExifTool's `ScanDir`
+/// unconditionally increments `$countDir` once per call (`exiftool:4421`,
+/// 13.59). Without `-r`, that is the only directory counted: subdirectories
+/// are neither descended into nor counted (`exiftool:4358`, `next unless
+/// $recurse`). With `-r`, every subdirectory walked into adds one more,
+/// however deep and whether or not it is empty.
+fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, usize)> {
     let mut files = Vec::new();
     let mut unidentified = 0usize;
+    // Non-recursive: only the directory itself is ever "scanned" -- fixed at
+    // 1 the moment `path` is confirmed to be a directory below, since a
+    // `max_depth(1)` walk never descends into a subdirectory to justify
+    // counting it. Recursive: start at 0 and count every directory entry the
+    // unbounded walk actually yields (the root included), matching one
+    // `ScanDir` call apiece.
+    let mut directories_scanned = 0usize;
 
     if path.is_file() {
         // Single file - check if supported
@@ -238,19 +329,42 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
     } else if path.is_dir() {
         // Directory - walk and collect files
         let walker = if recursive {
-            WalkDir::new(path)
-                .follow_links(false) // Avoid symlink loops
-                .into_iter()
+            WalkDir::new(path).follow_links(false) // Avoid symlink loops
         } else {
-            WalkDir::new(path)
-                .max_depth(1)
-                .follow_links(false)
-                .into_iter()
+            directories_scanned = 1;
+            WalkDir::new(path).max_depth(1).follow_links(false)
         };
 
-        for entry in walker {
+        // `filter_entry` prunes a directory entry it rejects along with
+        // everything under it, before the walk ever descends into it -- so a
+        // dot-prefixed subdirectory (PRRT_kwDOQNbr5M6mTOLF) is neither
+        // counted nor read from, matching ExifTool's own default `-r`
+        // (`exiftool:4358-4359`, `next if $file =~ /^\./ and $recurse ==
+        // 1`): only `-r.` (`$recurse == 2`, which oxidex does not have a
+        // separate flag for) would include it. The root itself (depth 0) is
+        // exempt, so a hidden directory named explicitly on the command line
+        // is still scanned.
+        for entry in walker.into_iter().filter_entry(|entry| {
+            entry.depth() == 0
+                || !entry.file_type().is_dir()
+                || !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+        }) {
             match entry {
                 Ok(entry) => {
+                    if entry.file_type().is_dir() {
+                        // A directory entry: at max_depth(1) this is only
+                        // ever the root itself (already counted above) or a
+                        // child that is never walked into, so only the
+                        // recursive walk -- where every entry it yields was
+                        // actually descended into -- adds to the count here.
+                        if recursive {
+                            directories_scanned += 1;
+                        }
+                        continue;
+                    }
                     if !entry.file_type().is_file() {
                         continue;
                     }
@@ -267,7 +381,7 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
         }
     }
 
-    Ok((files, unidentified))
+    Ok((files, unidentified, directories_scanned))
 }
 
 /// Whether a file's extension is one that identification can recognize at
@@ -399,6 +513,7 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         write_mode: false,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
+        directories_scanned: 0,
     })
 }
 
@@ -463,6 +578,7 @@ pub fn batch_write(
         write_mode: true,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
+        directories_scanned: 0,
     })
 }
 

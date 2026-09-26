@@ -125,41 +125,96 @@ fn main() {
         return;
     }
 
-    if file.is_dir() {
-        // Batch processing mode (directory)
-        handle_batch_processing(&file, &args, &[]);
-    } else if files.len() > 1 {
+    if files.len() > 1 {
         // args.file() only ever returns the *last* positional argument, so a
         // plain-read invocation with more than one path -- `oxidex -j a.jpg
-        // b.jpg` -- used to see "b.jpg" alone. Route explicit multi-file
-        // invocations through the same batch machinery a directory uses,
-        // which already emits one tagged result per file.
+        // b.jpg`, or a mix of files and directories -- used to see only the
+        // last one: if it happened to be a directory, every earlier argument
+        // was silently dropped (only that directory reached
+        // `handle_batch_processing`); otherwise a directory among several
+        // *non-trailing* arguments was handed to `handle_multi_file_processing`
+        // as if it were a plain file, which fails to read it at all. Route
+        // every multi-argument invocation through the same batch machinery,
+        // which now expands any directory argument in the mix (see
+        // `handle_multi_file_processing`).
         handle_multi_file_processing(&files, &args, &[]);
+    } else if file.is_dir() {
+        // Batch processing mode (single directory)
+        handle_batch_processing(&file, &args, &[]);
     } else {
         // Read mode: display metadata
         handle_read_operation(&file, &args);
     }
 }
 
-/// Handles multiple explicit file arguments (e.g. `oxidex -j a.jpg b.jpg`).
+/// Handles multiple positional arguments (e.g. `oxidex -j a.jpg b.jpg`, or a
+/// mix of files and directories on one command line).
 ///
-/// Unlike `handle_batch_processing`, this does not walk a directory or
-/// filter by extension -- the files were named explicitly on the command
-/// line, so every one of them is processed as given. `modifications` are the
+/// A plain file argument is never filtered by extension -- it was named
+/// explicitly on the command line, so it is processed as given, exactly as
+/// before this function had to consider directories at all. A directory
+/// argument, anywhere in the list, is expanded with
+/// `batch_processor::collect_paths` (walked non-recursively unless `-r`),
+/// which also contributes to the `directories scanned` count every directory
+/// among the arguments adds to the final summary. `modifications` are the
 /// write plan's sets (`WritePlan::sets`); empty for a read.
 fn handle_multi_file_processing(
     files: &[std::path::PathBuf],
     args: &CliArgs,
     modifications: &[(String, std::ffi::OsString)],
 ) {
-    let result = if !modifications.is_empty() {
-        batch_processor::batch_write(files.to_vec(), modifications, args)
+    let has_directory = files.iter().any(|path| path.is_dir());
+    let (expanded, unidentified, directories_scanned) = if has_directory {
+        match batch_processor::collect_paths(files, args.recursive) {
+            Ok(expansion) => expansion,
+            Err(e) => {
+                eprintln!("Error: Batch processing failed: {}", e);
+                process::exit(1);
+            }
+        }
     } else {
-        batch_processor::batch_read(files.to_vec(), args)
+        (files.to_vec(), 0, 0)
+    };
+
+    // A mix that expanded to nothing (every directory in it empty or holding
+    // only unrecognized extensions, and no plain file argument) still
+    // "scanned" those directories -- ExifTool's own fallback for this case
+    // (`exiftool`:2076, `$countDir and not $totWr`) is the read-style `0
+    // image files read` line, never `image files updated`, matching what
+    // `batch_process_requests` already does for a single empty/unsupported
+    // directory. And, like every other read path here (PRRT_kwDOQNbr5M6mTOK-:
+    // this branch used to print it unconditionally, uniquely contaminating
+    // `-j`/`-csv` stdout with human-readable text -- the single-directory
+    // path below never did, because its summary print already sits behind
+    // this same guard), a structured-output read stays silent rather than
+    // printing this human-readable summary at all.
+    if expanded.is_empty() {
+        let is_read_mode = modifications.is_empty();
+        if !(is_read_mode && (args.json || args.csv)) {
+            let stats = batch_processor::BatchStats {
+                files_read: 0,
+                files_updated: 0,
+                files_unchanged: 0,
+                write_mode: false,
+                errors: 0,
+                unidentified,
+                directories_scanned,
+            };
+            stats.print();
+        }
+        return;
+    }
+
+    let result = if !modifications.is_empty() {
+        batch_processor::batch_write(expanded, modifications, args)
+    } else {
+        batch_processor::batch_read(expanded, args)
     };
 
     match result {
-        Ok(stats) => {
+        Ok(mut stats) => {
+            stats.unidentified = unidentified;
+            stats.directories_scanned = directories_scanned;
             let is_read_mode = modifications.is_empty();
             // ExifTool prints its read summary after text output at every
             // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
