@@ -1418,6 +1418,23 @@ fn canonical_write_tag_name(tag_name: &str) -> &str {
         "ModifyDate" => "IFD0:ModifyDate",
         "DateTimeOriginal" => "ExifIFD:DateTimeOriginal",
         "ApertureValue" => "ExifIFD:ApertureValue",
+        // Codex review finding on PR #963 (comment 4112327516, P1): a bare
+        // `-FocalLength=50.0 mm` (no group) parses correctly once
+        // `value_parser::parse_cli_tag_value` knows the tag's declared type,
+        // but without an entry here the surgical writer had no write target
+        // for the bare key and silently did nothing -- "1 image files
+        // updated" with the tag never created. Confirmed against the
+        // oracle: all four land under `[ExifIFD]` when written bare, exactly
+        // like their explicit `-ExifIFD:` form. Matched case-insensitively
+        // for the same reason `value_parser::unit_suffix_tag` is: ExifTool's
+        // own tag names are (`-focallength=`, `-FOCALLENGTH=`, ... all
+        // behave like the canonical spelling there).
+        _ if tag_name.eq_ignore_ascii_case("FocalLength") => "ExifIFD:FocalLength",
+        _ if tag_name.eq_ignore_ascii_case("FocalLengthIn35mmFormat") => {
+            "ExifIFD:FocalLengthIn35mmFormat"
+        }
+        _ if tag_name.eq_ignore_ascii_case("SubjectDistance") => "ExifIFD:SubjectDistance",
+        _ if tag_name.eq_ignore_ascii_case("AmbientTemperature") => "ExifIFD:AmbientTemperature",
         _ => tag_name,
     }
 }

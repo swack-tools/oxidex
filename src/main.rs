@@ -193,9 +193,22 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
 
     // Apply each modification
     for (tag_name, value) in &modifications {
+        // `-TAG#=VALUE` is ExifTool's raw write syntax (see
+        // `value_parser::parse_cli_tag_value`, which already recognises the
+        // suffix for the tags it narrowly supports raw mode for); the `#`
+        // is never part of an actual tag name, so it must not reach tag
+        // resolution. Codex review finding on PR #963 (comment 4112327528):
+        // this used to strip it only in the modify branch below, so
+        // `-ExifIFD:FocalLength#=` (ExifTool's delete syntax with the raw
+        // suffix) called `remove_tag` with the literal, nonexistent name
+        // `"ExifIFD:FocalLength#"` and left the real tag in place while
+        // still reporting success -- confirmed against the oracle, which
+        // deletes the tag. Computed once, before either branch.
+        let write_tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name.as_str());
+
         if value.is_empty() {
             // Empty value = delete tag (ExifTool -TAG= syntax)
-            if let Err(e) = remove_tag(file, tag_name) {
+            if let Err(e) = remove_tag(file, write_tag_name) {
                 eprintln!("Error: Failed to remove tag '{}': {}", tag_name, e);
                 process::exit(1);
             }
@@ -212,7 +225,7 @@ fn handle_write_operation(file: &std::path::Path, args: &CliArgs) {
             };
 
             // Call modify_tag from core operations
-            if let Err(e) = modify_tag(file, tag_name, tag_value) {
+            if let Err(e) = modify_tag(file, write_tag_name, tag_value) {
                 // Format error message based on error type
                 let error_msg = format!("{}", e);
                 if error_msg.contains("invalid") || error_msg.contains("Invalid") {
