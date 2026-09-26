@@ -314,8 +314,12 @@ impl FormatParser for OTFParser {
 ///
 /// This is a convenience wrapper around OTFParser that provides a functional API.
 pub fn parse_otf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = OTFParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = OTFParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Adds OTF-specific tag aliases to metadata (Worker 22 requirements)

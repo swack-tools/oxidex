@@ -297,8 +297,12 @@ fn find_preferred_architecture(archs: &[structures::FatArch]) -> usize {
 
 /// Convenience function to parse Mach-O metadata
 pub fn parse_macho_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MachOParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MachOParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 // =============================================================================

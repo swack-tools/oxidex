@@ -178,10 +178,14 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
 pub fn parse_epub_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = EpubParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("EPUB parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = EpubParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("EPUB parse error: {}", e))
+    })
 }
 
 #[cfg(test)]

@@ -153,72 +153,76 @@ fn parse_line(line: &[u8]) -> Option<(&str, &str)> {
 
 /// Extract metadata from an Adobe Font Metrics file.
 pub fn parse_afm_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = usize::try_from(reader.size()).map_err(|_| "AFM file too large")?;
-    let data = reader.read(0, size).map_err(|e| e.to_string())?;
-    let lines = split_lines(data);
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = usize::try_from(reader.size()).map_err(|_| "AFM file too large")?;
+        let data = reader.read(0, size).map_err(|e| e.to_string())?;
+        let lines = split_lines(data);
 
-    let file_type = lines
-        .first()
-        .and_then(|line| afm_file_type(line))
-        .ok_or("not an Adobe Font Metrics file")?;
+        let file_type = lines
+            .first()
+            .and_then(|line| afm_file_type(line))
+            .ok_or("not an Adobe Font Metrics file")?;
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("FileType", TagValue::new_string(file_type));
+        let mut metadata = MetadataMap::new();
+        metadata.insert("FileType", TagValue::new_string(file_type));
 
-    let mut comment: Option<String> = None;
+        let mut comment: Option<String> = None;
 
-    for line in lines.iter().skip(1) {
-        // Font.pm:604-607: flush the accumulated comment when a line does
-        // not match /^Comment\s/. (`\s` includes the line terminator, so a
-        // bare `Comment\n` line does NOT flush.)
-        let is_comment_line = line
-            .strip_prefix(b"Comment")
-            .is_some_and(|r| r.first().is_some_and(|b| b.is_ascii_whitespace()));
-        if !is_comment_line && let Some(text) = comment.take() {
-            // FoundTag('Comment', ...) -- the Extra table's Comment,
-            // family-0 group File (Font.pm:606).
-            metadata.insert("File:Comment", TagValue::String(text));
+        for line in lines.iter().skip(1) {
+            // Font.pm:604-607: flush the accumulated comment when a line does
+            // not match /^Comment\s/. (`\s` includes the line terminator, so a
+            // bare `Comment\n` line does NOT flush.)
+            let is_comment_line = line
+                .strip_prefix(b"Comment")
+                .is_some_and(|r| r.first().is_some_and(|b| b.is_ascii_whitespace()));
+            if !is_comment_line && let Some(text) = comment.take() {
+                // FoundTag('Comment', ...) -- the Extra table's Comment,
+                // family-0 group File (Font.pm:606).
+                metadata.insert("File:Comment", TagValue::String(text));
+            }
+
+            let Some((mut tag, mut val)) = parse_line(line) else {
+                continue;
+            };
+
+            // Font.pm:611-613: a Comment carrying `Creation Date: ...` becomes
+            // the `Creation Date` tag. `/^(Creation Date):\s+(.*)/` -- greedy
+            // `\s+`, so all leading whitespace after the colon is consumed, and
+            // internal spacing in the date survives verbatim.
+            if tag == "Comment"
+                && let Some(after) = val.strip_prefix("Creation Date:")
+                && after.starts_with(|c: char| c.is_ascii_whitespace())
+            {
+                tag = "Creation Date";
+                val = after.trim_start_matches(|c: char| c.is_ascii_whitespace());
+            }
+
+            // Font.pm:614: unwrap a parenthesized value.
+            if val.len() >= 2 && val.starts_with('(') && val.ends_with(')') {
+                val = &val[1..val.len() - 1];
+            }
+
+            if tag == "Comment" {
+                // Font.pm:616-620: concatenate consecutive comments.
+                comment = Some(match comment.take() {
+                    Some(prev) => format!("{prev}\n{val}"),
+                    None => val.to_string(),
+                });
+                continue;
+            }
+
+            if let Some((_, name)) = AFM_TAGS.iter().find(|(kw, _)| *kw == tag) {
+                metadata.insert(format!("Font:{name}"), TagValue::new_string(val));
+            } else if tag.starts_with("Start") && tag != "StartDirection" {
+                // Font.pm:625-626: any unknown subsection ends the scan.
+                break;
+            }
         }
 
-        let Some((mut tag, mut val)) = parse_line(line) else {
-            continue;
-        };
-
-        // Font.pm:611-613: a Comment carrying `Creation Date: ...` becomes
-        // the `Creation Date` tag. `/^(Creation Date):\s+(.*)/` -- greedy
-        // `\s+`, so all leading whitespace after the colon is consumed, and
-        // internal spacing in the date survives verbatim.
-        if tag == "Comment"
-            && let Some(after) = val.strip_prefix("Creation Date:")
-            && after.starts_with(|c: char| c.is_ascii_whitespace())
-        {
-            tag = "Creation Date";
-            val = after.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        }
-
-        // Font.pm:614: unwrap a parenthesized value.
-        if val.len() >= 2 && val.starts_with('(') && val.ends_with(')') {
-            val = &val[1..val.len() - 1];
-        }
-
-        if tag == "Comment" {
-            // Font.pm:616-620: concatenate consecutive comments.
-            comment = Some(match comment.take() {
-                Some(prev) => format!("{prev}\n{val}"),
-                None => val.to_string(),
-            });
-            continue;
-        }
-
-        if let Some((_, name)) = AFM_TAGS.iter().find(|(kw, _)| *kw == tag) {
-            metadata.insert(format!("Font:{name}"), TagValue::new_string(val));
-        } else if tag.starts_with("Start") && tag != "StartDirection" {
-            // Font.pm:625-626: any unknown subsection ends the scan.
-            break;
-        }
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

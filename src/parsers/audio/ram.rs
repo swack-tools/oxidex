@@ -14,17 +14,21 @@ const MAX_RAM_RECORD_LEN: usize = 256;
 /// record must begin with `pnm://`, `rtsp://`, or `http://`; HTTP URLs must
 /// name a Real media resource.
 pub fn parse_ram_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let data = reader
-        .read(
-            0,
-            reader.size().min((MAX_RAM_RECORD_LEN + 1) as u64) as usize,
-        )
-        .map_err(|error| error.to_string())?;
-    let url = ram_url(data).ok_or_else(|| "Invalid RAM streaming URL".to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let data = reader
+            .read(
+                0,
+                reader.size().min((MAX_RAM_RECORD_LEN + 1) as u64) as usize,
+            )
+            .map_err(|error| error.to_string())?;
+        let url = ram_url(data).ok_or_else(|| "Invalid RAM streaming URL".to_string())?;
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("Real:URL", TagValue::new_string(url));
-    Ok(metadata)
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Real:URL", TagValue::new_string(url));
+        Ok(metadata)
+    })
 }
 
 /// Return the bounded first record when it satisfies ExifTool's RAM URL gate.

@@ -404,34 +404,38 @@ fn collect_annotation_expression(expression: Expression, metadata: &mut Metadata
 /// Extract DjVu INFO, included-file and annotation metadata from a DjVu image
 /// or multi-page document.
 pub fn parse_djvu_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let data = reader
-        .read(0, reader.size() as usize)
-        .map_err(|error| error.to_string())?;
-    let file = parse(&data).map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let data = reader
+            .read(0, reader.size() as usize)
+            .map_err(|error| error.to_string())?;
+        let file = parse(&data).map_err(|error| error.to_string())?;
 
-    let Chunk::Form {
-        secondary_id,
-        children,
-        ..
-    } = &file.root
-    else {
-        return Err("DjVu root must be a FORM chunk".to_string());
-    };
-    if !matches!(secondary_id, b"DJVU" | b"DJVM") {
-        return Err("DjVu root FORM type must be DJVU or DJVM".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    // The outer DJVM form is a directory, not the first image page.  ExifTool
-    // takes the first nested FORM's SubfileType for this case.
-    if secondary_id == b"DJVM" {
-        for child in children {
-            collect_djvu_chunks(child, &mut metadata);
+        let Chunk::Form {
+            secondary_id,
+            children,
+            ..
+        } = &file.root
+        else {
+            return Err("DjVu root must be a FORM chunk".to_string());
+        };
+        if !matches!(secondary_id, b"DJVU" | b"DJVM") {
+            return Err("DjVu root FORM type must be DJVU or DJVM".to_string());
         }
-    } else {
-        collect_djvu_chunks(&file.root, &mut metadata);
-    }
-    Ok(metadata)
+
+        let mut metadata = MetadataMap::new();
+        // The outer DJVM form is a directory, not the first image page.  ExifTool
+        // takes the first nested FORM's SubfileType for this case.
+        if secondary_id == b"DJVM" {
+            for child in children {
+                collect_djvu_chunks(child, &mut metadata);
+            }
+        } else {
+            collect_djvu_chunks(&file.root, &mut metadata);
+        }
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

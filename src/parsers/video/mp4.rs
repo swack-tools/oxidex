@@ -687,8 +687,12 @@ fn convert_mp4_codec_id_to_name(codec_id: &str, is_video: bool) -> String {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_mp4_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = Mp4Parser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = Mp4Parser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

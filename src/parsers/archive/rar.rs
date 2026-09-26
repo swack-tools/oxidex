@@ -435,57 +435,61 @@ impl FormatParser for RARParser {
 pub fn parse_rar_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = RARParser;
-    let mut metadata = parser
-        .parse(reader)
-        .map_err(|e| format!("RAR parse error: {}", e))?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = RARParser;
+        let mut metadata = parser
+            .parse(reader)
+            .map_err(|e| format!("RAR parse error: {}", e))?;
 
-    // ExifTool emits FileVersion from the signature alone, before it walks a
-    // single block, so an archive with no file entries still reports it
-    // (ZIP.pm, ProcessRAR):
-    //
-    // ```text
-    //     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
-    //         ...
-    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
-    //     ...
-    //     } else { # RARv5 (ref 7, github#203)
-    //         ...
-    //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v5');
-    // ```
-    let version =
-        RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
-    if let Some(file_version) = rar_file_version(version) {
-        metadata.insert(
-            "ZIP:FileVersion".to_string(),
-            TagValue::String(file_version.to_string()),
-        );
-    }
+        // ExifTool emits FileVersion from the signature alone, before it walks a
+        // single block, so an archive with no file entries still reports it
+        // (ZIP.pm, ProcessRAR):
+        //
+        // ```text
+        //     if ($buff eq "Rar!\x1a\x07\0") { # RARv4 (ref 4)
+        //         ...
+        //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v4');
+        //     ...
+        //     } else { # RARv5 (ref 7, github#203)
+        //         ...
+        //         $et->HandleTag($tagTablePtr, 'FileVersion', 'RAR v5');
+        // ```
+        let version =
+            RARParser::detect_version(reader).map_err(|e| format!("RAR parse error: {}", e))?;
+        if let Some(file_version) = rar_file_version(version) {
+            metadata.insert(
+                "ZIP:FileVersion".to_string(),
+                TagValue::String(file_version.to_string()),
+            );
+        }
 
-    if let Some(entry) =
-        rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
-    {
-        if let Some(size) = entry.compressed_size {
-            metadata.insert("ZIP:CompressedSize".to_string(), TagValue::Integer(size));
+        if let Some(entry) =
+            rar5_first_file_entry(reader).map_err(|e| format!("RAR parse error: {}", e))?
+        {
+            if let Some(size) = entry.compressed_size {
+                metadata.insert("ZIP:CompressedSize".to_string(), TagValue::Integer(size));
+            }
+            if let Some(size) = entry.uncompressed_size {
+                metadata.insert("ZIP:UncompressedSize".to_string(), TagValue::Integer(size));
+            }
+            if let Some(name) = entry.file_name {
+                metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
+            }
+            if let Some(os_byte) = entry.host_os {
+                // No PrintConv match in ExifTool means it prints the raw value,
+                // so an unmapped byte becomes its own number rather than a
+                // stand-in string -- see rar5_host_os.
+                let os = rar5_host_os(os_byte)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| os_byte.to_string());
+                metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
+            }
         }
-        if let Some(size) = entry.uncompressed_size {
-            metadata.insert("ZIP:UncompressedSize".to_string(), TagValue::Integer(size));
-        }
-        if let Some(name) = entry.file_name {
-            metadata.insert("ZIP:ArchivedFileName".to_string(), TagValue::String(name));
-        }
-        if let Some(os_byte) = entry.host_os {
-            // No PrintConv match in ExifTool means it prints the raw value,
-            // so an unmapped byte becomes its own number rather than a
-            // stand-in string -- see rar5_host_os.
-            let os = rar5_host_os(os_byte)
-                .map(str::to_string)
-                .unwrap_or_else(|| os_byte.to_string());
-            metadata.insert("ZIP:OperatingSystem".to_string(), TagValue::String(os));
-        }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Maps the detected RAR generation to ExifTool's `FileVersion` string.

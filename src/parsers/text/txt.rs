@@ -775,7 +775,11 @@ impl FormatParser for CSVParser {
 
 /// Parses metadata from CSV files (ExifTool `Text.pm`'s CSV branch).
 pub fn parse_csv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    CSVParser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        CSVParser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Parses metadata from plain text files.
@@ -791,8 +795,12 @@ pub fn parse_csv_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_txt_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = TXTParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = TXTParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 // There is deliberately no `add_text_tag_aliases` here any more.

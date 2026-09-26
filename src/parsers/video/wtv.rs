@@ -392,76 +392,82 @@ fn mint_tag_name(name: &str) -> String {
 
 /// Extract WTV metadata (`Image::ExifTool::WTV::ProcessWTV`).
 pub fn parse_wtv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < FILE_HEADER_LEN as u64 {
-        return Err("WTV file is too short for the 0x60-byte header".to_string());
-    }
-    let header = reader
-        .read(0, FILE_HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !header.starts_with(FILE_GUID) {
-        return Err("invalid WTV signature".to_string());
-    }
-
-    let sector_size = le_u32(header, SECTOR_SIZE_OFFSET).unwrap_or(STANDARD_SECTOR_SIZE);
-    // WTV.pm:221-223: "in case I'm wrong about this, constrain sector size".
-    let sector_size = if sector_size == STANDARD_SECTOR_SIZE || sector_size == TEST_SECTOR_SIZE {
-        sector_size
-    } else {
-        STANDARD_SECTOR_SIZE
-    };
-
-    let Some(directory) = read_sectors(reader, header, DIRECTORY_SECTOR_TABLE, sector_size) else {
-        return Err("could not read the WTV directory".to_string());
-    };
-
-    let mut metadata = MetadataMap::new();
-    let mut pos = 0usize;
-    while directory.len() >= 0x28 && pos < directory.len() - 0x28 {
-        if directory.get(pos..pos + 0x10) != Some(DIRECTORY_ENTRY_GUID.as_slice()) {
-            // `$et->Warn("WTV directory wasn't at expected location") unless $pos`
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < FILE_HEADER_LEN as u64 {
+            return Err("WTV file is too short for the 0x60-byte header".to_string());
         }
-        let Some(len) = le_u32(&directory, pos + 0x10).map(|len| len as usize) else {
-            break;
-        };
-        if len == 0 || pos + len > directory.len() {
-            break;
+        let header = reader
+            .read(0, FILE_HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !header.starts_with(FILE_GUID) {
+            return Err("invalid WTV signature".to_string());
         }
-        let Some(name_units) = le_u32(&directory, pos + 0x20).map(|n| n as usize) else {
-            break;
-        };
-        if 0x28 + name_units * 2 + 8 > len {
-            // `$et->Warn('WTV directory error'), last`
-            break;
-        }
-        let name =
-            decode_utf16le(&directory[pos + 0x28..pos + 0x28 + name_units * 2]).unwrap_or_default();
-        let ptr = pos + 0x28 + name_units * 2;
-        let flag = le_u32(&directory, ptr + 4).unwrap_or(u32::MAX);
-        pos += len;
 
-        // WTV.pm:255: `next unless $$tagTablePtr{$tag} and ($flg == 0 or $flg == 1)`.
-        if name != METADATA_DIRECTORY || (flag != 0 && flag != 1) {
-            continue;
-        }
-        let Some(sector) = directory.get(ptr..ptr + 4) else {
-            continue;
+        let sector_size = le_u32(header, SECTOR_SIZE_OFFSET).unwrap_or(STANDARD_SECTOR_SIZE);
+        // WTV.pm:221-223: "in case I'm wrong about this, constrain sector size".
+        let sector_size = if sector_size == STANDARD_SECTOR_SIZE || sector_size == TEST_SECTOR_SIZE
+        {
+            sector_size
+        } else {
+            STANDARD_SECTOR_SIZE
         };
-        let Some(mut data) = read_sectors(reader, sector, 0, sector_size) else {
-            break;
+
+        let Some(directory) = read_sectors(reader, header, DIRECTORY_SECTOR_TABLE, sector_size)
+        else {
+            return Err("could not read the WTV directory".to_string());
         };
-        // "read sectors from table if necessary (flag=1 indicates a sector
-        // table)" (WTV.pm:259-260).
-        if flag == 1 {
-            let Some(indirect) = read_sectors(reader, &data, 0, sector_size) else {
+
+        let mut metadata = MetadataMap::new();
+        let mut pos = 0usize;
+        while directory.len() >= 0x28 && pos < directory.len() - 0x28 {
+            if directory.get(pos..pos + 0x10) != Some(DIRECTORY_ENTRY_GUID.as_slice()) {
+                // `$et->Warn("WTV directory wasn't at expected location") unless $pos`
+                break;
+            }
+            let Some(len) = le_u32(&directory, pos + 0x10).map(|len| len as usize) else {
+                break;
+            };
+            if len == 0 || pos + len > directory.len() {
+                break;
+            }
+            let Some(name_units) = le_u32(&directory, pos + 0x20).map(|n| n as usize) else {
+                break;
+            };
+            if 0x28 + name_units * 2 + 8 > len {
+                // `$et->Warn('WTV directory error'), last`
+                break;
+            }
+            let name = decode_utf16le(&directory[pos + 0x28..pos + 0x28 + name_units * 2])
+                .unwrap_or_default();
+            let ptr = pos + 0x28 + name_units * 2;
+            let flag = le_u32(&directory, ptr + 4).unwrap_or(u32::MAX);
+            pos += len;
+
+            // WTV.pm:255: `next unless $$tagTablePtr{$tag} and ($flg == 0 or $flg == 1)`.
+            if name != METADATA_DIRECTORY || (flag != 0 && flag != 1) {
+                continue;
+            }
+            let Some(sector) = directory.get(ptr..ptr + 4) else {
                 continue;
             };
-            data = indirect;
+            let Some(mut data) = read_sectors(reader, sector, 0, sector_size) else {
+                break;
+            };
+            // "read sectors from table if necessary (flag=1 indicates a sector
+            // table)" (WTV.pm:259-260).
+            if flag == 1 {
+                let Some(indirect) = read_sectors(reader, &data, 0, sector_size) else {
+                    continue;
+                };
+                data = indirect;
+            }
+            process_metadata(&data, &mut metadata);
         }
-        process_metadata(&data, &mut metadata);
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

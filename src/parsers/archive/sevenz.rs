@@ -173,10 +173,14 @@ impl FormatParser for SevenZParser {
 pub fn parse_7z_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = SevenZParser;
-    parser
-        .parse(reader)
-        .map_err(|e| format!("7z parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = SevenZParser;
+        parser
+            .parse(reader)
+            .map_err(|e| format!("7z parse error: {}", e))
+    })
 }
 
 #[cfg(test)]

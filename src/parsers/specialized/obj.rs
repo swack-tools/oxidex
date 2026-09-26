@@ -179,6 +179,10 @@ impl FormatParser for OBJParser {
 ///
 /// This is a convenience wrapper around OBJParser that provides a functional API.
 pub fn parse_obj_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = OBJParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = OBJParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }

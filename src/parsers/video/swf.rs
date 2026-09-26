@@ -86,155 +86,159 @@ fn read_bits(data: &[u8], bit_pos: &mut usize, n: usize) -> Option<u32> {
 
 /// Extract SWF metadata from an in-memory reader.
 pub fn parse_swf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size() as usize;
-    if size < HEADER_LEN {
-        return Err("SWF file is too short for the 8-byte header".to_string());
-    }
-    let all = reader.read(0, size).map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size() as usize;
+        if size < HEADER_LEN {
+            return Err("SWF file is too short for the 8-byte header".to_string());
+        }
+        let all = reader.read(0, size).map_err(|error| error.to_string())?;
 
-    // Flash.pm:599: `$buff =~ /^(F|C)WS([^\0])/ or return 0;` -- the version
-    // byte must be present and non-zero.
-    let compressed = match &all[0..3] {
-        b"FWS" => false,
-        b"CWS" => true,
-        _ => return Err("missing FWS/CWS SWF signature".to_string()),
-    };
-    let version = all[3];
-    if version == 0 {
-        return Err("invalid SWF version byte".to_string());
-    }
+        // Flash.pm:599: `$buff =~ /^(F|C)WS([^\0])/ or return 0;` -- the version
+        // byte must be present and non-zero.
+        let compressed = match &all[0..3] {
+            b"FWS" => false,
+            b"CWS" => true,
+            _ => return Err("missing FWS/CWS SWF signature".to_string()),
+        };
+        let version = all[3];
+        if version == 0 {
+            return Err("invalid SWF version byte".to_string());
+        }
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("Flash:FlashVersion", TagValue::Integer(i64::from(version)));
-    metadata.insert(
-        "Flash:Compressed",
-        TagValue::new_string(if compressed { "True" } else { "False" }),
-    );
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Flash:FlashVersion", TagValue::Integer(i64::from(version)));
+        metadata.insert(
+            "Flash:Compressed",
+            TagValue::new_string(if compressed { "True" } else { "False" }),
+        );
 
-    // Flash.pm:609-611: the rest of the file (past the 8-byte header) is
-    // zlib-deflated for a `CWS` signature.
-    let body: std::borrow::Cow<'_, [u8]> = if compressed {
-        let mut decoder = ZlibDecoder::new(&all[HEADER_LEN..]);
-        let mut inflated = Vec::new();
-        if decoder.read_to_end(&mut inflated).is_err() {
-            // ExifTool warns and stops at the header on an inflate error
-            // (Flash.pm:610), rather than failing the whole file.
+        // Flash.pm:609-611: the rest of the file (past the 8-byte header) is
+        // zlib-deflated for a `CWS` signature.
+        let body: std::borrow::Cow<'_, [u8]> = if compressed {
+            let mut decoder = ZlibDecoder::new(&all[HEADER_LEN..]);
+            let mut inflated = Vec::new();
+            if decoder.read_to_end(&mut inflated).is_err() {
+                // ExifTool warns and stops at the header on an inflate error
+                // (Flash.pm:610), rather than failing the whole file.
+                return Ok(metadata);
+            }
+            std::borrow::Cow::Owned(inflated)
+        } else {
+            std::borrow::Cow::Borrowed(&all[HEADER_LEN..])
+        };
+
+        // Flash.pm:614-627: bit-packed `RECT` structure.
+        let mut bit_pos = 0usize;
+        let Some(n_bits) = read_bits(&body, &mut bit_pos, 5) else {
+            return Ok(metadata);
+        };
+        let n_bits = n_bits as usize;
+        let total_bits = 5 + n_bits * 4;
+        let n_bytes = total_bits.div_ceil(8);
+        if body.len() < n_bytes + 4 {
+            // Flash.pm:618-620: "Truncated Flash file" -- still report the
+            // header fields already found.
             return Ok(metadata);
         }
-        std::borrow::Cow::Owned(inflated)
-    } else {
-        std::borrow::Cow::Borrowed(&all[HEADER_LEN..])
-    };
-
-    // Flash.pm:614-627: bit-packed `RECT` structure.
-    let mut bit_pos = 0usize;
-    let Some(n_bits) = read_bits(&body, &mut bit_pos, 5) else {
-        return Ok(metadata);
-    };
-    let n_bits = n_bits as usize;
-    let total_bits = 5 + n_bits * 4;
-    let n_bytes = total_bits.div_ceil(8);
-    if body.len() < n_bytes + 4 {
-        // Flash.pm:618-620: "Truncated Flash file" -- still report the
-        // header fields already found.
-        return Ok(metadata);
-    }
-    let (Some(x_min), Some(x_max), Some(y_min), Some(y_max)) = (
-        read_bits(&body, &mut bit_pos, n_bits),
-        read_bits(&body, &mut bit_pos, n_bits),
-        read_bits(&body, &mut bit_pos, n_bits),
-        read_bits(&body, &mut bit_pos, n_bits),
-    ) else {
-        return Ok(metadata);
-    };
-    metadata.insert(
-        "Flash:ImageWidth",
-        TagValue::Integer((x_max as i64 - x_min as i64) / 20),
-    );
-    metadata.insert(
-        "Flash:ImageHeight",
-        TagValue::Integer((y_max as i64 - y_min as i64) / 20),
-    );
-
-    // Flash.pm:630-635: frame rate (8.8 fixed point) and frame count.
-    let frame_rate_raw = u16::from_le_bytes([body[n_bytes], body[n_bytes + 1]]);
-    let frame_count = u16::from_le_bytes([body[n_bytes + 2], body[n_bytes + 3]]);
-    let frame_rate = f64::from(frame_rate_raw) / 256.0;
-    metadata.insert(
-        "Flash:FrameRate",
-        TagValue::new_string(format_whole_or_decimal(frame_rate)),
-    );
-    metadata.insert(
-        "Flash:FrameCount",
-        TagValue::Integer(i64::from(frame_count)),
-    );
-    if frame_rate_raw != 0 {
-        let duration = f64::from(frame_count) * 256.0 / f64::from(frame_rate_raw);
+        let (Some(x_min), Some(x_max), Some(y_min), Some(y_max)) = (
+            read_bits(&body, &mut bit_pos, n_bits),
+            read_bits(&body, &mut bit_pos, n_bits),
+            read_bits(&body, &mut bit_pos, n_bits),
+            read_bits(&body, &mut bit_pos, n_bits),
+        ) else {
+            return Ok(metadata);
+        };
         metadata.insert(
-            "Flash:Duration",
-            TagValue::new_string(convert_duration(duration)),
+            "Flash:ImageWidth",
+            TagValue::Integer((x_max as i64 - x_min as i64) / 20),
         );
-    }
+        metadata.insert(
+            "Flash:ImageHeight",
+            TagValue::Integer((y_max as i64 - y_min as i64) / 20),
+        );
 
-    // Flash.pm:641-682: scan tags for FlashAttributes (69) and embedded XMP
-    // (77).
-    let rest = &body[n_bytes + 4..];
-    let mut cursor = 0usize;
-    let mut has_meta = false;
-    loop {
-        if rest.len() < cursor + 2 {
-            break;
-        }
-        let code = u16::from_le_bytes([rest[cursor], rest[cursor + 1]]);
-        let mut pos = cursor + 2;
-        let tag = code >> 6;
-        let mut tag_size = usize::from(code & 0x3f);
-
-        if tag != 69 && tag != 77 && !has_meta {
-            break;
-        }
-
-        if tag_size == 0x3f {
-            if rest.len() < pos + 4 {
-                break;
-            }
-            let extended = u32::from_le_bytes(rest[pos..pos + 4].try_into().unwrap()) as usize;
-            pos += 4;
-            if extended > 1_000_000 {
-                break;
-            }
-            tag_size = extended;
-        }
-        if rest.len() < pos + tag_size {
-            break;
-        }
-
-        if tag == 69 {
-            if tag_size == 0 {
-                break;
-            }
-            let flags = rest[pos];
+        // Flash.pm:630-635: frame rate (8.8 fixed point) and frame count.
+        let frame_rate_raw = u16::from_le_bytes([body[n_bytes], body[n_bytes + 1]]);
+        let frame_count = u16::from_le_bytes([body[n_bytes + 2], body[n_bytes + 3]]);
+        let frame_rate = f64::from(frame_rate_raw) / 256.0;
+        metadata.insert(
+            "Flash:FrameRate",
+            TagValue::new_string(format_whole_or_decimal(frame_rate)),
+        );
+        metadata.insert(
+            "Flash:FrameCount",
+            TagValue::Integer(i64::from(frame_count)),
+        );
+        if frame_rate_raw != 0 {
+            let duration = f64::from(frame_count) * 256.0 / f64::from(frame_rate_raw);
             metadata.insert(
-                "Flash:FlashAttributes",
-                TagValue::new_string(decode_bits(i64::from(flags), FLASH_ATTRIBUTES_BITS)),
+                "Flash:Duration",
+                TagValue::new_string(convert_duration(duration)),
             );
-            if flags & 0x10 == 0 {
+        }
+
+        // Flash.pm:641-682: scan tags for FlashAttributes (69) and embedded XMP
+        // (77).
+        let rest = &body[n_bytes + 4..];
+        let mut cursor = 0usize;
+        let mut has_meta = false;
+        loop {
+            if rest.len() < cursor + 2 {
                 break;
             }
-            has_meta = true;
-        } else if tag == 77 {
-            let payload = &rest[pos..pos + tag_size];
-            let _ = insert_xmp_packet(&mut metadata, payload, true);
-            break;
+            let code = u16::from_le_bytes([rest[cursor], rest[cursor + 1]]);
+            let mut pos = cursor + 2;
+            let tag = code >> 6;
+            let mut tag_size = usize::from(code & 0x3f);
+
+            if tag != 69 && tag != 77 && !has_meta {
+                break;
+            }
+
+            if tag_size == 0x3f {
+                if rest.len() < pos + 4 {
+                    break;
+                }
+                let extended = u32::from_le_bytes(rest[pos..pos + 4].try_into().unwrap()) as usize;
+                pos += 4;
+                if extended > 1_000_000 {
+                    break;
+                }
+                tag_size = extended;
+            }
+            if rest.len() < pos + tag_size {
+                break;
+            }
+
+            if tag == 69 {
+                if tag_size == 0 {
+                    break;
+                }
+                let flags = rest[pos];
+                metadata.insert(
+                    "Flash:FlashAttributes",
+                    TagValue::new_string(decode_bits(i64::from(flags), FLASH_ATTRIBUTES_BITS)),
+                );
+                if flags & 0x10 == 0 {
+                    break;
+                }
+                has_meta = true;
+            } else if tag == 77 {
+                let payload = &rest[pos..pos + tag_size];
+                let _ = insert_xmp_packet(&mut metadata, payload, true);
+                break;
+            }
+
+            if rest.len() < pos + 2 {
+                break;
+            }
+            cursor = pos;
         }
 
-        if rest.len() < pos + 2 {
-            break;
-        }
-        cursor = pos;
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]
