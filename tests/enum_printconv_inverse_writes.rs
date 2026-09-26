@@ -1160,6 +1160,65 @@ fn hand_written_enum_arms_reject_unmatched_garbage_like_the_oracle() {
     }
 }
 
+/// The catch-all added above (previous test) must not regress
+/// `GPSMeasureMode`/`GPSDestDistanceRef`'s own raw codes, which the oracle
+/// accepts via its case-insensitive PREFIX tier (`Writer.pl:3609`) because
+/// each code happens to be a unique prefix of its own label -- confirmed by
+/// a breadth-measurement regression caught before this landed
+/// (`GPSMeasureMode`'s numeric-bare "2" newly refused, pushing mismatched
+/// from 6 to 7). `unique_case_insensitive_prefix_match` reproduces exactly
+/// this one extra tier for these three small, hand-enumerated GPS arms.
+/// These tags are String-typed (the stored code IS the read-back text), so
+/// this asserts directly rather than through
+/// `assert_label_write_matches_oracle` (which compares against an `i64`).
+#[test]
+fn gps_measure_mode_and_dest_distance_ref_accept_their_own_codes_via_prefix_tier() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
+        return;
+    };
+    let Some(base) = canon_jpg() else {
+        eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
+        return;
+    };
+    for (tag, code) in [
+        ("GPS:GPSMeasureMode", "2"),
+        ("GPS:GPSMeasureMode", "3"),
+        ("GPS:GPSDestDistanceRef", "K"),
+        ("GPS:GPSDestDistanceRef", "M"),
+        ("GPS:GPSDestDistanceRef", "N"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let arg = format!("-{tag}={code}");
+
+        let ox_path = copy_into(&dir, &base, "prefix_ox.jpg");
+        let out = oxidex(&[&arg, ox_path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "oxidex {arg} should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            oxidex_read_n(&ox_path, tag),
+            code,
+            "oxidex read-back for {arg}"
+        );
+
+        let et_path = copy_into(&dir, &base, "prefix_et.jpg");
+        let et_out = oracle
+            .command()
+            .args(["-overwrite_original", &arg, et_path.to_str().unwrap()])
+            .output()
+            .expect("run oracle write");
+        assert!(et_out.status.success());
+        assert_eq!(
+            oracle_read_n(oracle, &et_path, tag),
+            code,
+            "oracle read-back for {arg}"
+        );
+    }
+}
+
 /// PR #959 review (Codex, round 4, P2): `OffsetTime`/`OffsetTimeOriginal`/
 /// `OffsetTimeDigitized` ignored `raw_mode` entirely, so
 /// `-ExifIFD:OffsetTime#=Z` / `--no-print-conv -ExifIFD:OffsetTime=Z` still

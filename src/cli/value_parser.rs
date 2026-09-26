@@ -720,55 +720,76 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             ("GPS:GPSStatus", "Measurement Active") => "A",
             ("GPS:GPSStatus", "Measurement Void") => "V",
             // A catch-all: without one, a value matching neither label above
-            // (including the RAW code itself, e.g. `-GPS:GPSStatus=A`, or
-            // outright garbage) fell through this match unchanged and reached
-            // the plain string parser, which stored it verbatim -- confirmed
-            // on `-GPS:GPSStatus=garbage`: pinned ExifTool 13.59 refuses it
-            // (`Can't convert GPS:GPSStatus (not in PrintConv)`), but this
-            // file wrote it with nothing to catch it. (The exact-code case
-            // `-GPS:GPSStatus=A` diverges from the oracle's own wording --
-            // `A` is a case-insensitive SUBSTRING of both "Measurement
-            // Active" and "Measurement Void", so the oracle's `ReverseLookup`
-            // refuses it too, but as "matches more than one PrintConv" via a
-            // fallback tier -- case-insensitive substring -- this port does
-            // not implement; both refuse, disclosed simplification per the
-            // module doc comment.)
-            ("GPS:GPSStatus", _) => {
-                return Err(invalid(
-                    tag_name,
-                    "Can't convert GPS:GPSStatus (not in PrintConv)",
-                ));
+            // (including outright garbage) fell through this match unchanged
+            // and reached the plain string parser, which stored it verbatim
+            // -- confirmed on `-GPS:GPSStatus=garbage`: pinned ExifTool 13.59
+            // refuses it (`Can't convert GPS:GPSStatus (not in PrintConv)`),
+            // but this file wrote it with nothing to catch it.
+            //
+            // Before refusing outright, this also tries the one extra
+            // `ReverseLookup` tier (`Writer.pl:3609`) this port otherwise
+            // does not implement: a case-insensitive PREFIX match, tried
+            // before the case-insensitive SUBSTRING tier that follows it.
+            // `GPSMeasureMode`/`GPSDestDistanceRef`'s own raw codes happen to
+            // be unique prefixes of their own labels ("2" only prefixes
+            // "2-Dimensional Measurement", not "3-Dimensional Measurement";
+            // "K" only prefixes "Kilometers"), so this tier resolves them
+            // exactly the way the oracle does -- not a guess, because a
+            // unique prefix match cannot select a different code than the
+            // oracle's own algorithm would. `GPSStatus`'s codes ("A"/"V") are
+            // NOT unique prefixes of either label (both start with "M"), so
+            // this tier correctly finds nothing for them and they still
+            // refuse -- matching the oracle's own refusal too, just by a
+            // different route (the oracle reaches its SUBSTRING tier, finds
+            // `A`/`V` inside BOTH labels, and refuses as ambiguous; this port
+            // stops one tier earlier having found no match at all). Neither
+            // outcome is ever a wrong WRITTEN value.
+            ("GPS:GPSStatus", other) => {
+                match unique_case_insensitive_prefix_match(GPS_STATUS_ENTRIES, other) {
+                    Some(code) => code,
+                    None => {
+                        return Err(invalid(
+                            tag_name,
+                            "Can't convert GPS:GPSStatus (not in PrintConv)",
+                        ));
+                    }
+                }
             }
             ("GPS:GPSMeasureMode", "2-Dimensional Measurement") => "2",
             ("GPS:GPSMeasureMode", "3-Dimensional Measurement") => "3",
-            // Catch-all, same reasoning as `GPSStatus` above.
-            // `-GPS:GPSMeasureMode=2` also diverges from the oracle by the
-            // same disclosed substring-tier gap: "2" is a unique substring of
-            // "2-Dimensional Measurement" there, so the real `ReverseLookup`
-            // accepts it (storing "2", coincidentally the same text as the
-            // input); this port refuses it instead of guessing which
-            // fallback tier to reproduce. Never a wrong WRITTEN value either
-            // way.
-            ("GPS:GPSMeasureMode", _) => {
-                return Err(invalid(
-                    tag_name,
-                    "Can't convert GPS:GPSMeasureMode (not in PrintConv)",
-                ));
+            // Catch-all with the same prefix-tier fallback as `GPSStatus`
+            // above; see that arm's comment for the full reasoning.
+            ("GPS:GPSMeasureMode", other) => {
+                match unique_case_insensitive_prefix_match(GPS_MEASURE_MODE_ENTRIES, other) {
+                    Some(code) => code,
+                    None => {
+                        return Err(invalid(
+                            tag_name,
+                            "Can't convert GPS:GPSMeasureMode (not in PrintConv)",
+                        ));
+                    }
+                }
             }
             ("GPS:GPSDestDistanceRef", "Kilometers") => "K",
             ("GPS:GPSDestDistanceRef", "Miles") => "M",
             ("GPS:GPSDestDistanceRef", "Nautical Miles") => "N",
-            // Catch-all, same reasoning as `GPSStatus` above.
-            // `-GPS:GPSDestDistanceRef=K` also diverges from the oracle by
-            // the disclosed case-insensitive-PREFIX tier (another fallback
-            // this port does not implement): "K" case-insensitively prefixes
-            // "Kilometers" uniquely, so the oracle accepts it (storing "K",
-            // coincidentally the input text); this port refuses instead.
-            ("GPS:GPSDestDistanceRef", _) => {
-                return Err(invalid(
-                    tag_name,
-                    "Can't convert GPS:GPSDestDistanceRef (not in PrintConv)",
-                ));
+            // Catch-all with the same prefix-tier fallback as `GPSStatus`
+            // above; see that arm's comment for the full reasoning. "M"
+            // uniquely PREFIX-matches "Miles" (not "Nautical Miles", which
+            // starts with "N"), so it resolves here even though "M" is also
+            // a substring of "Nautical Miles" -- the oracle's own algorithm
+            // stops at the prefix tier too, before it would ever see that
+            // ambiguity, confirmed directly against it.
+            ("GPS:GPSDestDistanceRef", other) => {
+                match unique_case_insensitive_prefix_match(GPS_DEST_DISTANCE_REF_ENTRIES, other) {
+                    Some(code) => code,
+                    None => {
+                        return Err(invalid(
+                            tag_name,
+                            "Can't convert GPS:GPSDestDistanceRef (not in PrintConv)",
+                        ));
+                    }
+                }
             }
             ("GPS:GPSDifferential", "No Correction") => "0",
             ("GPS:GPSDifferential", "Differential Corrected") => "1",
@@ -1096,6 +1117,51 @@ fn invert_subsec_time(value: &str) -> Option<&str> {
     let (_, fraction) = value.split_once('.')?;
     let end = fraction.bytes().take_while(u8::is_ascii_digit).count();
     (end > 0).then_some(&fraction[..end])
+}
+
+/// `GPS:GPSStatus`'s own (code, label) pairs (GPS.pm 0x0009), for
+/// [`unique_case_insensitive_prefix_match`].
+const GPS_STATUS_ENTRIES: &[(&str, &str)] =
+    &[("A", "Measurement Active"), ("V", "Measurement Void")];
+
+/// `GPS:GPSMeasureMode`'s own (code, label) pairs (GPS.pm 0x000a), for
+/// [`unique_case_insensitive_prefix_match`].
+const GPS_MEASURE_MODE_ENTRIES: &[(&str, &str)] = &[
+    ("2", "2-Dimensional Measurement"),
+    ("3", "3-Dimensional Measurement"),
+];
+
+/// `GPS:GPSDestDistanceRef`'s own (code, label) pairs (GPS.pm 0x0019), for
+/// [`unique_case_insensitive_prefix_match`].
+const GPS_DEST_DISTANCE_REF_ENTRIES: &[(&str, &str)] =
+    &[("K", "Kilometers"), ("M", "Miles"), ("N", "Nautical Miles")];
+
+/// One additional tier of ExifTool's `ReverseLookup` (`Writer.pl:3609`):
+/// case-insensitive PREFIX matching, tried after exact/case-insensitive and
+/// before case-insensitive SUBSTRING (which this file does not implement
+/// anywhere, per the module doc comment's disclosed simplification). Scoped
+/// to the three small, hand-enumerated GPS string arms that need it -- see
+/// their call sites for why implementing this one extra tier there is exact
+/// rather than a guess. Returns the matched entry's own first element (the
+/// stored code) only when exactly one entry's label starts with `raw`
+/// case-insensitively; `raw` empty or with more than one or zero matches
+/// returns `None`.
+fn unique_case_insensitive_prefix_match<'a>(
+    entries: &[(&'a str, &'a str)],
+    raw: &str,
+) -> Option<&'a str> {
+    if raw.is_empty() {
+        return None;
+    }
+    let mut matches = entries.iter().filter(|(_, label)| {
+        label
+            .get(..raw.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(raw))
+    });
+    match (matches.next(), matches.next()) {
+        (Some(&(code, _)), None) => Some(code),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
