@@ -130,10 +130,86 @@ pub fn undefined_tag_warning(tag: &str) -> Option<String> {
     }
     let name = plain_name(tag)?;
     if exiftool_tag_exists(name) {
+        // A defined name in an EXIF-family group it has no address in:
+        // `SetNewValue` finds no candidate there (pinned 13.59:
+        // `-IFD0:CanonModelID=1` is `Sorry, IFD0:CanonModelID doesn't exist or
+        // isn't writable` / `Nothing to do.`). Only where the captured
+        // candidates prove it.
+        if let Some((group, _)) = tag.rsplit_once(':')
+            && exif_group_answer(group, name) == Some(ExifGroupAnswer::Rejected)
+        {
+            let spelled = tag.strip_suffix('#').unwrap_or(tag);
+            return Some(format!("Sorry, {spelled} doesn't exist or isn't writable"));
+        }
         return None;
     }
     let spelled = tag.strip_suffix('#').unwrap_or(tag);
     Some(format!("Tag '{spelled}' is not defined"))
+}
+
+/// What ExifTool's `SetNewValue` makes of `GROUP:NAME` for an EXIF-family
+/// group, as far as oxidex can prove it (see [`exif_group_answer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExifGroupAnswer {
+    /// The name has an address the group may hold: an `Exif::Main` or
+    /// `GPS::Main` tag in any EXIF directory (pinned 13.59 accepts
+    /// `GPS:Make`, `IFD1:GPSAltitude`, `ExifIFD:Artist`), a maker-note tag
+    /// under `MakerNotes`.
+    Accepted,
+    /// The name's captured candidates hold no such address: ExifTool's
+    /// `Sorry, GROUP:NAME doesn't exist or isn't writable`.
+    Rejected,
+    /// Neither provable.
+    Unknown,
+}
+
+/// [`ExifGroupAnswer`] for `name` in `group`, or `None` when `group` is not
+/// an EXIF-family group (`IFD0`, `IFD1`, `ExifIFD`, `GPS`, `InteropIFD`,
+/// `EXIF`, `MakerNotes`; any letter case).
+///
+/// Proof comes from [`SET_NEW_VALUE_LOOKUP`], the pinned `FindTagInfo`
+/// candidates, which list every table a captured name lives in -- so a
+/// captured name with no candidate of the group's family 0 (`EXIF`, or
+/// `MakerNotes`) is `Rejected` -- and, for a name the lookup did not
+/// capture, the registry's `EXIF:`/`GPS:` rows, which only prove `Accepted`
+/// (pinned 13.59 accepts `IFD1:GPSAltitude`).
+pub fn exif_group_answer(group: &str, name: &str) -> Option<ExifGroupAnswer> {
+    let exif_dirs = ["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "EXIF"];
+    let family = if exif_dirs.iter().any(|g| g.eq_ignore_ascii_case(group)) {
+        "EXIF"
+    } else if group.eq_ignore_ascii_case("MakerNotes") {
+        "MakerNotes"
+    } else {
+        return None;
+    };
+    let candidates: Vec<&StaticNativeLookupCandidate> = SET_NEW_VALUE_LOOKUP
+        .iter()
+        .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
+        .collect();
+    // A captured name's candidates are the whole answer: the registry also
+    // lists EXIF tags ExifTool cannot write (`ExifIFD:DeviceSettingDescription`
+    // is `Sorry, ... doesn't exist or isn't writable` in pinned 13.59).
+    if !candidates.is_empty() {
+        return Some(
+            if candidates
+                .iter()
+                .any(|candidate| family0(candidate) == Some(family))
+            {
+                ExifGroupAnswer::Accepted
+            } else {
+                ExifGroupAnswer::Rejected
+            },
+        );
+    }
+    let registered = family == "EXIF"
+        && ["EXIF", "GPS"].iter().any(|prefix| {
+            crate::tag_db::tag_registry::get_tag_descriptor(&format!("{prefix}:{name}")).is_some()
+        });
+    Some(if registered {
+        ExifGroupAnswer::Accepted
+    } else {
+        ExifGroupAnswer::Unknown
+    })
 }
 
 /// ExifTool 13.59's `@delGroups` (Writer.pl:141-149): the groups a
@@ -217,6 +293,57 @@ const FAMILY2_GROUPS: &[&str] = &[
     "Audio", "Author", "Camera", "Document", "ExifTool", "Image", "Location", "Other", "Preview",
     "Printing", "Time", "Video",
 ];
+
+/// Groups a request may name in any letter case that the checks downstream
+/// compare by their canonical spelling, beyond the EXIF and maker-note
+/// groups [`crate::writers::exif_surgical::canonical_write_key`] knows.
+const CANONICAL_REQUEST_GROUPS: &[&str] = &["PDF", "PNG", "XMP", "IPTC", "File", "Photoshop"];
+
+/// The one spelling every step of a write request sees: value typing
+/// (`cli::value_parser`), address resolution ([`resolve_write_key`]), the
+/// hand-kept spellings, the no-op checks and the transaction.
+///
+/// Group and tag names are case-insensitive to ExifTool (`-exififd:iso=200`
+/// writes ExifIFD:ISO, pinned 13.59), while oxidex's registry lookups are
+/// not: typed as spelled, `exififd:iso` found no descriptor, its value
+/// stayed a string, and the write was refused as a type mismatch. A grouped
+/// name takes #943's canonical spelling (`exif_surgical::canonical_write_key`
+/// against no file: the EXIF and maker-note groups, `All`, the registry's
+/// tag spelling) and a group in [`CANONICAL_REQUEST_GROUPS`] its own. An
+/// ungrouped name takes the registry's spelling (its EXIF one where the
+/// spellings differ). A trailing `#` is kept. A name the registry does not
+/// know is returned as given.
+pub fn canonical_request_tag(tag: &str) -> String {
+    let (base, hash) = match tag.strip_suffix('#') {
+        Some(base) => (base, "#"),
+        None => (tag, ""),
+    };
+    let spelled = match base.rsplit_once(':') {
+        Some(_) => {
+            let key = crate::writers::exif_surgical::canonical_write_key(base, &MetadataMap::new());
+            let (group, name) = key.rsplit_once(':').unwrap_or(("", key.as_str()));
+            let group = CANONICAL_REQUEST_GROUPS
+                .iter()
+                .find(|known| known.eq_ignore_ascii_case(group))
+                .map_or_else(
+                    || match group.get(..4) {
+                        Some(prefix) if prefix.eq_ignore_ascii_case("xmp-") => {
+                            format!("XMP-{}", &group[4..])
+                        }
+                        _ => group.to_string(),
+                    },
+                    |known| known.to_string(),
+                );
+            let name = crate::tag_db::tag_registry::canonical_tag_name_spelling(&group, name)
+                .unwrap_or(name);
+            format!("{group}:{name}")
+        }
+        None => crate::tag_db::tag_registry::canonical_tag_name_spelling("EXIF", base)
+            .unwrap_or(base)
+            .to_string(),
+    };
+    format!("{spelled}{hash}")
+}
 
 /// The group of a `-GROUP:All=` (or `GROUP:*`) group deletion.
 pub fn group_deletion(tag: &str) -> Option<&str> {

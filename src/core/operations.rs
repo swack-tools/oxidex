@@ -1464,13 +1464,17 @@ fn resolve_write_key_for(
     // #943's canonical spelling (`exif_surgical::canonical_write_key`, the
     // spelling its transaction entry uses too), or the address checks below
     // refused `exififd` and a deletion of `ExifIFD:iso` looked absent.
-    let respelled;
-    let tag_name = if tag_name.contains(':') {
-        respelled = crate::writers::exif_surgical::canonical_write_key(tag_name, baseline);
-        respelled.as_str()
+    // An ungrouped name takes the registry's spelling
+    // (`write_request::canonical_request_tag`): the hand-kept spellings below
+    // are matched exactly, so `-exposuretime=1/30` missed `ExposureTime` and
+    // was refused as a write ExifTool also applies elsewhere.
+    let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
+    let respelled = if respelled.contains(':') {
+        crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
     } else {
-        tag_name
+        respelled
     };
+    let tag_name = respelled.as_str();
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
     let surgical = is_surgical_tiff_target(format, &reader);
@@ -1613,26 +1617,41 @@ pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
 /// `-InteropIFD:InteropIndex=R03` on t/images/PDF.pdf and
 /// tests/fixtures/pdf/sample.pdf -- with `0 image files updated` / `1 image
 /// files unchanged`, bytes untouched. oxidex does the same instead of
-/// refusing.
+/// refusing -- for a name `SetNewValue` accepts in that group
+/// (`write_request::exif_group_answer`); any other is refused.
 fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
-    let exif_group = tag_name.split_once(':').is_some_and(|(group, _)| {
-        [
-            "IFD0",
-            "IFD1",
-            "ExifIFD",
-            "GPS",
-            "InteropIFD",
-            "EXIF",
-            "MakerNotes",
-        ]
-        .iter()
-        .any(|known| known.eq_ignore_ascii_case(group))
-    });
-    if !exif_group {
+    use crate::writers::write_request::{ExifGroupAnswer, exif_group_answer};
+    let Some((group, name)) = tag_name.rsplit_once(':') else {
+        return Ok(false);
+    };
+    let Some(answer) = exif_group_answer(group, name) else {
+        return Ok(false);
+    };
+    let reader = MMapReader::new(path)?;
+    if !matches!(detect_format(&reader)?, FileFormat::PDF) {
         return Ok(false);
     }
-    let reader = MMapReader::new(path)?;
-    Ok(matches!(detect_format(&reader)?, FileFormat::PDF))
+    // Only a name `SetNewValue` accepts in that group is ExifTool's
+    // `unchanged` (it keeps no EXIF in a PDF). A name it does not define, or
+    // one with no address in the group (`GPS:Title`, pinned 13.59: `Sorry,
+    // GPS:Title doesn't exist or isn't writable`), is refused, not reported
+    // done; so is one oxidex cannot place either way.
+    let name = name.strip_suffix('#').unwrap_or(name);
+    if !crate::writers::write_request::exiftool_tag_exists(name) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Tag '{tag_name}' is not defined"
+        )));
+    }
+    match answer {
+        ExifGroupAnswer::Accepted => Ok(true),
+        ExifGroupAnswer::Rejected => Err(ExifToolError::unsupported_format(format!(
+            "Sorry, {tag_name} doesn't exist or isn't writable"
+        ))),
+        ExifGroupAnswer::Unknown => Err(ExifToolError::unsupported_format(format!(
+            "Cannot write '{tag_name}' to a PDF: oxidex cannot tell whether ExifTool \
+             gives {name} an address in {group}"
+        ))),
+    }
 }
 
 /// `-GROUP:All=` (`remove_tag(path, "GPS:All")`): a group-wide deletion.

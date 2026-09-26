@@ -594,17 +594,23 @@ fn png_ifd1_numerator(path: &Path, tag: u16) -> Option<u32> {
     None
 }
 
-/// Group and tag names are case-insensitive, as they are to ExifTool: the
-/// resolver reads a grouped name in its canonical spelling. Pinned 13.59 on
-/// synthetic_001.jpg, in sequence:
-/// - `-exififd:ISO=200`: `1 image files updated`, ISO 200;
-/// - `-ExifIFD:iso=`: `1 image files updated`, ISO gone;
-/// - `-ifd0:artist=you`: `1 image files updated`, Artist you;
-/// - `-exififd:iso=` (now absent): `0 image files updated` / `1 image files
-///   unchanged`.
+/// Group and tag names are case-insensitive, as they are to ExifTool: one
+/// canonical spelling reaches value typing, resolution and the transaction.
+/// Pinned 13.59 on synthetic_001.jpg, in sequence, every step `1 image
+/// files updated` but the last (`0 image files updated` / `1 image files
+/// unchanged`, ISO already gone), with the read-backs below:
+/// - integer: `-exififd:iso=200`, `-EXIFIFD:ISO=300`, `-iso=400`;
+/// - rational: `-exififd:exposuretime=1/250`, `-EXPOSURETIME=1/30`,
+///   `-ifd0:xresolution=300`, `-IFD0:XRESOLUTION=150`;
+/// - date: `-exififd:datetimeoriginal=...`, `-DATETIMEORIGINAL=...`;
+/// - string: `-ifd0:artist=me`, `-ARTIST=you`;
+/// - deletions: `-ExifIFD:iso=`, then `-exififd:iso=`.
 ///
-/// At 98288f02 oxidex refused the first (`cannot write the exififd group`)
-/// and reported the second unchanged with ISO still present.
+/// At 98288f02 `-exififd:ISO=200` was refused (`cannot write the exififd
+/// group`); at 1fdfbeab `-exififd:iso=200`, the rational and the date
+/// spellings were refused as type mismatches (`expected Integer but got
+/// String`: the value was typed by the name as typed) and `-EXPOSURETIME=`
+/// as a write ExifTool would also apply elsewhere.
 #[test]
 fn mixed_case_names_resolve_like_exiftool() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -625,25 +631,40 @@ fn mixed_case_names_resolve_like_exiftool() {
             .unwrap();
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     };
+    let updated = "    1 image files updated\n";
     for (arg, stdout, key, value) in [
+        ("-exififd:iso=200", updated, "ExifIFD:ISO", "200"),
+        ("-EXIFIFD:ISO=300", updated, "ExifIFD:ISO", "300"),
+        ("-iso=400", updated, "ExifIFD:ISO", "400"),
         (
-            "-exififd:ISO=200",
-            "    1 image files updated\n",
-            "ExifIFD:ISO",
-            "200",
+            "-exififd:exposuretime=1/250",
+            updated,
+            "ExifIFD:ExposureTime",
+            "1/250",
         ),
         (
-            "-ExifIFD:iso=",
-            "    1 image files updated\n",
-            "ExifIFD:ISO",
-            "",
+            "-EXPOSURETIME=1/30",
+            updated,
+            "ExifIFD:ExposureTime",
+            "1/30",
+        ),
+        ("-ifd0:xresolution=300", updated, "IFD0:XResolution", "300"),
+        ("-IFD0:XRESOLUTION=150", updated, "IFD0:XResolution", "150"),
+        (
+            "-exififd:datetimeoriginal=2024:01:15 10:30:00",
+            updated,
+            "ExifIFD:DateTimeOriginal",
+            "2024:01:15 10:30:00",
         ),
         (
-            "-ifd0:artist=you",
-            "    1 image files updated\n",
-            "IFD0:Artist",
-            "you",
+            "-DATETIMEORIGINAL=2023:02:03 04:05:06",
+            updated,
+            "ExifIFD:DateTimeOriginal",
+            "2023:02:03 04:05:06",
         ),
+        ("-ifd0:artist=me", updated, "IFD0:Artist", "me"),
+        ("-ARTIST=you", updated, "IFD0:Artist", "you"),
+        ("-ExifIFD:iso=", updated, "ExifIFD:ISO", ""),
         (
             "-exififd:iso=",
             "    0 image files updated\n    1 image files unchanged\n",

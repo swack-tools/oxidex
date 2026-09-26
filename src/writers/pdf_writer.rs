@@ -568,6 +568,9 @@ fn format_pdf_datetime(dt: &DateTime<Utc>) -> String {
 
 /// Converts an EXIF-style string (YYYY:MM:DD HH:MM:SS[+HH:MM]) to PDF date format
 fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
+    if let Some(pdf_date) = inverse_date_time_to_pdf(value) {
+        return Some(pdf_date);
+    }
     if let Ok(dt) = DateTime::parse_from_str(value, "%Y:%m:%d %H:%M:%S%:z") {
         return Some(format_fixed_offset_pdf_date(dt));
     }
@@ -592,6 +595,64 @@ fn convert_exif_string_to_pdf_date(value: &str) -> Option<String> {
     }
 
     None
+}
+
+/// WritePDF.pl's `WritePDFValue` for a `date` (13.59): the text
+/// `InverseDateTime` produced (`YYYY:mm:dd HH:MM:SS[.ss][Z|+HH:MM]`, see
+/// `cli::value_parser::parse_pdf_date`) loses its sub-seconds
+/// (`s/(:\d{2})\.\d*/$1/`), its zone delimiter becomes `'`
+/// (`s/([-+]\d{2}):(\d{2})/${1}'${2}'/`), and its spaces and colons go
+/// (`tr/ ://d`). A `Z` stays: pinned 13.59 writes `...05Z` as
+/// `(D:20200102030405Z)`. Anything not in that exact shape is `None`.
+fn inverse_date_time_to_pdf(value: &str) -> Option<String> {
+    let b = value.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        b.get(range)
+            .is_some_and(|run| run.iter().all(u8::is_ascii_digit))
+    };
+    let shape = digits(0..4)
+        && b.get(4) == Some(&b':')
+        && digits(5..7)
+        && b.get(7) == Some(&b':')
+        && digits(8..10)
+        && b.get(10) == Some(&b' ')
+        && digits(11..13)
+        && b.get(13) == Some(&b':')
+        && digits(14..16)
+        && b.get(16) == Some(&b':')
+        && digits(17..19);
+    if !shape {
+        return None;
+    }
+    let mut rest = &value[19..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let run = fraction.len()
+            - fraction
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .len();
+        if run == 0 {
+            return None;
+        }
+        rest = &fraction[run..];
+    }
+    let zone = match rest.as_bytes() {
+        [] => String::new(),
+        [b'Z'] => "Z".to_string(),
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2]
+            if [h1, h2, m1, m2].iter().all(|d| d.is_ascii_digit()) =>
+        {
+            format!(
+                "{}{}{}'{}{}'",
+                *sign as char, *h1 as char, *h2 as char, *m1 as char, *m2 as char
+            )
+        }
+        _ => return None,
+    };
+    let clock: String = value[..19]
+        .chars()
+        .filter(|c| *c != ' ' && *c != ':')
+        .collect();
+    Some(format!("{clock}{zone}"))
 }
 
 /// Formats a fixed-offset DateTime into PDF Info date string body (without leading "D:")

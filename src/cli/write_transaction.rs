@@ -26,7 +26,7 @@ use crate::core::operations::{
 };
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::exif_surgical::stored_entry_matches;
-use crate::writers::write_request::undefined_tag_warning;
+use crate::writers::write_request::{canonical_request_tag, undefined_tag_warning};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,9 +52,13 @@ pub fn partition_defined(
     let mut warnings = Vec::new();
     let mut defined = Vec::new();
     for (tag, value) in modifications {
+        // The warning quotes the name as typed, as ExifTool's does; a defined
+        // name continues in its one canonical spelling
+        // (`write_request::canonical_request_tag`), so value typing,
+        // resolution and the transaction all read the same key.
         match undefined_tag_warning(tag) {
             Some(warning) => warnings.push(warning),
-            None => defined.push((tag.clone(), value.clone())),
+            None => defined.push((canonical_request_tag(tag), value.clone())),
         }
     }
     (warnings, defined)
@@ -257,7 +261,10 @@ pub fn write_file(
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
     let plan = WritePlan {
-        sets: modifications.to_vec(),
+        sets: modifications
+            .iter()
+            .map(|(tag, value)| (canonical_request_tag(tag), value.clone()))
+            .collect(),
         requested_sets: !modifications.is_empty(),
         ..Default::default()
     };

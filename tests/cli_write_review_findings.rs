@@ -705,3 +705,94 @@ fn exif_writes_to_a_pdf_are_unchanged_like_exiftool() {
         assert_eq!(sha(&file), before, "{arg}");
     }
 }
+
+// --- Review threads on 1fdfbeab --------------------------------------------
+// Each test below failed at 1fdfbeab; outcomes pinned with the same oracle.
+
+/// value_parser.rs:1254 and :1258. A PDF date whose multibyte character spans
+/// byte 19 panicked the CLI (`split_at(19)`), and the `Z` and sub-second
+/// forms were refused. Pinned 13.59 on sample.pdf writes each of these into
+/// the Info dictionary as shown (`WritePDFValue`: sub-seconds dropped, `Z`
+/// kept, `+HH:MM` as `+HH'MM'`), `1 image files updated`.
+#[test]
+fn pdf_dates_are_written_as_exiftool_writes_them() {
+    for (value, written) in [
+        ("2020:01:02 03:04:05Z", "(D:20200102030405Z)"),
+        ("2020:01:02 03:04:05.25+02:00", "(D:20200102030405+02'00')"),
+        ("2020:01:02 03:04:05-0530", "(D:20200102030405-05'30')"),
+        ("2020:01:02 03:04:0é", "(D:20200102030400)"),
+        ("2020-01-02T03:04:05", "(D:20200102030405)"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let file = copy_into(&dir, PDF, "a.pdf");
+        let o = run(&file, &[&format!("-PDF:CreateDate={value}")]);
+        assert_eq!(o.status.code(), Some(0), "{value}: {}", err(&o));
+        assert_eq!(out(&o), "    1 image files updated\n", "{value}");
+        let bytes = fs::read(&file).unwrap();
+        let needle = format!("/CreationDate {written}");
+        assert!(
+            bytes
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes()),
+            "{value}: {needle} not written"
+        );
+    }
+}
+
+/// write_transaction.rs:332. Setting sample.png's `IFD0:Artist` to the value
+/// it holds is `1 image files updated` in pinned 13.59, as it is for a JPEG
+/// or TIFF. The read-back proof was handed the whole PNG, found no TIFF, and
+/// the request was reported unchanged -- skipping the `--backup` copy.
+#[test]
+fn a_same_value_png_exif_set_is_an_update() {
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, PNG_EXIF, "a.png");
+    let before = sha(&file);
+    let o = oxidex(&["--backup", "-IFD0:Artist=PNG Artist 1", s(&file)]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(out(&o), "    1 image files updated\n");
+    assert_eq!(sha(&dir.path().join("a.png.bak")), before);
+    assert_eq!(read_back(&file, "IFD0:Artist"), "PNG Artist 1");
+}
+
+/// operations.rs:1799. An EXIF-group write to a PDF is ExifTool's
+/// `unchanged` only when `SetNewValue` accepts the name in that group
+/// (pinned 13.59: `GPS:Make` is accepted, an Exif::Main tag in any IFD).
+/// A name with no address there is `Sorry, IFD0:PixelUnits doesn't exist or
+/// isn't writable` / `Nothing to do.`, exit 1, and an undefined one is `Tag
+/// 'GPS:NoSuchTag' is not defined`. At 1fdfbeab the library returned Ok for
+/// both.
+#[test]
+fn pdf_exif_group_writes_need_a_real_exif_address() {
+    use oxidex::core::operations::{modify_tag, remove_tag};
+    use oxidex::core::tag_value::TagValue;
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, PDF, "a.pdf");
+    let before = sha(&file);
+    modify_tag(&file, "GPS:Make", TagValue::new_string("x")).expect("GPS:Make is accepted");
+    for (tag, message) in [
+        (
+            "IFD0:PixelUnits",
+            "Sorry, IFD0:PixelUnits doesn't exist or isn't writable",
+        ),
+        (
+            "ExifIFD:DeviceSettingDescription",
+            "Sorry, ExifIFD:DeviceSettingDescription doesn't exist or isn't writable",
+        ),
+        ("GPS:NoSuchTag", "Tag 'GPS:NoSuchTag' is not defined"),
+    ] {
+        let set = modify_tag(&file, tag, TagValue::new_string("1"));
+        let text = set.expect_err(tag).to_string();
+        assert!(text.contains(message), "{tag}: {text}");
+        let removed = remove_tag(&file, tag);
+        assert!(removed.is_err(), "{tag}: remove reported done");
+    }
+    assert_eq!(sha(&file), before, "the PDF was touched");
+    let o = run(&file, &["-IFD0:PixelUnits=1"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        err(&o),
+        "Warning: Sorry, IFD0:PixelUnits doesn't exist or isn't writable\nNothing to do.\n"
+    );
+    assert_eq!(sha(&file), before);
+}

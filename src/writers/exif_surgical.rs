@@ -2565,7 +2565,7 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
 }
 
 /// Whether the EXIF entry `key` names (`IFD0:`/`ExifIFD:`/`GPS:`/`IFD1:<name>`) in
-/// `file_bytes` (a JPEG, or a TIFF-structured file) holds exactly the
+/// `file_bytes` (a JPEG, a PNG, or a TIFF-structured file) holds exactly the
 /// field -- type, count and bytes -- this writer would emit for `value`.
 ///
 /// This is the read-back proof behind reporting a byte-identical write as
@@ -2585,6 +2585,18 @@ pub(crate) fn stored_entry_matches(file_bytes: &[u8], key: &str, value: &TagValu
     let tag_id = descriptor_tag_id(get_tag_descriptor(key)?)?;
     let scan = if file_bytes.starts_with(&[0xff, 0xd8]) {
         scan_exif_entries(&jpeg_exif_payload(file_bytes).ok()??).ok()?
+    } else if file_bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        // A PNG's EXIF is the TIFF payload of its one `eXIf` chunk; the whole
+        // file scans as no TIFF at all, so a same-value set was never proven
+        // and reported `unchanged` (without the `--backup` copy) where pinned
+        // 13.59 reports `1 image files updated`. Two eXIf chunks, or EXIF in
+        // a raw-profile text chunk, prove nothing.
+        let payloads =
+            crate::writers::png_writer::png_exif_payloads(&SliceReader(file_bytes)).ok()??;
+        let [payload] = payloads.as_slice() else {
+            return None;
+        };
+        scan_exif_entries(payload).ok()?
     } else {
         scan_exif_entries(file_bytes).ok()?
     };
