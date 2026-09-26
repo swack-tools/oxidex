@@ -268,6 +268,15 @@ python3 "$HERE/gen_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --out "$(artifact_path lens-alternatives)"
 
 echo "=========================================================="
+echo ">> TIER 2g: SetNewValue's defined-tag-name set (TagLookup + Shortcuts)"
+echo "=========================================================="
+# `-NoSuchTag=v` must answer ExifTool's own `Tag 'NoSuchTag' is not defined`
+# / `Nothing to do.` (src/writers/write_request.rs). The generator proves each
+# extracted TagLookup key with the pinned interpreter's TagExists.
+python3 "$HERE/tag_exists_codegen.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --output "$(artifact_path tag-exists)"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"

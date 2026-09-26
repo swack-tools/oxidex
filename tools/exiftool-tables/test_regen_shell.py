@@ -208,6 +208,11 @@ else:
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
         assert flag('--out')==artifact(name[:-3])
         output(flag('--out'),name)
+    elif name=='tag_exists_codegen.py':
+        assert flag('--exiftool-dir')==lib.parent
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        assert flag('--output')==artifact('tag_exists_codegen')
+        output(flag('--output'),name)
     elif name=='verify_lens_alternatives.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -338,7 +343,8 @@ class RegenerationShellTests(unittest.TestCase):
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
                 'gen_nikon_encrypted_tables.py',
-                'gen_sony_plain_tables.py', 'verify_sony_plain.py']
+                'gen_sony_plain_tables.py', 'verify_sony_plain.py',
+                'tag_exists_codegen.py']
 
     def test_both_tiers_and_tier2_use_selected_source_and_complete_checks(self):
         for full in (True, False):

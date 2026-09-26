@@ -795,6 +795,27 @@ impl CliArgs {
         modifications
     }
 
+    /// The plain `-TAG=VALUE` requests: [`Self::tag_modifications`] minus
+    /// the arguments another mode owns -- `-all=` (clear) and every date
+    /// shift (`-DateTimeOriginal+=1`, an absolute `-ModifyDate=...`), which
+    /// `tag_modifications` also reports, spelled `DateTimeOriginal+` or
+    /// `all`. Classifying each argument exactly once is what lets a command
+    /// combining modes apply all of them instead of dispatching on the first
+    /// and dropping the rest.
+    pub fn plain_tag_modifications(&self) -> Vec<(String, OsString)> {
+        self.option_args()
+            .iter()
+            .filter(|arg| match arg.to_str() {
+                Some(text) => {
+                    let lower = text.to_lowercase();
+                    lower != "-all=" && lower != "--all=" && Self::parse_date_shift(text).is_none()
+                }
+                None => true,
+            })
+            .filter_map(|arg| Self::parse_modification(arg))
+            .collect()
+    }
+
     /// Parses a single modification argument in the form -TAG=VALUE. A
     /// value that is not UTF-8 goes through the same steps byte-wise
     /// (`cli::non_utf8::unquote`); the tag name always is UTF-8 (`parse`).
@@ -884,8 +905,9 @@ impl CliArgs {
         for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
-                // Extract tag name (remove leading '-')
-                let tag_name = arg.trim_start_matches('-').to_string();
+                // Remove exactly one leading '-': `--TAG` is ExifTool's
+                // exclusion, which must not be mistaken for `-TAG`.
+                let tag_name = arg[1..].to_string();
                 tag_names.push(tag_name);
             }
         }
@@ -1085,6 +1107,15 @@ impl CliArgs {
                 name if name.eq_ignore_ascii_case("CreateDate")
                     || name.eq_ignore_ascii_case("DateTimeOriginal")
             ) {
+                return None;
+            }
+            // A PDF Info date is an ordinary write too: the shift path only
+            // patches EXIF dates, so `-PDF:ModifyDate=2020:01:02 03:04:05`
+            // failed there ("not a DateTime tag") while pinned 13.59 writes it.
+            if tag
+                .split_once(':')
+                .is_some_and(|(group, _)| group.eq_ignore_ascii_case("PDF"))
+            {
                 return None;
             }
 
@@ -1367,7 +1398,6 @@ mod tests {
             (&[b"-=\xff", b"a.jpg"], "invalid tag name"),
             (&[b"-IFD0:Artist=A\xffB", b"a.jpg"], "not valid UTF-8"),
             (&[b"-IFD0:XPTitle=A\xffB", b"a.jpg"], "Malformed UTF-8"),
-            (&[b"-XPTitle=A\xed\xa0\x80B", b"a.jpg"], "-IFD0:XPTitle="),
             (&[b"-d", b"%Y\xff", b"a.jpg"], "-d must be valid UTF-8"),
             (
                 &[b"--detector", b"\xff", b"a.jpg"],

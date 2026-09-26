@@ -204,10 +204,10 @@ fn xp_value_with_a_lone_surrogate_writes_exiftools_ucs2_bytes() {
     }
 }
 
-/// All five XP tags take the same encoding under `IFD0:` and `EXIF:`. The
-/// bare name is refused: oxidex's writer does not reach the file for an
-/// ungrouped XP name (`-XPTitle=Hi` reports an update and writes nothing),
-/// so accepting bytes for one would report a write that never happens.
+/// All five XP tags take the same encoding bare, under `IFD0:` and under
+/// `EXIF:`: pinned ExifTool 13.59 writes each spelling to the IFD0 entry.
+/// (The bare name used to be refused because oxidex's writer silently
+/// dropped an ungrouped XP name; `writers::write_request` now resolves it.)
 #[test]
 fn every_xp_tag_and_group_spelling_takes_the_encoding() {
     for (id, name) in [
@@ -217,7 +217,7 @@ fn every_xp_tag_and_group_spelling_takes_the_encoding() {
         (0x9c9e, "XPKeywords"),
         (0x9c9f, "XPSubject"),
     ] {
-        for group in ["IFD0:", "EXIF:"] {
+        for group in ["", "IFD0:", "EXIF:"] {
             let dir = tempfile::tempdir().unwrap();
             let file = write(dir.path(), b"a.jpg", &hex(BASE_JPEG_HEX));
             let mut arg = format!("-{group}{name}=").into_bytes();
@@ -234,16 +234,6 @@ fn every_xp_tag_and_group_spelling_takes_the_encoding() {
                 "-{group}{name}="
             );
         }
-        let dir = tempfile::tempdir().unwrap();
-        let file = write(dir.path(), b"a.jpg", &hex(BASE_JPEG_HEX));
-        let before = std::fs::read(&file).unwrap();
-        let mut arg = format!("-{name}=").into_bytes();
-        arg.extend_from_slice(b"A\xed\xa0\x80B");
-        let out = run(&[os(&arg), file.clone().into()]);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "-{name}: {stderr}");
-        assert!(stderr.contains(&format!("-IFD0:{name}=")), "{stderr}");
-        assert_eq!(std::fs::read(&file).unwrap(), before, "-{name}=");
     }
 }
 

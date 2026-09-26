@@ -2564,6 +2564,69 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
     Ok(segment)
 }
 
+/// Whether the EXIF entry `key` names (`IFD0:`/`ExifIFD:`/`GPS:`/`IFD1:<name>`) in
+/// `file_bytes` (a JPEG, a PNG, or a TIFF-structured file) holds exactly the
+/// field -- type, count and bytes -- this writer would emit for `value`.
+///
+/// This is the read-back proof behind reporting a byte-identical write as
+/// updated. The reader's map cannot give it: it normalizes (`Make` is read
+/// through ExifTool's `RawConv` trailing-space strip), so a stored
+/// `"Canon   "` reads as `"Canon"` while ExifTool's `-Make=Canon` rewrites
+/// it. `None` when the entry cannot be located or compared.
+pub(crate) fn stored_entry_matches(file_bytes: &[u8], key: &str, value: &TagValue) -> Option<bool> {
+    let (group, _) = key.split_once(':')?;
+    let ifd = match group {
+        "IFD0" => IfdKind::Ifd0,
+        "ExifIFD" => IfdKind::ExifIfd,
+        "GPS" => IfdKind::Gps,
+        "IFD1" => IfdKind::Ifd1,
+        _ => return None,
+    };
+    let tag_id = descriptor_tag_id(get_tag_descriptor(key)?)?;
+    let scan = if file_bytes.starts_with(&[0xff, 0xd8]) {
+        scan_exif_entries(&jpeg_exif_payload(file_bytes).ok()??).ok()?
+    } else if file_bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        // A PNG's EXIF is the TIFF payload of its one `eXIf` chunk; the whole
+        // file scans as no TIFF at all, so a same-value set was never proven
+        // and reported `unchanged` (without the `--backup` copy) where pinned
+        // 13.59 reports `1 image files updated`. Two eXIf chunks, or EXIF in
+        // a raw-profile text chunk, prove nothing.
+        let payloads =
+            crate::writers::png_writer::png_exif_payloads(&SliceReader(file_bytes)).ok()??;
+        let [payload] = payloads.as_slice() else {
+            return None;
+        };
+        scan_exif_entries(payload).ok()?
+    } else {
+        scan_exif_entries(file_bytes).ok()?
+    };
+    let mut entries = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.ifd == ifd && entry.tag_id == tag_id);
+    let entry = entries.next()?;
+    if entries.next().is_some() {
+        return None;
+    }
+    let (field_type, count, mut bytes) =
+        tag_value_to_field_for_key(key, value, Some(entry.field_type)).ok()?;
+    // Multi-byte numeric fields come back native-endian (see
+    // `tag_value_to_field`); put them in the file's order before comparing.
+    let width = match field_type {
+        3 | 8 => 2,
+        4 | 5 | 9 | 10 | 11 => 4,
+        12 => 8,
+        _ => 1,
+    };
+    let file_big = matches!(scan.byte_order, ByteOrder::BigEndian);
+    if width > 1 && file_big != cfg!(target_endian = "big") {
+        for chunk in bytes.chunks_mut(width) {
+            chunk.reverse();
+        }
+    }
+    Some(field_type == entry.field_type && count == entry.count && bytes == entry.value)
+}
+
 /// The carrier-neutral core of [`rewrite_jpeg_exif_with_removals`]: the new
 /// TIFF payload (header onward, no `Exif\0\0`) for an EXIF block whose
 /// original payload is `tiff`, preserving everything the caller did not

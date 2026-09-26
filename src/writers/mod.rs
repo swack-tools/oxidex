@@ -39,10 +39,12 @@ pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
 // Source-selected final scalar stage remains internal until file parity is proved.
+pub(crate) mod generated_tag_exists;
 pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
 pub mod tiff_writer;
+pub mod write_request;
 // Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
 pub(crate) mod xp_strings;
 
