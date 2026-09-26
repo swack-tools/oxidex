@@ -107,7 +107,7 @@ fn is_exiftool_available() -> bool {
 /// The resolved oracle, or a panic naming why there is none. Call sites that
 /// have already passed [`is_exiftool_available`] cannot hit the panic.
 fn oracle() -> &'static exiftool_oracle::Oracle {
-    exiftool_oracle::shared().unwrap_or_else(|e| panic!("No usable ExifTool oracle: {}", e))
+    exiftool_oracle::required()
 }
 
 /// Executes Perl ExifTool and captures JSON output

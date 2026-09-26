@@ -3109,6 +3109,48 @@ mod removal_then_set_tests {
         }
     }
 
+    /// The boundary of the rule above on a PNG: a set in a malformed eXIf
+    /// chunk that the same transaction does *not* delete -- no removal, or a
+    /// removal short of the carrier (`IFD0:Software`, `ExifIFD:All`) -- is
+    /// refused with the file untouched and a message naming the fault
+    /// (`png_writer::MalformedExif`), since that write would have to edit
+    /// the chunk. Pinned ExifTool 13.59 keeps a markless chunk and adds a
+    /// second eXIf, edits a magic-43 chunk in place keeping the 43 (which
+    /// this reader does not read), and leaves a too-short chunk unchanged;
+    /// see `a_set_in_a_malformed_exif_chunk_is_refused_untouched`
+    /// (tests/png_exif_surgical.rs).
+    #[test]
+    fn a_set_in_a_kept_malformed_exif_chunk_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let payloads: [(&str, Vec<u8>, &str); 3] = [
+            ("short", b"II*".to_vec(), "too short for a TIFF header"),
+            (
+                "byte-order",
+                b"XX*\0\x08\0\0\0\0\0\0\0\0\0".to_vec(),
+                "does not start with a TIFF byte-order mark",
+            ),
+            (
+                "magic",
+                b"II\x2b\0\x08\0\0\0\0\0\0\0\0\0".to_vec(),
+                "magic number 43, not 42",
+            ),
+        ];
+        for (label, payload, fault) in payloads {
+            let original = png(&payload);
+            for removed in [&[][..], &["IFD0:Software"], &["ExifIFD:All"]] {
+                let (result, _) = batch(
+                    dir.path(),
+                    "k.png",
+                    &original,
+                    removed,
+                    &[("IFD0:Artist", TagValue::new_string("x"))],
+                );
+                let error = result.expect_err(label).to_string();
+                assert!(error.contains(fault), "{label} {removed:?}: {error}");
+            }
+        }
+    }
+
     /// A same-value set after a removal of the same tag, in one batch
     /// (`removed = ["IFD0:Make"]`, then `IFD0:Make=Acme` with Make already
     /// Acme) survives, as pinned ExifTool 13.59's `-IFD0:Make= -IFD0:Make=Acme`

@@ -687,11 +687,10 @@ fn direct_write_of_a_code_point_above_the_bmp_keeps_its_low_16_bits() {
 /// must read both files back as the same text.
 #[test]
 fn oracle_writes_the_same_xp_bytes() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     let et = |args: &[&std::ffi::OsStr]| {
         let out = oracle.command().args(args).output().unwrap();
         assert!(
@@ -917,11 +916,10 @@ fn an_untouched_xp_entry_keeps_its_stored_bytes() {
 /// order, write identical XP entries.
 #[test]
 fn oracle_explicit_set_of_the_stored_text_matches() {
-    if !exiftool_oracle::available() {
-        eprintln!("skipping: no usable ExifTool oracle");
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)");
         return;
-    }
-    let oracle = exiftool_oracle::shared().expect("available() resolved it");
+    };
     let artist = (0x013b, 2, 3, b"me\0".to_vec());
     for (label, typ, raw, text, _) in explicit_cases() {
         for order in [Order::Ii, Order::Mm] {
