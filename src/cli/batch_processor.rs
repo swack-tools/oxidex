@@ -150,6 +150,21 @@ impl BatchStats {
 /// Individual file errors are logged to stderr but do not stop batch processing.
 /// All errors are counted and reported in the final statistics.
 pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
+    batch_process_requests(path, args, &args.plain_tag_modifications())
+}
+
+/// [`batch_process`] with the write requests given rather than reparsed from
+/// `args`: the CLI passes its `WritePlan`'s sets, the one classification of
+/// the command line every write path consumes (undefined names already
+/// warned about and dropped, names in their canonical spelling), so a
+/// directory write can never apply a different request list than the
+/// single-file write of the same command (#957, PRRT_kwDOQNbr5M6mR8dA).
+/// Empty `modifications` is a read.
+pub fn batch_process_requests(
+    path: &Path,
+    args: &CliArgs,
+    modifications: &[(String, OsString)],
+) -> Result<BatchStats> {
     // Validate that the path exists
     if !path.exists() {
         return Err(ExifToolError::from(std::io::Error::new(
@@ -171,7 +186,6 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Determine operation mode
-    let modifications = args.plain_tag_modifications();
     let is_write_mode = !modifications.is_empty();
 
     // Validate readonly flag for write operations
@@ -184,7 +198,7 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
 
     // Process files based on mode
     let mut stats = if is_write_mode {
-        batch_write(files, &modifications, args)?
+        batch_write(files, modifications, args)?
     } else {
         batch_read(files, args)?
     };
