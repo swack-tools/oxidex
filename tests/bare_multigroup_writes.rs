@@ -1,0 +1,494 @@
+//! CLI parity: a write of a tag name that exists in more than one writable
+//! group, graded against pinned ExifTool 13.59 (`exiftool_oracle::graded()`).
+//!
+//! What the oracle does (evidence `multigroup-write/exp/`, pinned 13.59 on
+//! t/images):
+//!
+//! - An ungrouped `-TAG=VALUE` creates the tag in its highest-priority group
+//!   (EXIF: `[ExifIFD] WhiteBalance`, `[IFD0] CalibrationIlluminant1`) and
+//!   also edits every same-named tag the file already carries in another
+//!   writable group -- `-WhiteBalance#=1` on Canon.jpg writes `[ExifIFD]`
+//!   and `[Canon] WhiteBalance`, on Nikon.jpg `[ExifIFD]` and `[Nikon]
+//!   WhiteBalance`. A tag only a maker note defines is edited where the note
+//!   holds it and never created (`-MacroMode#=2` on Nikon.jpg: `1 image files
+//!   unchanged`).
+//! - `-Flash=` names the writable `Composite:Flash`, whose `WriteAlso` also
+//!   creates an XMP-exif Flash structure.
+//! - `-EXIF:TAG=` writes only EXIF; `-MakerNotes:TAG=` only the maker note.
+//! - ExifTool.jpg carries an MIE trailer: every EXIF write is also written
+//!   into MIE-Meta's EXIF directory, which ExifTool creates.
+//!
+//! oxidex writes only EXIF, so it writes exactly the requests whose ExifTool
+//! result is EXIF alone and refuses the rest by name (`Cannot write tag
+//! ...`), file untouched -- never a partial write, never a silent no-op.
+//! Every case is written by both tools onto fresh copies and both results
+//! are read back by the oracle (oxidex's reader does not surface every
+//! maker-note row ExifTool edits). A case expected to match must hold every
+//! group's value the oracle's write holds; a case expected to be refused
+//! must be one the oracle changed the file for.
+
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+use oxidex::exiftool_oracle::{self, Oracle};
+use std::path::Path;
+use std::process::Command;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form {
+    /// `-Name=<print-converted label>`
+    Printed,
+    /// `-Name#=<raw value>`
+    Hash,
+    /// `-EXIF:Name#=<raw value>`
+    Grouped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Expect {
+    /// oxidex writes, and every group's value equals the oracle's write.
+    Match,
+    /// oxidex refuses by name, file untouched; the oracle writes more than
+    /// EXIF (or into MIE), which oxidex cannot.
+    Refused,
+    /// A grouped EXIF write in a file carrying MIE: the oracle also writes
+    /// MIE-Meta's EXIF copy; oxidex writes the main EXIF copy only. This
+    /// predates the bare-name resolver and is pinned here as the known gap
+    /// it is: oxidex's rows are the oracle's less the MIE copy.
+    MieGap,
+}
+
+/// (name, printed value, raw value) -- each name is also defined by a maker
+/// note table (except CalibrationIlluminant1, which only EXIF defines).
+const NAMES: &[(&str, &str, &str)] = &[
+    ("WhiteBalance", "Manual", "1"),
+    ("ColorSpace", "Uncalibrated", "2"),
+    ("MeteringMode", "Spot", "3"),
+    ("CalibrationIlluminant1", "D55", "20"),
+    ("Contrast", "High", "2"),
+    ("Saturation", "High", "2"),
+    ("Sharpness", "Hard", "2"),
+    ("FocalLength", "50", "50"),
+    ("ISO", "200", "200"),
+    ("Flash", "Off, Did not fire", "16"),
+];
+
+/// Canon.jpg (a Canon maker note), Nikon.jpg (a maker note oxidex's reader
+/// decodes no row of), ExifTool.jpg (MIE) and Writer.jpg (no maker note, no
+/// MIE: EXIF is the whole of ExifTool's write).
+const FILES: &[&str] = &["Canon.jpg", "Nikon.jpg", "ExifTool.jpg", "Writer.jpg"];
+
+/// The pinned outcome of every case.
+fn expected(file: &str, name: &str, form: Form) -> Expect {
+    match (file, form) {
+        // MIE: every EXIF write is also an MIE write; a bare name is
+        // refused, a grouped one keeps its pre-existing EXIF-only write.
+        ("ExifTool.jpg", Form::Grouped) => Expect::MieGap,
+        ("ExifTool.jpg", _) => Expect::Refused,
+        // `-EXIF:` names one group: exactly what oxidex writes.
+        (_, Form::Grouped) => Expect::Match,
+        // Composite:Flash is written (with its XMP WriteAlso) everywhere.
+        (_, _) if name == "Flash" => Expect::Refused,
+        // Only EXIF defines it: no other group ExifTool would also write.
+        (_, _) if name == "CalibrationIlluminant1" => Expect::Match,
+        // No maker note, no MIE: the bare name is EXIF alone, typed by its
+        // EXIF address (`-ColorSpace#=2` was a string, refused, before).
+        ("Writer.jpg", _) => Expect::Match,
+        // Canon.jpg: Canon's maker note may hold every other name;
+        // Nikon.jpg: a maker note oxidex's reader decodes no row of, which
+        // may hold any of them.
+        _ => Expect::Refused,
+    }
+}
+
+fn arg(name: &str, printed: &str, raw: &str, form: Form) -> String {
+    match form {
+        Form::Printed => format!("-{name}={printed}"),
+        Form::Hash => format!("-{name}#={raw}"),
+        Form::Grouped => format!("-EXIF:{name}#={raw}"),
+    }
+}
+
+/// Every group's `name` row of `path` as the oracle reads it (`-a -G1 -n`).
+fn oracle_rows(oracle: &Oracle, path: &Path, name: &str) -> Vec<String> {
+    let out = oracle
+        .command()
+        .args(["-a", "-G1", "-n", "-s", "-m", &format!("-{name}")])
+        .arg(path)
+        .output()
+        .expect("run oracle read");
+    let mut rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.starts_with('['))
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// Runs one case; `Err` describes how it departed from `expect`.
+fn run_case(
+    oracle: &Oracle,
+    source: &Path,
+    file: &str,
+    (name, printed, raw): (&str, &str, &str),
+    form: Form,
+    expect: Expect,
+) -> Result<(), String> {
+    let original = std::fs::read(source).unwrap();
+    let args = [arg(name, printed, raw, form)];
+    run_args(oracle, &original, "jpg", file, name, &args, expect)
+}
+
+/// Writes `args` (one command line) with both tools onto fresh copies of
+/// `original` (extension `ext`) and grades every group's `name` rows, read
+/// back by the oracle, against `expect`.
+fn run_args(
+    oracle: &Oracle,
+    original: &[u8],
+    ext: &str,
+    file: &str,
+    name: &str,
+    args: &[String],
+    expect: Expect,
+) -> Result<(), String> {
+    let dir = tempfile::tempdir().unwrap();
+    let et_path = dir.path().join(format!("et.{ext}"));
+    let ox_path = dir.path().join(format!("ox.{ext}"));
+    std::fs::write(&et_path, original).unwrap();
+    std::fs::write(&ox_path, original).unwrap();
+
+    let et = oracle
+        .command()
+        .args(["-m", "-overwrite_original"])
+        .args(args)
+        .arg(&et_path)
+        .output()
+        .expect("run oracle write");
+    let ox = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(args)
+        .arg(&ox_path)
+        .output()
+        .expect("run oxidex");
+    let et_changed = std::fs::read(&et_path).unwrap() != original;
+    let ox_changed = std::fs::read(&ox_path).unwrap() != original;
+    let ox_stderr = String::from_utf8_lossy(&ox.stderr).into_owned();
+    let et_rows = oracle_rows(oracle, &et_path, name);
+    let ox_rows = oracle_rows(oracle, &ox_path, name);
+    let case = format!("{file} {}", args.join(" "));
+    match expect {
+        Expect::Match => {
+            if !ox.status.success() {
+                return Err(format!(
+                    "{case}: expected a write, oxidex failed: {ox_stderr}"
+                ));
+            }
+            if ox_changed != et_changed || ox_rows != et_rows {
+                return Err(format!(
+                    "{case}: oxidex wrote {ox_rows:?} (changed {ox_changed}), the oracle \
+                     {et_rows:?} (changed {et_changed}); oracle said {}",
+                    String::from_utf8_lossy(&et.stdout).trim()
+                ));
+            }
+        }
+        Expect::MieGap => {
+            let main_copy = ox_rows.iter().all(|row| et_rows.contains(row));
+            if !ox.status.success() || !main_copy || et_rows.len() <= ox_rows.len() {
+                return Err(format!(
+                    "{case}: expected oxidex's EXIF-only write beside the oracle's extra MIE \
+                     copy; oxidex {ox_rows:?} ({ox_stderr}), the oracle {et_rows:?}"
+                ));
+            }
+        }
+        Expect::Refused => {
+            if ox.status.success() || ox_changed || !ox_stderr.contains("Cannot write tag") {
+                return Err(format!(
+                    "{case}: expected a named refusal with the file untouched; oxidex exit \
+                     {:?}, changed {ox_changed}, said {ox_stderr:?}{}; the oracle wrote \
+                     {et_rows:?}",
+                    ox.status.code(),
+                    String::from_utf8_lossy(&ox.stdout).trim()
+                ));
+            }
+            if !et_changed {
+                return Err(format!(
+                    "{case}: oxidex refused a request the oracle left unchanged ({})",
+                    String::from_utf8_lossy(&et.stdout).trim()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Canon.jpg, Nikon.jpg, ExifTool.jpg and Writer.jpg x ten multi-group names x printed,
+/// `#` and `-EXIF:` forms: each matches the oracle's write or is refused by
+/// name, as [`expected`] pins.
+#[test]
+fn bare_multigroup_writes_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let mut failures = Vec::new();
+    let mut counted = 0;
+    for file in FILES {
+        let source = fixtures::required_t_images_fixture_path(file);
+        for &case in NAMES {
+            for form in [Form::Printed, Form::Hash, Form::Grouped] {
+                counted += 1;
+                let expect = expected(file, case.0, form);
+                if let Err(failure) = run_case(oracle, &source, file, case, form, expect) {
+                    failures.push(failure);
+                }
+            }
+        }
+    }
+    assert_eq!(counted, 120);
+    assert!(
+        failures.is_empty(),
+        "{} of {counted} cases departed from the pinned outcome:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The maker-note half on its own: `-MakerNotes:WhiteBalance=` deletes
+/// `[Nikon] WhiteBalance` from Nikon.jpg in pinned 13.59, a row oxidex's
+/// reader does not surface. It must be refused, not reported unchanged.
+#[test]
+fn a_makernote_deletion_oxidex_cannot_rule_out_is_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let source = fixtures::required_t_images_fixture_path("Nikon.jpg");
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&source).unwrap();
+    let et_path = dir.path().join("et.jpg");
+    let ox_path = dir.path().join("ox.jpg");
+    std::fs::write(&et_path, &original).unwrap();
+    std::fs::write(&ox_path, &original).unwrap();
+    for (tool_path, is_oracle) in [(&et_path, true), (&ox_path, false)] {
+        let out = if is_oracle {
+            oracle
+                .command()
+                .args(["-m", "-overwrite_original", "-MakerNotes:WhiteBalance="])
+                .arg(tool_path)
+                .output()
+        } else {
+            Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .arg("-MakerNotes:WhiteBalance=")
+                .arg(tool_path)
+                .output()
+        }
+        .unwrap();
+        if is_oracle {
+            assert!(out.status.success());
+        } else {
+            assert!(
+                !out.status.success(),
+                "oxidex must refuse, not report unchanged"
+            );
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("Cannot write tag"),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    assert_ne!(
+        oracle_rows(oracle, &et_path, "WhiteBalance"),
+        oracle_rows(oracle, &source, "WhiteBalance"),
+        "the oracle edits [Nikon] WhiteBalance"
+    );
+    assert_eq!(std::fs::read(&ox_path).unwrap(), original);
+}
+
+/// One review-round case: file label, bytes, extension, graded name, the
+/// command line, and its pinned outcome.
+type Case<'a> = (&'a str, &'a [u8], &'a str, &'a str, Vec<String>, Expect);
+
+/// `original` with the first EXIF APP1 of `donor` inserted after its own
+/// first EXIF APP1: two EXIF blocks, as no corpus file has.
+fn with_second_app1(original: &[u8], donor: &[u8]) -> Vec<u8> {
+    fn first_app1(data: &[u8]) -> (usize, usize) {
+        let mut at = 2;
+        loop {
+            let len = usize::from(u16::from_be_bytes([data[at + 2], data[at + 3]]));
+            if data[at + 1] == 0xE1 && data[at + 4..].starts_with(b"Exif\0\0") {
+                return (at, at + 2 + len);
+            }
+            at += 2 + len;
+        }
+    }
+    let (_, end) = first_app1(original);
+    let (donor_start, donor_end) = first_app1(donor);
+    [
+        &original[..end],
+        &donor[donor_start..donor_end],
+        &original[end..],
+    ]
+    .concat()
+}
+
+/// The shapes PR #960's review found, each graded against the pinned
+/// oracle (evidence `multigroup-write/review/`):
+///
+/// - an IFD0 `DNGPrivateData` with no Adobe `MakN` record holds no maker
+///   note: `-Contrast#=2` is EXIF alone (DNG.dng with the record renamed);
+/// - a 0x927C that is a JPEG is `ProcessUnknownOrPreview`'s PreviewImage,
+///   no maker note (SamsungDigimax370.jpg);
+/// - a request that deletes the maker note leaves no copy to edit, in
+///   either order (`-MakerNotes:All= -WhiteBalance#=1` on Canon.jpg);
+/// - a value-typed note (NikonLS-50.jpg's `LSI1`) holds no tags, but two
+///   EXIF APP1s -- one with Nikon.jpg's note -- are both written by ExifTool
+///   and refused here;
+/// - `-MakerNotes:FocusMode=` on Nikon.jpg deletes a row oxidex's reader
+///   does not surface: refused, not reported unchanged.
+#[test]
+fn review_round_shapes_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let read = |path: std::path::PathBuf| std::fs::read(path).unwrap();
+    let canon = read(fixtures::required_t_images_fixture_path("Canon.jpg"));
+    let nikon = read(fixtures::required_t_images_fixture_path("Nikon.jpg"));
+    let Some(dng) = fixtures::pinned_combined_fixture_path("DNG.dng").map(read) else {
+        return;
+    };
+    let Some(digimax) =
+        fixtures::pinned_combined_fixture_path("Samsung/SamsungDigimax370.jpg").map(read)
+    else {
+        return;
+    };
+    let Some(lsi) = fixtures::pinned_combined_fixture_path("Nikon/NikonLS-50.jpg").map(read) else {
+        return;
+    };
+    let makn = b"Adobe\0MakN";
+    let at = dng
+        .windows(makn.len())
+        .position(|window| window == makn)
+        .expect("DNG.dng carries an Adobe MakN record");
+    let mut foreign = dng.clone();
+    foreign[at + 6..at + 10].copy_from_slice(b"XxxN");
+    let two_app1 = with_second_app1(&nikon, &lsi);
+    let s = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let cases: Vec<Case<'_>> = vec![
+        (
+            "DNG.dng (MakN renamed)",
+            &foreign,
+            "dng",
+            "Contrast",
+            s(&["-Contrast#=2"]),
+            Expect::Match,
+        ),
+        (
+            "DNG.dng",
+            &dng,
+            "dng",
+            "MeteringMode",
+            s(&["-MeteringMode#=2"]),
+            Expect::Refused,
+        ),
+        (
+            "SamsungDigimax370.jpg",
+            &digimax,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "SamsungDigimax370.jpg",
+            &digimax,
+            "jpg",
+            "Contrast",
+            s(&["-Contrast#=2"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1", "-MakerNotes:All="]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-ExifIFD:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:All=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "NikonLS-50.jpg",
+            &lsi,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg+NikonLS-50 APP1",
+            &two_app1,
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg+NikonLS-50 APP1",
+            &two_app1,
+            "jpg",
+            "Sharpness",
+            s(&["-Sharpness#=2"]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "FocusMode",
+            s(&["-MakerNotes:FocusMode="]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon,
+            "jpg",
+            "Quality",
+            s(&["-MakerNotes:Quality="]),
+            Expect::Refused,
+        ),
+    ];
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(file, bytes, ext, name, args, expect)| {
+            run_args(oracle, bytes, ext, file, name, args, *expect).err()
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases departed from the pinned outcome:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}

@@ -181,6 +181,7 @@ STATIC_ARTIFACTS = (
     Artifact("dicom", 2, "gen_dicom_dict", "src/parsers/specialized/dicom_dict.rs"),
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
     Artifact("tag-exists", 2, "tag_exists_codegen", "src/writers/generated_tag_exists.rs"),
+    Artifact("makernote-groups", 2, "makernote_groups_codegen", "src/writers/generated_makernote_groups.rs"),
 )
 
 

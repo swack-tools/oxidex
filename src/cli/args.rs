@@ -1663,4 +1663,24 @@ mod tests {
             None
         );
     }
+
+    /// `-TAG#=` is a raw write, never a date shift: pinned 13.59 writes
+    /// `-DateTimeOriginal#=2020:01:02 03:04:05` and `-ModifyDate#=...`,
+    /// which the shift path refused as an unknown tag `DateTimeOriginal#`.
+    #[test]
+    fn a_raw_date_assignment_is_a_normal_tag_write() {
+        for arg in [
+            "-DateTimeOriginal#=2020:01:02 03:04:05",
+            "-ModifyDate#=2020:01:02 03:04:05",
+            "-ExifIFD:DateTimeOriginal#=2020:01:02 03:04:05",
+        ] {
+            assert_eq!(CliArgs::parse_date_shift(arg), None, "{arg}");
+        }
+        // #957: an absolute assignment is never a shift either.
+        assert_eq!(
+            CliArgs::parse_date_shift("-ModifyDate=2020:01:02 03:04:05"),
+            None
+        );
+        assert!(CliArgs::parse_date_shift("-ModifyDate+=1:0:0 0:0:0").is_some());
+    }
 }

@@ -2398,6 +2398,79 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
 /// The TIFF magic an EXIF block (JPEG APP1, PNG eXIf) carries.
 pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 
+/// What the EXIF blocks of a file carry, for the bare-name resolver
+/// (`write_request::makernote_may_hold`, `ensure_not_also_updated`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MakerNoteCensus {
+    /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
+    pub blocks: usize,
+    /// Blocks whose maker note may hold tags ExifTool edits: an ExifIFD
+    /// MakerNote (0x927C) that is not read as one value (not
+    /// `tiff_helpers::makernote_value_holds_no_tags`: a SilverFast `LSI1`
+    /// note, a text note, a Samsung `STMN` binary, a JPEG preview), or an
+    /// IFD0 `DNGPrivateData` carrying an Adobe `MakN` record. A block the
+    /// scan cannot walk counts, as does any block when the count cannot be
+    /// made at all -- absence is what callers rely on, so it is proven.
+    pub tag_bearing: usize,
+    /// The request deletes every EXIF maker note before the bare write is
+    /// judged (`-MakerNotes:All=`, `-ExifIFD:All=`, `-EXIF:All=` planned as
+    /// a real deletion): pinned 13.59 then has no maker-note copy to edit,
+    /// in either argument order.
+    pub deleted: bool,
+}
+
+impl MakerNoteCensus {
+    /// A census that proves nothing: every block may hold anything.
+    pub(crate) const UNKNOWN: Self = Self {
+        blocks: usize::MAX,
+        tag_bearing: usize::MAX,
+        deleted: false,
+    };
+}
+
+/// Counts the EXIF blocks `blocks` and the ones carrying a tag-bearing
+/// maker note ([`MakerNoteCensus`]).
+pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCensus {
+    let tag_bearing = blocks
+        .iter()
+        .filter(|block| match scan_entries_with_magics(block, magics) {
+            Ok(scan) => {
+                let ifd0_text = |tag_id: u16| {
+                    scan.entries
+                        .iter()
+                        .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
+                        .map(|entry| {
+                            String::from_utf8_lossy(&entry.value)
+                                .trim_end_matches(['\0', ' '])
+                                .to_string()
+                        })
+                        .unwrap_or_default()
+                };
+                let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
+                scan.entries.iter().any(|entry| {
+                    (entry.ifd == IfdKind::ExifIfd
+                        && entry.tag_id == MAKERNOTE
+                        && !crate::core::tiff_helpers::makernote_value_holds_no_tags(
+                            &entry.value,
+                            &make,
+                            &model,
+                        ))
+                        || (entry.ifd == IfdKind::Ifd0
+                            && entry.tag_id == DNG_PRIVATE_DATA
+                            && entry.value.starts_with(b"Adobe\0")
+                            && entry.value.windows(4).any(|w| w == b"MakN"))
+                })
+            }
+            Err(_) => true,
+        })
+        .count();
+    MakerNoteCensus {
+        blocks: blocks.len(),
+        tag_bearing,
+        deleted: false,
+    }
+}
+
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a
 /// TIFF-structured file, the set its writer walks (42, and 85 for RW2).
 pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<ExifScan> {
@@ -4131,10 +4204,43 @@ pub(crate) fn removal_covers(removal: &str, key: &str, baseline: &MetadataMap) -
 /// Whether `key` of `baseline` is a row a maker-note decoder produced: its
 /// family-1 group is a maker-note group ([`MAKERNOTE_GROUPS`]) or its
 /// occurrence's family-0 group is `MakerNotes`.
-fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
+pub(crate) fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
     key.split_once(':')
         .is_some_and(|(group, _)| MAKERNOTE_GROUPS.contains(&group))
         || baseline.group0_of(key) == Some("MakerNotes")
+}
+
+/// The family-1 groups of every maker-note row of `baseline`, winners and
+/// duplicates alike: an occurrence whose family-0 group is `MakerNotes`, or
+/// whose family-1 group (its recorded one, else its key's) is a maker-note
+/// group ([`MAKERNOTE_GROUPS`]). The recorded family-1 group is the one
+/// ExifTool reports (`[Canon] FocalLength` of t/images/ExifTool.jpg's CIFF,
+/// keyed `MakerNotes:FocalLength`).
+pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::BTreeSet<String> {
+    baseline
+        .keyed_occurrences()
+        .filter_map(|(key, occurrence)| {
+            let key_group = key.split_once(':').map(|(group, _)| group)?;
+            let group1 = if occurrence.group1.is_empty() {
+                key_group
+            } else {
+                &occurrence.group1
+            };
+            (&*occurrence.group0 == "MakerNotes"
+                || MAKERNOTE_GROUPS.contains(&group1)
+                || MAKERNOTE_GROUPS.contains(&key_group))
+            .then(|| group1.to_string())
+        })
+        .collect()
+}
+
+/// Whether the group-wide removal `key` deletes the EXIF maker note with its
+/// group: `MakerNotes:All`, `ExifIFD:All`, `IFD0:All` / `EXIF:All`.
+pub(crate) fn removal_deletes_makernote(key: &str) -> bool {
+    matches!(
+        group_removal(key),
+        Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd | GroupRemoval::Carrier)
+    )
 }
 
 /// The maker-note rows of `baseline` a write drops from the map without
@@ -4150,12 +4256,7 @@ pub(crate) fn dropped_makernote_rows(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Vec<String> {
-    let deletes_makernote = removed.iter().any(|key| {
-        matches!(
-            group_removal(key),
-            Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd | GroupRemoval::Carrier)
-        )
-    });
+    let deletes_makernote = removed.iter().any(|key| removal_deletes_makernote(key));
     if deletes_makernote {
         return Vec::new();
     }

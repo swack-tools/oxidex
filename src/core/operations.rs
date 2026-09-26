@@ -1699,6 +1699,23 @@ pub(crate) fn resolve_write_key_for(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request(path, tag_name, baseline, false)
+}
+
+/// [`resolve_write_key_for`] for one request of a transaction whose other
+/// requests delete the EXIF maker note (`makernote_deleted`: a planned
+/// `-MakerNotes:All=`, `-ExifIFD:All=` or `-EXIF:All=` deletion,
+/// `core::write_transaction::plan_changes`). Pinned 13.59 then edits no
+/// maker-note copy of a bare name, whichever order the arguments came in
+/// (`-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` on t/images/Canon.jpg both leave `[ExifIFD]
+/// WhiteBalance` 1 and no maker note).
+pub(crate) fn resolve_write_key_in_request(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+    makernote_deleted: bool,
+) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
         png_prefers_text, resolve_exif_family_key, resolve_write_key,
@@ -1712,6 +1729,12 @@ pub(crate) fn resolve_write_key_for(
     // (`write_request::canonical_request_tag`): the hand-kept spellings below
     // are matched exactly, so `-exposuretime=1/30` missed `ExposureTime` and
     // was refused as a write ExifTool also applies elsewhere.
+    // A trailing `#` (ExifTool's "this value is raw") names the same tag:
+    // the CLI strips it before typing the value (`cli::write_transaction::
+    // apply_sets`), and a library or C ABI caller's typed value is raw
+    // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
+    let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
+    let ungrouped = !tag_name.contains(':');
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1762,6 +1785,12 @@ pub(crate) fn resolve_write_key_for(
     } else {
         tag_name
     };
+    // Whether the file's EXIF carries a maker note, scanned only when a name
+    // with a maker-note candidate asks (`write_request::makernote_may_hold`).
+    let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
+        deleted: makernote_deleted,
+        ..file_makernote_census(&reader, format, surgical)
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1770,13 +1799,19 @@ pub(crate) fn resolve_write_key_for(
         // ExifTool's `PNG:Software`), and never half of a write ExifTool also
         // applies to another group (`XMP-tiff:Software`).
         if (!exif_ifd0_target && !surgical) || (png && png_prefers_text(tag_name)) {
-            return Err(resolve_write_key(tag_name, exif_ifd0_target, png, baseline)
-                .err()
-                .unwrap_or_else(|| {
-                    ExifToolError::tag_not_written(tag_name, "name its group explicitly")
-                }));
+            return Err(resolve_write_key(
+                tag_name,
+                exif_ifd0_target,
+                png,
+                baseline,
+                &makernote_block,
+            )
+            .err()
+            .unwrap_or_else(|| {
+                ExifToolError::tag_not_written(tag_name, "name its group explicitly")
+            }));
         }
-        ensure_not_also_updated(tag_name, canonical, baseline)?;
+        ensure_not_also_updated(tag_name, canonical, baseline, &makernote_block)?;
         canonical.to_string()
     } else if !tag_name.contains(':')
         && surgical
@@ -1792,8 +1827,15 @@ pub(crate) fn resolve_write_key_for(
         // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
         resolved
     } else {
-        resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
+        resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
+    // An ungrouped EXIF write in a file with MIE is written into MIE's EXIF
+    // too (pinned 13.59), set or deletion alike; refused, never half-done.
+    // (A grouped `-IFD0:Artist=` there is the same in 13.59; oxidex's
+    // EXIF-only write of it predates this resolver and is left as it was.)
+    if ungrouped {
+        crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
+    }
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
@@ -1813,6 +1855,44 @@ pub(crate) fn resolve_write_key_for(
         ensure_writer_addresses(tag_name, &key, format, surgical)
     };
     Ok((key, addressed))
+}
+
+/// The file's EXIF blocks and the ones carrying a maker note that may hold
+/// tags (`exif_surgical::makernote_census`): the JPEG's APP1 EXIF blocks, a
+/// PNG's `eXIf`, or a TIFF-structured file itself. Unprovable -- a file
+/// that cannot be read or split into blocks -- is
+/// [`MakerNoteCensus::UNKNOWN`](crate::writers::exif_surgical::MakerNoteCensus::UNKNOWN).
+fn file_makernote_census(
+    reader: &MMapReader,
+    format: FileFormat,
+    surgical: bool,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, MakerNoteCensus, jpeg_exif_payloads, makernote_census,
+    };
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let payloads = if surgical {
+        return makernote_census(
+            &[file_bytes],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        );
+    } else {
+        match format {
+            FileFormat::JPEG => jpeg_exif_payloads(file_bytes).ok(),
+            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(reader) {
+                Ok(payloads) => Some(payloads.unwrap_or_default()),
+                Err(_) => None,
+            },
+            _ => return MakerNoteCensus::default(),
+        }
+    };
+    let Some(payloads) = payloads else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+    makernote_census(&blocks, EXIF_BLOCK_MAGICS)
 }
 
 /// Whether deleting `key` from the file at `path` changes nothing: the map
@@ -1848,6 +1928,28 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
     let removed = [key.to_string()];
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
+    // A maker-note tag is never judged absent from the map alone: the
+    // reader does not surface every row ExifTool reads (pinned 13.59 deletes
+    // `[Nikon] WhiteBalance` from t/images/Nikon.jpg on
+    // `-MakerNotes:WhiteBalance=`, a row oxidex's reader lacks), so a
+    // deletion the file's maker note may name is not a no-op
+    // (`write_request::makernote_may_hold`) -- and the writer, which cannot
+    // edit a maker note, refuses it. The maker-note blob's own names
+    // (`MakerNotes:MakerNoteCanon`) keep the block scan below.
+    if group == "MakerNotes" {
+        let name = key.split_once(':').map_or(key, |(_, name)| name);
+        let name = name.strip_suffix('#').unwrap_or(name);
+        let surgical = is_surgical_tiff_target(format, &reader);
+        if !name.eq_ignore_ascii_case("all")
+            && !name.starts_with("MakerNote")
+            && crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
+                file_makernote_census(&reader, format, surgical)
+            })
+            .is_some()
+        {
+            return Ok(false);
+        }
+    }
     let file_bytes = reader.read(0, reader.size() as usize)?;
     // A PNG with a bad chunk CRC is refused before any no-op decision, as the
     // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned

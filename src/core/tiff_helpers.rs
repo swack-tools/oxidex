@@ -2600,6 +2600,16 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
 /// `Condition` for `MakerNoteUnknown` is empty (it always matches), and the
 /// JPEG test lives in the ProcessProc, which sees `$dirLen` -- the entire
 /// value.
+/// Whether pinned ExifTool reads the MakerNote (0x927C) value `data` of a
+/// block whose IFD0 says `make`/`model` as one value that holds no tags --
+/// `MakerNoteSamsung1a`, `MakerNoteUnknownText`, `MakerNoteUnknownBinary`,
+/// or a JPEG `ProcessUnknownOrPreview` reports as `PreviewImage` (see
+/// [`special_makernote_value`]) -- so that no maker-note tag of it can be
+/// edited.
+pub(crate) fn makernote_value_holds_no_tags(data: &[u8], make: &str, model: &str) -> bool {
+    special_makernote_value("MakerNote", data, make, model).is_some()
+}
+
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],
