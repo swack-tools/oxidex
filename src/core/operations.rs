@@ -3405,11 +3405,12 @@ mod tests {
 /// checking the sets: success, and the set lost (b92d0c44). Group removals
 /// cleared the directory the set had just been planned into.
 ///
-/// Known difference from the oracle, not asserted: a block or directory
-/// created so carries no mandatory entries (ExifTool adds YCbCrPositioning,
-/// ExifVersion/ComponentsConfiguration/ColorSpace, GPSVersionID...); those
-/// belong to staging/beta1/exififd-mandatory. IFD1 and InteropIFD sets are
-/// refused (a raw-carried class) where ExifTool creates the directory.
+/// A block or directory created so carries WriteExif's mandatory entries,
+/// as the oracle's does: the fresh block's IFD0 YCbCrPositioning, a
+/// re-created ExifIFD's ExifVersion/ComponentsConfiguration/ColorSpace, a
+/// re-created GPS IFD's GPSVersionID (WriteExif.pl 13.59:25-50, 714-719).
+/// InteropIFD sets are refused (a raw-carried class) where ExifTool
+/// creates the directory.
 #[cfg(test)]
 mod removal_then_set_tests {
     use super::*;
@@ -3614,6 +3615,12 @@ mod removal_then_set_tests {
                             b"MM"
                         };
                         assert_eq!(&written[..2], expected, "{label}: byte order");
+                        // The fresh block's IFD0 is created: WriteExif's
+                        // mandatory YCbCrPositioning (WriteExif.pl 13.59:28).
+                        assert!(
+                            after.contains_key("IFD0:YCbCrPositioning"),
+                            "{label}: no mandatory YCbCrPositioning"
+                        );
                     }
                 }
             }
@@ -3681,7 +3688,8 @@ mod removal_then_set_tests {
     /// `II` mark. One exception, the oracle's: `IFD0:All` keeps a PNG eXIf
     /// too short for a TIFF header, and ExifTool then writes nothing
     /// ("unchanged"); this writer refuses the set there instead of dropping
-    /// it. Known difference: no mandatory YCbCrPositioning yet (#955).
+    /// it. The new block's IFD0 carries the mandatory YCbCrPositioning, as
+    /// the oracle's does.
     #[test]
     fn a_deleted_unreadable_carrier_is_never_parsed() {
         let dir = tempfile::tempdir().unwrap();
@@ -3723,6 +3731,10 @@ mod removal_then_set_tests {
                             carrier == "u.png" && group == "IFD0:All" && payload.starts_with(b"II");
                         let expected: &[u8] = if keeps_ii { b"II" } else { b"MM" };
                         assert_eq!(&written[..2], expected, "{case}: byte order");
+                        assert!(
+                            after.contains_key("IFD0:YCbCrPositioning"),
+                            "{case}: no mandatory YCbCrPositioning"
+                        );
                     }
                 }
             }
@@ -3819,6 +3831,85 @@ mod removal_then_set_tests {
         }
     }
 
+    /// Every entry of IFD1 in a carrier's EXIF block, `(tag, type, count,
+    /// value bytes)`, the thumbnail pointer pair left out (its offset is
+    /// layout); `None` when there is no IFD1.
+    fn ifd1_entries(file: &[u8]) -> Option<Vec<(u16, u16, u32, Vec<u8>)>> {
+        let tiff = payload_of(file)?;
+        let scan = crate::writers::exif_surgical::scan_exif_entries(&tiff).unwrap();
+        let entries: Vec<_> = scan
+            .entries
+            .iter()
+            .filter(|entry| entry.ifd == crate::writers::exif_surgical::IfdKind::Ifd1)
+            .map(|entry| {
+                (
+                    entry.tag_id,
+                    entry.field_type,
+                    entry.count,
+                    entry.value.clone(),
+                )
+            })
+            .collect();
+        (!entries.is_empty()).then_some(entries)
+    }
+
+    /// One transaction deleting IFD1 (`IFD1:All`) or the whole carrier
+    /// (`EXIF:All`) and setting a generated IFD1 tag creates IFD1 anew, so
+    /// WriteExif gives it its other %mandatory entries (WriteExif.pl
+    /// 13.59:25-50, 714-719). Pinned ExifTool 13.59, one invocation of
+    /// `-IFD1:All= -IFD1:XResolution=300` (or `-EXIF:All= ...`), JPEG and
+    /// PNG, II and MM: IFD1 = {Compression 6, XResolution 300, YResolution
+    /// 72, ResolutionUnit 2}, the thumbnail gone. The transaction seeded
+    /// those entries, and then the group-removal verification refused them
+    /// as IFD1 content left behind (8b32abd8): a write ExifTool makes,
+    /// refused.
+    #[test]
+    fn a_recreated_ifd1_keeps_its_mandatory_entries() {
+        let Some(oracle) = crate::exiftool_oracle::graded() else {
+            eprintln!("skipping: no usable ExifTool oracle");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let tiff = block(bo);
+            for (carrier, original) in [("r.jpg", jpeg(&tiff)), ("r.png", png(&tiff))] {
+                for group in ["IFD1:All", "EXIF:All"] {
+                    let label = format!("{bo:?} {carrier} {group}");
+                    let (result, _) = batch(
+                        dir.path(),
+                        carrier,
+                        &original,
+                        &[group],
+                        &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
+                    );
+                    result.unwrap_or_else(|e| panic!("{label}: {e}"));
+                    // Compared in the block: the PNG reader surfaces no
+                    // IFD1 row.
+                    let ours = std::fs::read(dir.path().join(carrier)).unwrap();
+
+                    let theirs = dir.path().join(format!("oracle-{carrier}"));
+                    std::fs::write(&theirs, &original).unwrap();
+                    let status = oracle
+                        .command()
+                        .args(["-q", "-q", "-overwrite_original"])
+                        .arg(format!("-{group}="))
+                        .arg("-IFD1:XResolution=300")
+                        .arg(&theirs)
+                        .status()
+                        .unwrap();
+                    assert!(status.success(), "{label}: oracle failed");
+                    let theirs = std::fs::read(&theirs).unwrap();
+                    assert_eq!(ifd1_entries(&ours), ifd1_entries(&theirs), "{label}: IFD1");
+                    assert_eq!(
+                        ifd1_entries(&theirs).map(|e| e.len()),
+                        Some(4),
+                        "{label}: oracle IFD1"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_set_survives_a_group_removal_of_its_own_directory_in_one_batch() {
         let dir = tempfile::tempdir().unwrap();
@@ -3837,6 +3928,14 @@ mod removal_then_set_tests {
                 assert_eq!(after.get_integer("ExifIFD:ISO"), Some(200), "{label}");
                 assert!(!after.contains_key("ExifIFD:ExposureProgram"), "{label}");
                 assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
+                // The ExifIFD the removal deleted is created anew by the set.
+                for key in [
+                    "ExifIFD:ExifVersion",
+                    "ExifIFD:ComponentsConfiguration",
+                    "ExifIFD:ColorSpace",
+                ] {
+                    assert!(after.contains_key(key), "{label}: no mandatory {key}");
+                }
 
                 let (result, after) = batch(
                     dir.path(),
@@ -3851,23 +3950,32 @@ mod removal_then_set_tests {
                     "{label}: GPSAltitude lost"
                 );
                 assert!(!after.contains_key("GPS:GPSAltitudeRef"), "{label}");
+                assert!(
+                    after.contains_key("GPS:GPSVersionID"),
+                    "{label}: no mandatory GPSVersionID"
+                );
                 assert_eq!(after.get_string("IFD0:Make"), Some("Acme"), "{label}");
 
-                // An IFD1 set: honored or refused (file untouched), never
-                // reported done and lost.
-                let (result, after) = batch(
+                // An IFD1 set: honored, never reported done and lost. Read
+                // from the block itself: the PNG reader surfaces no IFD1 row.
+                // (Its recreated IFD1 is pinned against the oracle in
+                // `a_recreated_ifd1_keeps_its_mandatory_entries`.)
+                let (result, _) = batch(
                     dir.path(),
                     carrier,
                     &original,
                     &["IFD1:All"],
                     &[("IFD1:XResolution", TagValue::new_rational(300, 1))],
                 );
-                if result.is_ok() {
-                    assert!(
-                        after.contains_key("IFD1:XResolution"),
-                        "{label}: IFD1 set lost"
-                    );
-                }
+                result.unwrap_or_else(|e| panic!("{label} IFD1: {e}"));
+                let written = std::fs::read(dir.path().join(carrier)).unwrap();
+                assert!(
+                    ifd1_entries(&written)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|(tag, typ, count, _)| (*tag, *typ, *count) == (0x011a, 5, 1)),
+                    "{label}: IFD1 set lost"
+                );
             }
         }
     }

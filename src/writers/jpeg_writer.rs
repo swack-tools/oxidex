@@ -287,7 +287,7 @@ pub(crate) fn write_public_exif_transaction(
             &|| source_raw_properties(head),
             baseline,
             plan,
-            crate::writers::exif_surgical::FreshOrder::BigEndian,
+            crate::writers::exif_surgical::FreshOrder::SetPreferred,
         )
         .map(|bytes| (bytes, ()))
     })
@@ -335,11 +335,14 @@ pub(crate) fn rewrite_generated_exif_payload(
     // read -- it may be unreadable, and pinned ExifTool 13.59 discards it
     // unparsed. The write then always stages (the fresh block of the legacy
     // sets, or an empty IFD0 in the fresh byte order), and nothing below
-    // reads the deleted block. Seeding stays off, as it was for a readable
-    // deleted block: a new block's mandatory entries are #955's (known gap).
+    // reads the deleted block. The fresh block's IFD0 is created, so it is
+    // seeded as a block the carrier never had is (`$numEntries` 0; pinned
+    // ExifTool 13.59's `-EXIF:All= -IFD0:Artist=x` block carries
+    // YCbCrPositioning); the legacy half seeds the sub-directories it
+    // creates.
     let deletes_carrier = crate::writers::exif_surgical::removes_carrier(&plan.legacy_removed);
     let creation_count = match original {
-        Some(_) if deletes_carrier => Some(u16::MAX),
+        Some(_) if deletes_carrier => Some(0),
         Some(tiff) => Some(tiff_surgical::ifd0_state(tiff)?.0),
         None => None,
     };
@@ -361,7 +364,7 @@ pub(crate) fn rewrite_generated_exif_payload(
                 // A deleted carrier's order is only its byte-order mark
                 // (`FreshOrder`); a kept one's is its scan.
                 let order = match if deletes_carrier {
-                    crate::writers::exif_surgical::fresh_byte_order(tiff, fresh)
+                    crate::writers::exif_surgical::fresh_byte_order(tiff, fresh)?
                 } else {
                     crate::writers::exif_surgical::scan_exif_entries(tiff)?.byte_order
                 } {
@@ -386,7 +389,14 @@ pub(crate) fn rewrite_generated_exif_payload(
     let tiff = match original {
         Some(tiff) => tiff,
         None => {
-            let order = source_fresh_byte_order()?;
+            let order = match crate::writers::exif_surgical::fresh_byte_order(&[], fresh)? {
+                crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                    mandatory::TiffByteOrder::Little
+                }
+                crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                    mandatory::TiffByteOrder::Big
+                }
+            };
             empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
                 .map_err(ExifToolError::unsupported_format)?;
             &empty
@@ -612,7 +622,7 @@ fn mandatory_default_edits(
         })
 }
 
-fn validate_creation_sources() -> Result<()> {
+pub(crate) fn validate_creation_sources() -> Result<()> {
     let address =
         crate::writers::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
             .ok_or_else(|| {
@@ -638,7 +648,8 @@ fn validate_creation_sources() -> Result<()> {
     Ok(())
 }
 
-fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
+pub(crate) fn source_fresh_byte_order()
+-> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
     use crate::writers::generated_fresh_jpeg_byte_order::*;
     use crate::writers::mandatory_defaults_runtime::TiffByteOrder;
     validate_creation_sources()?;
@@ -657,7 +668,9 @@ fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtim
     })
 }
 
-fn source_raw_properties(head: &[Segment<'_>]) -> Result<std::collections::BTreeMap<String, i64>> {
+pub(crate) fn source_raw_properties(
+    head: &[Segment<'_>],
+) -> Result<std::collections::BTreeMap<String, i64>> {
     let mut properties = std::collections::BTreeMap::new();
     for segment in head {
         if let Some(found) = crate::writers::raw_segment_properties::decode_raw_segment(
@@ -1621,10 +1634,12 @@ mod tests {
         // Should start with EXIF identifier
         assert_eq!(&segment_data[0..6], EXIF_IDENTIFIER);
 
-        // Should have TIFF header
-        assert_eq!(&segment_data[6..8], &[0x49, 0x49]); // Little-endian
-        assert_eq!(&segment_data[8..10], &[0x2A, 0x00]); // Magic
-        assert_eq!(&segment_data[10..14], &[0x08, 0x00, 0x00, 0x00]); // IFD offset
+        // Should have TIFF header, big-endian: pinned ExifTool 13.59 creates
+        // a new block in `SetPreferredByteOrder`'s default order
+        // (Writer.pl 13.59:5183-5195), MM with no option or ExifByteOrder.
+        assert_eq!(&segment_data[6..8], &[0x4D, 0x4D]); // Big-endian
+        assert_eq!(&segment_data[8..10], &[0x00, 0x2A]); // Magic
+        assert_eq!(&segment_data[10..14], &[0x00, 0x00, 0x00, 0x08]); // IFD offset
 
         // The segment must actually parse and contain the tag we asked for
         let tiff = &segment_data[EXIF_IDENTIFIER.len()..];
@@ -1635,6 +1650,17 @@ mod tests {
             .find(|e| e.tag_id == 0x010F)
             .expect("Make tag must be present");
         assert_eq!(make.value, b"Canon\0");
+        // The IFD0 it creates carries WriteExif's mandatory YCbCrPositioning
+        // (WriteExif.pl 13.59:25-32, 714-719).
+        let positioning = scan
+            .entries
+            .iter()
+            .find(|e| e.tag_id == 0x0213)
+            .expect("YCbCrPositioning must be present");
+        assert_eq!(
+            (positioning.field_type, positioning.value.as_slice()),
+            (3, &[0, 1][..])
+        );
     }
 
     #[test]

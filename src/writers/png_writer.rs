@@ -352,7 +352,7 @@ fn rewrite_exif_payload(
                 .split_once(':')
                 .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
     }) {
-        crate::writers::exif_surgical::FreshOrder::BigEndian
+        crate::writers::exif_surgical::FreshOrder::SetPreferred
     } else {
         crate::writers::exif_surgical::FreshOrder::KeepReadableMark
     };

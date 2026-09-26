@@ -263,54 +263,69 @@ fn fresh_scan(byte_order: ByteOrder) -> ExifScan {
         thumbnail: None,
         makernote_offset: None,
         ifd1_next: None,
+        raw_entry_counts: Vec::new(),
     }
 }
 
-/// The byte order of the block a carrier-wide removal's sets are written
-/// to, as pinned ExifTool 13.59 picks it (measured on II/MM, readable and
-/// malformed APP1 and eXIf payloads, `-EXIF:All= -IFD0:Artist=x`):
-/// a new JPEG APP1, and a new PNG eXIf chunk after `EXIF:All`, are
-/// big-endian (`SetPreferredByteOrder`'s MM); `IFD0:All` on a PNG deletes
-/// IFD0 inside the chunk and keeps its TIFF header's order when that mark
-/// is readable, MM otherwise.
+/// The byte order of a block a write creates, as pinned ExifTool 13.59
+/// picks it: a carrier with no block, or whose block a carrier-wide
+/// removal deletes (measured on II/MM, readable and malformed APP1 and eXIf
+/// payloads, `-EXIF:All= -IFD0:Artist=x`), gets a new block in
+/// `SetPreferredByteOrder`'s order (Writer.pl 13.59:5183-5195; big-endian
+/// with no ByteOrder option or ExifByteOrder value), except that `IFD0:All`
+/// on a PNG deletes IFD0 inside the chunk and keeps its TIFF header's order
+/// when that mark is readable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FreshOrder {
-    /// Big-endian, whatever the deleted block was.
-    BigEndian,
-    /// The deleted block's `II` mark if it has one, else big-endian.
+    /// `SetPreferredByteOrder`'s order, whatever the deleted block was.
+    SetPreferred,
+    /// The deleted block's `II` mark if it has one, else
+    /// [`FreshOrder::SetPreferred`].
     KeepReadableMark,
 }
 
-/// [`FreshOrder`] resolved against the deleted block: only its first two
-/// bytes are read, never the rest (it may be unreadable).
-pub(crate) fn fresh_byte_order(deleted: &[u8], order: FreshOrder) -> ByteOrder {
-    match (order, deleted.get(..2)) {
-        (FreshOrder::KeepReadableMark, Some(b"II")) => ByteOrder::LittleEndian,
-        _ => ByteOrder::BigEndian,
+/// [`FreshOrder`] resolved against the deleted block (empty: none): only
+/// its first two bytes are read, never the rest (it may be unreadable).
+/// `SetPreferredByteOrder`'s order is the generated capture's
+/// (`jpeg_writer::source_fresh_byte_order`), the one the generated path
+/// creates a block in: one mechanism for every new block.
+pub(crate) fn fresh_byte_order(deleted: &[u8], order: FreshOrder) -> Result<ByteOrder> {
+    use crate::writers::mandatory_defaults_runtime::TiffByteOrder;
+    if let (FreshOrder::KeepReadableMark, Some(b"II")) = (order, deleted.get(..2)) {
+        return Ok(ByteOrder::LittleEndian);
     }
+    Ok(
+        match crate::writers::jpeg_writer::source_fresh_byte_order()? {
+            TiffByteOrder::Little => ByteOrder::LittleEndian,
+            TiffByteOrder::Big => ByteOrder::BigEndian,
+        },
+    )
 }
 
 /// The payload a carrier-wide removal (`IFD0:All` / `EXIF:All`) leaves:
 /// nothing when the write sets nothing, else a fresh block holding the
-/// sets, in the byte order [`FreshOrder`] gives. The deleted block is never
-/// parsed beyond its byte-order mark.
+/// sets, in the byte order [`FreshOrder`] gives, its directories seeded as
+/// `seeding` says -- every one of them is created. The deleted block is
+/// never parsed beyond its byte-order mark.
 fn fresh_block_for_sets(
     deleted: &[u8],
     original_map: &MetadataMap,
     desired: &MetadataMap,
     order: FreshOrder,
+    seeding: MandatorySeeding<'_>,
 ) -> Result<Vec<u8>> {
     let sets = requested_sets(original_map, desired);
     if sets.is_empty() {
         return Ok(Vec::new());
     }
-    let byte_order = fresh_byte_order(deleted, order);
+    let byte_order = fresh_byte_order(deleted, order)?;
     let plan = plan_exif_write_inner(
         &fresh_scan(byte_order),
         &MetadataMap::new(),
         &sets,
         &[],
         false,
+        seeding,
     )?;
     serialize_exif(&plan)
 }
@@ -695,6 +710,11 @@ pub struct ExifScan {
     /// (IFD2 -- a Leica JPEG's PreviewImage) that the serializer does not
     /// model and would drop, so a block carrying one is never re-laid out.
     pub ifd1_next: Option<usize>,
+    /// Each walked directory with its raw entry count, structural pointers
+    /// included -- WriteExif's `$numEntries`, which alone decides whether a
+    /// directory is being created (WriteExif.pl 13.59:714-719). A pointer-
+    /// only IFD0 has no entry in `entries` but is not new.
+    pub(crate) raw_entry_counts: Vec<(IfdKind, usize)>,
 }
 
 /// Byte size of one value of the given TIFF field type.
@@ -1270,7 +1290,36 @@ pub(crate) fn plan_exif_write_with_removals(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<WritePlan> {
-    plan_exif_write_inner(scan, original_map, desired, removed, true)
+    plan_exif_write_inner(
+        scan,
+        original_map,
+        desired,
+        removed,
+        true,
+        MandatorySeeding::All(&no_properties),
+    )
+}
+
+/// A carrier with no JFIF segment: `$$et{JFIFYResolution}` is undefined, so
+/// IFD0's mandatory defaults take no JFIF substitution.
+fn no_properties() -> Result<std::collections::BTreeMap<String, i64>> {
+    Ok(std::collections::BTreeMap::new())
+}
+
+/// Which directories [`plan_exif_write_inner`] gives WriteExif's mandatory
+/// entries when this write creates them.
+#[derive(Clone, Copy)]
+pub(crate) enum MandatorySeeding<'a> {
+    /// None: a re-layout of entries already written adds nothing.
+    Off,
+    /// ExifIFD, GPS and InteropIFD; the caller seeds IFD0 itself (the
+    /// legacy half of a generated transaction, whose IFD0 seeding
+    /// `jpeg_writer::rewrite_generated_exif_payload` owns).
+    SubDirectories,
+    /// Every directory, IFD0's defaults taking the carrier's JFIF
+    /// properties (WriteExif.pl 13.59:705-711), which are read only when
+    /// IFD0 is created.
+    All(&'a dyn Fn() -> Result<std::collections::BTreeMap<String, i64>>),
 }
 
 /// [`plan_exif_write_with_removals`]; `drop_all_when_no_rows` selects the
@@ -1284,6 +1333,7 @@ fn plan_exif_write_inner(
     desired: &MetadataMap,
     removed: &[String],
     drop_all_when_no_rows: bool,
+    seeding: MandatorySeeding<'_>,
 ) -> Result<WritePlan> {
     let exif_family_keys = |m: &MetadataMap| -> Vec<String> {
         m.iter()
@@ -1340,9 +1390,8 @@ fn plan_exif_write_inner(
         // -Make=x` leaves a block holding Make): the rows this write sets
         // go into a fresh block, planned exactly as a set on a file with no
         // EXIF is. Before, the empty plan dropped them and the write
-        // reported success. (A block created so carries no mandatory
-        // entries -- YCbCrPositioning, ExifVersion... -- yet; that belongs
-        // to the mandatory-entries work, staging/beta1/exififd-mandatory.)
+        // reported success. Every directory of that block is created, so
+        // each gets its mandatory entries as `seeding` allows.
         let sets = requested_sets(original_map, desired);
         if sets.is_empty() {
             return Ok(plan);
@@ -1353,6 +1402,7 @@ fn plan_exif_write_inner(
             &sets,
             &[],
             false,
+            seeding,
         );
     }
 
@@ -1929,38 +1979,17 @@ fn plan_exif_write_inner(
         }
     }
 
-    // GPS.pm (ExifTool 13.59) requires GPSVersionID in every GPS IFD. A file
-    // without a GPS IFD gains one when a covered tag is added, so emit
-    // ExifTool's declared default version alongside it. An existing GPS IFD
-    // is left as it is, version entry or not: `WriteExif` adds mandatory
-    // entries only to a directory it creates (WriteExif.pl 13.59:714-719),
-    // and an iPhone GPS IFD without GPSVersionID gained one on every
-    // unrelated edit.
-    let gps_existed = scan.entries.iter().any(|entry| entry.ifd == IfdKind::Gps);
-    if !gps_existed
-        && plan.gps.iter().any(|entry| {
-            matches!(
-                entry.tag_id,
-                0x000d | 0x000f | 0x0014 | 0x0018 | 0x001d | 0x001f
-            )
-        })
-        && !plan.gps.iter().any(|entry| entry.tag_id == 0x0000)
-    {
-        plan.gps.push(OutEntry {
-            tag_id: 0x0000,
-            field_type: 1,
-            count: 4,
-            value: vec![2, 3, 0, 0],
-            native_endian: false,
-        });
-    }
+    // WriteExif decides IFD0's seeding when it rewrites IFD0, before it
+    // reaches IFD1 -- so while an IFD1 a group-wide removal is about to
+    // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
+    let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
 
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the
     // entries this same write sets there: delete first, then set, as pinned
     // ExifTool 13.59 does (`-ExifIFD:All= -ExifIFD:ISO=200` leaves ExifIFD
-    // holding ISO). A directory created so carries no mandatory entries yet
-    // (staging/beta1/exififd-mandatory).
+    // holding ISO). A directory so deleted and set again is created anew:
+    // it gets its mandatory entries below, as the oracle's does.
     let set_addresses: Vec<(IfdKind, u16)> = requested_sets(original_map, desired)
         .keys()
         .flat_map(|key| key_addresses(key))
@@ -1992,7 +2021,213 @@ fn plan_exif_write_inner(
         }
     }
 
+    // WriteExif's %mandatory entries go into every directory this write
+    // creates, and only those (WriteExif.pl 13.59:25-50, 714-719). A
+    // directory a group-wide removal deletes is created anew by a set into
+    // it (pinned ExifTool 13.59: `-ExifIFD:All= -ExifIFD:ISO=200` on an
+    // ExifIFD without ExifVersion leaves ISO, ExifVersion,
+    // ComponentsConfiguration and ColorSpace).
+    let deleted: Vec<IfdKind> = groups
+        .iter()
+        .flat_map(|group| match group {
+            GroupRemoval::ExifIfd => &[IfdKind::ExifIfd, IfdKind::Interop][..],
+            GroupRemoval::Gps => &[IfdKind::Gps][..],
+            GroupRemoval::Interop => &[IfdKind::Interop][..],
+            GroupRemoval::Ifd1 => &[IfdKind::Ifd1][..],
+            GroupRemoval::Carrier | GroupRemoval::MakerNotes => &[][..],
+        })
+        .copied()
+        .collect();
+    add_mandatory_entries(scan, &deleted, ifd0_at_rewrite, &mut plan, seeding)?;
+
     Ok(plan)
+}
+
+/// Whether `entry`, left after a group-wide removal, is a %mandatory entry
+/// of a directory the same write set a tag into -- so created anew, and
+/// seeded (`add_mandatory_entries`) as pinned ExifTool 13.59 seeds it:
+/// `-ExifIFD:All= -ExifIFD:ISO=200` leaves ExifVersion beside ISO, and
+/// `-EXIF:All= -IFD0:Make=x` YCbCrPositioning beside Make, and
+/// `-IFD1:All= -IFD1:XResolution=300` Compression, YResolution and
+/// ResolutionUnit beside XResolution (the generated path seeds a created
+/// IFD1). Only the exact entry the recipe creates counts; IFD0's
+/// JFIF-substituted resolution rows need only their recipe type, the JFIF
+/// values being the carrier's.
+fn recreated_mandatory(entry: &RawEntry, byte_order: ByteOrder, kept: &[(IfdKind, u16)]) -> bool {
+    use crate::writers::mandatory_defaults_runtime::{TiffByteOrder, encode_creation_defaults};
+    let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    let set_into = match entry.ifd {
+        IfdKind::Ifd0 => !kept.is_empty(),
+        ifd => kept.iter().any(|(kind, _)| *kind == ifd),
+    };
+    if !set_into {
+        return false;
+    }
+    let order = match byte_order {
+        ByteOrder::LittleEndian => TiffByteOrder::Little,
+        ByteOrder::BigEndian => TiffByteOrder::Big,
+    };
+    let Ok(defaults) = encode_creation_defaults(
+        recipe,
+        entry.ifd.prefix(),
+        order,
+        &std::collections::BTreeMap::new(),
+    ) else {
+        return false;
+    };
+    if defaults.iter().any(|default| {
+        default.tag_id == entry.tag_id
+            && default.tiff_type == entry.field_type
+            && default.count == entry.count
+            && default.bytes == entry.value
+    }) {
+        return true;
+    }
+    entry.ifd == IfdKind::Ifd0
+        && entry.count == 1
+        && recipe
+            .jfif_assignments
+            .iter()
+            .any(|assignment| assignment.tag_id == entry.tag_id)
+        && recipe.encodings.iter().any(|encoding| {
+            encoding.tag_id == entry.tag_id && encoding.tiff_type == entry.field_type
+        })
+}
+
+/// Whether `ifd` held any entry, a structural pointer included, before this
+/// write: WriteExif's `$numEntries` (WriteExif.pl 13.59:645-676). A scan
+/// built by hand carries no raw counts, and then its entries decide.
+fn directory_existed(scan: &ExifScan, ifd: IfdKind) -> bool {
+    scan.raw_entry_counts
+        .iter()
+        .any(|(kind, count)| *kind == ifd && *count > 0)
+        || scan.entries.iter().any(|entry| entry.ifd == ifd)
+}
+
+/// WriteExif adds a directory's %mandatory entries exactly when it writes a
+/// directory that had no entries (`unless ($numEntries)`, WriteExif.pl
+/// 13.59:714-719): a directory this write creates -- including one a
+/// group-wide removal in `deleted` takes out and a set puts back -- never
+/// an existing one, whatever it lacks -- an iPhone GPS IFD without GPSVersionID keeps
+/// lacking it. An entry the caller writes itself is never replaced. The
+/// tags, values and JFIF substitutions are the generated recipe's
+/// (`generated_mandatory_defaults`), shared with the generated path.
+///
+/// A directory holding only mandatory entries is dropped again unless a
+/// next IFD follows (WriteExif.pl 13.59:2079-2089); none arises here: a
+/// created ExifIFD/GPS holds the caller's entry, and a created IFD0 holds
+/// a sub-directory pointer or precedes IFD1.
+/// What WriteExif sees of IFD0 when it rewrites it: whether the write puts
+/// anything at all into the block, and whether a next IFD (IFD1) follows.
+/// Taken before group-wide removals, which WriteExif applies per directory
+/// as it reaches each one (pinned ExifTool 13.59 `-IFD1:All=` on a block
+/// whose IFD0 has no entries and whose IFD1 holds the thumbnail:
+/// "Rewriting IFD0 / + IFD0:YCbCrPositioning = '1' (mandatory) / Deleting
+/// IFD1", leaving IFD0 = {YCbCrPositioning}).
+#[derive(Clone, Copy)]
+struct Ifd0AtRewrite {
+    block_written: bool,
+    next_ifd: bool,
+}
+
+impl Ifd0AtRewrite {
+    fn of(plan: &WritePlan) -> Self {
+        let next_ifd = !plan.ifd1.is_empty() || plan.thumbnail.is_some();
+        Self {
+            block_written: next_ifd
+                || !(plan.ifd0.is_empty()
+                    && plan.exif_ifd.is_empty()
+                    && plan.gps.is_empty()
+                    && plan.interop.is_empty()),
+            next_ifd,
+        }
+    }
+}
+
+fn add_mandatory_entries(
+    scan: &ExifScan,
+    deleted: &[IfdKind],
+    ifd0_at_rewrite: Ifd0AtRewrite,
+    plan: &mut WritePlan,
+    seeding: MandatorySeeding<'_>,
+) -> Result<()> {
+    use crate::writers::mandatory_defaults_runtime::{self as mandatory, TiffByteOrder};
+    if matches!(seeding, MandatorySeeding::Off) {
+        return Ok(());
+    }
+    let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    let order = match plan.byte_order {
+        ByteOrder::LittleEndian => TiffByteOrder::Little,
+        ByteOrder::BigEndian => TiffByteOrder::Big,
+    };
+    let mut created = Vec::new();
+    for ifd in [IfdKind::ExifIfd, IfdKind::Gps, IfdKind::Interop] {
+        let bucket = match ifd {
+            IfdKind::ExifIfd => &plan.exif_ifd,
+            IfdKind::Gps => &plan.gps,
+            _ => &plan.interop,
+        };
+        if !bucket.is_empty() && (deleted.contains(&ifd) || !directory_existed(scan, ifd)) {
+            created.push(ifd);
+        }
+    }
+    let ifd0_properties = match seeding {
+        MandatorySeeding::All(properties)
+            if ifd0_at_rewrite.block_written && !directory_existed(scan, IfdKind::Ifd0) =>
+        {
+            created.push(IfdKind::Ifd0);
+            Some(properties()?)
+        }
+        _ => None,
+    };
+    if created.is_empty() {
+        return Ok(());
+    }
+    crate::writers::jpeg_writer::validate_creation_sources()?;
+    let empty = std::collections::BTreeMap::new();
+    for ifd in created {
+        let properties = match ifd {
+            IfdKind::Ifd0 => ifd0_properties.as_ref().unwrap_or(&empty),
+            _ => &empty,
+        };
+        let defaults = mandatory::encode_creation_defaults(recipe, ifd.prefix(), order, properties)
+            .map_err(ExifToolError::unsupported_format)?;
+        let bucket = match ifd {
+            IfdKind::Ifd0 => &mut plan.ifd0,
+            IfdKind::ExifIfd => &mut plan.exif_ifd,
+            IfdKind::Gps => &mut plan.gps,
+            _ => &mut plan.interop,
+        };
+        let mut seeded = 0;
+        for default in defaults {
+            if bucket.iter().any(|entry| entry.tag_id == default.tag_id) {
+                continue;
+            }
+            bucket.push(OutEntry {
+                tag_id: default.tag_id,
+                field_type: default.tiff_type,
+                count: default.count,
+                value: default.bytes,
+                native_endian: false,
+            });
+            seeded += 1;
+        }
+        // The mandatory-only cleanup (WriteExif.pl 13.59:2079-2089): a
+        // created IFD0 left holding nothing but the entries seeded into it
+        // -- no caller entry, no sub-directory pointer -- is dropped unless
+        // a next IFD followed it when it was rewritten. (A created ExifIFD,
+        // GPS or InteropIFD always holds the caller's entry.)
+        if ifd == IfdKind::Ifd0
+            && plan.ifd0.len() == seeded
+            && plan.exif_ifd.is_empty()
+            && plan.gps.is_empty()
+            && plan.interop.is_empty()
+            && !ifd0_at_rewrite.next_ifd
+        {
+            plan.ifd0.clear();
+        }
+    }
+    Ok(())
 }
 
 /// Strict validation for values the caller changed or added — identical
@@ -2063,6 +2298,7 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
         thumbnail: None,
         makernote_offset: None,
         ifd1_next: None,
+        raw_entry_counts: Vec::new(),
     };
 
     let ifd0_offset = read_u32(&tiff[4..8], byte_order) as usize;
@@ -2135,6 +2371,7 @@ fn walk_ifd(
         _ => return result, // corrupt IFD offset: skip this IFD gracefully
     };
     let entry_count = read_u16(&tiff[offset..entries_start], byte_order) as usize;
+    scan.raw_entry_counts.push((which, entry_count));
 
     for i in 0..entry_count {
         let entry_start = entries_start + i * 12;
@@ -2575,12 +2812,29 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
-    let tiff_out = rewrite_tiff_exif_with_removals(
+    // A created IFD0 takes its resolution from a JFIF APP0 segment read
+    // before the EXIF one (WriteExif.pl 13.59:705-711): the segments ahead
+    // of the existing EXIF APP1, or the leading APP0 run a new one follows.
+    let jfif = || -> Result<std::collections::BTreeMap<String, i64>> {
+        let reader = SliceReader(file_bytes);
+        let segments = parse_segments(&reader)?;
+        let before: Vec<_> = segments
+            .into_iter()
+            .skip(1) // SOI
+            .take_while(|segment| {
+                !(segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER))
+                    && (tiff.is_some() || segment.marker == 0xFFE0)
+            })
+            .collect();
+        crate::writers::jpeg_writer::source_raw_properties(&before)
+    };
+    let tiff_out = rewrite_tiff_exif_creating(
         tiff.as_deref(),
         &original_map,
         desired,
         removed,
-        FreshOrder::BigEndian,
+        FreshOrder::SetPreferred,
+        &jfif,
     )?;
     if tiff_out.is_empty() {
         return Ok(Vec::new());
@@ -2671,33 +2925,55 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
     removed: &[String],
     fresh: FreshOrder,
 ) -> Result<Vec<u8>> {
+    rewrite_tiff_exif_creating(tiff, original_map, desired, removed, fresh, &no_properties)
+}
+
+/// [`rewrite_tiff_exif_with_removals`] for a carrier whose raw JFIF
+/// properties (`jfif`, read only if IFD0 is created) seed a created IFD0's
+/// mandatory resolution entries, as WriteExif seeds them from
+/// `$$et{JFIFYResolution}` (WriteExif.pl 13.59:705-711).
+pub(crate) fn rewrite_tiff_exif_creating(
+    tiff: Option<&[u8]>,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+    fresh: FreshOrder,
+    jfif: &dyn Fn() -> Result<std::collections::BTreeMap<String, i64>>,
+) -> Result<Vec<u8>> {
     // `IFD0:All` / `EXIF:All` delete the carrier without reading it; what
-    // the same write sets goes into a fresh block.
+    // the same write sets goes into a fresh block, whose directories are
+    // all created (IFD0 with the carrier's JFIF resolution).
     if let Some(deleted) = tiff
         && removes_carrier(removed)
     {
-        return fresh_block_for_sets(deleted, original_map, desired, fresh);
+        return fresh_block_for_sets(
+            deleted,
+            original_map,
+            desired,
+            fresh,
+            MandatorySeeding::All(jfif),
+        );
     }
     let empty = MetadataMap::new();
     let (scan, original_map) = match tiff {
         Some(tiff_bytes) => (scan_exif_entries(tiff_bytes)?, original_map),
-        None => (
-            ExifScan {
-                byte_order: ByteOrder::LittleEndian,
-                entries: Vec::new(),
-                thumbnail: None,
-                makernote_offset: None,
-                ifd1_next: None,
-            },
-            &empty,
-        ),
+        // A carrier with no block gets a new one, in the order WriteExif
+        // creates one in ([`fresh_byte_order`]).
+        None => (fresh_scan(fresh_byte_order(&[], fresh)?), &empty),
     };
     if let Some(tiff) = tiff
         && is_no_op(&scan, original_map, desired, removed)
     {
         return Ok(tiff.to_vec());
     }
-    let plan = plan_exif_write_with_removals(&scan, original_map, desired, removed)?;
+    let plan = plan_exif_write_inner(
+        &scan,
+        original_map,
+        desired,
+        removed,
+        true,
+        MandatorySeeding::All(jfif),
+    )?;
     serialize_exif(&plan)
 }
 
@@ -3084,13 +3360,26 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     fresh: FreshOrder,
 ) -> Result<Vec<u8>> {
     if removes_carrier(removed) {
-        return fresh_block_for_sets(tiff, original_map, desired, fresh);
+        return fresh_block_for_sets(
+            tiff,
+            original_map,
+            desired,
+            fresh,
+            MandatorySeeding::SubDirectories,
+        );
     }
     let scan = scan_exif_entries(tiff)?;
     if is_no_op(&scan, original_map, desired, removed) {
         return Ok(tiff.to_vec());
     }
-    let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
+    let plan = plan_exif_write_inner(
+        &scan,
+        original_map,
+        desired,
+        removed,
+        false,
+        MandatorySeeding::SubDirectories,
+    )?;
     serialize_exif(&plan)
 }
 
@@ -3104,7 +3393,7 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
 pub(crate) fn relayout_exif(tiff: &[u8]) -> Result<Vec<u8>> {
     let scan = scan_exif_entries(tiff)?;
     let empty = MetadataMap::new();
-    let plan = plan_exif_write_inner(&scan, &empty, &empty, &[], false)?;
+    let plan = plan_exif_write_inner(&scan, &empty, &empty, &[], false, MandatorySeeding::Off)?;
     serialize_exif(&plan)
 }
 
@@ -3579,6 +3868,7 @@ pub(crate) fn verify_exif_write(
         thumbnail: None,
         makernote_offset: None,
         ifd1_next: None,
+        raw_entry_counts: Vec::new(),
     };
     let is_exif = |key: &str| {
         ["IFD0:", "ExifIFD:", "GPS:", "EXIF:", "IFD1:", "InteropIFD:"]
@@ -3743,10 +4033,11 @@ pub(crate) fn verify_exif_write(
             GroupRemoval::Interop => entry.ifd == IfdKind::Interop,
             GroupRemoval::MakerNotes => entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE,
         };
-        let still = after
-            .entries
-            .iter()
-            .find(|entry| in_group(entry) && !kept.contains(&(entry.ifd, entry.tag_id)));
+        let still = after.entries.iter().find(|entry| {
+            in_group(entry)
+                && !kept.contains(&(entry.ifd, entry.tag_id))
+                && !recreated_mandatory(entry, after.byte_order, &kept)
+        });
         let thumbnail_left = matches!(group, GroupRemoval::Carrier | GroupRemoval::Ifd1)
             && after.thumbnail.is_some();
         if still.is_some() || thumbnail_left {
@@ -4187,6 +4478,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4226,6 +4518,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4252,6 +4545,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4289,6 +4583,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4342,6 +4637,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4366,6 +4662,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4506,6 +4803,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4526,6 +4824,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4550,6 +4849,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4569,6 +4869,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -4621,6 +4922,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -5037,6 +5339,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -5244,6 +5547,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -5268,6 +5572,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let original = MetadataMap::new();
         let mut desired = MetadataMap::new();
@@ -5447,6 +5752,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: Some(38),
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let mut original = MetadataMap::new();
         original.insert(
@@ -5491,6 +5797,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let mut original = MetadataMap::new();
         original.insert(
@@ -5541,6 +5848,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let mut original = MetadataMap::new();
         original.insert("IFD0:Artist", TagValue::new_string("me"));
@@ -5577,6 +5885,7 @@ mod tests {
             thumbnail: None,
             makernote_offset: None,
             ifd1_next: None,
+            raw_entry_counts: Vec::new(),
         };
         let mut original = MetadataMap::new();
         original.insert("IFD1:Compression", TagValue::Integer(6));
