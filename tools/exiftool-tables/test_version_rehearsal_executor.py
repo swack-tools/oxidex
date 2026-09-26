@@ -41,6 +41,50 @@ def fixture_text(artifact) -> str:
     return artifact.key
 
 
+CONTENDER = (
+    "import fcntl, sys\n"
+    "with open(sys.argv[1], 'a+') as stream:\n"
+    "    try:\n"
+    "        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+    "    except BlockingIOError:\n"
+    "        print('blocked')\n"
+    "    else:\n"
+    "        print('acquired')\n"
+)
+
+
+def _contend(lock: Path) -> str:
+    """Ask an independent process whether it can take the host lock now."""
+    probe = subprocess.run([sys.executable, "-c", CONTENDER, str(lock)],
+                           capture_output=True, text=True, timeout=20)
+    if probe.returncode != 0:
+        raise AssertionError(f"contender probe failed: {probe.stderr}")
+    return probe.stdout.strip()
+
+
+def _read_reported_line(read_fd: int, *, timeout: float = 30.0) -> bytes:
+    """Read one newline-terminated report, failing instead of blocking forever.
+
+    A reporting process can die before it writes (a loaded host, or a short
+    command timeout killing its parent first); the test must then fail with a
+    diagnostic rather than hang the whole suite on the pipe.
+    """
+    deadline = time.monotonic() + timeout
+    payload = b""
+    while not payload.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"no complete report within {timeout}s (read so far: {payload!r})")
+        readable, _, _ = select.select([read_fd], [], [], remaining)
+        if not readable:
+            continue
+        chunk = os.read(read_fd, 4096)
+        if not chunk:
+            raise AssertionError(f"reporting pipe closed before a complete report (read so far: {payload!r})")
+        payload += chunk
+    return payload
+
+
 def _isolate_process_ownership(case: unittest.TestCase) -> None:
     """Give each test its own owned-child registry and retained-lock list.
 
@@ -466,6 +510,63 @@ class ExecutorTests(unittest.TestCase):
                     pass
             for child in children:
                 executor._close_ownership_probe(child)
+
+    def test_unreleased_inherited_ownership_keeps_host_lock_held(self):
+        """Incomplete ownership release must reach the lock owner's release decision.
+
+        A detached descendant in its own session keeps the inherited lock and
+        ownership descriptors after the direct child exits 0. The command is
+        refused as incomplete, and the lock owner must then retain the lock:
+        an explicit unlock would also release it for that live descendant.
+        """
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+        )
+        try:
+            with self.assertRaises(executor.LockRetained) as retained:
+                with executor._HostLock(self.lock):
+                    with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                        executor._run_record(
+                            [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                            cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                        )
+                    os.close(write_fd)
+                    write_fd = -1
+                    descendant_pid = int(_read_reported_line(read_fd))
+            self.assertTrue(executor._pid_live(descendant_pid))
+            self.assertIn("inherited", executor.describe_survivors(retained.exception.survivors))
+            self.assertEqual(_contend(self.lock), "blocked")
+            os.kill(descendant_pid, signal.SIGKILL)
+            deadline = time.monotonic() + 10
+            while executor.release_retained_locks():
+                if time.monotonic() >= deadline:
+                    self.fail("retained lock stayed held after the inheriting descendant exited")
+                time.sleep(0.05)
+            self.assertEqual(_contend(self.lock), "acquired")
+        finally:
+            for descriptor in (write_fd, read_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def config(self, *, write=True, tests=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}

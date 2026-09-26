@@ -800,18 +800,42 @@ def _zombie_only_group(pgid: int) -> bool:
     return second is not None and sorted(second) == sorted(first)
 
 
+def _inherited_ownership_state(child: subprocess.Popen[Any]) -> str | None:
+    """None unless a process may still hold the child's inherited descriptors.
+
+    Children created by ``_spawn_with_deferred_sigint`` carry an ownership
+    probe: an inherited pipe writer that every descendant keeps alongside the
+    host-lock descriptor. Until its reader sees EOF some process, possibly a
+    descendant that left the child's process group, still holds them, and an
+    explicit unlock would release the lock for that process too.
+    """
+    if (not hasattr(child, "_oxidex_ownership_read_fd")
+            and not getattr(child, "_oxidex_ownership_released", False)):
+        return None  # no probe was issued for this child
+    try:
+        if _ownership_probe_live(child):
+            return "exited; a descendant still holds its inherited descriptors"
+    except OSError as exc:
+        return f"exited; inherited descriptor ownership cannot be verified: {exc}"
+    return None
+
+
 def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
     """None only when the child is reaped and its whole process group is gone.
 
     A group that still answers ``killpg(pgid, 0)`` (or refuses it with EPERM,
     as macOS does for a zombie-only group) counts as gone only when every
-    member is verified to be a zombie.
+    member is verified to be a zombie. A child with an ownership probe also
+    stays unproven while any process still holds its inherited descriptors.
     """
     try:
         if child.poll() is None:
             return "running"
     except OSError as exc:
         return f"exit status cannot be observed: {exc}"
+    inherited = _inherited_ownership_state(child)
+    if inherited is not None:
+        return inherited
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
