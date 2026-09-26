@@ -568,17 +568,43 @@ fn census_exif_ifd_carriers_match_the_pinned_oracle() {
     }
 }
 
-/// Decision D-2 (its own commit): MaxApertureValue is the engine's, whose
-/// ValueConv (`2**($val/2)`) cannot numify the two-count `2.971 1`
-/// SamsungGT-B2710.jpg writes (pinned ExifTool numifies it and prints
-/// `2.8`): absent, not the hand arm's wrong `2.971 1`. Construct K-N turns
-/// it into a match. Reverting D-2 alone restores the hand row and drops this.
+/// Decision D-2 (802a459e / 5181163c, 2026-09-12) moved MaxApertureValue to
+/// the engine of that day (`DecodedValue::number()`), whose `2**($val/2)`
+/// could not numify the two-count `2.971 1` SamsungGT-B2710.jpg writes: the
+/// tag came back absent, not the hand arm's wrong `2.971 1` (pinned
+/// ExifTool numifies the leading `2.971` and prints `2.8`). The commit
+/// named the future fix "construct K-N" and it landed in 2d8ff775 ("v2
+/// steps 1-2: Exif::Main conversions generated from ExifTool source,
+/// per-field mixed mode (0 lost, +94 reads)", #838, 2026-09-18): the
+/// Session runtime's `perl_num`/`numify_bytes` give `vc_9205`'s
+/// `rt::div`/`rt::pow` (`src/exiftool_tables/conv/exif_main.rs`,
+/// `src/exiftool_tables/conv/rt.rs`) the same leading-numeric-prefix
+/// coercion Perl applies in numeric context, so `2.971 1` numifies to
+/// `2.971` and the row now matches. Bisected by building
+/// `git log --oneline -S"0x9202, 0x9205" -- src/core/tiff_helpers.rs`'s
+/// single non-D-2 hit, 2d8ff775, against its parent 8cceb4a7: this test
+/// passes (absent) at 8cceb4a7 and fails (present) at 2d8ff775. Reverting
+/// 2d8ff775 alone would restore the absence this test used to pin.
+///
+/// Pinned ExifTool 13.59 (`-j -G1 -ExifIFD:MaxApertureValue`): `2.8`;
+/// (`-n -j -G1`): `2.80014201831531`. oxidex's `-j`/`shown` also prints
+/// `2.8`; its `-n`/`shown_n` prints the same `f64` (`2**(2.971/2)`) as
+/// `2.8001420183153147` -- Rust's shortest round-trip `Display` where
+/// Perl's JSON encoder rounds to 15 significant digits (`%.15g`); both
+/// spellings are bit-identical (verified with Python's `%.17g`).
 #[test]
 #[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples"]
-fn census_d2_an_unnumifiable_max_aperture_value_is_absent() {
+fn census_d2_max_aperture_value_matches_exiftool() {
     let b2710 = carrier(&format!("{CORPUS}/Samsung"), "SamsungGT-B2710.jpg")
         .expect("Samsung/SamsungGT-B2710.jpg is part of the pinned corpus");
-    assert!(b2710.get("ExifIFD:MaxApertureValue").is_none());
+    assert_eq!(
+        shown(&b2710, "ExifIFD:MaxApertureValue").as_deref(),
+        Some("2.8")
+    );
+    assert_eq!(
+        shown_n(&b2710, "ExifIFD:MaxApertureValue").as_deref(),
+        Some("2.8001420183153147")
+    );
 }
 
 /// PNG `eXIf` (entry point C3, `embedded.rs`): no corpus file carries an
