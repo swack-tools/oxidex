@@ -328,6 +328,66 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         ]));
     }
 
+    // GPS.pm 0x001d GPSDateStamp PrintConvInv: the date part of any date or
+    // date/time -- `$val =~ /(\d{4}).*?(\d{2}).*?(\d{2})/ ? "$1:$2:$3" :
+    // undef` -- after adjusting a zoned date/time to UTC. No date is no
+    // value (13.59 does not copy t/images/InfiRay.jpg's empty stamp); the
+    // UTC adjustment and `now` are refused rather than approximated.
+    if declared_tag_name.rsplit(':').next() == Some("GPSDateStamp") {
+        if raw.eq_ignore_ascii_case("now") || raw.contains(['-', '+']) {
+            return Err(invalid(
+                tag_name,
+                "oxidex does not adjust a zoned GPSDateStamp to UTC; give the date",
+            ));
+        }
+        let digits: Vec<(usize, char)> = raw.char_indices().collect();
+        let run = |from: usize, len: usize| -> Option<(usize, String)> {
+            (from..digits.len()).find_map(|start| {
+                let text: String = digits
+                    .get(start..start + len)?
+                    .iter()
+                    .map(|(_, c)| *c)
+                    .collect();
+                text.chars()
+                    .all(|c| c.is_ascii_digit())
+                    .then_some((start + len, text))
+            })
+        };
+        let date = run(0, 4).and_then(|(after, year)| {
+            let (after, month) = run(after, 2)?;
+            let (_, day) = run(after, 2)?;
+            Some(format!("{year}:{month}:{day}"))
+        });
+        return date
+            .map(TagValue::String)
+            .ok_or_else(|| invalid(tag_name, "GPSDateStamp needs a date (YYYY:mm:dd)"));
+    }
+
+    // Exif.pm 0xa302 CFAPattern: PrintConvInv `GetCFAPattern` turns the
+    // printed `[Blue,Green][Green,Red]` into the dimensions and colours, and
+    // RawConvInv packs them in the file's byte order. oxidex does neither;
+    // refuse the text rather than store it as the tag's bytes.
+    if declared_tag_name.rsplit(':').next() == Some("CFAPattern") {
+        return Err(invalid(
+            tag_name,
+            "oxidex does not convert a CFAPattern value (GetCFAPattern)",
+        ));
+    }
+
+    // Exif.pm 0xa301 SceneType is writable undef too: PrintConv {1 =>
+    // 'Directly photographed'} inverted, then ValueConvInv 'chr($val &
+    // 0xff)'. The label reached the writer as text and was stored as its
+    // bytes, which ExifTool reads back as `Unknown (Directly photographed)`.
+    if declared_tag_name.rsplit(':').next() == Some("SceneType") {
+        if raw != "Directly photographed" {
+            return Err(invalid(
+                tag_name,
+                "Can't convert SceneType value (not in PrintConv)",
+            ));
+        }
+        return Ok(TagValue::Binary(vec![1]));
+    }
+
     // GPS.pm 13.59 converts GPSDestLatitude's decimal input into a three-part
     // DMS value before rationalizing the components. Preserve finite decimal
     // text exactly here so that later conversion does not start from the
@@ -444,6 +504,17 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
         return Ok(TagValue::new_array(values));
     }
 
+    // Writer.pl `ReverseLookup` (13.59:3614-3620): a printed `Unknown (X)`
+    // of a PrintConv hash is its raw value X. ExifTool prints a GPS
+    // reference it has no label for that way (t/images/Ricoh2.jpg:
+    // `GPSDestDistanceRef: Unknown ()`), and a copy hands it back.
+    let raw = match raw
+        .strip_prefix("Unknown (")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(inner) if is_gps_enum_reference(tag_name) => inner,
+        _ => raw,
+    };
     let raw = if matches!(
         tag_name,
         "GPSLatitudeRef" | "GPS:GPSLatitudeRef" | "GPSDestLatitudeRef" | "GPS:GPSDestLatitudeRef"
@@ -1039,11 +1110,22 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
     } else {
         raw
     };
-    // Exif.pm 13.59 0x9202 stores APEX but accepts the displayed F-number:
-    // ValueConvInv => '$val>0 ? 2*log($val)/log(2) : 0'. Apply this before
-    // the generic rational cases because ExifTool rejects fractions, `inf`
-    // and `undef` here rather than storing them directly.
-    if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "ApertureValue" {
+    // Exif.pm 13.59 0x920a FocalLength: PrintConvInv => '$val=~s/\s*mm$//;$val',
+    // so the printed `34.0 mm` is accepted as well as `34`.
+    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "FocalLength" {
+        raw.strip_suffix("mm").map(str::trim_end).unwrap_or(raw)
+    } else {
+        raw
+    };
+    // Exif.pm 13.59 0x9202 ApertureValue and 0x9205 MaxApertureValue store
+    // APEX but accept the displayed F-number: ValueConvInv => '$val>0 ?
+    // 2*log($val)/log(2) : 0' on both. Apply this before the generic
+    // rational cases because ExifTool rejects fractions, `inf` and `undef`
+    // here rather than storing them directly.
+    if matches!(
+        tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name),
+        "ApertureValue" | "MaxApertureValue"
+    ) {
         let text =
             as_float_text(raw).ok_or_else(|| invalid(tag_name, "Not a floating point number"))?;
         let f_number: f64 = text
@@ -1111,6 +1193,18 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
         .parse()
         .map_err(|_| invalid(tag_name, "Not a floating point number"))?;
     let (numerator, denominator) = rationalize(value, RATIONAL_MAX);
+    // An unsigned rational64u is rationalized up to 0xffffffff (Writer.pl
+    // `SetRational64u`: `Rationalize($_[0],0xffffffff)`); a value that
+    // needs more than 0x7fffffff (3.614421976e-10 is 1/2766695617) comes
+    // out differently there, and a `TagValue::Rational` cannot hold it.
+    // Refuse it rather than store the signed-range approximation (0/1).
+    if rationalize(value, 0xffff_ffff) != (numerator, denominator) {
+        return Err(invalid(
+            tag_name,
+            "the value needs a rational beyond the signed 32-bit range, which oxidex \
+             cannot represent",
+        ));
+    }
     Ok(TagValue::Rational {
         numerator: numerator as i32,
         denominator: denominator as i32,
@@ -1194,6 +1288,26 @@ fn assemble_rational(num: f64, denom: f64, fracs: &[f64]) -> (f64, f64) {
         None => (num, denom),
         Some((frac, rest)) => assemble_rational(frac * num + denom, num, rest),
     }
+}
+
+/// The GPS.pm string tags whose PrintConv is a hash of letter codes.
+fn is_gps_enum_reference(tag_name: &str) -> bool {
+    matches!(
+        tag_name.rsplit(':').next(),
+        Some(
+            "GPSLatitudeRef"
+                | "GPSLongitudeRef"
+                | "GPSStatus"
+                | "GPSMeasureMode"
+                | "GPSSpeedRef"
+                | "GPSTrackRef"
+                | "GPSImgDirectionRef"
+                | "GPSDestLatitudeRef"
+                | "GPSDestLongitudeRef"
+                | "GPSDestBearingRef"
+                | "GPSDestDistanceRef"
+        )
+    )
 }
 
 /// `Rationalize` — `Writer.pl:5200-5228`. The `inf` / `undef` / `N/D` cases
@@ -2094,6 +2208,67 @@ mod tests {
             TagValue::Binary(vec![3])
         );
         assert!(parse("FileSource", "3").is_err());
+    }
+
+    /// Exif.pm 0xa301: pinned 13.59 `-ExifIFD:SceneType="Directly
+    /// photographed"` stores the byte 1.
+    #[test]
+    fn scene_type_printed_value_is_inverted_to_its_undef_byte() {
+        for tag in ["SceneType", "EXIF:SceneType", "ExifIFD:SceneType"] {
+            assert_eq!(
+                parse(tag, "Directly photographed").unwrap(),
+                TagValue::Binary(vec![1])
+            );
+        }
+        assert!(parse("ExifIFD:SceneType", "Unknown").is_err());
+    }
+
+    /// Writer.pl `ReverseLookup`: `Unknown (X)` is X (pinned 13.59 copies
+    /// Ricoh2.jpg's `GPSDestDistanceRef: Unknown ()` as the empty string).
+    #[test]
+    fn an_unknown_gps_reference_label_is_its_raw_value() {
+        assert_eq!(
+            parse("GPS:GPSDestDistanceRef", "Unknown ()").unwrap(),
+            TagValue::String(String::new())
+        );
+        assert_eq!(
+            parse("GPS:GPSLongitudeRef", "Unknown (Q)").unwrap(),
+            TagValue::String("Q".into())
+        );
+    }
+
+    /// 3.614421976e-10 needs the unsigned range (t/images/GoPro.jpg's
+    /// ExposureIndex, which pinned 13.59 copies as 1/2766695617).
+    /// GPS.pm 0x001d PrintConvInv keeps the date part; no date is no value.
+    #[test]
+    fn gps_date_stamp_keeps_the_date_part() {
+        assert_eq!(
+            parse("GPS:GPSDateStamp", "2024:01:02 10:11:12").unwrap(),
+            TagValue::String("2024:01:02".into())
+        );
+        assert_eq!(
+            parse("GPS:GPSDateStamp", "2024:01:02").unwrap(),
+            TagValue::String("2024:01:02".into())
+        );
+        assert!(parse("GPS:GPSDateStamp", "").is_err());
+        assert!(parse("GPS:GPSDateStamp", "2024:01:02 10:11:12+02:00").is_err());
+    }
+
+    #[test]
+    fn a_cfa_pattern_text_is_refused() {
+        assert!(parse("ExifIFD:CFAPattern", "[Blue,Green][Green,Red]").is_err());
+    }
+
+    #[test]
+    fn a_rational_beyond_the_signed_range_is_refused() {
+        assert!(parse("ExifIFD:ExposureIndex", "3.614421976e-10").is_err());
+        assert_eq!(
+            parse("ExifIFD:ExposureIndex", "100").unwrap(),
+            TagValue::Rational {
+                numerator: 100,
+                denominator: 1
+            }
+        );
     }
 
     #[test]

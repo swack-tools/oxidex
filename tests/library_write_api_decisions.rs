@@ -146,9 +146,11 @@ fn a_map_read_from_another_file_only_sets() {
 /// the in-repo EXIF+XMP fixture always.
 #[test]
 fn copy_all_is_best_effort_and_reports_what_it_skipped() {
-    let mut sources: Vec<(PathBuf, Vec<&str>)> = vec![(PathBuf::from(JPEG_XMP), vec!["XMP"])];
+    // Family-1 groups since #957 round 8: what 13.59 writes, by name.
+    let mut sources: Vec<(PathBuf, Vec<&str>)> =
+        vec![(PathBuf::from(JPEG_XMP), vec!["XMP-dc", "XMP-xmp"])];
     if let Some(xmp) = fixtures::pinned_t_images_fixture_path("XMP.jpg") {
-        sources.push((xmp, vec!["JFIF", "ICC_Profile", "XMP"]));
+        sources.push((xmp, vec!["JFIF", "IPTC", "XMP-dc", "XMP-photoshop"]));
     }
     for (source, skipped) in sources {
         let label = source.display().to_string();

@@ -667,6 +667,112 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     Ok(out)
 }
 
+/// WriteExif seeds a directory's %mandatory entries from the tags being set
+/// anywhere in the table, not only in that directory: rewriting IFD1, it
+/// adds each IFD1 %mandatory tag (Compression, XResolution, YResolution,
+/// ResolutionUnit) that the write sets -- in IFD0 -- and IFD1 lacks, with
+/// the %mandatory value (WriteExif.pl 13.59:1150-1200: the tag is in `%set`,
+/// has no new value for IFD1, and `$$mandatory{$newID}` is defined). Pinned
+/// 13.59, `-IFD0:XResolution=1` on tests/fixtures/tiff/sample.tif (whose IFD1
+/// holds only ImageWidth, ImageHeight and Model): `+ IFD1:XResolution = '72'
+/// (mandatory)`. The values are the generated recipe's
+/// (`generated_mandatory_defaults`).
+///
+/// `desired` is the write's map: its assigned IFD0 rows (`IFD0:` or the
+/// `EXIF:` family, which writes these tags to IFD0) are the tags set.
+pub(crate) fn add_ifd1_mandatory_entries(out: &mut Vec<u8>, desired: &MetadataMap) -> Result<()> {
+    use crate::writers::mandatory_defaults_runtime::{TiffByteOrder, encode_creation_defaults};
+    let ifd0_set: Vec<u16> = desired
+        .assigned_keys()
+        .iter()
+        .filter_map(|key| {
+            let (group, name) = key.split_once(':')?;
+            if !(group.eq_ignore_ascii_case("IFD0") || group.eq_ignore_ascii_case("EXIF")) {
+                return None;
+            }
+            match name {
+                "Compression" => Some(0x0103),
+                "XResolution" => Some(0x011a),
+                "YResolution" => Some(0x011b),
+                "ResolutionUnit" => Some(0x0128),
+                _ => None,
+            }
+        })
+        .collect();
+    if ifd0_set.is_empty() || !is_walkable_tiff(out) {
+        return Ok(());
+    }
+    let scan = scan_tiff(out)?;
+    let bo = scan.byte_order;
+    let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    let order = match bo {
+        ByteOrder::LittleEndian => TiffByteOrder::Little,
+        ByteOrder::BigEndian => TiffByteOrder::Big,
+    };
+    let defaults =
+        encode_creation_defaults(recipe, "IFD1", order, &std::collections::BTreeMap::new())
+            .map_err(ExifToolError::unsupported_format)?;
+    if !defaults
+        .iter()
+        .any(|default| ifd0_set.contains(&default.tag_id))
+    {
+        return Ok(());
+    }
+    // IFD1 is IFD0's next directory.
+    let ifd0 = scan.ifd0_offset;
+    let Some(count) = out.get(ifd0..ifd0 + 2).map(|b| read_u16(b, bo) as usize) else {
+        return Ok(());
+    };
+    let next_at = ifd0 + 2 + count * 12;
+    let Some(ifd1) = out
+        .get(next_at..next_at + 4)
+        .map(|b| read_u32(b, bo) as usize)
+        .filter(|offset| *offset != 0)
+    else {
+        return Ok(());
+    };
+    let Some(ifd1_count) = out.get(ifd1..ifd1 + 2).map(|b| read_u16(b, bo) as usize) else {
+        return Ok(());
+    };
+    let Some(records) = out.get(ifd1 + 2..ifd1 + 2 + ifd1_count * 12) else {
+        return Ok(());
+    };
+    let present: Vec<u16> = records
+        .chunks_exact(12)
+        .map(|record| read_u16(&record[0..2], bo))
+        .collect();
+    let mut additions = Vec::new();
+    for default in defaults {
+        if !ifd0_set.contains(&default.tag_id) || present.contains(&default.tag_id) {
+            continue;
+        }
+        let mut inline_or_offset = [0u8; 4];
+        if default.bytes.len() <= 4 {
+            inline_or_offset[..default.bytes.len()].copy_from_slice(&default.bytes);
+        } else {
+            let at = append_aligned(out, &default.bytes);
+            put_u32(
+                &mut inline_or_offset,
+                u32::try_from(at).map_err(too_big)?,
+                bo,
+            );
+        }
+        additions.push(NewRecord {
+            tag_id: default.tag_id,
+            field_type: default.tiff_type,
+            count: default.count,
+            inline_or_offset,
+        });
+    }
+    if additions.is_empty() {
+        return Ok(());
+    }
+    let new_at = grow_ifd(out, ifd1, &additions, bo)?;
+    let new_at = u32::try_from(new_at).map_err(too_big)?;
+    put_u32(&mut out[next_at..next_at + 4], new_at, bo);
+    Ok(())
+}
+
 fn too_big(_: std::num::TryFromIntError) -> ExifToolError {
     ExifToolError::unsupported_format(
         "File exceeds 4 GB: TIFF offsets are 32-bit and cannot address the \
