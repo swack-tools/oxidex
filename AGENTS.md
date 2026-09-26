@@ -405,6 +405,17 @@ commits missing from `origin` (`git status --porcelain` is empty and
 `git rev-list HEAD --not --remotes=origin` prints nothing). Use
 `git worktree remove`, never `rm -rf`.
 
+**The stash is shared by every worktree.** `refs/stash` belongs to the
+repository, not to a worktree. A bare `git stash pop` or `git stash apply`
+therefore takes whatever was stashed last in any worktree, possibly another
+agent's work-in-progress from a different branch. It has already happened
+here once. Git kept the other stash only because the pop conflicted. Prefer a
+WIP commit on your own branch, or a patch file in your evidence directory,
+over the stash. If you must stash, give it a message naming your branch
+(`git stash push -m "<branch>: <why>"`). Then find it with `git stash list`
+and apply it by its exact `stash@{N}`, after checking that entry's message.
+Never run a bare `pop`, `apply` or `drop`, and never `git stash clear`.
+
 ## How work lands
 
 Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
