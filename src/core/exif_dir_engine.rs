@@ -284,6 +284,25 @@ impl DirEngineRows {
         self
     }
 
+    /// Records at priority 0 every row for which `loses(name,
+    /// table_priority_is_zero)` holds, and keeps it there through
+    /// [`Self::at_priority`]. Call it before `at_priority`, while each row
+    /// still carries its table priority.
+    ///
+    /// The row is kept, never dropped: ExifTool's `FoundTag` files a second
+    /// copy of a name under its own key (`-a -G1` prints it, and
+    /// `-<Group>:<Name>` reads it). Priority 0 only makes it lose a bare
+    /// `-<Name>` to the twin the caller says ExifTool would have preferred.
+    pub(crate) fn demote(mut self, loses: impl Fn(&str, bool) -> bool) -> Self {
+        for row in &mut self.rows {
+            if loses(row.name, row.priority == 0) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+        }
+        self
+    }
+
     /// Records every row with the value its entry stores
     /// (`TagOccurrence::stored`, see [`stored_value`]) beside the printed
     /// one: for a directory whose hand arm stored that typed value as the
