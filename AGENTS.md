@@ -559,7 +559,7 @@ So stacked branches are kept current by rebasing, not by merge commits.
   Auto-merge is not supported for stacks, and an API merge must use the
   asynchronous stack-merge endpoint. Never merge a child into its parent
   branch.
-- **After a partial merge.** `gh stack sync` is not just cleanup: it also
+- **After a partial merge of a GitHub stack.** (For a merge-based stack, follow "Existing merge-based stacks" instead: retarget, then merge the new tip. Never rebase its reviewed branches.) `gh stack sync` is not just cleanup: it also
   rebases and force-pushes every remaining layer, which would publish heads
   nobody has gated. So after lower layers land:
   1. Rebase the remaining layers onto the new trunk, bottom to top
