@@ -1,0 +1,36 @@
+# Pulls the runner image onto every CI node as soon as the node joins, so the
+# first job on a fresh node does not wait for the ~1.5 GB pull. The init
+# container only has to exist; the pause container keeps the pod (and so the
+# image reference) alive with no real resource use.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ci-runner-prepull
+  namespace: arc-runners
+spec:
+  selector:
+    matchLabels:
+      app: ci-runner-prepull
+  template:
+    metadata:
+      labels:
+        app: ci-runner-prepull
+    spec:
+      nodeSelector:
+        workload: ci-runners
+      imagePullSecrets:
+        - name: ghcr-pull
+      initContainers:
+        - name: pull
+          image: ghcr.io/swack-tools/ci-runner:2.337.0-1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/true"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests: {cpu: 1m, memory: 8Mi}
+            limits: {memory: 16Mi}

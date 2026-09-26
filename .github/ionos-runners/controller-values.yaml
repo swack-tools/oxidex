@@ -1,0 +1,4 @@
+# gha-runner-scale-set-controller (ARC) values. The controller runs on the CI
+# pool, the only pool this setup relies on.
+nodeSelector:
+  workload: ci-runners
