@@ -61,29 +61,17 @@ use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::writers::exif_surgical::{IfdKind, scan_exif_entries, type_size};
+use crate::writers::exif_surgical::{IfdKind, scan_entries_with_magics, type_size};
 
 const EXIF_IFD_POINTER: u16 = 0x8769;
 const GPS_IFD_POINTER: u16 = 0x8825;
 const INTEROP_POINTER: u16 = 0xA005;
 const MAKERNOTE: u16 = 0x927C;
 
-/// `IsOffset` Start/Offset rows a maker-note decoder reports, with the
-/// Length row that sizes what they locate. The names are ExifTool 13.59's
-/// `IsOffset` tags (every loaded table, walked for `IsOffset`) that come in
-/// a Start/Length pair, plus Olympus `ZoomedPreviewStart`, which ExifTool
-/// does not relocate (Olympus.pm:895) but which locates data all the same.
-const OFFSET_PAIRS: &[(&str, &str)] = &[
-    ("PreviewImageStart", "PreviewImageLength"),
-    ("ThumbnailOffset", "ThumbnailLength"),
-    ("OtherImageStart", "OtherImageLength"),
-    ("JpgFromRawStart", "JpgFromRawLength"),
-    ("HiddenDataOffset", "HiddenDataLength"),
-    ("IDCPreviewStart", "IDCPreviewLength"),
-    ("MPImageStart", "MPImageLength"),
-    ("PreviewJXLStart", "PreviewJXLLength"),
-    ("ZoomedPreviewStart", "ZoomedPreviewLength"),
-];
+// Which decoded rows are offset/length pairs: generated from the pinned
+// ExifTool's `IsOffset`/`OffsetPair` inventory
+// (`tools/exiftool-tables/makernote_offset_pairs.py`), never a hand list.
+use super::makernote_offset_pairs::{OFFSET_PAIRS, UNPAIRED_OFFSETS};
 
 fn u16_at(tiff: &[u8], at: usize, bo: ByteOrder) -> Option<u16> {
     let b = tiff.get(at..at.checked_add(2)?)?;
@@ -498,15 +486,43 @@ pub(crate) struct Carrier<'a> {
     pub(crate) file: &'a [u8],
     pub(crate) tiff_at: usize,
     pub(crate) tiff_len: usize,
+    /// Where a Canon `OriginalDecisionDataOffset` counts from, as an index
+    /// into `file`: the file start in a JPEG (the offset is a FILE offset
+    /// there, Canon.pm 13.59:1786-1795), the TIFF header elsewhere; `None`
+    /// for a JPEG's block seen without its file, where the block does not
+    /// hold what the offset locates.
+    pub(crate) odd_base: Option<usize>,
 }
 
 impl<'a> Carrier<'a> {
-    /// A block standing alone: nothing past its end is reachable.
+    /// A block standing alone -- a PNG `eXIf` chunk, a TIFF file: nothing
+    /// past its end is reachable, and its offsets count from its header.
     pub(crate) fn block(tiff: &'a [u8]) -> Self {
         Carrier {
             file: tiff,
             tiff_at: 0,
             tiff_len: tiff.len(),
+            odd_base: Some(0),
+        }
+    }
+
+    /// A block taken out of a carrier this check cannot see (the shared
+    /// surgical rewrite, which serves JPEG and PNG alike): a FILE offset
+    /// cannot be followed in it.
+    pub(crate) fn detached(tiff: &'a [u8]) -> Self {
+        Carrier {
+            odd_base: None,
+            ..Carrier::block(tiff)
+        }
+    }
+
+    /// The `index`-th block of a JPEG file, at `tiff_at` for `tiff_len`.
+    pub(crate) fn jpeg(file: &'a [u8], tiff_at: usize, tiff_len: usize) -> Self {
+        Carrier {
+            file,
+            tiff_at,
+            tiff_len,
+            odd_base: Some(0),
         }
     }
 
@@ -542,132 +558,338 @@ fn ifd0_ascii(scan: &crate::writers::exif_surgical::ExifScan, tag: u16) -> Optio
         })
 }
 
-fn integer(map: &MetadataMap, key: &str) -> Option<usize> {
-    match map.get(key)? {
+fn integer(value: &TagValue) -> Option<usize> {
+    match value {
         TagValue::Integer(v) => usize::try_from(*v).ok(),
         TagValue::String(s) => s.trim().parse().ok(),
         _ => None,
     }
 }
 
+/// Every maker-note row a readback produced, in file order, duplicates
+/// included: `(lookup key, family-1 group, every value form)`. Comparing the
+/// map's winning projection would let a changed duplicate occurrence pass.
+fn occurrence_rows(map: &MetadataMap) -> Vec<(String, String, String)> {
+    map.all_occurrences()
+        .map(|(key, occurrence)| {
+            (
+                key,
+                occurrence.group1.to_string(),
+                format!(
+                    "{:?}|{:?}|{:?}",
+                    occurrence.raw, occurrence.value, occurrence.print
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Every MakerNote entry (0x927C, value past its entry) of `scan`, in any
+/// directory the reader accepts one in -- ExifIFD, and IFD0 or another
+/// top-level directory, which the reader also decodes -- with its offset.
+fn makernotes(
+    scan: &crate::writers::exif_surgical::ExifScan,
+    tiff: &[u8],
+) -> Vec<(IfdKind, usize, Vec<u8>)> {
+    let layout = OriginalLayout::of(tiff);
+    let mut notes = Vec::new();
+    for entry in &scan.entries {
+        if entry.tag_id != MAKERNOTE || entry.value.len() <= 4 {
+            continue;
+        }
+        if notes.iter().any(|(ifd, _, _)| *ifd == entry.ifd) {
+            continue; // the first of duplicates is the one kept and decoded
+        }
+        let at = if entry.ifd == IfdKind::ExifIfd {
+            scan.makernote_offset
+        } else {
+            layout
+                .as_ref()
+                .and_then(|l| l.value(entry.ifd, MAKERNOTE))
+                .map(|(at, _)| at)
+        };
+        if let Some(at) = at {
+            notes.push((entry.ifd, at, entry.value.clone()));
+        }
+    }
+    notes
+}
+
 /// Post-condition of an EXIF write on a block with a MakerNote, checked on
 /// the produced bytes before anything is committed: every maker-note value
 /// reads back unchanged, including the data it locates outside the note.
 ///
-/// * the MakerNote is at its original offset with its original bytes (a
-///   note the edit dropped entirely, or a block dropped entirely, is not
-///   checked);
-/// * [`makernote_readback`](crate::core::tiff_helpers::makernote_readback)
-///   of the new block equals that of the original, row for row, decoded
-///   under the original Make and Model;
-/// * every `IsOffset` Start/Length pair the note decodes to locates the same
-///   bytes in `output`'s carrier as in `original`'s -- inside the block or
-///   past its end (a JPEG-trailer preview), when the original carrier holds
-///   them.
+/// `magics` are the TIFF magics the carrier accepts (42 for an EXIF block;
+/// 42 and 85 for a TIFF-structured file, RW2/RWL included). An original
+/// block that cannot be scanned is not assumed safe: unless the write left
+/// it byte-identical where it was, the write is refused.
 ///
-/// Any mismatch refuses the write.
-pub(crate) fn verify_makernote_preserved(original: Carrier<'_>, output: Carrier<'_>) -> Result<()> {
+/// For every MakerNote the original holds (in ExifIFD or a top-level
+/// directory) that the output still holds:
+///
+/// * it is at its original offset with its original bytes;
+/// * the bytes its own IFD addresses outside it are unchanged
+///   ([`note_references`]);
+/// * [`makernote_readback`](crate::core::tiff_helpers::makernote_readback)
+///   of the new block equals that of the original, every occurrence in
+///   order, decoded under the original Make/Model AND under the output's
+///   (an edit of Make or Model selects the decoder the file is read with
+///   next);
+/// * every offset/length pair the note decodes to (the pinned `IsOffset` /
+///   `OffsetPair` inventory, every occurrence) locates the same bytes in the
+///   output's carrier as in the original's -- inside the block or past its
+///   end (a JPEG-trailer preview), when the original carrier holds them;
+/// * a Canon `OriginalDecisionDataOffset` (no length tag) locates the same
+///   OriginalDecisionData block, read with the ODD reader.
+///
+/// Any mismatch refuses the write. A note the write deletes is not checked.
+pub(crate) fn verify_makernote_preserved(
+    original: Carrier<'_>,
+    output: Carrier<'_>,
+    magics: &[u16],
+) -> Result<()> {
     // A block dropped entirely (a clear) has nothing to check, and the
     // discarded original is never parsed.
     let after_tiff = output.tiff();
-    if after_tiff.is_empty() {
-        return Ok(());
-    }
     let before_tiff = original.tiff();
-    let Ok(before) = scan_exif_entries(before_tiff) else {
+    if after_tiff.is_empty() || before_tiff.is_empty() {
         return Ok(());
-    };
-    let Some(note_at) = before.makernote_offset else {
-        return Ok(());
-    };
-    let Some(note) = before
-        .entries
-        .iter()
-        .find(|e| e.ifd == IfdKind::ExifIfd && e.tag_id == MAKERNOTE)
-    else {
-        return Ok(());
-    };
-    let after = scan_exif_entries(after_tiff)?;
-    let Some(written) = after
-        .entries
-        .iter()
-        .find(|e| e.ifd == IfdKind::ExifIfd && e.tag_id == MAKERNOTE)
-    else {
-        return Ok(());
-    };
-    if after.makernote_offset != Some(note_at) || written.value != note.value {
-        return Err(refused(format!(
-            "the MakerNote would move from TIFF offset {note_at} or change, which \
-             invalidates the absolute offsets inside it"
-        )));
     }
-
-    // The bytes the note's own IFD addresses outside it, where no decoder
-    // may read them (`note_references`): unchanged, at the same offsets.
-    for (start, end) in note_references(before_tiff, note_at, note.value.len(), before.byte_order) {
-        if after_tiff.get(start..end) != before_tiff.get(start..end) {
+    let before = match scan_entries_with_magics(before_tiff, magics) {
+        Ok(scan) => scan,
+        // Nothing can be verified about a block that does not scan; only one
+        // the write left untouched, in place, is safe.
+        Err(_) if before_tiff == after_tiff && original.tiff_at == output.tiff_at => {
+            return Ok(());
+        }
+        Err(e) => {
             return Err(refused(format!(
-                "the MakerNote addresses bytes {start}..{end} outside itself, which \
-                 this edit would move or overwrite"
+                "the original EXIF block cannot be scanned to verify its maker note ({e})"
             )));
         }
+    };
+    let notes = makernotes(&before, before_tiff);
+    if notes.is_empty() {
+        return Ok(());
     }
+    let after = scan_entries_with_magics(after_tiff, magics)?;
+    let after_notes = makernotes(&after, after_tiff);
 
-    let make = ifd0_ascii(&before, 0x010F).unwrap_or_default();
-    let model = ifd0_ascii(&before, 0x0110);
-    let read = |tiff: &[u8]| {
-        crate::core::tiff_helpers::makernote_readback(
-            tiff,
-            note_at,
-            note.value.len(),
-            before.byte_order,
-            &make,
-            model.as_deref(),
+    let identity = |scan: &crate::writers::exif_surgical::ExifScan| {
+        (
+            ifd0_ascii(scan, 0x010F).unwrap_or_default(),
+            ifd0_ascii(scan, 0x0110),
         )
     };
-    let was = read(before_tiff);
-    let now = read(after_tiff);
-    let mut keys: Vec<&String> = was.keys().chain(now.keys()).collect();
-    keys.sort();
-    keys.dedup();
-    if let Some(key) = keys.into_iter().find(|key| was.get(key) != now.get(key)) {
-        return Err(refused(format!(
-            "maker-note tag '{key}' would read back differently: the data it \
-             locates outside the MakerNote would be overwritten"
-        )));
+    let mut identities = vec![identity(&before)];
+    if identity(&after) != identities[0] {
+        identities.push(identity(&after));
     }
 
-    for key in was.keys() {
-        let Some((group, name)) = key.rsplit_once(':') else {
-            continue;
+    for (ifd, note_at, note) in &notes {
+        let Some((_, written_at, written)) = after_notes.iter().find(|(i, _, _)| i == ifd) else {
+            continue; // deleted by the write
         };
-        let Some((_, length_name)) = OFFSET_PAIRS.iter().find(|(start, _)| *start == name) else {
-            continue;
-        };
-        let (Some(start), Some(len)) = (
-            integer(&was, key),
-            integer(&was, &format!("{group}:{length_name}")),
-        ) else {
-            continue;
-        };
-        if len == 0 {
+        if written_at != note_at || written != note {
+            return Err(refused(format!(
+                "the {} MakerNote would move from TIFF offset {note_at} or change, which \
+                 invalidates the absolute offsets inside it",
+                ifd.prefix()
+            )));
+        }
+
+        // The bytes the note's own IFD addresses outside it, where no decoder
+        // may read them (`note_references`): unchanged, at the same offsets.
+        for (start, end) in note_references(before_tiff, *note_at, note.len(), before.byte_order) {
+            if after_tiff.get(start..end) != before_tiff.get(start..end) {
+                return Err(refused(format!(
+                    "the MakerNote addresses bytes {start}..{end} outside itself, which \
+                     this edit would move or overwrite"
+                )));
+            }
+        }
+
+        for (make, model) in &identities {
+            let read = |tiff: &[u8]| {
+                crate::core::tiff_helpers::makernote_readback(
+                    tiff,
+                    *note_at,
+                    note.len(),
+                    before.byte_order,
+                    make,
+                    model.as_deref(),
+                )
+            };
+            let was_map = read(before_tiff);
+            let now_map = read(after_tiff);
+            let was = occurrence_rows(&was_map);
+            let now = occurrence_rows(&now_map);
+            if was != now {
+                let key = was
+                    .iter()
+                    .zip(&now)
+                    .find(|(a, b)| a != b)
+                    .map(|(a, _)| a.0.clone())
+                    .or_else(|| {
+                        was.get(now.len())
+                            .or(now.get(was.len()))
+                            .map(|r| r.0.clone())
+                    })
+                    .unwrap_or_default();
+                return Err(refused(format!(
+                    "maker-note tag '{key}' would read back differently (decoded as {make}): \
+                     the data it locates outside the MakerNote would be overwritten"
+                )));
+            }
+            verify_located_bytes(&was_map, &original, &output)?;
+            verify_original_decision_data(&was_map, &original, &output, before.byte_order)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`verify_makernote_preserved`] for a whole JPEG: every `Exif\0\0` APP1
+/// block of `original`, not only the first, against the block in the same
+/// position of `output`. A later block moves when an earlier segment
+/// changes length, and its maker note's file-level targets (a trailer
+/// preview, an ODD block) with it. Where the two files hold a different
+/// number of EXIF blocks the blocks cannot be paired: refused unless no
+/// original block holds a MakerNote (as the generated adapter refuses an
+/// ambiguous multi-EXIF JPEG outright).
+pub(crate) fn verify_jpeg_makernotes(original: &[u8], output: &[u8]) -> Result<()> {
+    use crate::writers::exif_surgical::{EXIF_BLOCK_MAGICS, jpeg_exif_blocks};
+    let was = jpeg_exif_blocks(original)?;
+    let now = jpeg_exif_blocks(output)?;
+    if was.len() != now.len() {
+        let holds_note = was.iter().any(|(at, len)| {
+            let tiff = &original[*at..at + len];
+            match scan_entries_with_magics(tiff, EXIF_BLOCK_MAGICS) {
+                Ok(scan) => !makernotes(&scan, tiff).is_empty(),
+                Err(_) => false, // no TIFF structure: no maker note to lose
+            }
+        });
+        if holds_note {
+            return Err(refused(format!(
+                "the JPEG holds {} EXIF blocks and the output {}, so the blocks holding a \
+                 MakerNote cannot be paired to verify it",
+                was.len(),
+                now.len()
+            )));
+        }
+        return Ok(());
+    }
+    for ((was_at, was_len), (now_at, now_len)) in was.into_iter().zip(now) {
+        verify_makernote_preserved(
+            Carrier::jpeg(original, was_at, was_len),
+            Carrier::jpeg(output, now_at, now_len),
+            EXIF_BLOCK_MAGICS,
+        )?;
+    }
+    Ok(())
+}
+
+/// Every offset/length pair of `rows` (every occurrence, paired within its
+/// family-1 group by rank) locates the same bytes in `output` as in
+/// `original`, when the original carrier holds them.
+fn verify_located_bytes(
+    rows: &MetadataMap,
+    original: &Carrier<'_>,
+    output: &Carrier<'_>,
+) -> Result<()> {
+    let occurrences: Vec<(String, String, usize)> = rows
+        .all_occurrences()
+        .filter_map(|(key, o)| {
+            let value = integer(o.value.as_ref().unwrap_or(&o.raw))?;
+            let name = key
+                .rsplit_once(':')
+                .map_or(key.as_str(), |(_, n)| n)
+                .to_string();
+            Some((name, format!("{}|{}", o.group0, o.group1), value))
+        })
+        .collect();
+    for (offset_name, length_name) in OFFSET_PAIRS {
+        let mut groups: Vec<&String> = occurrences
+            .iter()
+            .filter(|(n, _, _)| n == offset_name)
+            .map(|(_, g, _)| g)
+            .collect();
+        groups.dedup();
+        for group in groups {
+            let starts = occurrences
+                .iter()
+                .filter(|(n, g, _)| n == offset_name && g == group);
+            let lengths: Vec<usize> = occurrences
+                .iter()
+                .filter(|(n, g, _)| n == length_name && g == group)
+                .map(|(_, _, v)| *v)
+                .collect();
+            for ((_, _, start), len) in starts.zip(lengths) {
+                let (start, len) = (*start, len);
+                if len == 0 || start == 0 {
+                    continue;
+                }
+                let from = original.tiff_at.checked_add(start);
+                let Some(held) = from.and_then(|at| original.file.get(at..at.checked_add(len)?))
+                else {
+                    continue; // the original carrier does not hold it either
+                };
+                let to = output.tiff_at.checked_add(start);
+                let kept = to.and_then(|at| output.file.get(at..at.checked_add(len)?));
+                if kept != Some(held) {
+                    return Err(refused(format!(
+                        "maker-note {offset_name} locates {len} bytes at TIFF offset {start}{}, \
+                         which this edit would move or overwrite",
+                        if start >= original.tiff_len {
+                            " (past the end of the EXIF block)"
+                        } else {
+                            ""
+                        }
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A Canon `OriginalDecisionDataOffset` -- an `IsOffset` tag with no length
+/// tag (`UNPAIRED_OFFSETS`) -- still locates the same OriginalDecisionData
+/// block: read with the ODD reader (Canon.pm 13.59 `ReadODD`, the
+/// `Composite:OriginalDecisionData` source) from the original and the
+/// output carrier. A FILE offset in a JPEG, TIFF-relative elsewhere.
+fn verify_original_decision_data(
+    rows: &MetadataMap,
+    original: &Carrier<'_>,
+    output: &Carrier<'_>,
+    order: ByteOrder,
+) -> Result<()> {
+    debug_assert!(UNPAIRED_OFFSETS.contains(&"OriginalDecisionDataOffset"));
+    let little_endian = order == ByteOrder::LittleEndian;
+    for (key, o) in rows.all_occurrences() {
+        if !key.ends_with(":OriginalDecisionDataOffset") {
             continue;
         }
-        let from = original.tiff_at.checked_add(start);
-        let Some(held) = from.and_then(|at| original.file.get(at..at.checked_add(len)?)) else {
-            continue; // the original carrier does not hold it either
+        let Some(value) = integer(o.value.as_ref().unwrap_or(&o.raw)) else {
+            continue;
         };
-        let to = output.tiff_at.checked_add(start);
-        let kept = to.and_then(|at| output.file.get(at..at.checked_add(len)?));
-        if kept != Some(held) {
+        if value == 0 {
+            continue;
+        }
+        let (Some(was_base), Some(now_base)) = (original.odd_base, output.odd_base) else {
+            continue;
+        };
+        let locate = |carrier: &Carrier<'_>, base: usize| {
+            crate::parsers::tiff::makernotes::canon::original_decision_data::odd_block(
+                carrier.file,
+                base.saturating_add(value) as u64,
+                little_endian,
+            )
+        };
+        let was = locate(original, was_base);
+        if was.is_some() && locate(output, now_base) != was {
             return Err(refused(format!(
-                "maker-note {key} locates {len} bytes at TIFF offset {start}{}, which \
-                 this edit would move or overwrite",
-                if start >= original.tiff_len {
-                    " (past the end of the EXIF block)"
-                } else {
-                    ""
-                }
+                "maker-note OriginalDecisionDataOffset locates the OriginalDecisionData \
+                 block at {value}, which this edit would move or overwrite"
             )));
         }
     }
@@ -731,6 +953,221 @@ mod tests {
         assert_eq!(layout.table(IfdKind::ExifIfd), Some((38, 1)));
     }
 
+    /// A little-endian block, magic `magic`: IFD0 {Make, ExifIFD} @8,
+    /// "Make\0", ExifIFD {MakerNote} , the note, then `tail` (bytes after the
+    /// note, where out-of-note data lives). `note(note_at)` builds the note
+    /// once its offset is known. Returns the block and the note's offset.
+    fn note_block(
+        magic: u16,
+        make: &str,
+        note: &dyn Fn(usize) -> Vec<u8>,
+        tail: &[u8],
+    ) -> (Vec<u8>, usize) {
+        let mut make_bytes = make.as_bytes().to_vec();
+        make_bytes.push(0);
+        let make_at = 8 + 2 + 12 * 2 + 4;
+        let exif_at = make_at + make_bytes.len() + make_bytes.len() % 2;
+        let note_at = exif_at + 2 + 12 + 4;
+        let len = note(note_at).len();
+        let mut t = b"II".to_vec();
+        t.extend(le16(magic));
+        t.extend(le32(8));
+        t.extend(le16(2));
+        t.extend(le16(0x010F));
+        t.extend(le16(2));
+        t.extend(le32(make_bytes.len() as u32));
+        t.extend(le32(make_at as u32));
+        t.extend(le16(0x8769));
+        t.extend(le16(4));
+        t.extend(le32(1));
+        t.extend(le32(exif_at as u32));
+        t.extend(le32(0));
+        t.extend(&make_bytes);
+        t.resize(exif_at, 0);
+        t.extend(le16(1));
+        t.extend(le16(0x927C));
+        t.extend(le16(7));
+        t.extend(le32(len as u32));
+        t.extend(le32(note_at as u32));
+        t.extend(le32(0));
+        assert_eq!(t.len(), note_at);
+        t.extend(note(note_at));
+        t.extend(tail);
+        (t, note_at)
+    }
+
+    /// A Casio Type2 note (`QVC\0\0\0`, TIFF-relative offsets) whose
+    /// PreviewImage entries (0x2000, `copies` of them) all locate
+    /// `preview_len` bytes at `preview_at`, just past the note.
+    fn casio_note(
+        copies: usize,
+        preview_at: impl Fn(usize) -> usize,
+        preview_len: u32,
+    ) -> impl Fn(usize) -> Vec<u8> {
+        move |note_at| {
+            let rows = 1 + copies;
+            let at = preview_at(note_at + 6 + 2 + 12 * rows + 4);
+            let mut n = b"QVC\0\0\0".to_vec();
+            n.extend(le16(rows as u16));
+            n.extend(le16(0x0002));
+            n.extend(le16(3));
+            n.extend(le32(2));
+            n.extend(le16(320));
+            n.extend(le16(240));
+            for i in 0..copies {
+                n.extend(le16(0x2000));
+                n.extend(le16(7));
+                n.extend(le32(preview_len));
+                n.extend(le32((at + i * preview_len as usize) as u32));
+            }
+            n.extend(le32(0));
+            n
+        }
+    }
+
+    /// P1 "validate maker notes in RW2 files": a block of magic 85 (RW2/RWL)
+    /// is scanned with the carrier's magics, and an original that does not
+    /// scan is refused unless the write left it untouched -- never "Ok".
+    /// Red at 6e14d505: `scan_exif_entries` accepts magic 42 only, and its
+    /// `Err` was returned as `Ok(())`.
+    #[test]
+    fn a_magic_85_block_is_verified_and_an_unscannable_one_refused() {
+        let (t, note_at) = note_block(85, "CASIO", &casio_note(1, |end| end, 8), b"PREVIEW!");
+        let mut overwritten = t.clone();
+        let n = overwritten.len();
+        overwritten[n - 8..].copy_from_slice(b"DDDDDDDD");
+        let err = verify_makernote_preserved(
+            Carrier::block(&t),
+            Carrier::block(&overwritten),
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("maker-note"), "{err}");
+        verify_makernote_preserved(
+            Carrier::block(&t),
+            Carrier::block(&t),
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        )
+        .unwrap();
+        let _ = note_at;
+        // With the EXIF magics only, the same original does not scan: that
+        // is a refusal, not a pass, unless the block is untouched.
+        let err = verify_makernote_preserved(
+            Carrier::block(&t),
+            Carrier::block(&overwritten),
+            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("cannot be scanned"), "{err}");
+        verify_makernote_preserved(
+            Carrier::block(&t),
+            Carrier::block(&t),
+            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+        )
+        .unwrap();
+    }
+
+    /// P1 "compare every maker-note occurrence": two PreviewImage entries;
+    /// overwriting what the SECOND locates must refuse although the map's
+    /// winning projection may show only one of them. Red at 6e14d505.
+    #[test]
+    fn a_changed_duplicate_occurrence_is_refused() {
+        let (t, _) = note_block(
+            42,
+            "CASIO",
+            &casio_note(2, |end| end, 8),
+            b"FIRST!!!SECOND!!",
+        );
+        for which in [0usize, 1] {
+            let mut changed = t.clone();
+            let n = changed.len();
+            let at = n - 16 + 8 * which;
+            changed[at..at + 8].copy_from_slice(b"XXXXXXXX");
+            let err =
+                verify_makernote_preserved(Carrier::block(&t), Carrier::block(&changed), &[42])
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains("maker-note"), "occurrence {which}: {err}");
+        }
+    }
+
+    /// The comparison is over every recorded occurrence, in order: a
+    /// duplicate that does not win the map's lookup still counts.
+    #[test]
+    fn occurrence_rows_keep_every_duplicate() {
+        use crate::core::tag_occurrence::Instance;
+        let map = |second: &str| {
+            let mut m = MetadataMap::new();
+            m.insert_occurrence(
+                "Casio:Quality",
+                TagValue::new_string("Fine"),
+                5,
+                "Casio",
+                Instance(0),
+            );
+            m.insert_occurrence(
+                "Casio:Quality",
+                TagValue::new_string(second),
+                5,
+                "Casio",
+                Instance(1),
+            );
+            m
+        };
+        let rows = occurrence_rows(&map("Normal"));
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_ne!(rows, occurrence_rows(&map("Economy")));
+    }
+
+    /// P1 "verify readback under the output camera identity": a Canon note
+    /// (IFD at 0, TIFF-relative offsets) whose PreviewImageInfo locates a
+    /// preview past the note. Under the original Make ("Acme") no decoder
+    /// reads it; the edit makes the file a Canon, whose decoder follows the
+    /// pair -- so overwriting the preview while changing Make must refuse.
+    /// Red at 6e14d505, which decoded under the original Make only.
+    #[test]
+    fn readback_is_checked_under_the_output_identity_too() {
+        let canon = |preview_at: usize| {
+            move |note_at: usize| {
+                let info_at = note_at + 2 + 12 + 4;
+                let mut n = le16(1).to_vec();
+                n.extend(le16(0x00B6));
+                n.extend(le16(4));
+                n.extend(le32(12));
+                n.extend(le32(info_at as u32));
+                n.extend(le32(0));
+                for v in [48u32, 2, 8, 160, 120, preview_at as u32, 0, 0, 0, 0, 0, 0] {
+                    n.extend(le32(v));
+                }
+                n
+            }
+        };
+        // two passes: the preview sits right after the note
+        let (probe, _) = note_block(42, "Acme", &canon(0), b"PREVIEW!");
+        let preview_at = probe.len() - 8;
+        let (t, _) = note_block(42, "Acme", &canon(preview_at), b"PREVIEW!");
+        let (as_canon, _) = note_block(42, "Canon", &canon(preview_at), b"PREVIEW!");
+        assert_eq!(
+            as_canon.len(),
+            t.len(),
+            "Make strings of one length keep offsets"
+        );
+        // same Make: nothing changed
+        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&t), &[42]).unwrap();
+        // Make edited to Canon, preview overwritten
+        let mut edited = as_canon.clone();
+        let n = edited.len();
+        edited[n - 8..].copy_from_slice(b"DDDDDDDD");
+        let err = verify_makernote_preserved(Carrier::block(&t), Carrier::block(&edited), &[42])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("decoded as Canon"), "{err}");
+        // Make edited to Canon, preview kept: fine
+        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&as_canon), &[42]).unwrap();
+    }
+
     /// `note_references` finds the note's IFD in either byte order and
     /// after a vendor header, and returns only what lies outside the note.
     #[test]
@@ -762,12 +1199,12 @@ mod tests {
         let t = block();
         let mut changed = t.clone();
         changed[57] = b'X';
-        let err = verify_makernote_preserved(Carrier::block(&t), Carrier::block(&changed))
+        let err = verify_makernote_preserved(Carrier::block(&t), Carrier::block(&changed), &[42])
             .unwrap_err()
             .to_string();
         assert!(err.contains("MakerNote would move"), "{err}");
-        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&t)).unwrap();
+        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&t), &[42]).unwrap();
         // a dropped block is not this check's business
-        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&[])).unwrap();
+        verify_makernote_preserved(Carrier::block(&t), Carrier::block(&[]), &[42]).unwrap();
     }
 }

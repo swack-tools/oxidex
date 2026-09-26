@@ -1150,6 +1150,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 crate::writers::makernote_guard::verify_makernote_preserved(
                     crate::writers::makernote_guard::Carrier::block(file_bytes),
                     crate::writers::makernote_guard::Carrier::block(&out),
+                    crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
                 )?;
             }
         }
@@ -1283,24 +1284,10 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 // (`writers::makernote_guard`). Never on a whole clear or a
                 // carrier removal (a deleted carrier is not read), and a no-op
                 // returned above.
-                if !crate::writers::exif_surgical::removes_carrier(removed)
-                    && let (Some((was_at, was_len)), Some((now_at, now_len))) = (
-                        crate::writers::exif_surgical::jpeg_exif_block(file_bytes)?,
-                        crate::writers::exif_surgical::jpeg_exif_block(&serialized_bytes)?,
-                    )
-                {
-                    use crate::writers::makernote_guard::{Carrier, verify_makernote_preserved};
-                    verify_makernote_preserved(
-                        Carrier {
-                            file: file_bytes,
-                            tiff_at: was_at,
-                            tiff_len: was_len,
-                        },
-                        Carrier {
-                            file: &serialized_bytes,
-                            tiff_at: now_at,
-                            tiff_len: now_len,
-                        },
+                if !crate::writers::exif_surgical::removes_carrier(removed) {
+                    crate::writers::makernote_guard::verify_jpeg_makernotes(
+                        file_bytes,
+                        &serialized_bytes,
                     )?;
                 }
             }

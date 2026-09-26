@@ -22,6 +22,9 @@
 //! preview in the JPEG trailer ("beyond-tiff"). Every case runs in both byte
 //! orders and, where the carrier can hold it, in JPEG and in PNG.
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::operations::{modify_tag, read_metadata, remove_tag};
 use oxidex::core::tag_value::TagValue;
 use std::path::{Path, PathBuf};
@@ -952,5 +955,281 @@ fn bytes_a_note_addresses_in_a_deleted_table_are_kept() {
             &out[note_at..note_at + note_len],
             &t[note_at..note_at + note_len]
         );
+    }
+}
+
+/// An OriginalDecisionData block, version 3 (`ReadODD`, Canon.pm
+/// 13.59:10368-10460): `ff ff ff ff`, the version, then three
+/// length-prefixed records, the third length counting its own word.
+fn odd_block() -> Vec<u8> {
+    let mut b = vec![0xFF; 4];
+    b.extend(3u32.to_le_bytes());
+    for (len, body) in [(4u32, *b"odd1"), (4, *b"odd2"), (8, *b"odd3")] {
+        b.extend(len.to_le_bytes());
+        b.extend(body);
+    }
+    b
+}
+
+/// A little-endian Canon EXIF block whose note (IFD at 0, TIFF-relative
+/// offsets) holds an `OriginalDecisionDataOffset` (0x0083) -- a FILE offset
+/// in a JPEG (Canon.pm 13.59:1786-1795: `IsOffset` only when `FILE_TYPE ne
+/// "JPEG"`), with no length tag.
+fn canon_odd_block(odd_file_offset: u32) -> Vec<u8> {
+    let order = Order::Ii;
+    let make = ascii("Canon");
+    let model = ascii("Canon EOS-1D Mark III");
+    let ifd0_entries = |exif_at: u32| {
+        vec![
+            entry(0x010F, 2, make.len() as u32, make.clone()),
+            entry(0x0110, 2, model.len() as u32, model.clone()),
+            entry(0x0131, 2, 46, ascii(SOFTWARE)),
+            entry(0x8769, 4, 1, order.u32(exif_at).to_vec()),
+        ]
+    };
+    let exif_at = 8 + ifd(order, 8, &ifd0_entries(0), &[]).len();
+    let note_at = exif_at + 2 + 12 * 2 + 4 + 8;
+    let note = ifd(
+        order,
+        note_at,
+        &[
+            entry(0x0006, 2, 13, ascii("IMG:EOS-1D M3")),
+            entry(0x0083, 4, 1, order.u32(odd_file_offset).to_vec()),
+        ],
+        &[],
+    );
+    let mut tiff = order.mark().to_vec();
+    tiff.extend(order.u16(42));
+    tiff.extend(order.u32(8));
+    tiff.extend(ifd(order, 8, &ifd0_entries(exif_at as u32), &[]));
+    tiff.extend(ifd(
+        order,
+        exif_at,
+        &[
+            entry(0x829A, 5, 1, [order.u32(1), order.u32(60)].concat()),
+            entry(0x927C, 7, note.len() as u32, note),
+        ],
+        &[],
+    ));
+    tiff
+}
+
+/// P1 "preserve unpaired OriginalDecisionData targets": the ODD block after
+/// the image, located by the note's FILE offset. A growing JPEG edit moves
+/// it; the pinned note still holds the old offset. The write must keep the
+/// block where the offset says or be refused untouched. Red at 6e14d505:
+/// the offset was checked by nothing, the write succeeded, and the block
+/// read back as nothing (`Composite:OriginalDecisionData` gone).
+#[test]
+fn an_original_decision_data_block_after_the_image_is_never_shifted_away() {
+    let dir = tempfile::tempdir().unwrap();
+    let odd = odd_block();
+    let probe = jpeg_with(&canon_odd_block(0));
+    let odd_at = probe.len() as u32;
+    let mut file = jpeg_with(&canon_odd_block(odd_at));
+    assert_eq!(file.len(), probe.len());
+    file.extend(&odd);
+    let original = write(dir.path(), "odd.jpg", &file);
+    let map = read_metadata(&original).unwrap();
+    assert_eq!(
+        map.get("Composite:OriginalDecisionData"),
+        Some(&TagValue::Binary(odd.clone())),
+        "the reader must see the ODD block first: {:?}",
+        map.keys()
+            .filter(|k| k.contains("Decision"))
+            .collect::<Vec<_>>()
+    );
+    for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
+        let path = write(dir.path(), &format!("odd-{edit:?}.jpg"), &file);
+        match apply(&path, edit) {
+            Ok(()) => {
+                let out = std::fs::read(&path).unwrap();
+                assert_eq!(
+                    out.get(odd_at as usize..odd_at as usize + odd.len()),
+                    Some(odd.as_slice()),
+                    "{edit:?}: the ODD block moved away from its offset"
+                );
+                assert_eq!(
+                    read_metadata(&path)
+                        .unwrap()
+                        .get("Composite:OriginalDecisionData"),
+                    Some(&TagValue::Binary(odd.clone())),
+                    "{edit:?}"
+                );
+            }
+            Err(e) => {
+                assert!(
+                    e.to_string().contains("OriginalDecisionData"),
+                    "{edit:?}: {e}"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), file, "refused but modified");
+            }
+        }
+    }
+}
+
+/// The real Canon1DmkIII sample (its ODD block lies inside the note, at a
+/// FILE offset): every edit keeps `Composite:OriginalDecisionData`.
+#[test]
+fn canon_1d_mark_iii_keeps_its_original_decision_data() {
+    let Some(sample) = fixtures::pinned_t_images_fixture_path("Canon1DmkIII.jpg") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::fs::read(&sample).unwrap();
+    let odd = read_metadata(&sample)
+        .unwrap()
+        .get("Composite:OriginalDecisionData")
+        .cloned();
+    assert!(odd.is_some(), "Canon1DmkIII.jpg has an ODD block");
+    for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
+        let path = write(dir.path(), &format!("1dm3-{edit:?}.jpg"), &original);
+        apply(&path, edit).unwrap_or_else(|e| panic!("{edit:?}: {e}"));
+        assert_eq!(
+            read_metadata(&path)
+                .unwrap()
+                .get("Composite:OriginalDecisionData")
+                .cloned(),
+            odd,
+            "{edit:?}"
+        );
+    }
+}
+
+/// P1 "pin MakerNotes stored directly in top-level IFDs": a Casio Type2
+/// note in IFD0 (0x927C there, as the reader accepts it), its preview in a
+/// hole. The serializer pins only ExifIFD's note, so a re-layout moved this
+/// one and its TIFF-relative pointers dangled. Kept exactly or refused
+/// untouched. Red at 6e14d505 (moved, reported success).
+#[test]
+fn a_maker_note_in_ifd0_is_kept_in_place_or_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let order = Order::Mm;
+    let make = ascii("CASIO COMPUTER CO.,LTD");
+    let software = ascii(SOFTWARE);
+    let note_len = 6 + 2 + 12 * 2 + 4;
+    // IFD0 {Make, Software, ModifyDate, MakerNote} @8, values, note, hole
+    let ifd0_len = ifd(
+        order,
+        8,
+        &[
+            entry(0x010F, 2, make.len() as u32, make.clone()),
+            entry(0x0131, 2, software.len() as u32, software.clone()),
+            entry(0x0132, 2, 20, ascii("2003:02:28 09:45:00")),
+            entry(0x927C, 7, note_len as u32, vec![0; note_len]),
+        ],
+        &[],
+    )
+    .len();
+    let note_at = 8 + ifd0_len - note_len - note_len % 2;
+    let preview_at = 8 + ifd0_len + 2;
+    let mut note = b"QVC\0\0\0".to_vec();
+    note.extend(ifd(
+        order,
+        note_at + 6,
+        &[
+            entry(0x0002, 3, 2, [order.u16(320), order.u16(240)].concat()),
+            entry(0x2000, 7, PREVIEW.len() as u32, vec![0; PREVIEW.len()]),
+        ],
+        &[(0x2000, preview_at as u32)],
+    ));
+    assert_eq!(note.len(), note_len);
+    let mut tiff = order.mark().to_vec();
+    tiff.extend(order.u16(42));
+    tiff.extend(order.u32(8));
+    tiff.extend(ifd(
+        order,
+        8,
+        &[
+            entry(0x010F, 2, make.len() as u32, make.clone()),
+            entry(0x0131, 2, software.len() as u32, software.clone()),
+            entry(0x0132, 2, 20, ascii("2003:02:28 09:45:00")),
+            entry(0x927C, 7, note_len as u32, note.clone()),
+        ],
+        &[],
+    ));
+    assert_eq!(
+        &tiff[note_at..note_at + note_len],
+        note.as_slice(),
+        "note placed"
+    );
+    tiff.resize(preview_at, 0);
+    tiff.extend(PREVIEW);
+    for (carrier, file) in [("jpg", jpeg_with(&tiff)), ("png", png_with(&tiff))] {
+        for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
+            let path = write(dir.path(), &format!("ifd0-note-{edit:?}.{carrier}"), &file);
+            match apply(&path, edit) {
+                Ok(()) => {
+                    let out = tiff_of(&std::fs::read(&path).unwrap());
+                    assert_eq!(
+                        out.get(note_at..note_at + note_len),
+                        Some(note.as_slice()),
+                        "{carrier} {edit:?}: the IFD0 MakerNote moved"
+                    );
+                    assert_eq!(
+                        out.get(preview_at..preview_at + PREVIEW.len()),
+                        Some(PREVIEW),
+                        "{carrier} {edit:?}: its preview was overwritten"
+                    );
+                }
+                Err(e) => {
+                    assert!(
+                        e.to_string().contains("MakerNote"),
+                        "{carrier} {edit:?}: {e}"
+                    );
+                    assert_eq!(std::fs::read(&path).unwrap(), file, "refused but modified");
+                }
+            }
+        }
+    }
+}
+
+/// P1 "check every EXIF block before moving later maker notes": a JPEG
+/// with two EXIF APP1 blocks, the second a Canon block whose note locates an
+/// ODD block after the image by FILE offset. Editing the first block moves
+/// everything after it. Every block is verified: kept or refused untouched.
+/// Red at 6e14d505 (only the first block was looked at; the ODD offset of
+/// the second went stale and the write reported success).
+#[test]
+fn every_exif_block_of_a_jpeg_is_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let odd = odd_block();
+    let first = casio_block(Order::Ii, Target::Hole).0;
+    let app1 = |tiff: &[u8]| {
+        let mut s = vec![0xFF, 0xE1];
+        s.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        s.extend(b"Exif\0\0");
+        s.extend(tiff);
+        s
+    };
+    let build = |odd_at: u32| {
+        let mut f = vec![0xFF, 0xD8];
+        f.extend(app1(&first));
+        f.extend(app1(&canon_odd_block(odd_at)));
+        f.extend(&jpeg_body()[..]);
+        f
+    };
+    let odd_at = build(0).len() as u32;
+    let mut file = build(odd_at);
+    file.extend(&odd);
+    for edit in [Edit::Grow, Edit::Shrink, Edit::Same] {
+        let path = write(dir.path(), &format!("two-exif-{edit:?}.jpg"), &file);
+        match apply(&path, edit) {
+            Ok(()) => {
+                let out = std::fs::read(&path).unwrap();
+                assert_eq!(
+                    out.get(odd_at as usize..odd_at as usize + odd.len()),
+                    Some(odd.as_slice()),
+                    "{edit:?}: the second block's ODD block moved away from its offset"
+                );
+            }
+            Err(e) => {
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    file,
+                    "{edit:?}: refused but modified ({e})"
+                );
+            }
+        }
     }
 }

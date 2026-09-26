@@ -338,6 +338,7 @@ fn rewrite_exif_payload(
         crate::writers::makernote_guard::verify_makernote_preserved(
             crate::writers::makernote_guard::Carrier::block(original),
             crate::writers::makernote_guard::Carrier::block(&payload),
+            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
         )?;
     }
     Ok(payload)

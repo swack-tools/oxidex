@@ -1384,6 +1384,28 @@ fn plan_exif_write_inner(
             entry.tag_id
         )));
     }
+    // A MakerNote stored directly in a top-level directory (IFD0, GPS,
+    // InteropIFD, IFD1 -- the reader decodes one in IFD0 as it does in
+    // ExifIFD) is not pinned: the serializer pins only ExifIFD's, so a
+    // re-layout would move it and invalidate the absolute offsets inside it.
+    // Refused, unless the write deletes the directory holding it.
+    if let Some(entry) = scan.entries.iter().find(|entry| {
+        entry.tag_id == MAKERNOTE
+            && entry.ifd != IfdKind::ExifIfd
+            && entry.value.len() > 4
+            && !(entry.ifd == IfdKind::Ifd1 && groups.contains(&GroupRemoval::Ifd1))
+            && !(entry.ifd == IfdKind::Gps && groups.contains(&GroupRemoval::Gps))
+            && !(entry.ifd == IfdKind::Interop
+                && (groups.contains(&GroupRemoval::Interop)
+                    || groups.contains(&GroupRemoval::ExifIfd)))
+    }) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot rewrite this EXIF block: {} holds a MakerNote (tag 0x927C), which this \
+             writer pins only in ExifIFD; re-laying the block out would move it and \
+             invalidate the offsets inside it",
+            entry.ifd.prefix()
+        )));
+    }
     // Likewise a directory chain past IFD1 (IFD2 and on: a Leica JPEG's
     // PreviewImage IFD). The serializer writes IFD1 with a zero next-IFD
     // pointer, so the chain and the data it locates were dropped and the
@@ -2808,8 +2830,9 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
     if let Some(tiff) = tiff {
         // maker-note data outside the note survived, or nothing is written
         super::makernote_guard::verify_makernote_preserved(
-            super::makernote_guard::Carrier::block(tiff),
-            super::makernote_guard::Carrier::block(&out),
+            super::makernote_guard::Carrier::detached(tiff),
+            super::makernote_guard::Carrier::detached(&out),
+            EXIF_BLOCK_MAGICS,
         )?;
     }
     Ok(out)
@@ -3201,8 +3224,9 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
     let out = serialize_exif_keeping(&plan, Some(tiff))?;
     super::makernote_guard::verify_makernote_preserved(
-        super::makernote_guard::Carrier::block(tiff),
-        super::makernote_guard::Carrier::block(&out),
+        super::makernote_guard::Carrier::detached(tiff),
+        super::makernote_guard::Carrier::detached(&out),
+        EXIF_BLOCK_MAGICS,
     )?;
     Ok(out)
 }
@@ -3221,6 +3245,23 @@ pub(crate) fn jpeg_exif_block(file_bytes: &[u8]) -> Result<Option<(usize, usize)
                 s.data.len() - EXIF_IDENTIFIER.len(),
             )
         }))
+}
+
+/// Where the TIFF payload of every `Exif\0\0` APP1 block of a JPEG sits in
+/// the file, as `(offset, length)`, in file order.
+pub(crate) fn jpeg_exif_blocks(file_bytes: &[u8]) -> Result<Vec<(usize, usize)>> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader)?;
+    Ok(segments
+        .iter()
+        .filter(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+        .map(|s| {
+            (
+                s.offset as usize + 4 + EXIF_IDENTIFIER.len(),
+                s.data.len() - EXIF_IDENTIFIER.len(),
+            )
+        })
+        .collect())
 }
 
 /// `tiff` laid out afresh by the serializer with every entry carried

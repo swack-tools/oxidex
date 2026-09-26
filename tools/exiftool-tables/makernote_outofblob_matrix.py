@@ -145,15 +145,27 @@ def carrier_exif(path: str) -> tuple[int | None, bytes | None]:
 
 
 def structure(tiff: bytes) -> tuple[list[tuple[str, int, int]], tuple[int, int] | None]:
-    """Byte ranges the standard TIFF structures own, and the MakerNote range."""
+    """Byte ranges the standard TIFF structures own, and the (first
+    ExifIFD) MakerNote range. :func:`makernotes_of` lists every note."""
+    owned, notes = _walk_structure(tiff)
+    exif = [r for d, r in notes if d == "ExifIFD"]
+    return owned, (exif[0] if exif else None)
+
+
+def makernotes_of(tiff: bytes) -> list[tuple[str, tuple[int, int]]]:
+    """Every MakerNote (0x927C) range of the block, in any directory the
+    reader accepts one in (IFD0 before ExifIFD, as ``-v3`` prints them)."""
+    return _walk_structure(tiff)[1]
+
+
+def _walk_structure(tiff: bytes) -> tuple[list[tuple[str, int, int]], list[tuple[str, tuple[int, int]]]]:
     e = "<" if tiff[:2] == b"II" else ">"
     u16 = lambda o: struct.unpack(e + "H", tiff[o:o + 2])[0]  # noqa: E731
     u32 = lambda o: struct.unpack(e + "I", tiff[o:o + 4])[0]  # noqa: E731
     owned: list[tuple[str, int, int]] = [("header", 0, 8)]
-    note = None
+    notes: list[tuple[str, tuple[int, int]]] = []
 
     def walk(off: int, name: str) -> tuple[dict, int | None] | None:
-        nonlocal note
         if off + 2 > len(tiff):
             return None
         count = u16(off)
@@ -170,8 +182,8 @@ def structure(tiff: bytes) -> tuple[list[tuple[str, int, int]], tuple[int, int] 
             size = TYPE_SIZE.get(typ, 1) * cnt
             if size > 4:
                 owned.append((f"{name}:0x{tag:04x}", val, val + size))
-                if name == "ExifIFD" and tag == 0x927C and note is None:
-                    note = (val, val + size)  # the first: ExifTool decodes it
+                if tag == 0x927C and not any(d == name for d, _ in notes):
+                    notes.append((name, (val, val + size)))  # the first per directory
             if name == "IFD1" and tag in (0x201, 0x202):
                 ptrs[tag] = val
         nxt = u32(off + 2 + 12 * count) if off + 2 + 12 * count + 4 <= len(tiff) else None
@@ -190,7 +202,9 @@ def structure(tiff: bytes) -> tuple[list[tuple[str, int, int]], tuple[int, int] 
             ifd1 = walk(nxt, "IFD1")
             if ifd1 and 0x201 in ifd1[0] and 0x202 in ifd1[0]:
                 owned.append(("thumbnail", ifd1[0][0x201], ifd1[0][0x201] + ifd1[0][0x202]))
-    return owned, note
+    order = {"IFD0": 0, "ExifIFD": 1, "InteropIFD": 2, "GPS": 3, "IFD1": 4}
+    notes.sort(key=lambda n: order.get(n[0], 9))
+    return owned, notes
 
 
 # ----------------------------------------------------------------- survey ---
@@ -209,15 +223,19 @@ def value_targets(et: Oracle, path: str) -> list[tuple[str, str, int, int]]:
             if ("(SubDirectory) -->" in line and "MakerNote" in line and i + 1 < len(lines)
                     and "Tag 0x927c" in lines[i + 1]):
                 depth = line.count("|")
+                seen_header = False
                 i += 2
                 continue
         else:
-            if line.count("|") <= depth and re.match(r"^[\s|]*\d+\)", line):
-                break
+            # the subtree ends: look on for another MakerNote directory
+            ended = line.count("|") <= depth and re.match(r"^[\s|]*\d+\)", line)
             if line.count("|") <= depth and re.match(r"^[\s|]*\+ \[", line):
                 if seen_header:
-                    break
+                    ended = True
                 seen_header = True
+            if ended:
+                depth = None
+                continue
             m = TAG_LINE.match(line)
             if m and line.count("|") > depth and i + 1 < len(lines):
                 h = HEX_LINE.match(lines[i + 1])
@@ -230,15 +248,19 @@ def value_targets(et: Oracle, path: str) -> list[tuple[str, str, int, int]]:
 
 def offset_targets(et: Oracle, path: str) -> list[tuple[str, str, int, int]]:
     """IsOffset Start/Offset tags with a paired Length (ExifTool absolutises them)."""
-    rows = et.json(["-n", "-a", "-G1", "-MakerNotes:all"], path)
+    # -G1:4: every instance keeps its own key (`Casio:Copy1:PreviewImageStart`),
+    # where -G1 alone keeps one per group and drops the duplicates
+    rows = et.json(["-n", "-a", "-G1:4", "-MakerNotes:all"], path)
     out = []
     for key, value in rows.items():
-        group, _, name = key.partition(":")
+        parts = key.split(":")
+        name = parts[-1]
         if name not in ISOFFSET or not isinstance(value, int):
             continue
         stem = re.sub(r"(Start|Offset)$", "", name)
+        prefix = ":".join(parts[:-1])
         for suffix in ("Length", "Size", "ByteCount"):
-            length = rows.get(f"{group}:{stem}{suffix}")
+            length = rows.get(f"{prefix}:{stem}{suffix}")
             if isinstance(length, int) and length > 0:
                 out.append((name, "isoffset", value, length))
                 break
@@ -250,15 +272,17 @@ def survey_one(et: Oracle, path: str) -> dict | None:
     if tiff is None or len(tiff) < 8 or tiff[:2] not in (b"II", b"MM"):
         return None
     try:
-        owned, note = structure(tiff)
+        owned, _ = structure(tiff)
+        notes = [r for _, r in makernotes_of(tiff)]
     except struct.error:
         return None
-    if not note:
+    if not notes:
         return None
+    note_keys = {f"{d}:0x927c" for d, _ in makernotes_of(tiff)}
     refs = []
     for name, tag, off, size in value_targets(et, path) + offset_targets(et, path):
         start, end = off - base, off - base + size
-        if start >= note[0] and end <= note[1]:
+        if any(start >= a and end <= b for a, b in notes):
             continue
         if start < 0:
             cls = "before-tiff"
@@ -266,13 +290,14 @@ def survey_one(et: Oracle, path: str) -> dict | None:
             cls = "beyond-tiff"
         elif end > len(tiff):
             cls = "straddles-tiff-end"
-        elif start < note[1] and end > note[0]:
+        elif any(start < b and end > a for a, b in notes):
             cls = "mn-overlap"
         else:
-            hits = sorted({o[0] for o in owned if o[1] < end and start < o[2] and o[0] != "ExifIFD:0x927c"})
+            hits = sorted({o[0] for o in owned if o[1] < end and start < o[2] and o[0] not in note_keys})
             cls = "claimed:" + ",".join(hits) if hits else "hole"
         refs.append({"name": name, "tag": tag, "tiff_off": start, "len": size, "class": cls})
-    return {"file": path, "order": tiff[:2].decode(), "tiff_len": len(tiff), "mn": note, "out": refs}
+    return {"file": path, "order": tiff[:2].decode(), "tiff_len": len(tiff), "mn": notes[0],
+            "mns": notes, "out": refs}
 
 
 def known_ref(ref: dict) -> bool:
@@ -499,11 +524,26 @@ def variants(et: Oracle, src: str, work: Path, flip: bool = True) -> tuple[list[
     return out, notes
 
 
+def edit_readback(et: Oracle, path: str, args: list[str]) -> dict:
+    """What the requested edit addresses, read back by the oracle: the tag
+    (`-IFD0:ImageDescription=...` -> `-IFD0:ImageDescription`) or the whole
+    group (`-IFD1:All=` -> `-IFD1:All`), every instance. Equal for oxidex's
+    and the oracle's output of the same edit, or the edit did not happen as
+    requested (a silent no-op reports success and changes nothing)."""
+    wanted = [a.split("=", 1)[0] for a in args if a.startswith("-") and "=" in a]
+    rows = et.json(["-a", "-G1:4", "-n", *wanted], path)
+    rows.pop("SourceFile", None)
+    return rows
+
+
 def run_cells(et: Oracle, binaries: dict[str, str], src: str, root: Path, sets: str = "basic",
               flip: bool = True) -> list[dict]:
     """Every cell of one source; the oracle edits each cell once and every
     oxidex binary (``label -> path``) is judged against that same edit."""
-    work = root / re.sub(r"[^A-Za-z0-9._-]", "_", src.split("combined-samples/")[-1].split("t/images/")[-1])
+    # collision-free: the readable tail plus a hash of the full source path
+    # (two corpora can hold the same relative name)
+    tail = re.sub(r"[^A-Za-z0-9._-]", "_", src.split("combined-samples/")[-1].split("t/images/")[-1])
+    work = root / f"{tail}-{hashlib.sha256(src.encode()).hexdigest()[:12]}"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
@@ -545,7 +585,14 @@ def run_cells(et: Oracle, binaries: dict[str, str], src: str, root: Path, sets: 
                     rec["preview_verdict"] = preview_verdict(orig_preview, et_preview, ox_preview)
                     rec["ox_preview"], rec["et_preview"] = ox_preview, et_preview
                     rec["validate_parity"] = et_preview is None or ox_preview["warnings"] == et_preview["warnings"]
-                    if et_ok:
+                    rec["mn_rows"] = sum(len(v) for v in before.values())
+                    if et_ok and edit_readback(et, str(ox_path), args) != edit_readback(et, str(et_path), args):
+                        # the requested edit did not happen (or not as the
+                        # oracle's did): never counted as a match
+                        rec["verdict"] = "edit-not-applied"
+                        rec["edit_ox"] = edit_readback(et, str(ox_path), args)
+                        rec["edit_et"] = edit_readback(et, str(et_path), args)
+                    elif et_ok:
                         if ox_rb == et_rb:
                             rec["verdict"] = "match"
                         elif ox_rb == before:
@@ -564,7 +611,7 @@ def run_cells(et: Oracle, binaries: dict[str, str], src: str, root: Path, sets: 
     return records
 
 
-VERDICTS = ("match", "match-orig", "refused-untouched", "refused-modified", "corrupt")
+VERDICTS = ("match", "match-orig", "refused-untouched", "refused-modified", "corrupt", "edit-not-applied")
 
 
 def summarize(records: list[dict]) -> None:
@@ -585,7 +632,7 @@ def summarize(records: list[dict]) -> None:
         pv = r.get("preview_verdict")
         if pv in ("lost", "mis-pointed", "differs-from-oracle"):
             by[key][f"{pv}:{r.get('binary', 'ox')}"] += 1
-        if r["verdict"] in ("corrupt", "refused-modified"):
+        if r["verdict"] in ("corrupt", "refused-modified", "edit-not-applied"):
             by[key][f"corrupt:{r.get('binary', 'ox')}"] += 1
         if r["verdict"] == "refused-untouched":
             by[key][f"refused:{r.get('binary', 'ox')}"] += 1
@@ -617,7 +664,7 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("survey")
     s.add_argument("files", help="file listing JPEG paths, one per line")
-    s.add_argument("--jobs", type=int, default=4)
+    s.add_argument("--jobs", type=int, default=2, help="workers (AGENTS.md: at most ~2 heavy waves)")
     s.add_argument("--out", required=True)
     s.add_argument("--min-files", type=int, default=1)
     sel = sub.add_parser("select")
@@ -634,7 +681,10 @@ def main() -> int:
     m.add_argument("--no-flip", action="store_true", help="skip the byte-order-flipped variant")
     m.add_argument("--out", required=True, help="JSONL of every cell")
     m.add_argument("--work", default=None)
-    m.add_argument("--jobs", type=int, default=4)
+    m.add_argument("--jobs", type=int, default=2, help="workers (AGENTS.md: at most ~2 heavy waves)")
+    m.add_argument("--min-mn-tags", type=int, default=1000,
+                   help="floor on maker-note rows compared (summed over the first binary's cells): "
+                        "a degraded oracle reads none and every cell would 'match'")
     m.add_argument("--min-cells", type=int, default=1)
     args = ap.parse_args()
 
@@ -677,10 +727,14 @@ def main() -> int:
     sys.stdout.flush()
 
     if args.cmd == "survey":
+        rows = []
         with ThreadPoolExecutor(args.jobs) as ex, open(args.out, "w") as out:
-            rows = [r for r in ex.map(lambda f: survey_one(et, f), files) if r is not None]
-            for r in rows:
-                out.write(json.dumps(r) + "\n")
+            # streamed: a row is on disk as soon as its file is surveyed
+            for r in ex.map(lambda f: survey_one(et, f), files):
+                if r is not None:
+                    out.write(json.dumps(r) + "\n")
+                    out.flush()
+                    rows.append(r)
         if len(rows) < args.min_files:
             sys.exit(f"❌ only {len(rows)} maker-note files surveyed (< --min-files {args.min_files})")
         hit = [r for r in rows if any(known_ref(o) for o in r["out"])]
@@ -703,7 +757,13 @@ def main() -> int:
     summarize(records)
     if cells < args.min_cells:
         sys.exit(f"❌ only {cells} cells ran (< --min-cells {args.min_cells}); refusing to report a number")
-    bad = sum(1 for r in records if r.get("verdict") in ("corrupt", "refused-modified"))
+    first = next(iter(binaries), None)
+    mn_rows = sum(r.get("mn_rows", 0) for r in records if r.get("binary") == first)
+    print(f"maker-note rows compared ({first}): {mn_rows}")
+    if mn_rows < args.min_mn_tags:
+        sys.exit(f"❌ only {mn_rows} maker-note rows compared (< --min-mn-tags {args.min_mn_tags}); "
+                 "the oracle read-back looks degraded -- refusing to report a number")
+    bad = sum(1 for r in records if r.get("verdict") in ("corrupt", "refused-modified", "edit-not-applied"))
     return 1 if bad else 0
 
 
