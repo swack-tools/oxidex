@@ -219,10 +219,11 @@ fn is_file_system_fact(key: &str) -> bool {
 /// The requests a whole-map write makes of the file whose current map is
 /// `baseline`. When `deletions` -- `desired` is a read of this same file
 /// (`MetadataMap::read_from`) -- the rows its caller assigned are the sets,
-/// and every row the read saw (`MetadataMap::read_saw`) that `baseline`
-/// still holds and `desired` lacks is a row its caller removed, and a
-/// deletion; a row the file gained since the read (an earlier write from
-/// this map) is neither. Otherwise every row of `desired` that is new or
+/// and every row the view observed or its caller successfully saved
+/// (`MetadataMap::read_saw`) that `baseline` still holds and `desired`
+/// lacks is a row its caller removed, and a deletion. Writer seeds and
+/// rows excluded by a projection never establish deletion intent. Otherwise
+/// every row of `desired` that is new or
 /// differs is a set, and (a map built from
 /// scratch, or read from another file) nothing is deleted: ExifTool's
 /// SetNewValue model, where a tag nobody named is never touched (ExifTool.pod,
@@ -284,10 +285,9 @@ pub(crate) fn changes_between(
         return changes;
     }
     for (key, _) in baseline.iter() {
-        // Only a row the read saw can be one its caller removed: a row the
-        // file gained since (a write from this same map seeding an
-        // ExifIFD's mandatory entries) is not a deletion -- when unsure,
-        // nothing is deleted.
+        // Read rows and successfully saved caller rows can be removals.
+        // Shared identity refresh does not make writer seeds or filtered-out
+        // rows visible to this view's caller.
         if row_of(desired, key).is_some() || is_descriptive(key) || !desired.read_saw(key) {
             continue;
         }

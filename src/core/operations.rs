@@ -375,9 +375,10 @@ pub fn read_metadata_with_detector_and_options(
     // Everything recorded by the read is the file's own; what a caller
     // inserts or mutates afterwards is an assignment
     // (`MetadataMap::is_assigned`).
+    let source = MetadataMap::capture_read_source(path);
     read_metadata_unmarked(path, detector_mode, options).map(|mut metadata| {
         metadata.mark_read_complete();
-        metadata.set_read_source(path);
+        metadata.set_read_source_identity(path, source);
         metadata
     })
 }
@@ -642,9 +643,10 @@ pub fn read_metadata_report_with_detector_and_options(
 ) -> Result<ReadReport> {
     // As `read_metadata_with_detector_and_options`: the read's occurrences
     // are the file's, later insertions are assignments.
+    let source = MetadataMap::capture_read_source(path);
     read_metadata_report_unmarked(path, detector_mode, options).map(|mut report| {
         report.metadata.mark_read_complete();
-        report.metadata.set_read_source(path);
+        report.metadata.set_read_source_identity(path, source);
         report
     })
 }
@@ -1066,7 +1068,32 @@ pub(crate) fn write_metadata_counted(
         // the file already holds this map: nothing to write
         return Ok((WriteOutcome::Unchanged, 0));
     }
-    crate::core::write_transaction::apply_tag_changes_counted(path, &changes)
+    let result = crate::core::write_transaction::apply_tag_changes_counted(path, &changes)?;
+    Ok(finish_metadata_write(
+        metadata,
+        &baseline,
+        read,
+        result,
+        || read_metadata(path),
+    ))
+}
+
+/// A failed optional refresh cannot turn an already committed, proven write
+/// into an error promising unchanged bytes, or advance deletion authority.
+fn finish_metadata_write(
+    metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    read: bool,
+    result: (WriteOutcome, usize),
+    reread: impl FnOnce() -> Result<MetadataMap>,
+) -> (WriteOutcome, usize) {
+    if read
+        && result.0 == WriteOutcome::Updated
+        && let Ok(saved) = reread()
+    {
+        metadata.record_write_success(&saved, baseline);
+    }
+    result
 }
 
 /// The removal calls of a read map's log (`mutations`) that the map's rows
@@ -4076,5 +4103,49 @@ mod removal_then_set_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod provenance_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn committed_write_remains_successful_when_provenance_reread_fails() {
+        use crate::core::write_transaction::{TagChange, apply_tag_changes_counted};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("refresh.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let baseline = read_metadata(&path).unwrap();
+        let mut desired = baseline.clone();
+        desired.insert("IFD0:Artist", TagValue::new_string("committed"));
+        let committed = apply_tag_changes_counted(
+            &path,
+            &[TagChange::set(
+                "IFD0:Artist",
+                TagValue::new_string("committed"),
+            )],
+        )
+        .unwrap();
+        let result = finish_metadata_write(&desired, &baseline, true, committed, || {
+            Err(ExifToolError::IoError(std::io::Error::other(
+                "injected reread failure after commit",
+            )))
+        });
+        assert_eq!(result.0, WriteOutcome::Updated);
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("committed")
+        );
+        desired.remove("IFD0:Artist");
+        assert_eq!(
+            write_metadata(&path, &desired).unwrap(),
+            WriteOutcome::Unchanged
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("committed")
+        );
     }
 }

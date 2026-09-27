@@ -86,18 +86,105 @@ impl PartialEq for MetadataMap {
     }
 }
 
-/// The snapshot a read took: the file it read, canonicalized, and every key
-/// it produced. A map deletes only rows of this snapshot that its caller
-/// removed -- never a row it never saw, which is what a write made after the
-/// read may add (creating an ExifIFD seeds `ExifVersion`,
-/// `ComponentsConfiguration` and `ColorSpace`): a map written twice compared
-/// the second file against the first read's rows and deleted the seeded
-/// ones as "removals" (#957, PRRT_kwDOQNbr5M6mO8E4). Shared, so the many
-/// clones a read map goes through do not copy the key set.
+/// Each view keeps its own read keys and explicit removals. Clones share the
+/// successfully saved files and caller-written keys, so atomic replacement
+/// does not invalidate them. Birth stamps guard against inode reuse without
+/// retaining descriptors. Surviving hardlinks keep their value identities.
 #[derive(Debug, Clone)]
 struct ReadSource {
-    path: std::path::PathBuf,
-    keys: std::sync::Arc<std::collections::HashSet<String>>,
+    keys: std::collections::HashSet<String>,
+    removed_assignments: std::collections::HashSet<String>,
+    source: Option<SourceIdentity>,
+    saved: std::sync::Arc<std::sync::Mutex<SavedSource>>,
+}
+
+#[derive(Debug)]
+struct SavedSource {
+    identities: std::collections::HashSet<FileIdentity>,
+    caller_keys: std::collections::HashSet<String>,
+}
+
+/// A file's stable identity, including its immutable creation stamp so an
+/// unlinked inode reused by a replacement does not acquire deletion authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FileIdentity {
+    device: u64,
+    index: u64,
+    birth: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceIdentity {
+    identity: FileIdentity,
+    links: u64,
+}
+
+fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).ok()?;
+        // If the filesystem cannot supply a birth stamp, fail closed for
+        // deletion authority instead of guessing or hashing every file.
+        let birth = metadata
+            .created()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some(SourceIdentity {
+            identity: FileIdentity {
+                device: metadata.dev(),
+                index: metadata.ino(),
+                birth,
+            },
+            links: metadata.nlink(),
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileInformation {
+            attributes: u32,
+            creation_time: [u32; 2],
+            access_time: [u32; 2],
+            write_time: [u32; 2],
+            volume_serial: u32,
+            size_high: u32,
+            size_low: u32,
+            links: u32,
+            index_high: u32,
+            index_low: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandle(
+                handle: *mut std::ffi::c_void,
+                information: *mut FileInformation,
+            ) -> i32;
+        }
+        let file = std::fs::File::open(path).ok()?;
+        let mut information = FileInformation::default();
+        // SAFETY: File owns a live handle and information has the Win32
+        // BY_HANDLE_FILE_INFORMATION layout and is writable for this call.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+        (ok != 0).then_some(SourceIdentity {
+            identity: FileIdentity {
+                device: u64::from(information.volume_serial),
+                index: (u64::from(information.index_high) << 32) | u64::from(information.index_low),
+                birth: (u128::from(information.creation_time[1]) << 32)
+                    | u128::from(information.creation_time[0]),
+            },
+            links: u64::from(information.links),
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -222,60 +309,100 @@ impl MetadataMap {
     /// Records the file this map was read from (`read_metadata`), with the
     /// keys the read produced: the snapshot [`Self::read_saw`] answers from.
     pub(crate) fn set_read_source(&mut self, path: &std::path::Path) {
+        self.set_read_source_identity(path, Self::capture_read_source(path));
+    }
+
+    pub(crate) fn capture_read_source(path: &std::path::Path) -> Option<SourceIdentity> {
+        file_identity(path)
+    }
+
+    pub(crate) fn set_read_source_identity(
+        &mut self,
+        path: &std::path::Path,
+        before: Option<SourceIdentity>,
+    ) {
+        // Bound the actual read with two identity observations. A replacement
+        // during parsing cannot silently become this map's deletion source.
+        let source = before.and_then(|before| {
+            file_identity(path).filter(|after| before.identity == after.identity)
+        });
         self.read_source = Some(ReadSource {
-            path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
-            keys: std::sync::Arc::new(self.keys().cloned().collect()),
+            keys: self.keys().cloned().collect(),
+            removed_assignments: Default::default(),
+            source,
+            saved: std::sync::Arc::new(std::sync::Mutex::new(SavedSource {
+                identities: source.into_iter().map(|source| source.identity).collect(),
+                caller_keys: Default::default(),
+            })),
         });
     }
 
-    /// Gives this map `source`'s read provenance ([`Self::read_from`]): for
-    /// a projection of that read under the same keys
-    /// (`tag_normalization::normalize_metadata_map`,
-    /// [`Self::without_print_conv`], ...), so a row its caller then removes is
-    /// a deletion there as it is in the read itself. Keep removals already
-    /// present in the source; discard only rows the projection itself left
-    /// out, since filtering a row is not a request to delete it.
+    /// Filtering excludes rows, while preserving prior explicit removals.
     pub(crate) fn inherit_read_source(&mut self, source: &MetadataMap) {
         self.read_source = source.read_source.as_ref().map(|read| {
             let retained = |key: &String| self.contains_key(key) || !source.contains_key(key);
-            let keys = if read.keys.iter().all(retained) {
-                std::sync::Arc::clone(&read.keys)
-            } else {
-                std::sync::Arc::new(
-                    read.keys
-                        .iter()
-                        .filter(|key| retained(key))
-                        .cloned()
-                        .collect(),
-                )
-            };
             ReadSource {
-                path: read.path.clone(),
-                keys,
+                keys: read
+                    .keys
+                    .iter()
+                    .filter(|key| retained(key))
+                    .cloned()
+                    .collect(),
+                removed_assignments: read
+                    .removed_assignments
+                    .iter()
+                    .filter(|key| retained(key))
+                    .cloned()
+                    .collect(),
+                source: read.source,
+                saved: std::sync::Arc::clone(&read.saved),
             }
         });
     }
 
-    /// Whether this map is a read of the file at `path` (or a projection of
-    /// one): the one case in which a row the map lacks can be a row its
-    /// caller removed, and so a deletion `write_metadata` applies -- for the
-    /// rows the read saw ([`Self::read_saw`]). A map built from scratch, or
-    /// read from another file, names only what it sets.
+    /// Stable file identity, shared across successful saves and clones.
+    /// Path spellings never establish deletion authority.
     pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
         self.read_source.as_ref().is_some_and(|read| {
-            std::fs::canonicalize(path).map_or(read.path == path, |path| read.path == path)
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            file_identity(path).is_some_and(|target| saved.identities.contains(&target.identity))
         })
     }
 
-    /// Whether the read this map came from produced `key`. Only such a row,
-    /// once removed, is a deletion: a row a later write added (a seeded
-    /// mandatory entry, a created directory's pointer) was never the
-    /// caller's to remove, so a map written again after a write can never
-    /// delete it.
+    /// Only observed read rows or successfully saved caller rows can be removed.
     pub(crate) fn read_saw(&self, key: &str) -> bool {
-        self.read_source
-            .as_ref()
-            .is_some_and(|read| read.keys.contains(key))
+        self.read_source.as_ref().is_some_and(|read| {
+            read.keys.contains(key)
+                || (read.removed_assignments.contains(key)
+                    && read
+                        .saved
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .caller_keys
+                        .contains(key))
+        })
+    }
+
+    /// Refresh only after an updated transaction and its successful read-back.
+    /// Writer seeds never enter caller_keys; the map's public rows stay intact.
+    pub(crate) fn record_write_success(&self, saved_map: &MetadataMap, baseline: &MetadataMap) {
+        if let (Some(read), Some(written)) = (&self.read_source, &saved_map.read_source) {
+            let Some(written) = written.source else {
+                return;
+            };
+            let mut saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(previous) = baseline.read_source.as_ref().and_then(|read| read.source)
+                && previous.links <= 1
+            {
+                saved.identities.remove(&previous.identity);
+            }
+            saved.identities.insert(written.identity);
+            saved.caller_keys.extend(
+                self.keys()
+                    .filter(|key| self.is_assigned(key) && saved_map.contains_key(key))
+                    .cloned(),
+            );
+        }
     }
 
     /// Uninterpreted blocks in parser encounter order, separate from named tags.
@@ -796,6 +923,11 @@ impl MetadataMap {
     ///
     /// Returns the value if the tag existed, `None` otherwise.
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
+        if self.is_assigned(key)
+            && let Some(read) = &mut self.read_source
+        {
+            read.removed_assignments.insert(key.to_owned());
+        }
         self.sink.remove(key)
     }
 
@@ -816,6 +948,14 @@ impl MetadataMap {
 
     /// Clears all tags from the map
     pub fn clear(&mut self) {
+        let assigned: Vec<_> = self
+            .keys()
+            .filter(|key| self.is_assigned(key))
+            .cloned()
+            .collect();
+        if let Some(read) = &mut self.read_source {
+            read.removed_assignments.extend(assigned);
+        }
         self.sink.clear();
         self.raw_blocks.clear();
     }
@@ -1033,6 +1173,64 @@ mod tests {
             "filter exclusion is not a removal"
         );
         assert!(filtered.read_saw("IFD0:Model"));
+    }
+
+    #[test]
+    fn replacement_between_read_observations_grants_no_deletion_authority() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("observed.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let before = MetadataMap::capture_read_source(&path);
+        let replacement = directory.path().join("replacement.jpg");
+        std::fs::copy(&path, &replacement).unwrap();
+        let mut seed = MetadataMap::new();
+        seed.insert("IFD0:Artist", TagValue::new_string("replacement"));
+        write_metadata(&replacement, &seed).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let mut observed = read_metadata(&path).unwrap();
+        observed.set_read_source_identity(&path, before);
+        observed.remove("IFD0:Artist");
+        assert_eq!(
+            write_metadata(&path, &observed).unwrap(),
+            crate::core::WriteOutcome::Unchanged
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("replacement")
+        );
+    }
+
+    #[test]
+    fn filtered_view_does_not_delete_a_reinserted_saved_caller_row() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("filtered.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let mut source = read_metadata(&path).unwrap();
+        source.insert("IFD0:Artist", TagValue::new_string("saved"));
+        write_metadata(&path, &source).unwrap();
+        source.remove("IFD0:Artist");
+        source.insert("IFD0:Artist", TagValue::new_string("saved"));
+        let mut filtered = MetadataMap::new();
+        for (key, value) in source
+            .iter()
+            .filter(|(key, _)| key.as_str() != "IFD0:Artist")
+        {
+            filtered.insert(key.clone(), value.clone());
+        }
+        filtered.copy_provenance_from(&source);
+        filtered.inherit_read_source(&source);
+        assert_eq!(
+            write_metadata(&path, &filtered).unwrap(),
+            crate::core::WriteOutcome::Unchanged
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("saved")
+        );
     }
 
     /// Provenance is a property of each occurrence, driven by the public
