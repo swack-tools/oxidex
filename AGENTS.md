@@ -546,6 +546,22 @@ So stacked branches are kept current by rebasing, not by merge commits.
   `pull_request` trigger does not subscribe to, so only the push that follows
   starts a CI run against the new base. If the tip merge was already pushed
   before retargeting, re-run CI explicitly.
+- **Pre-review every push with the local Codex reviewer.** Before pushing any
+  PR head (a stack layer, a fix commit, or a rebased layer), run the local
+  Codex reviewer on it from the worktree:
+  `codex review -c model_reasoning_effort="high" --commit <sha>` for one
+  commit, or `--base <branch below>` for a whole layer. It is the same reviewer
+  the GitHub app runs, and it reads this AGENTS.md. Fix every valid finding, or
+  explain why it's invalid, and re-run until it comes back clean.
+  - This applies even when the GitHub reviewer already approved the same code.
+    Reviews aren't deterministic, and the GitHub app re-reviews every new head:
+    #958 got a 👍 at 13577739, then 3 new P2s on the identical tree at 14fe93f8.
+  - For write-path or higher-risk layers, run the local review twice. Treat a
+    finding from either run as real.
+  - A clean local pass reduces GitHub review rounds but doesn't guarantee zero.
+    Record in `HANDOFF.md` how many new findings the GitHub app still raises
+    after a clean local pass. If that stays above zero, raise the local effort
+    or add a second, independent reviewer.
 - **Landing.** Every layer still meets "How work lands" on its own:
   - CI green;
   - no unresolved review thread;
