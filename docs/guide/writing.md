@@ -82,7 +82,8 @@ oxidex -TagsFromFile src.jpg -EXIF:Artist dest.jpg
   `photo.jpg.bak` first. `-overwrite_original` is not an OxiDex option.
 - `--readonly` refuses every write, and `--preserve-file-times` restores
   the modification time afterwards.
-- Each `-TAG=VALUE` is applied as its own read and write.
+- Assignments, copies, and deletions in one command form a transaction for
+  each destination file. A refused request leaves that file unchanged.
 - `-all=` writes an empty tag set through the same format writer. What that
   removes depends on the writer, and it has not been compared with
   ExifTool's `-all=`.
@@ -93,6 +94,10 @@ oxidex -TagsFromFile src.jpg -EXIF:Artist dest.jpg
   group OxiDex cannot (XMP into a JPEG, a maker note block), the copy says
   so: `Warning: Not copied from src.jpg: oxidex cannot write the XMP-tiff
   group(s) here`, and `copy_metadata_report` lists each tag.
+  An explicit named copy refuses the transaction if its surviving destination
+  cannot be written. Group and wildcard selections use the best-effort behavior
+  above. ExifTool may skip a named read-only field and still write other fields;
+  OxiDex refuses that combination to avoid silently dropping an explicit request.
 
 ## From Rust
 

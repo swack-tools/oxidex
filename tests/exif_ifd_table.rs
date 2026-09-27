@@ -1037,14 +1037,13 @@ fn tiff_entries(tiff: &[u8]) -> Vec<(u16, u16, u32, Vec<u8>)> {
 
 /// Review finding (E-2, found while fixing the PNG writer): `-TagsFromFile`
 /// handed a binary tag's `(Binary data 4 bytes, ...)` placeholder to the
-/// writer as text. A copy now converts what pinned 13.59 copies -- the value
-/// as it prints it, or a binary tag's data -- and copies only what 13.59
-/// copies (#957 round 8): Exif.pm's 0xa40b DeviceSettingDescription has no
-/// `Writable`, so pinned 13.59 `-TagsFromFile SRC -ExifIFD:DeviceSettingDescription
-/// -ExifIFD:ColorSpace` onto t/images/Nikon.jpg writes no 0xa40b and
-/// ColorSpace as its SHORT (`-n` 2).
+/// writer as text. Exif.pm's 0xa40b DeviceSettingDescription has no
+/// `Writable`, so pinned 13.59 skips it while copying ColorSpace as SHORT
+/// (`-n` 2). An explicit named OxiDex request instead refuses atomically
+/// when any surviving destination is unwritable. A wildcard selection keeps
+/// the best-effort behavior and must never write the binary placeholder.
 #[test]
-fn copy_metadata_copies_what_exiftool_copies() {
+fn copy_metadata_refuses_unwritable_names_and_copies_selected_fields() {
     let Some(path) = fixtures::pinned_t_images_fixture_path("Nikon.jpg") else {
         return;
     };
@@ -1085,8 +1084,20 @@ fn copy_metadata_copies_what_exiftool_copies() {
         "ExifIFD:DeviceSettingDescription".to_string(),
         "ExifIFD:ColorSpace".to_string(),
     ];
-    oxidex::core::operations::copy_metadata(src.path(), dst.path(), Some(&tags))
-        .expect("the copy succeeds");
+    let error = oxidex::core::operations::copy_metadata(src.path(), dst.path(), Some(&tags))
+        .expect_err("a named unwritable destination refuses the entire copy");
+    assert!(matches!(
+        error,
+        oxidex::error::ExifToolError::TagsNotWritten { tags }
+            if tags.iter().any(|tag| tag.tag == "ExifIFD:DeviceSettingDescription")
+    ));
+    assert_eq!(std::fs::read(dst.path()).unwrap(), dest_bytes);
+    oxidex::core::operations::copy_metadata(
+        src.path(),
+        dst.path(),
+        Some(&["ExifIFD:*".to_string()]),
+    )
+    .expect("a selection copies the writable fields");
     let written = std::fs::read(dst.path()).expect("read back");
     let entries = tiff_entries(&tiff_block_of(&written));
     assert!(
