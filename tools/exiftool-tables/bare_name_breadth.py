@@ -76,9 +76,14 @@ def parse_grouped(text: str) -> list[tuple[str, str, str]]:
 
 
 def run(argv: list[str], timeout: int = 120) -> str:
-    return subprocess.run(  # nosec B603 -- list argv
+    proc = subprocess.run(  # nosec B603 -- list argv
         argv, capture_output=True, text=True, errors="replace", timeout=timeout
-    ).stdout
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"child command failed (exit {proc.returncode}): {' '.join(argv)}\n{proc.stderr}"
+        )
+    return proc.stdout
 
 
 def multi_group_names(rows: list[tuple[str, str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -99,6 +104,10 @@ def oracle_answers(oracle, path: Path, names: list[str]) -> dict[str, str]:
         argv, input="\n".join(args) + "\n", capture_output=True, text=True,
         errors="replace", timeout=600,
     )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"oracle batch failed (exit {proc.returncode}) for {path.name}: {proc.stderr}"
+        )
     answers: dict[str, list[str]] = {}
     current = None
     for line in proc.stdout.split("\n"):

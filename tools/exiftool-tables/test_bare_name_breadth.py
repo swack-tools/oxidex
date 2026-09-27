@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def load():
@@ -54,6 +55,41 @@ class BareNameBreadthTests(unittest.TestCase):
         # the winning group is absent from oxidex's -a -G1 output
         only_exif = [("ExifIFD", "MeteringMode", "Average")]
         self.assertEqual(classify("MeteringMode", "Multi-segment", "Average", oracle_rows, only_exif), "WINNER_ABSENT")
+
+
+class BareNameBreadthChildFailureTests(unittest.TestCase):
+    """A nonzero-exit child (crashed parser, killed process, denied exec)
+    must abort the run instead of being read as an empty/valid answer --
+    the ignored-returncode bug the run() helper and oracle_answers() shared.
+    """
+
+    def setUp(self):
+        self.tool = load()
+
+    def test_run_raises_on_nonzero_exit_with_stderr(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="oxidex: panicked")
+        with mock.patch.object(self.tool.subprocess, "run", return_value=failed):
+            with self.assertRaises(SystemExit) as ctx:
+                self.tool.run(["oxidex", "-s3", "-MeteringMode", "x.jpg"])
+        message = str(ctx.exception)
+        self.assertIn("exit 1", message)
+        self.assertIn("oxidex: panicked", message)
+
+    def test_run_returns_stdout_on_success(self):
+        ok = mock.Mock(returncode=0, stdout="Multi-segment\n", stderr="")
+        with mock.patch.object(self.tool.subprocess, "run", return_value=ok):
+            self.assertEqual(self.tool.run(["oxidex"]), "Multi-segment\n")
+
+    def test_oracle_answers_raises_on_nonzero_exit_with_stderr(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="perl: died")
+        oracle = mock.Mock()
+        oracle.command.return_value = ["fake-exiftool", "-@", "-"]
+        with mock.patch.object(self.tool.subprocess, "run", return_value=failed):
+            with self.assertRaises(SystemExit) as ctx:
+                self.tool.oracle_answers(oracle, Path("x.jpg"), ["MeteringMode"])
+        message = str(ctx.exception)
+        self.assertIn("exit 1", message)
+        self.assertIn("perl: died", message)
 
 
 if __name__ == "__main__":
