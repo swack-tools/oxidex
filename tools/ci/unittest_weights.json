@@ -73,6 +73,7 @@
   "test_lens_rf_absence": 3.1,
   "test_load_oracle_ledger": 0.1,
   "test_mandatory_defaults": 0.1,
+  "test_merge_dump_shards": 95.0,
   "test_minolta_deparse": 0.1,
   "test_module_absence": 2.4,
   "test_module_entry_absence": 0.1,

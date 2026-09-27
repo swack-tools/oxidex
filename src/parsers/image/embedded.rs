@@ -11,7 +11,8 @@
 use crate::core::MetadataMap;
 use crate::core::tag_conversion::exif_entry_to_tag_value;
 use crate::core::tiff_helpers::{
-    parse_exif_subifd_with_session, parse_gps_subifd, parse_ifd1_directory,
+    Ifd0Arbiter, parse_exif_subifd_with_session, parse_gps_subifd, parse_ifd1_directory,
+    physical_entry_indices,
 };
 use crate::exiftool_tables::Ctx;
 use crate::exiftool_tables::session::Session;
@@ -111,9 +112,11 @@ pub fn parse_embedded_exif_at(
         return false;
     };
 
-    let mut exif_ifd_offset = None;
-    let mut gps_ifd_offset = None;
     let mut full_resolution_ifd0 = false;
+    // ExifTool's encounter order and priorities (`Ifd0Arbiter`): the ExifIFD
+    // is read at IFD0's pointer entry.
+    let mut arbiter = Ifd0Arbiter::default();
+    let physical_indices = physical_entry_indices(&reader, ifd0_offset, byte_order, &entries);
     let mut session = Session::new();
     let mut members = std::collections::HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
@@ -132,21 +135,58 @@ pub fn parse_embedded_exif_at(
     )
     .map(|engine| engine.keep_hand(EMBEDDED_IFD0_HAND_KEPT));
 
-    for (tag_id, field_type, value_count, raw_bytes) in &entries {
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in entries.iter().enumerate()
+    {
         let bytes = raw_bytes.as_ref();
+        // Rows of entries the parser skipped, at their own position.
+        if let (Some(engine), Some(entry_index)) = (
+            engine.as_mut(),
+            physical_indices
+                .as_deref()
+                .and_then(|indices| indices.get(survivor_index)),
+        ) {
+            arbiter.route_unreached(engine, Some(*entry_index), metadata, |name| {
+                format!("IFD0:{name}")
+            });
+        }
+        arbiter.see_entry(*tag_id, *field_type, bytes, byte_order);
 
         // Sub-IFD pointers are structural, not tags ExifTool reports here.
+        // ExifTool reads the ExifIFD at its pointer entry, before the IFD0
+        // entries after it.
         if *tag_id == EXIF_IFD_POINTER && bytes.len() >= 4 {
-            exif_ifd_offset = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from);
+            if let Some(offset) = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from) {
+                // `tiff_data` itself is the enclosing block (ExifTool's
+                // `$dataLen`); `tiff_base` only shifts the offsets that get
+                // *reported*, see above.
+                parse_exif_subifd_with_session(
+                    &reader,
+                    offset,
+                    byte_order,
+                    tiff_base,
+                    tiff_data.len() as u64,
+                    &mut session,
+                    &mut cond_ctx,
+                    arbiter.copies(),
+                    metadata,
+                );
+            }
             continue;
         }
         if *tag_id == GPS_IFD_POINTER && bytes.len() >= 4 {
-            gps_ifd_offset = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from);
+            if let Some(offset) = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from) {
+                parse_gps_subifd(&reader, offset, byte_order, metadata);
+            }
             continue;
         }
 
         // The engine's row for this entry, at this entry's position, or the
         // hand arm below when the engine leaves it.
+        if let Some(engine) = engine.as_mut() {
+            engine.demote_next_row(*tag_id, |name, priority_zero| {
+                arbiter.records_at_zero(metadata, name, priority_zero)
+            });
+        }
         if let Some(engine) = engine.as_mut()
             && engine.take_ifd0(*tag_id, metadata)
         {
@@ -163,6 +203,13 @@ pub fn parse_embedded_exif_at(
         };
 
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
+        let hand_priority = arbiter.hand_priority(
+            metadata,
+            *tag_id,
+            tag_name
+                .split_once(':')
+                .map_or(tag_name.as_str(), |(_, name)| name),
+        );
         // Exif.pm 13.59:445-501: only SubfileType=0/OldSubfileType=1
         // marks this IFD0 as the full-resolution directory. Do this in physical
         // entry order: a marker after ImageWidth cannot promote that earlier
@@ -195,35 +242,26 @@ pub fn parse_embedded_exif_at(
                 forms.print,
                 forms.value,
                 Some(forms.stored),
-                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                hand_priority,
                 "",
                 crate::core::tag_occurrence::Instance::default(),
             );
-        } else {
+        } else if hand_priority == crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY {
             metadata.insert(tag_name, tag_value);
+        } else {
+            metadata.insert_occurrence(
+                tag_name,
+                tag_value,
+                hand_priority,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
         }
     }
 
-    if let Some(engine) = engine {
-        engine.finish_ifd0(metadata);
-    }
-
-    if let Some(offset) = exif_ifd_offset {
-        // `tiff_data` itself is the enclosing block (ExifTool's `$dataLen`);
-        // `tiff_base` only shifts the offsets that get *reported*, see above.
-        parse_exif_subifd_with_session(
-            &reader,
-            offset,
-            byte_order,
-            tiff_base,
-            tiff_data.len() as u64,
-            &mut session,
-            &mut cond_ctx,
-            metadata,
-        );
-    }
-    if let Some(offset) = gps_ifd_offset {
-        parse_gps_subifd(&reader, offset, byte_order, metadata);
+    // Rows of skipped entries after the last one the loop reached.
+    if let Some(mut engine) = engine {
+        arbiter.route_unreached(&mut engine, None, metadata, |name| format!("IFD0:{name}"));
     }
 
     true

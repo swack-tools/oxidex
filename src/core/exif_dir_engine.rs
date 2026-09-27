@@ -85,6 +85,10 @@ struct Row {
     /// [`tag_priority_is_zero`] -- through [`DirEngineRows::at_priority`], so
     /// a 0xfe4e WhiteBalance (`Avoid`) still cannot displace the 0xa403 row.
     keeps_priority: bool,
+    /// Whether the tag's own ExifTool priority is 0 (`priority` as the
+    /// walk first set it, before [`DirEngineRows::at_priority`] or a
+    /// demotion changes it): what `FoundTag` arbitrates the row with.
+    table_priority_zero: bool,
     consumed: bool,
 }
 
@@ -282,6 +286,94 @@ impl DirEngineRows {
             row.priority = priority;
         }
         self
+    }
+
+    /// Records at priority 0 every row for which `loses(name,
+    /// table_priority_is_zero)` holds, and keeps it there through
+    /// [`Self::at_priority`].
+    ///
+    /// The row is kept, never dropped: ExifTool's `FoundTag` files a second
+    /// copy of a name under its own key (`-a -G1` prints it, and
+    /// `-<Group>:<Name>` reads it). Priority 0 only makes it lose a bare
+    /// `-<Name>` to the twin the caller says ExifTool would have preferred.
+    pub(crate) fn demote(mut self, loses: impl Fn(&str, bool) -> bool) -> Self {
+        for row in &mut self.rows {
+            if loses(row.name, row.table_priority_zero) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+        }
+        self
+    }
+
+    /// Records, in entry order, the unrecorded rows of entries before
+    /// `before` (every remaining row when `None`): rows of entries the hand
+    /// walk's parser skipped (an entry only the generated reader accepts),
+    /// which [`Self::route_entry`] never reaches. Calling this before each
+    /// routed entry places them at their own entry position, as ExifTool
+    /// finds them. `zero(metadata, name, table_priority_zero, value)` is
+    /// asked once per row, in order, just before it is recorded; `true`
+    /// records the row at priority 0.
+    pub(crate) fn route_unreached(
+        &mut self,
+        before: Option<usize>,
+        metadata: &mut MetadataMap,
+        key: impl Fn(&str) -> String,
+        mut zero: impl FnMut(&MetadataMap, &str, bool, &TagValue) -> bool,
+    ) {
+        for row in self
+            .rows
+            .iter_mut()
+            .filter(|row| !row.consumed && before.is_none_or(|before| row.entry_index < before))
+        {
+            row.consumed = true;
+            if zero(
+                metadata,
+                row.name,
+                row.table_priority_zero,
+                &row.no_print_conv,
+            ) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+            record(row, self.stored_forms, metadata, key(row.name));
+        }
+    }
+
+    /// [`Self::demote`] for the one row [`Self::take_ifd0`] would record next
+    /// for entry `id` (the id-keyed replay of the embedded IFD0 walk).
+    pub(crate) fn demote_next_row(&mut self, id: u16, loses: impl FnOnce(&str, bool) -> bool) {
+        let table = self.table;
+        if let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| !row.consumed && declares(table, id, row.name))
+            && loses(row.name, row.table_priority_zero)
+        {
+            row.priority = 0;
+            row.keeps_priority = true;
+        }
+    }
+
+    /// [`Self::demote`] for the rows not yet recorded, in emission order:
+    /// those of entry `entry_index` (the entry the hand walk is about to
+    /// route), or every one left for [`Self::finish`] when `None`. `loses`
+    /// is called once per row, in order, so it may track what it has seen.
+    pub(crate) fn demote_unrecorded(
+        &mut self,
+        entry_index: Option<usize>,
+        mut loses: impl FnMut(&str, bool) -> bool,
+    ) {
+        for row in self
+            .rows
+            .iter_mut()
+            .filter(|row| !row.consumed && entry_index.is_none_or(|index| row.entry_index == index))
+        {
+            if loses(row.name, row.table_priority_zero) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+        }
     }
 
     /// Records every row with the value its entry stores
@@ -703,6 +795,7 @@ pub(crate) fn walk_with_session(
                 SHIM_DEFAULT_PRIORITY
             },
             keeps_priority: taken_from_hand,
+            table_priority_zero: row.low_priority,
             consumed: false,
         });
     }
