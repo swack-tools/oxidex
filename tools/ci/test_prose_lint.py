@@ -1,6 +1,7 @@
 """Exercise the Claude and Codex hook protocols without touching real docs."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -34,6 +35,19 @@ class ProseHookTests(unittest.TestCase):
         payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse', tool_name=tool, tool_input=inputs, **extra)
         return subprocess.run(['bash', str(HOOK)], input=json.dumps(payload), env=self.env,
                               text=True, capture_output=True, cwd=self.repo)
+
+    def test_registration_dispatches_codex_patch_payload(self):
+        payload = {'command': '*** Begin Patch\n*** Update File: doc with spaces.md\n*** End Patch'}
+        registrations = json.loads((ROOT/'.codex/hooks.json').read_text())['hooks']['PostToolUse']
+        dispatched = False
+        for registration in registrations:
+            # Older Codex reports the raw tool name rather than Edit/Write.
+            if re.fullmatch(registration['matcher'], 'apply_patch'):
+                result = self.invoke('apply_patch', payload)
+                self.assertEqual(result.returncode, 2, result)
+                dispatched = True
+        self.assertTrue(dispatched, 'real Codex apply_patch payload did not reach Vale')
+        self.assertTrue(self.log.exists())
 
     def test_claude_file_path_feedback(self):
         result = self.invoke('Edit', {'file_path': str(self.repo/'doc with spaces.md')})
