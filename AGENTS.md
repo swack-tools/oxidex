@@ -408,10 +408,14 @@ delete it only after proving, against the live remote, that every commit it
 carries is reachable from `origin`:
 - **Clone.** Pruning can delete the clone's only reference to a commit, so
   capture every ref first:
-  `git for-each-ref --format='%(objectname)' > <evidence>/clone-refs.txt`.
-  Then run `git fetch --prune origin`, so `origin/*` matches the live remote.
-  Then `git rev-list --all --reflog $(cat <evidence>/clone-refs.txt) --not --remotes=origin`
-  must print nothing.
+  `git for-each-ref --format='%(objectname)' > <evidence>/clone-refs.txt`,
+  plus the SHAs in `.git/FETCH_HEAD`, if any. Then run
+  `git fetch --prune origin`, so `origin/*` matches the live remote. Then both
+  checks must come back empty:
+  - `git rev-list --all --reflog $(cat <evidence>/clone-refs.txt) --not --remotes=origin`
+    prints nothing;
+  - `git fsck --unreachable --no-reflogs` lists no commit that isn't
+    reachable from `origin`.
 - **Bundle.** Its objects can't be inspected from another repository, so
   import them first. In a scratch bare repository, run
   `git fetch <origin-url> '+refs/heads/*:refs/remotes/origin/*'`, then
@@ -610,17 +614,19 @@ So stacked branches are kept current by rebasing, not by merge commits.
      post-merge trunk.
   2. Work bottom to top, one layer at a time. Rebase the lowest remaining
      layer onto `origin/refactor/tag-machinery`, since its old parent has
-     landed and may be deleted. Rebase each layer above it onto the layer
+     landed and may be deleted. Cut off the parent's original commits with
+     `git rebase --onto origin/refactor/tag-machinery <old parent head> <branch>`,
+     so they aren't replayed into the child. Rebase each layer above it onto the layer
      below as it now is on `origin` (fetch again first when another worktree
      owns that layer). For each layer, re-run its gates, and push
      it with `--force-with-lease=<branch>:<sha>`. Only then move to the child.
      `gh stack rebase` does the same in one pass for a single-worktree stack;
      still gate every layer before `gh stack push`.
-  3. Delete merged local branches by hand, or run `gh stack sync --prune`
-     only once nothing remains to rebase.
+  3. Delete merged local branches by hand (`git branch -d <branch>`). Don't use
+     `gh stack sync --prune` for cleanup: if anything moved since your gates, it
+     rebases and force-pushes the remaining layers without gating them.
 
-  A stack linked with `gh stack link` has no local tracking, so skip
-  `gh stack sync` for it. Each owner fetches and resets their own worktree
+  A stack linked with `gh stack link` has no local tracking. Each owner fetches and resets their own worktree
   to the pushed head.
 - **Keep unapproved work out of any automatic integration queue.** The
   multi-host fleet is stopped. Its train, however, treats every unclaimed,
