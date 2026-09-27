@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""Project-local Vale feedback for Claude file edits and Codex patch/shell tools."""
+"""Project-local Vale feedback for Claude file edits and Codex patch/shell tools.
+
+Reload the Codex session after changing hook registration. Without a matching
+PreToolUse baseline, shell PostToolUse safely skips attribution; direct file
+edits still receive feedback. Installed Codex 0.157.1 normalizes exec_command
+into Bash/command and drops workdir, retaining the session cwd. Hidden sibling
+shell workdirs cannot be observed; explicit file paths and supplied workdir can.
+"""
+import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -62,6 +71,9 @@ def selected_paths(payload, root, cwd):
 
 
 SHELL_TOOLS = {'Bash', 'exec_command'}
+SNAPSHOT_TTL = 3600
+MAX_PENDING_SNAPSHOTS = 64
+OWNED_SNAPSHOT = re.compile(r"[0-9a-f]{64}(?:\.json|\.[0-9]+\.tmp)\Z")
 MAX_SNAPSHOT_FILES = 20000
 MAX_LINT_FILES = 100
 MAX_LINT_BYTES = 1024 * 1024
@@ -93,6 +105,45 @@ def shell_snapshot(root):
     return result
 
 
+def input_digest(inputs):
+    """Compare inputs without retaining shell commands in baseline files."""
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def store_snapshot(state_dir, state, snapshot):
+    """Prune owned expired files; preserve active baselines when capacity is full."""
+    state_dir.mkdir(exist_ok=True)
+    if state_dir.is_symlink():
+        return
+    lock = state_dir / '.lock'
+    if lock.is_symlink():
+        return
+    with lock.open('a') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        active = 0
+        now = time.time()
+        for path in state_dir.iterdir():
+            if not OWNED_SNAPSHOT.fullmatch(path.name) or path.is_symlink() or not path.is_file():
+                continue
+            try:
+                age = now - path.stat().st_mtime
+                if age > SNAPSHOT_TTL:
+                    path.unlink(missing_ok=True)
+                else:
+                    active += 1
+            except FileNotFoundError:
+                continue
+        # A repeated pre event must not replace an active call's baseline.
+        if state.exists() or active >= MAX_PENDING_SNAPSHOTS:
+            return
+        pending = state.with_suffix(f'.{os.getpid()}.tmp')
+        try:
+            pending.write_text(json.dumps(snapshot))
+            pending.replace(state)
+        finally:
+            pending.unlink(missing_ok=True)
+
+
 def shell_paths(payload, root, cwd):
     """Consume a matching pre-call baseline once, including failed lint runs."""
     session = payload.get('session_id')
@@ -104,19 +155,15 @@ def shell_paths(payload, root, cwd):
     git_dir = Path(os.fsdecode(git(root, 'rev-parse', '--absolute-git-dir')).strip())
     state_dir = git_dir / 'prose-lint-snapshots'
     state = state_dir / (key + '.json')
+    if state_dir.is_symlink() or state.is_symlink():
+        return []
     if event == 'PreToolUse':
         snapshot = shell_snapshot(root)
         if snapshot is None:
             return []
-        state_dir.mkdir(exist_ok=True)
-        pending = state.with_suffix(f'.{os.getpid()}.tmp')
-        try:
-            pending.write_text(json.dumps({'root': str(root), 'cwd': str(cwd),
-                                          'input': payload.get('tool_input'),
-                                          'created': time.time(), 'files': snapshot}))
-            pending.replace(state)
-        finally:
-            pending.unlink(missing_ok=True)
+        store_snapshot(state_dir, state, {'root': str(root), 'cwd': str(cwd),
+                                         'input_digest': input_digest(payload.get('tool_input')),
+                                         'created': time.time(), 'files': snapshot})
         return []
     if event != 'PostToolUse':
         return []
@@ -129,9 +176,9 @@ def shell_paths(payload, root, cwd):
     if not isinstance(before, dict):
         return []
     if (before.get('root') != str(root) or before.get('cwd') != str(cwd)
-            or before.get('input') != payload.get('tool_input')
+            or before.get('input_digest') != input_digest(payload.get('tool_input'))
             or not isinstance(before.get('created'), (float, int))
-            or not 0 <= time.time() - before['created'] <= 3600
+            or not 0 <= time.time() - before['created'] <= SNAPSHOT_TTL
             or not isinstance(before.get('files'), dict)):
         return []
     if any(not isinstance(signature, list) or len(signature) != 4

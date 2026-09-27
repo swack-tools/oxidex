@@ -5,7 +5,11 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
+
+from tools import prose_lint
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / '.claude/hooks/prose-lint.sh'
@@ -174,6 +178,69 @@ class ProseHookTests(unittest.TestCase):
         link = self.repo/'link.md'
         link.symlink_to(self.repo/'doc with spaces.md')
         self.assertEqual(self.invoke('Edit', {'file_path': str(link)}).returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_snapshot_prunes_owned_stale_orphans_preserving_unknowns(self):
+        directory = self.repo/'snapshots'
+        directory.mkdir()
+        stale = directory/('a'*64+'.json')
+        orphan = directory/('b'*64+'.123.tmp')
+        unknown = directory/'other.json'
+        target = directory/'unknown-target'
+        symlink = directory/('c'*64+'.json')
+        for path in [stale, orphan, unknown, target]:
+            path.write_text('preserve unknown, prune owned')
+            os.utime(path, (time.time()-4000, time.time()-4000))
+        symlink.symlink_to(target)
+        fresh = directory/('d'*64+'.json')
+        prose_lint.store_snapshot(directory, fresh, {'files': {}})
+        self.assertFalse(stale.exists())
+        self.assertFalse(orphan.exists())
+        self.assertTrue(fresh.exists())
+        self.assertEqual(unknown.read_text(), 'preserve unknown, prune owned')
+        self.assertTrue(symlink.is_symlink())
+        self.assertTrue(target.exists())
+
+    def test_snapshot_cap_preserves_active_calls_and_recovers_after_consumption(self):
+        directory = self.repo/'snapshots'
+        first = directory/('a'*64+'.json')
+        second = directory/('b'*64+'.json')
+        third = directory/('c'*64+'.json')
+        with patch.object(prose_lint, 'MAX_PENDING_SNAPSHOTS', 2):
+            prose_lint.store_snapshot(directory, first, {'first': 1})
+            prose_lint.store_snapshot(directory, second, {'second': 2})
+            prose_lint.store_snapshot(directory, third, {'third': 3})
+            self.assertFalse(third.exists())
+            self.assertEqual(json.loads(first.read_text()), {'first': 1})
+            self.assertEqual(json.loads(second.read_text()), {'second': 2})
+            prose_lint.store_snapshot(directory, first, {'replaced': True})
+            self.assertEqual(json.loads(first.read_text()), {'first': 1})
+            first.unlink()
+            prose_lint.store_snapshot(directory, third, {'third': 3})
+            self.assertTrue(third.exists())
+
+    def test_input_digest_is_deterministic_and_does_not_store_command(self):
+        inputs = {'command': 'private shell text', 'workdir': '/project'}
+        self.assertEqual(prose_lint.input_digest(inputs),
+                         prose_lint.input_digest(dict(reversed(list(inputs.items())))))
+        self.assertNotEqual(prose_lint.input_digest(inputs),
+                            prose_lint.input_digest({**inputs, 'command': 'different'}))
+        self.shell('PreToolUse')
+        state = next((self.repo/'.git/prose-lint-snapshots').glob('*.json'))
+        stored = json.loads(state.read_text())
+        self.assertNotIn('input', stored)
+        self.assertEqual(stored['input_digest'], prose_lint.input_digest({'command': 'command'}))
+        self.assertNotIn('command', state.read_text())
+
+    def test_stale_snapshot_skips_post_and_is_consumed(self):
+        self.shell('PreToolUse')
+        state = next((self.repo/'.git/prose-lint-snapshots').glob('*.json'))
+        stored = json.loads(state.read_text())
+        stored['created'] = time.time()-4000
+        state.write_text(json.dumps(stored))
+        (self.repo/'doc with spaces.md').write_text('changed')
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertFalse(state.exists())
         self.assertFalse(self.log.exists())
 
     def test_clean_prose_returns_success(self):
