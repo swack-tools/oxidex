@@ -415,8 +415,10 @@ carries is reachable from `origin`:
 - **Bundle.** Its objects can't be inspected from another repository, so
   import them first. In a scratch bare repository, run
   `git fetch <origin-url> '+refs/heads/*:refs/remotes/origin/*'`, then
-  `git fetch <bundle> '+refs/*:refs/bundle/*' '+HEAD:refs/bundle/HEAD'`
-  (a bundle may advertise only `HEAD`). Both fetches must succeed. Then
+  `git fetch <bundle> '+refs/*:refs/bundle/*'`. Add `'+HEAD:refs/bundle/HEAD'`
+  only when `git bundle list-heads <bundle>` shows `HEAD`: a bundle may
+  advertise only `HEAD`, only branches, or both. Both fetches must succeed.
+  Then
   `git rev-list --glob=refs/bundle --not --remotes=origin` must print nothing.
   Delete the scratch repository afterwards.
 
@@ -425,7 +427,11 @@ Anything unreachable must be pushed or archived first.
 A worktree is removable only when all of these hold:
 - it has no uncommitted or untracked files (`git status --porcelain` is empty);
 - it has no commits missing from `origin`
-  (`git rev-list HEAD --not --remotes=origin` prints nothing);
+  (`git rev-list HEAD --not --remotes=origin` prints nothing), or its branch's
+  PR has squash-merged into `refactor/tag-machinery`. Check that with
+  `gh pr view <n> --json state,mergeCommit`, and confirm the head you're
+  removing is the head that merged. A squash merge leaves the branch's own
+  commits unreachable from `origin`, but its change is in the trunk;
 - its ignored files hold nothing worth keeping. `git worktree remove` deletes
   ignored files without asking, and `git status` does not show them, so list
   them with `git status --porcelain --ignored`. `HANDOFF.md` is ignored, and it
