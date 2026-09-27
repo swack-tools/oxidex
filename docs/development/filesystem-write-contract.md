@@ -2,8 +2,8 @@
 
 CLI, library and C FFI writes use the same filesystem transaction. A rewrite
 commits a new inode, so the transaction first guards the destination and captures
-its security metadata. Checking only the directory's ability to rename, or
-copying only permission bits, bypasses the source inode's protections.
+its supported filesystem metadata. Checking only the directory's ability to
+rename, or copying only permission bits, bypasses the source inode's protections.
 
 Before creating scratch files, writes refuse symbolic links (including dangling
 links), nonregular files, files with no write permission bits, and files that
@@ -18,13 +18,22 @@ extended attributes. Darwin also preserves extended ACLs and BSD file flags;
 resource forks, Finder information and labels are included in its attributes.
 Ownership is restored before mode, then ACLs and attributes, with equality
 verification before commit. Unsupported metadata, inability to read or restore
-it, and verification mismatches cause refusal. Other operating systems currently
-refuse writes because filesystem metadata preservation is not implemented.
+it, and verification mismatches cause refusal.
+
+Windows retains the existing permissions-only atomic-write behavior and the
+shared symbolic-link, readonly and actual writable-open guards. Permissions are
+restored and verified on the replacement before backup/commit. Expanded owner,
+group, ACL and extended-attribute preservation in this repair applies to Linux
+and macOS. Windows security descriptors (including audit ACLs), alternate data
+streams and other native metadata remain inherited limitations of the existing
+replacement transaction; this repair does not claim to preserve them. Other
+operating systems refuse writes because filesystem metadata preservation is not
+implemented.
 
 The writer may replace the scratch inode; the transaction reopens that inode
-before restoration and synchronization. Metadata restoration and verification
-finish before the CLI backup callback. Refused writes leave destination bytes,
-its inode security metadata, symbolic links and their targets, and existing backups
+before restoration and synchronization. Supported metadata restoration and
+verification finish before the CLI backup callback. Refused writes leave destination bytes,
+its filesystem metadata, symbolic links and their targets, and existing backups
 untouched. Scratch files are removed on failure. Successful byte-identical writes
 keep the original inode and do not create backups. Updated writes atomically
 rename the prepared inode over the destination. Modification/change timestamps

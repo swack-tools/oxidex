@@ -340,15 +340,41 @@ mod platform {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) use platform::Snapshot;
 
+// Windows retains the existing atomic writer's permissions-only behavior.
+// Full security-descriptor/alternate-stream preservation is inherited debt;
+// do not turn this Unix preservation repair into a blanket Windows refusal.
+#[cfg(windows)]
+pub(super) struct Snapshot {
+    permissions: fs::Permissions,
+}
+#[cfg(windows)]
+impl Snapshot {
+    pub(super) fn read(file: &File) -> io::Result<Self> {
+        Ok(Self {
+            permissions: file.metadata()?.permissions(),
+        })
+    }
+    pub(super) fn restore(&self, original: &File, replacement: &File) -> io::Result<()> {
+        if original.metadata()?.permissions() != self.permissions {
+            return Err(refused("source permissions changed during write"));
+        }
+        replacement.set_permissions(self.permissions.clone())?;
+        if replacement.metadata()?.permissions() != self.permissions {
+            return Err(refused("cannot preserve destination permissions"));
+        }
+        Ok(())
+    }
+}
+
 // Do not claim to preserve metadata on a platform without an implementation.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(super) struct Snapshot;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl Snapshot {
     pub(super) fn read(_: &File) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "atomic metadata preservation is supported on Linux and Darwin",
+            "filesystem metadata preservation is not implemented on this platform",
         ))
     }
     pub(super) fn restore(&self, _: &File, _: &File) -> io::Result<()> {
@@ -385,5 +411,63 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o444);
         assert_eq!(fs::read(&backup).unwrap(), b"existing backup");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use crate::core::write_transaction::{WriteOutcome, transact_with};
+
+    fn write(path: &Path) -> io::Result<WriteOutcome> {
+        transact_with(
+            path,
+            |scratch| {
+                // Exercise the reopening seam: format writers can replace the
+                // scratch inode rather than modifying the initially held fd.
+                fs::remove_file(scratch)?;
+                fs::write(scratch, b"rewritten")
+            },
+            || -> io::Result<()> { Ok(()) },
+            |_, error| io::Error::other(error),
+        )
+    }
+
+    #[test]
+    fn ordinary_windows_write_remains_supported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jpg");
+        fs::write(&path, b"original").unwrap();
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        assert_eq!(write(&path).unwrap(), WriteOutcome::Updated);
+        assert_eq!(fs::read(&path).unwrap(), b"rewritten");
+        assert_eq!(fs::metadata(&path).unwrap().permissions(), permissions);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn readonly_windows_write_refuses_before_scratch_or_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jpg");
+        let backup = dir.path().join("source.jpg.bak");
+        fs::write(&path, b"original").unwrap();
+        fs::write(&backup, b"existing backup").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions.clone()).unwrap();
+        let result = transact_with(
+            &path,
+            |_| -> io::Result<()> { panic!("readonly destination must refuse before scratch") },
+            || -> io::Result<()> { panic!("readonly destination must refuse before backup") },
+            |_, error| io::Error::other(error),
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::metadata(&path).unwrap().permissions(), permissions);
+        assert_eq!(fs::read(&backup).unwrap(), b"existing backup");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        // Windows cannot clean up readonly files automatically.
+        permissions.set_readonly(false);
+        fs::set_permissions(&path, permissions).unwrap();
     }
 }
