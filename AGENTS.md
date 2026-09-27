@@ -653,9 +653,9 @@ So stacked branches are kept current by rebasing, not by merge commits.
 
 The Codex reviewer, on GitHub and through `codex review` locally, reads this
 section, and so should every human or agent reviewer. Review against these
-priorities, and back every parity claim with evidence from the pinned
-ExifTool 13.59: its source (file:line in the pinned tree) or its actual
-output. A finding that says only "ExifTool probably does X" isn't actionable.
+priorities. Back every parity claim with evidence from the ExifTool release
+pinned in `.exiftool-version` (13.59 as of this writing): its source (file:line
+in the pinned tree) or its actual output. A finding that says only "ExifTool probably does X" isn't actionable.
 
 **P1: always report.**
 - A wrong value, read or written, under a real ExifTool tag name. That
@@ -674,11 +674,13 @@ output. A finding that says only "ExifTool probably does X" isn't actionable.
 - A security issue, or a secret committed to the repo.
 
 **P2: report when the evidence shows a real divergence.**
-- oxidex diverges from pinned 13.59 on a request both tools accept: a
+- oxidex diverges from the pinned ExifTool on a request both tools accept: a
   different winner for a bare name, a different count or exit code, or
   different request ordering.
-- A refusal that should exist is missing, or a refusal has the wrong error type
-  or code: per-tag refusals must be typed `TagsNotWritten`.
+- A refusal that should exist is missing, or it doesn't name the tag it
+  refuses. Where the codebase has a typed per-tag refusal (`TagsNotWritten`,
+  added by roll-up #957), new per-tag refusals must use it. Until that lands, an
+  explicit error naming the tag is acceptable.
 - A test that can't fail: it asserts the implementation instead of the oracle,
   collapses ordered output, skips when the oracle is missing without
   `OXIDEX_REQUIRE_EXIFTOOL_ORACLE`, or reads a stale binary.
