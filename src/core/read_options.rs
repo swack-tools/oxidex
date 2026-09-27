@@ -241,15 +241,22 @@ mod tests {
     #[test]
     fn a_filtered_read_deletes_only_rows_its_caller_removed() {
         use crate::core::write_transaction::{TagChange, changes_between};
+        let source = tempfile::NamedTempFile::new().unwrap();
         let mut read = MetadataMap::new();
         read.insert("IFD0:Make", TagValue::new_string("Acme"));
         read.insert("IFD0:Artist", TagValue::new_string("me"));
         read.insert("IFD0:0xc6d2", TagValue::new_string("x"));
         read.mark_read_complete();
-        read.set_read_source(std::path::Path::new("a.jpg"));
+        read.set_read_source(source.path());
         let mut filtered = ReadOptions::default_full_listing().strip_extended_only(&read);
         assert!(!filtered.contains_key("IFD0:0xc6d2"));
-        assert!(filtered.read_from(std::path::Path::new("a.jpg")));
+        assert!(
+            filtered.read_from(source.path()) || filtered.unverifiable_read_identity(source.path())
+        );
+        assert_eq!(
+            filtered.read_from(source.path()),
+            read.read_from(source.path())
+        );
         assert!(changes_between(&read, &filtered, true).is_empty());
         filtered.remove("IFD0:Artist");
         assert_eq!(
