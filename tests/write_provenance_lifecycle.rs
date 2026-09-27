@@ -258,3 +258,134 @@ fn descriptor_limited_batch_reads_do_not_retain_source_handles() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+fn saved_alias_removal(key: &str) {
+    let (_directory, path) = fixture();
+    let mut map = read_metadata(&path).unwrap();
+    map.insert(key, TagValue::new_string("alias addition"));
+    let before = map.clone();
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    for mut view in [map.clone(), map.without_print_conv(), before] {
+        assert!(view.remove(key).is_some());
+        assert_eq!(write_metadata(&path, &view).unwrap(), WriteOutcome::Updated);
+        assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
+        view.insert(key, TagValue::new_string("alias addition"));
+        assert_eq!(write_metadata(&path, &view).unwrap(), WriteOutcome::Updated);
+    }
+}
+
+#[test]
+fn saved_ungrouped_alias_removal() {
+    saved_alias_removal("Artist");
+}
+#[test]
+fn saved_family_zero_alias_removal() {
+    saved_alias_removal("EXIF:Artist");
+}
+#[test]
+fn saved_lowercase_alias_removal() {
+    saved_alias_removal("ifd0:artist");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn pre_epoch_birth_timestamp_keeps_deletion_authority() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_directory, path) = fixture();
+    let mut seed = MetadataMap::new();
+    artist(&mut seed);
+    write_metadata(&path, &seed).unwrap();
+    // This is the independently validated APFS setattrlist fixture, not a
+    // replacement implementation of platform identity resolution.
+    let mut attributes: libc::attrlist = unsafe { std::mem::zeroed() };
+    attributes.bitmapcount = 5;
+    attributes.commonattr = 0x200; // ATTR_CMN_CRTIME
+    let timestamp = libc::timespec {
+        tv_sec: -315619200,
+        tv_nsec: 0,
+    };
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: attributes selects exactly one timespec, whose live buffer and
+    // length match that selection; name is a NUL-terminated pathname.
+    let result = unsafe {
+        libc::setattrlist(
+            name.as_ptr(),
+            (&mut attributes as *mut libc::attrlist).cast(),
+            (&timestamp as *const libc::timespec).cast_mut().cast(),
+            std::mem::size_of_val(&timestamp),
+            0,
+        )
+    };
+    assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    assert!(fs::metadata(&path).unwrap().created().unwrap() < std::time::UNIX_EPOCH);
+    let mut map = read_metadata(&path).unwrap();
+    map.remove("IFD0:Artist");
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
+}
+
+#[test]
+fn saved_alias_removal_overrides_the_untouched_old_read_spelling() {
+    let (_directory, path) = fixture();
+    let mut seed = MetadataMap::new();
+    artist(&mut seed);
+    write_metadata(&path, &seed).unwrap();
+    let mut map = read_metadata(&path).unwrap();
+    map.insert("EXIF:Artist", TagValue::new_string("new alias value"));
+    write_metadata(&path, &map).unwrap();
+    map.remove("EXIF:Artist");
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
+}
+
+#[test]
+fn saved_artist_alias_does_not_own_an_unrelated_group() {
+    let (_directory, path) = fixture();
+    let packet = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Artist="unrelated group"/></rdf:RDF></x:xmpmeta>"#;
+    let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+    payload.extend_from_slice(packet);
+    let bytes = fs::read(&path).unwrap();
+    let mut with_xmp = bytes[..2].to_vec();
+    with_xmp.extend_from_slice(&[0xff, 0xe1]);
+    with_xmp.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+    with_xmp.extend_from_slice(&payload);
+    with_xmp.extend_from_slice(&bytes[2..]);
+    fs::write(&path, with_xmp).unwrap();
+    let mut map = read_metadata(&path).unwrap();
+    assert_eq!(map.get_string("XMP-tiff:Artist"), Some("unrelated group"));
+    let original = fs::read(&path).unwrap();
+    map.insert("Artist", TagValue::new_string("refused broad request"));
+    // The authoritative writer refuses a bare request that would also change
+    // the existing XMP field. Its failed assignment grants no removal binding.
+    assert!(write_metadata(&path, &map).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    map.remove("Artist");
+    map.insert("EXIF:Artist", TagValue::new_string("caller field"));
+    write_metadata(&path, &map).unwrap();
+    map.remove("EXIF:Artist");
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    let result = read_metadata(&path).unwrap();
+    assert!(result.get("IFD0:Artist").is_none());
+    assert_eq!(
+        result.get_string("XMP-tiff:Artist"),
+        Some("unrelated group")
+    );
+}
+
+#[test]
+fn switching_saved_alias_spelling_keeps_the_new_assignment() {
+    let (_directory, path) = fixture();
+    let mut map = read_metadata(&path).unwrap();
+    map.insert("Artist", TagValue::new_string("first spelling"));
+    write_metadata(&path, &map).unwrap();
+    map.remove("Artist");
+    map.insert("EXIF:Artist", TagValue::new_string("second spelling"));
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    assert_eq!(
+        read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+        Some("second spelling")
+    );
+    map.remove("EXIF:Artist");
+    assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
+    assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
+}

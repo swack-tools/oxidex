@@ -1028,10 +1028,45 @@ pub(crate) fn write_metadata_counted(
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     let baseline = read_metadata(path)?;
-    let read = metadata.read_from(path);
+    let unverifiable = metadata.unverifiable_read_identity(path);
+    let read = metadata.read_from(path) || unverifiable;
     let mut changes = changes_between(&baseline, metadata, read);
     if read {
         removals_in_call_order(metadata, mutations, &mut changes);
+    }
+    if mutations.is_empty() && changes.iter().any(|change| change.value().is_none()) {
+        // A plain map has no call order: a present assignment replaces an
+        // inferred removal of the same field, even under a different alias.
+        // Use the writer's authoritative resolution, including fields whose
+        // validation will fail, so inference cannot cancel that refusal.
+        // Logged calls retain their existing order in the transaction plan.
+        let assigned_fields: Vec<_> = changes
+            .iter()
+            .filter(|change| change.value().is_some())
+            .filter_map(|change| {
+                resolve_write_key_for(path, change.tag(), &baseline)
+                    .ok()
+                    .map(|(field, _)| field)
+            })
+            .collect();
+        changes.retain(|change| {
+            change.value().is_some()
+                || !assigned_fields.iter().any(|field| {
+                    field.eq_ignore_ascii_case(change.tag())
+                        || field_spellings(change.tag())
+                            .iter()
+                            .any(|alias| field.eq_ignore_ascii_case(alias))
+                })
+        });
+    }
+    if unverifiable {
+        let tags: Vec<_> = changes.iter().filter(|change| change.value().is_none()).map(|change| {
+            crate::error::TagNotWritten::new(change.tag(),
+                "cannot verify a read-map deletion because a creation timestamp is unavailable; use an explicit remove_tag request for the current file")
+        }).collect();
+        if !tags.is_empty() {
+            return Err(ExifToolError::TagsNotWritten { tags });
+        }
     }
     // Positions are 1-based in the log; 0 is "before every call".
     let named = |call: &str, key: &str| {
@@ -1068,12 +1103,13 @@ pub(crate) fn write_metadata_counted(
         // the file already holds this map: nothing to write
         return Ok((WriteOutcome::Unchanged, 0));
     }
-    let result = crate::core::write_transaction::apply_tag_changes_counted(path, &changes)?;
+    let receipt = crate::core::write_transaction::apply_tag_changes_with_receipt(path, &changes)?;
     Ok(finish_metadata_write(
         metadata,
         &baseline,
         read,
-        result,
+        (receipt.outcome, receipt.sets),
+        &receipt.caller_fields,
         || read_metadata(path),
     ))
 }
@@ -1085,13 +1121,14 @@ fn finish_metadata_write(
     baseline: &MetadataMap,
     read: bool,
     result: (WriteOutcome, usize),
+    caller_fields: &[(String, String)],
     reread: impl FnOnce() -> Result<MetadataMap>,
 ) -> (WriteOutcome, usize) {
     if read
         && result.0 == WriteOutcome::Updated
         && let Ok(saved) = reread()
     {
-        metadata.record_write_success(&saved, baseline);
+        metadata.record_write_success(&saved, baseline, caller_fields);
     }
     result
 }
@@ -4128,7 +4165,7 @@ mod provenance_refresh_tests {
             )],
         )
         .unwrap();
-        let result = finish_metadata_write(&desired, &baseline, true, committed, || {
+        let result = finish_metadata_write(&desired, &baseline, true, committed, &[], || {
             Err(ExifToolError::IoError(std::io::Error::other(
                 "injected reread failure after commit",
             )))

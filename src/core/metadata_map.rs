@@ -101,16 +101,17 @@ struct ReadSource {
 #[derive(Debug)]
 struct SavedSource {
     identities: std::collections::HashSet<FileIdentity>,
-    caller_keys: std::collections::HashSet<String>,
+    caller_fields: std::collections::HashMap<String, String>,
 }
 
-/// A file's stable identity, including its immutable creation stamp so an
-/// unlinked inode reused by a replacement does not acquire deletion authority.
+/// A value identity with an optional creation stamp, including signed Unix
+/// timestamps. Missing stamps permit no implicit deletion authority. Coarse or
+/// externally changed stamps are not an adversarial generation guarantee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FileIdentity {
     device: u64,
     index: u64,
-    birth: u128,
+    birth: Option<i128>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -124,14 +125,12 @@ fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
     {
         use std::os::unix::fs::MetadataExt;
         let metadata = std::fs::metadata(path).ok()?;
-        // If the filesystem cannot supply a birth stamp, fail closed for
-        // deletion authority instead of guessing or hashing every file.
-        let birth = metadata
-            .created()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
+        let birth = metadata.created().ok().map(|created| {
+            match created.duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos() as i128,
+                Err(before_epoch) => -(before_epoch.duration().as_nanos() as i128),
+            }
+        });
         Some(SourceIdentity {
             identity: FileIdentity {
                 device: metadata.dev(),
@@ -174,8 +173,10 @@ fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
             identity: FileIdentity {
                 device: u64::from(information.volume_serial),
                 index: (u64::from(information.index_high) << 32) | u64::from(information.index_low),
-                birth: (u128::from(information.creation_time[1]) << 32)
-                    | u128::from(information.creation_time[0]),
+                birth: Some(
+                    (i128::from(information.creation_time[1]) << 32)
+                        | i128::from(information.creation_time[0]),
+                ),
             },
             links: u64::from(information.links),
         })
@@ -321,18 +322,36 @@ impl MetadataMap {
         path: &std::path::Path,
         before: Option<SourceIdentity>,
     ) {
+        self.set_read_source_observations(before, file_identity(path));
+    }
+
+    fn set_read_source_observations(
+        &mut self,
+        before: Option<SourceIdentity>,
+        after: Option<SourceIdentity>,
+    ) {
         // Bound the actual read with two identity observations. A replacement
         // during parsing cannot silently become this map's deletion source.
-        let source = before.and_then(|before| {
-            file_identity(path).filter(|after| before.identity == after.identity)
-        });
+        let source =
+            before.and_then(|before| after.filter(|after| before.identity == after.identity));
         self.read_source = Some(ReadSource {
             keys: self.keys().cloned().collect(),
             removed_assignments: Default::default(),
             source,
             saved: std::sync::Arc::new(std::sync::Mutex::new(SavedSource {
-                identities: source.into_iter().map(|source| source.identity).collect(),
-                caller_keys: Default::default(),
+                // Inconsistent observations never grant authority, but an
+                // observed missing stamp must remain visible for explicit refusal.
+                identities: source
+                    .into_iter()
+                    .chain(
+                        before
+                            .into_iter()
+                            .chain(after)
+                            .filter(|source| source.identity.birth.is_none()),
+                    )
+                    .map(|source| source.identity)
+                    .collect(),
+                caller_fields: Default::default(),
             })),
         });
     }
@@ -365,27 +384,59 @@ impl MetadataMap {
     pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
         self.read_source.as_ref().is_some_and(|read| {
             let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
-            file_identity(path).is_some_and(|target| saved.identities.contains(&target.identity))
+            file_identity(path).is_some_and(|target| {
+                target.identity.birth.is_some() && saved.identities.contains(&target.identity)
+            })
         })
     }
 
-    /// Only observed read rows or successfully saved caller rows can be removed.
-    pub(crate) fn read_saw(&self, key: &str) -> bool {
+    /// An unverified object match can support caller assignments, but never
+    /// implicit removals. The write boundary explicitly refuses such removals.
+    pub(crate) fn unverifiable_read_identity(&self, path: &std::path::Path) -> bool {
         self.read_source.as_ref().is_some_and(|read| {
-            read.keys.contains(key)
-                || (read.removed_assignments.contains(key)
-                    && read
-                        .saved
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .caller_keys
-                        .contains(key))
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            file_identity(path).is_some_and(|target| {
+                saved.identities.iter().any(|source| {
+                    source.device == target.identity.device
+                        && source.index == target.identity.index
+                        && (source.birth.is_none() || target.identity.birth.is_none())
+                })
+            })
         })
+    }
+
+    /// A removed original request owns only its last successfully proven field.
+    pub(crate) fn removed_saved_field(&self, key: &str) -> bool {
+        self.read_source.as_ref().is_some_and(|read| {
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            read.removed_assignments.iter().any(|request| {
+                !self.contains_key(request)
+                    && saved.caller_fields.get(request).is_some_and(|field| {
+                        field.eq_ignore_ascii_case(key)
+                            || crate::core::operations::field_spellings(key)
+                                .iter()
+                                .any(|alias| field.eq_ignore_ascii_case(alias))
+                    })
+            })
+        })
+    }
+
+    /// Only observed read rows or successfully saved caller fields can be removed.
+    pub(crate) fn read_saw(&self, key: &str) -> bool {
+        self.read_source
+            .as_ref()
+            .is_some_and(|read| read.keys.contains(key))
+            || self.removed_saved_field(key)
     }
 
     /// Refresh only after an updated transaction and its successful read-back.
-    /// Writer seeds never enter caller_keys; the map's public rows stay intact.
-    pub(crate) fn record_write_success(&self, saved_map: &MetadataMap, baseline: &MetadataMap) {
+    /// Writer seeds never enter caller_fields; the map's public rows stay intact.
+    pub(crate) fn record_write_success(
+        &self,
+        saved_map: &MetadataMap,
+        baseline: &MetadataMap,
+        caller_fields: &[(String, String)],
+    ) {
         if let (Some(read), Some(written)) = (&self.read_source, &saved_map.read_source) {
             let Some(written) = written.source else {
                 return;
@@ -397,11 +448,11 @@ impl MetadataMap {
                 saved.identities.remove(&previous.identity);
             }
             saved.identities.insert(written.identity);
-            saved.caller_keys.extend(
-                self.keys()
-                    .filter(|key| self.is_assigned(key) && saved_map.contains_key(key))
-                    .cloned(),
-            );
+            for (request, field) in caller_fields {
+                if self.is_assigned(request) && saved_map.contains_key(field) {
+                    saved.caller_fields.insert(request.clone(), field.clone());
+                }
+            }
         }
     }
 
@@ -1173,6 +1224,35 @@ mod tests {
             "filter exclusion is not a removal"
         );
         assert!(filtered.read_saw("IFD0:Model"));
+    }
+
+    #[test]
+    fn missing_birth_stamp_refuses_deletion_without_changing_file() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("no-birth.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let mut seed = MetadataMap::new();
+        seed.insert(
+            "IFD0:Artist",
+            TagValue::new_string("retained until verifiable"),
+        );
+        write_metadata(&path, &seed).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let reliable = MetadataMap::capture_read_source(&path).unwrap();
+        let mut missing = reliable;
+        missing.identity.birth = None; // platform-independent missing-created seam
+        for (before, after) in [(missing, missing), (missing, reliable), (reliable, missing)] {
+            let mut map = read_metadata(&path).unwrap();
+            map.set_read_source_observations(Some(before), Some(after));
+            map.remove("IFD0:Artist");
+            let error = write_metadata(&path, &map)
+                .expect_err("missing birth must not silently skip a removal");
+            assert!(error.to_string().contains("creation timestamp"));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_some());
+        }
     }
 
     #[test]

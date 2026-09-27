@@ -138,20 +138,57 @@ pub(crate) fn apply_tag_changes_counted(
     path: &Path,
     changes: &[TagChange],
 ) -> Result<(WriteOutcome, usize)> {
+    let receipt = apply_tag_changes_with_receipt(path, changes)?;
+    Ok((receipt.outcome, receipt.sets))
+}
+
+/// Addresses of surviving set requests proven by the same transaction plan.
+/// Seeds, cancelled requests and failed writes never produce caller attribution.
+pub(crate) struct AppliedWrite {
+    pub(crate) outcome: WriteOutcome,
+    pub(crate) sets: usize,
+    pub(crate) caller_fields: Vec<(String, String)>,
+}
+
+pub(crate) fn apply_tag_changes_with_receipt(
+    path: &Path,
+    changes: &[TagChange],
+) -> Result<AppliedWrite> {
     // Every request is resolved, and every no-op decided, against the file
     // itself -- before any scratch file exists. A request that is all no-ops
     // (an absent tag's deletion, an EXIF group in a PDF, nothing at all)
     // writes nothing and so needs no writable directory.
     let plan = plan_changes(path, changes)?;
     if plan.steps.is_empty() {
-        return Ok((WriteOutcome::Unchanged, 0));
+        return Ok(AppliedWrite {
+            outcome: WriteOutcome::Unchanged,
+            sets: 0,
+            caller_fields: Vec::new(),
+        });
     }
     let mut proven_sets = 0;
     let outcome = transact(path, |scratch| {
         proven_sets = execute_plan(scratch, &plan)?;
         Ok(())
     })?;
-    Ok((outcome, proven_sets))
+    let caller_fields = if outcome == WriteOutcome::Updated {
+        plan.steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Field(request) if request.value.is_some() => {
+                    Some((request.requested.to_owned(), request.key.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(AppliedWrite {
+        outcome,
+        sets: proven_sets,
+        caller_fields,
+    })
 }
 
 /// Groups whose rows describe the file (or the read) rather than being
@@ -288,7 +325,12 @@ pub(crate) fn changes_between(
         // Read rows and successfully saved caller rows can be removals.
         // Shared identity refresh does not make writer seeds or filtered-out
         // rows visible to this view's caller.
-        if row_of(desired, key).is_some() || is_descriptive(key) || !desired.read_saw(key) {
+        let held = row_of(desired, key);
+        if (held.as_ref().is_some_and(|(spelling, _)| {
+            !desired.removed_saved_field(key) || desired.is_assigned(spelling)
+        })) || is_descriptive(key)
+            || !desired.read_saw(key)
+        {
             continue;
         }
         let spellings = field_spellings(key);
