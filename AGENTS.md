@@ -3,6 +3,15 @@
 ## Overview
 Rust implementation of ExifTool - high-performance metadata parsing for 140+ formats.
 
+## Codex delegation and review before push
+
+Before delegating Codex work or pushing, read
+[Codex task routing](.agents/skills/codex-task-routing/SKILL.md).
+Select an explicit model and effort suited to the task; do not inherit the
+root session's settings. Run a local Codex review-and-repair cycle before the
+first push and review subsequent changes locally before each update. Preserve
+findings and commit-bound evidence. GitHub review and CI remain required.
+
 ## Use rust uutils coreutils when you can like ripgrep and LSP's as well as claude-mem
 to decrease the amount of time grepping. We also have things like hyperfine.
 

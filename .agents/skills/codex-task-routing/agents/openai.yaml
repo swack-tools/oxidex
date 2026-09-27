@@ -1,0 +1,7 @@
+interface:
+  display_name: "OxiDex Codex Routing"
+  short_description: "Route tasks and review locally before pushing"
+  default_prompt: "Use $codex-task-routing to choose an explicit model and complete the local review-and-repair gate before pushing this OxiDex candidate."
+
+policy:
+  allow_implicit_invocation: true
