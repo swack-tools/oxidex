@@ -56,6 +56,14 @@ enum Expect {
     /// predates the bare-name resolver and is pinned here as the known gap
     /// it is: oxidex's rows are the oracle's less the MIE copy.
     MieGap,
+    /// oxidex's writer declines the whole request (an explicit error, not a
+    /// resolver refusal), file untouched; the oracle changed the file.
+    Declined,
+    /// oxidex refuses by name, file untouched, where the oracle changes
+    /// nothing: a later group deletion cancels the earlier set in 13.59 and
+    /// the deletion itself is a no-op there. A known gap (a refusal, never
+    /// a write the oracle does not make).
+    RefusedWhereUnchanged,
 }
 
 /// (name, printed value, raw value) -- each name is also defined by a maker
@@ -197,6 +205,30 @@ fn run_args(
                 return Err(format!(
                     "{case}: expected oxidex's EXIF-only write beside the oracle's extra MIE \
                      copy; oxidex {ox_rows:?} ({ox_stderr}), the oracle {et_rows:?}"
+                ));
+            }
+        }
+        Expect::Declined => {
+            if ox.status.success() || ox_changed || !et_changed {
+                return Err(format!(
+                    "{case}: expected oxidex to decline with the file untouched beside the \
+                     oracle's write; oxidex exit {:?}, changed {ox_changed}, said \
+                     {ox_stderr:?}; the oracle changed {et_changed}, wrote {et_rows:?}",
+                    ox.status.code()
+                ));
+            }
+        }
+        Expect::RefusedWhereUnchanged => {
+            if ox.status.success()
+                || ox_changed
+                || !ox_stderr.contains("Cannot write tag")
+                || et_changed
+            {
+                return Err(format!(
+                    "{case}: expected a named refusal beside the oracle's unchanged file; \
+                     oxidex exit {:?}, changed {ox_changed}, said {ox_stderr:?}; the \
+                     oracle changed {et_changed}, wrote {et_rows:?}",
+                    ox.status.code()
                 ));
             }
         }
@@ -781,4 +813,181 @@ fn second_review_round_shapes_match_the_oracle_or_are_refused() {
         cases.len(),
         failures.join("\n")
     );
+}
+
+/// A Samsung Sound & Shot SEFT/QDIOBS trailer (the builder of
+/// `trailer_tail_forward_port.rs`): pinned 13.59 reads it as
+/// `[MakerNotes:Samsung] EmbeddedAudioFileName`.
+fn samsung_soundshot_trailer() -> Vec<u8> {
+    let (name, audio) = (&b"SoundShot_000"[..], &b"sound-shot-bytes"[..]);
+    let mut trailer = 0u32.to_be_bytes().to_vec();
+    trailer.extend_from_slice(&(name.len() as u32).to_le_bytes());
+    trailer.extend_from_slice(name);
+    trailer.extend_from_slice(audio);
+    let directory_at = trailer.len() as u32;
+    let mut directory = b"SEFH".to_vec();
+    directory.extend_from_slice(&101u32.to_le_bytes());
+    directory.extend_from_slice(&1u32.to_le_bytes());
+    directory.extend_from_slice(&0u16.to_le_bytes());
+    directory.extend_from_slice(&0x0100u16.to_le_bytes());
+    directory.extend_from_slice(&directory_at.to_le_bytes());
+    directory.extend_from_slice(&((8 + name.len() + audio.len()) as u32).to_le_bytes());
+    trailer.extend_from_slice(&directory);
+    trailer.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    trailer.extend_from_slice(b"SEFT");
+    trailer.extend_from_slice(&[0; 20]);
+    trailer.extend_from_slice(&20u32.to_le_bytes());
+    trailer.extend_from_slice(b"QDIOBS");
+    trailer
+}
+
+/// PR #960's third review round, graded against the pinned oracle
+/// (evidence `multigroup-write/round5/`):
+///
+/// - a TIFF-structured file's group deletion counts only where its writer
+///   makes it (4113017923): on a raw type ExifIFD/MakerNotes deletions,
+///   and on every TIFF `IFD0:All`, are pinned 13.59's no-ops, so the maker
+///   note survives and 13.59 edits it too (t/images/Nikon.nef and
+///   CanonRaw.cr2: `[Nikon]` / `[Canon] WhiteBalance` 1 beside `[ExifIFD]`);
+///   oxidex wrote EXIF only (and, with the deletion after the set, where
+///   13.59 changes nothing or only EXIF, it now refuses);
+/// - a Samsung SEFT trailer's `Samsung` rows do not identify the EXIF
+///   note (4113017918): Nikon.jpg with a trailer appended, where 13.59
+///   also edits `[Nikon] WhiteBalance`; oxidex wrote EXIF only;
+/// - `-ExifIFD:MakerNote=` names no tag in 13.59 ("doesn't exist or isn't
+///   writable"), so the Canon copy is still edited (4112376913);
+/// - two EXIF APP1s deleted by `-EXIF:All=` are no longer two copies to
+///   the resolver (4112376897); the multi-APP1 deletion itself is still
+///   declined by the writer, file untouched.
+#[test]
+fn third_review_round_shapes_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let read = |path: std::path::PathBuf| std::fs::read(path).unwrap();
+    let nef = read(fixtures::required_t_images_fixture_path("Nikon.nef"));
+    let cr2 = read(fixtures::required_t_images_fixture_path("CanonRaw.cr2"));
+    let nikon = read(fixtures::required_t_images_fixture_path("Nikon.jpg"));
+    let canon = read(fixtures::required_t_images_fixture_path("Canon.jpg"));
+    let Some(lsi) = fixtures::pinned_combined_fixture_path("Nikon/NikonLS-50.jpg").map(read) else {
+        return;
+    };
+    let nikon_seft = [&nikon[..], &samsung_soundshot_trailer()].concat();
+    let two_app1 = with_second_app1(&nikon, &lsi);
+    let s = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let mut cases: Vec<Case<'_>> = Vec::new();
+    for deletion in [
+        "-MakerNotes:All=",
+        "-ExifIFD:All=",
+        "-EXIF:All=",
+        "-IFD0:All=",
+    ] {
+        for (file, bytes, ext) in [("Nikon.nef", &nef, "nef"), ("CanonRaw.cr2", &cr2, "cr2")] {
+            cases.push((
+                file,
+                bytes,
+                ext,
+                "WhiteBalance",
+                s(&[deletion, "-WhiteBalance#=1"]),
+                Expect::Refused,
+            ));
+            // After the set, 13.59's deletion cancels the set's new values
+            // in the groups it names: `MakerNotes:All` the maker-note copy
+            // (so only `[ExifIFD] WhiteBalance` is written, and the note
+            // stays), the others every copy (file unchanged). oxidex, which
+            // does not model the cancellation, refuses both.
+            let after = if deletion == "-MakerNotes:All=" {
+                Expect::Refused
+            } else {
+                Expect::RefusedWhereUnchanged
+            };
+            cases.push((
+                file,
+                bytes,
+                ext,
+                "WhiteBalance",
+                s(&["-WhiteBalance#=1", deletion]),
+                after,
+            ));
+        }
+    }
+    cases.extend([
+        (
+            "Nikon.jpg+SEFT",
+            &nikon_seft[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Canon.jpg",
+            &canon[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-ExifIFD:MakerNote=", "-WhiteBalance#=1"]),
+            Expect::Refused,
+        ),
+        (
+            "Nikon.jpg+NikonLS-50 APP1",
+            &two_app1[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-EXIF:All=", "-WhiteBalance#=1"]),
+            Expect::Declined,
+        ),
+    ]);
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|(file, bytes, ext, name, args, expect)| {
+            run_args(oracle, bytes, ext, file, name, args, *expect).err()
+        })
+        .collect();
+    assert_eq!(cases.len(), 19);
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases departed from the pinned outcome:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+/// 4112472786: the Sigma `Software` candidate is not read-only in
+/// practice -- pinned 13.59 `-Software=x` on Sigma.jpg edits `[Sigma]
+/// Software` beside `[IFD0] Software` (`-v2`: "Writing Sigma:Software if
+/// tag exists"), so the bare name stays refused.
+#[test]
+fn the_oracle_writes_the_sigma_software_candidate() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let Some(source) = fixtures::pinned_combined_fixture_path("Sigma.jpg") else {
+        return;
+    };
+    let original = std::fs::read(&source).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("et.jpg");
+    std::fs::write(&path, &original).unwrap();
+    let out = oracle
+        .command()
+        .args(["-m", "-overwrite_original", "-Software=x"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        oracle_rows(oracle, &path, "Software"),
+        ["[IFD0] Software : x", "[Sigma] Software : x"]
+    );
+    run_args(
+        oracle,
+        &original,
+        "jpg",
+        "Sigma.jpg",
+        "Software",
+        &["-Software=x".to_string()],
+        Expect::Refused,
+    )
+    .unwrap();
 }

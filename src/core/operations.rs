@@ -2130,6 +2130,39 @@ pub(crate) fn plan_group_deletion(
     ))
 }
 
+/// Whether the group-wide removal `key` that [`plan_group_deletion`] planned
+/// for the file at `path` really removes its group when written, as the
+/// format's writer resolves it -- for judging what a request's other
+/// requests may still find there (`core::write_transaction::
+/// request_deletions`). A TIFF-structured file's removals go through
+/// [`resolve_tiff_group_removals`](crate::writers::exif_surgical::resolve_tiff_group_removals),
+/// which drops `IFD0:All` on every TIFF and the ExifIFD/MakerNotes
+/// removals on a raw type (pinned 13.59: "Can't delete ... from NEF", file
+/// unchanged) and refuses the rest: none of those leaves the maker note
+/// gone. `-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef: 13.59
+/// writes `[ExifIFD]` and `[Nikon] WhiteBalance` 1. Unprovable (the file
+/// cannot be read) is `false`: nothing is taken as deleted.
+pub(crate) fn group_removal_takes_effect(path: &Path, key: &str) -> bool {
+    let Ok(reader) = MMapReader::new(path) else {
+        return false;
+    };
+    let Ok(format) = detect_format(&reader) else {
+        return false;
+    };
+    if !is_surgical_tiff_target(format, &reader) {
+        return true;
+    }
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return false;
+    };
+    let Ok(baseline) = read_metadata(path) else {
+        return false;
+    };
+    let removed = [key.to_string()];
+    crate::writers::exif_surgical::resolve_tiff_group_removals(file_bytes, &baseline, &removed)
+        .is_ok_and(|kept| kept.iter().any(|kept| kept == key))
+}
+
 /// Whether the reader's map proves the file holds nothing in `group`.
 ///
 /// Only for groups whose rows the map keys under the group's own name: XMP

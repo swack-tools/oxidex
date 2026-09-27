@@ -4282,8 +4282,28 @@ pub(crate) fn is_makernote_row(baseline: &MetadataMap, key: &str) -> bool {
 /// ExifTool reports (`[Canon] FocalLength` of t/images/ExifTool.jpg's CIFF,
 /// keyed `MakerNotes:FocalLength`).
 pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::BTreeSet<String> {
+    makernote_row_groups_where(baseline, |_| true)
+}
+
+/// [`makernote_row_groups`] less the rows of a Samsung SEFT trailer
+/// (`samsung_trailer::TRAILER_ROW_KEYS`): pinned 13.59 files those under
+/// family 0 `MakerNotes`, family 1 `Samsung` -- the groups of a Samsung
+/// EXIF maker note's rows -- but they come from after the JPEG's EOI, so
+/// they say nothing of which note the EXIF block carries.
+pub(crate) fn exif_makernote_row_groups(
+    baseline: &MetadataMap,
+) -> std::collections::BTreeSet<String> {
+    use crate::parsers::samsung_trailer::TRAILER_ROW_KEYS;
+    makernote_row_groups_where(baseline, |key| !TRAILER_ROW_KEYS.contains(&key))
+}
+
+fn makernote_row_groups_where(
+    baseline: &MetadataMap,
+    keep: impl Fn(&str) -> bool,
+) -> std::collections::BTreeSet<String> {
     baseline
         .keyed_occurrences()
+        .filter(|(key, _)| keep(key))
         .filter_map(|(key, occurrence)| {
             let key_group = key.split_once(':').map(|(group, _)| group)?;
             let group1 = if occurrence.group1.is_empty() {

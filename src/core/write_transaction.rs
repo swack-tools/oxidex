@@ -43,8 +43,9 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata, removal_is_no_op,
-    remove_field, resolve_write_key_in_request, write_metadata_transaction,
+    exif_group_in_pdf, field_spellings, group_removal_takes_effect, plan_group_deletion,
+    read_metadata, removal_is_no_op, remove_field, resolve_write_key_in_request,
+    write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -358,7 +359,11 @@ struct Pending<'a> {
 /// for judging the bare names the same request sets
 /// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)):
 /// only a deletion [`plan_group_deletion`] plans for real counts -- one it
-/// proves a no-op (a note ExifTool files under EXIF) removes nothing.
+/// proves a no-op (a note ExifTool files under EXIF) removes nothing --
+/// and only where the format's writer really makes it
+/// ([`group_removal_takes_effect`]): a TIFF-structured file drops `IFD0:All`,
+/// and a raw type's ExifIFD/MakerNotes removals, as the no-ops pinned 13.59
+/// makes them, so its maker note survives to be edited.
 /// Pinned 13.59 applies them in either argument order.
 pub(crate) fn request_deletions(
     path: &Path,
@@ -370,8 +375,8 @@ pub(crate) fn request_deletions(
         .filter(|change| change.value().is_none())
         .filter_map(|change| {
             let group = group_deletion(change.tag())?;
-            matches!(plan_group_deletion(path, change.tag(), group), Ok(Some(_)))
-                .then(|| RequestDeletions::of(change.tag()))
+            let key = plan_group_deletion(path, change.tag(), group).ok()??;
+            group_removal_takes_effect(path, &key).then(|| RequestDeletions::of(change.tag()))
         })
         .fold(RequestDeletions::default(), RequestDeletions::union)
 }

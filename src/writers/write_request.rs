@@ -817,13 +817,27 @@ pub(crate) fn makernote_may_hold(
     // Rows do not say which EXIF block they were decoded from, so more than
     // one tag-bearing note cannot be told apart; and the one tag-bearing
     // note must be one the reader identified -- rows only from outside it
-    // (a JPEG's CIFF segment, a Qualcomm APP7) say nothing of it. A note
-    // ExifTool reads as one value, or a JPEG preview, bears no tags and is
-    // not counted (`exif_surgical::makernote_census`).
+    // say nothing of it. Those are a Samsung SEFT trailer's (family 1
+    // `Samsung`, after EOI: `exif_makernote_row_groups` leaves them out), a
+    // JPEG's CIFF segment's (family 1 `CIFF`, `CanonRaw`, and `Canon` for
+    // its `Canon::*` subdirectories -- so with a CIFF segment present no
+    // group the CIFF root reaches identifies the EXIF note), and a Qualcomm
+    // APP7's (a group no root claims). A note ExifTool reads as one value,
+    // or a JPEG preview, bears no tags and is not counted
+    // (`exif_surgical::makernote_census`).
+    let exif_decoded = super::exif_surgical::exif_makernote_row_groups(baseline);
+    let ciff_reaches = |group: &str| {
+        ciff && MAKERNOTE_ROOTS
+            .iter()
+            .any(|root| root.entry == "CIFF" && root.closure.contains(&group))
+    };
     if tag_bearing > 1
         || (tag_bearing == 1
             && !MAKERNOTE_ROOTS.iter().any(|root| {
-                root.entry != "CIFF" && !root.group.is_empty() && decoded.contains(root.group)
+                root.entry != "CIFF"
+                    && !root.group.is_empty()
+                    && exif_decoded.contains(root.group)
+                    && !ciff_reaches(root.group)
             }))
     {
         return Some(format!(
@@ -833,8 +847,9 @@ pub(crate) fn makernote_may_hold(
     }
     // Every root a decoded group is the root group of; then, for a decoded
     // group none of those reaches (`PreviewIFD`), every root that reaches
-    // it; a group no root reaches (a Qualcomm APP7, a Samsung trailer) is a
-    // maker-note-like block of its own and holds only its own candidates.
+    // it; a group no root reaches (a Qualcomm APP7) is a maker-note-like
+    // block of its own and holds only its own candidates. (A Samsung
+    // trailer's `Samsung` rows, kept here, only widen what may be held.)
     let mut reachable: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for root in MAKERNOTE_ROOTS
         .iter()
@@ -1241,6 +1256,59 @@ mod tests {
             ..one_note()
         };
         assert!(makernote_may_hold("FocalLength", &ciff, &makernotes_all).is_none());
+    }
+
+    /// Rows from a maker-note block outside the EXIF note never identify
+    /// it (#960 review 4113017918): a Samsung SEFT trailer's rows are
+    /// family 1 `Samsung` (pinned 13.59 on t/images/Nikon.jpg with a Sound
+    /// & Shot trailer appended: `[MakerNotes:Samsung]
+    /// EmbeddedAudioFileName`, and `-WhiteBalance#=1` writes `[Nikon]` and
+    /// `[ExifIFD] WhiteBalance`), and a CIFF segment's include family 1
+    /// `Canon` (t/images/ExifTool.jpg's CIFF: `[Canon] FocalLength`).
+    /// Taken for the EXIF note's root, either closure missed the hidden
+    /// note's candidate and the bare write went EXIF-only.
+    #[test]
+    fn rows_from_outside_the_exif_note_do_not_identify_it() {
+        use crate::parsers::samsung_trailer::{EMBEDDED_AUDIO_FILE, EMBEDDED_AUDIO_FILE_NAME};
+        let mut seft = MetadataMap::new();
+        seft.insert_with_group1(
+            EMBEDDED_AUDIO_FILE_NAME,
+            TagValue::new_string("SoundShot_000"),
+            "Samsung",
+        );
+        seft.insert_with_group1(
+            EMBEDDED_AUDIO_FILE,
+            TagValue::new_binary(vec![0]),
+            "Samsung",
+        );
+        let err = makernote_may_hold("WhiteBalance", &seft, &one_note).unwrap();
+        assert!(err.contains("cannot identify"), "{err}");
+        // A trailer beside no tag-bearing EXIF note still holds only its
+        // own groups' candidates.
+        assert!(makernote_may_hold("WhiteBalance", &seft, &no_note).is_none());
+        // A real Samsung EXIF note's rows still identify it.
+        let mut samsung = seft.clone();
+        samsung.insert_with_group1(
+            "MakerNotes:DeviceType",
+            TagValue::new_string("Compact Digital Camera"),
+            "Samsung",
+        );
+        assert!(makernote_may_hold("WhiteBalance", &samsung, &one_note).is_none());
+
+        let mut ciff = MetadataMap::new();
+        ciff.insert("CIFF:CanonImageType", TagValue::new_string("CRW:EOS"));
+        ciff.insert_with_group1(
+            "MakerNotes:FocalLength",
+            TagValue::new_string("5 mm"),
+            "Canon",
+        );
+        // `Lens` has only a Nikon maker-note candidate.
+        let err = makernote_may_hold("Lens", &ciff, &one_note).unwrap();
+        assert!(err.contains("cannot identify"), "{err}");
+        // Without a CIFF segment a Canon row is the EXIF note's.
+        let mut canon = MetadataMap::new();
+        canon.insert("Canon:MacroMode", TagValue::new_string("Normal"));
+        assert!(makernote_may_hold("Lens", &canon, &one_note).is_none());
     }
 
     /// Candidates come from the pinned `FindTagInfo` capture, never from
