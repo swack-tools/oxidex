@@ -573,16 +573,19 @@ So stacked branches are kept current by rebasing, not by merge commits.
   before retargeting, re-run CI explicitly.
 - **Pre-review every push with the local Codex reviewer.** Before pushing any
   PR head (a stack layer, a fix commit, or a rebased layer), run the local
-  Codex reviewer on it from the worktree:
-  `codex review -c model_reasoning_effort="high" --commit <sha>` for one
-  commit, or `--base <branch below>` for a whole layer. It is the same reviewer
+  Codex reviewer on it from the worktree, TWICE (two independent runs; runs
+  are non-deterministic, so take the union of their findings):
+  `codex review -c model_reasoning_effort="xhigh" --commit <sha>` for one
+  commit, or `--base <branch below>` for a whole layer. `review_model` is
+  unset by default, so `/review` uses the configured `model`. Pass
+  `-c review_model=<model>` to pin a different one. It is the same reviewer
   the GitHub app runs, and it reads this AGENTS.md. Fix every valid finding, or
   explain why it's invalid, and re-run until it comes back clean.
   - This applies even when the GitHub reviewer already approved the same code.
     Reviews aren't deterministic, and the GitHub app re-reviews every new head:
     #958 got a 👍 at 13577739, then 3 new P2s on the identical tree at 14fe93f8.
-  - For write-path or higher-risk layers, run the local review twice. Treat a
-    finding from either run as real.
+  - A finding from either run is real. For write-path or higher-risk layers,
+    add a third run.
   - A clean local pass reduces GitHub review rounds but doesn't guarantee zero.
     Record in `HANDOFF.md` how many new findings the GitHub app still raises
     after a clean local pass. If that stays above zero, raise the local effort
@@ -645,6 +648,50 @@ So stacked branches are kept current by rebasing, not by merge commits.
 - **Record the stack.** List the bottom-to-top chain, and whether it is a
   `gh stack` or merge-based, in `HANDOFF.md` and in each PR body, so a
   successor knows the order.
+
+## Review guidelines
+
+The Codex reviewer, on GitHub and through `codex review` locally, reads this
+section, and so should every human or agent reviewer. Review against these
+priorities, and back every parity claim with evidence from the pinned
+ExifTool 13.59: its source (file:line in the pinned tree) or its actual
+output. A finding that says only "ExifTool probably does X" isn't actionable.
+
+**P1: always report.**
+- A wrong value, read or written, under a real ExifTool tag name. That
+  includes an approximated conversion, a wrong unit, and a value from the wrong
+  directory or copy (see "Never approximate a conversion").
+- A silent partial write or silent no-op: the tool reports success, or
+  `updated`/`unchanged`, while the bytes on disk don't match the request, or
+  a copy ExifTool would also write is left behind (MIE trailers, second APP1
+  blocks, maker-note copies, alias spellings).
+- Data loss or corruption: a dropped maker note, preview or trailer, or a
+  broken offset, CRC or IFD chain.
+- A crash or panic on input, an unbounded read, or quadratic work on a crafted
+  file.
+- A fail-open path where the code must fail closed (locks, leases, process
+  reaping, ownership checks).
+- A security issue, or a secret committed to the repo.
+
+**P2: report when the evidence shows a real divergence.**
+- oxidex diverges from pinned 13.59 on a request both tools accept: a
+  different winner for a bare name, a different count or exit code, or
+  different request ordering.
+- A refusal that should exist is missing, or a refusal has the wrong error type
+  or code: per-tag refusals must be typed `TagsNotWritten`.
+- A test that can't fail: it asserts the implementation instead of the oracle,
+  collapses ordered output, skips when the oracle is missing without
+  `OXIDEX_REQUIRE_EXIFTOOL_ORACLE`, or reads a stale binary.
+- A measurement in a PR or commit without its instrument named, or a number
+  that doesn't come from the instrument claimed.
+
+**Do not report.**
+- Formatting, lint, naming or style. `cargo fmt` and clippy with
+  `-D warnings` run in CI.
+- A refusal where ExifTool writes, when the refusal is explicit, typed and
+  documented as a follow-up. Failing closed is acceptable here; failing
+  silently is not.
+- A preference between two behaviours that both match the oracle.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
