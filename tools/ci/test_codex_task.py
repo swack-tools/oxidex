@@ -95,6 +95,16 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertIn('durable', result.stderr)
         self.assertFalse(self.args_log.exists())
 
+    def test_default_evidence_checks_appended_subdirectory(self):
+        ops = self.root/'ops'
+        ops.mkdir()
+        (ops/'evidence').symlink_to(tempfile.gettempdir(), target_is_directory=True)
+        self.env['OXIDEX_OPS_DIR'] = str(ops)
+        result = self.run_task('review', '--base', self.base, '--dry-run')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('durable', result.stderr)
+        self.assertFalse(self.args_log.exists())
+
     def test_zero_reported_usage_is_unknown(self):
         self.env['ZERO_USAGE'] = '1'
         out = self.root/'run'

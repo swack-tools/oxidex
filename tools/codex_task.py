@@ -92,8 +92,9 @@ def main():
     model, effort = args.model or model, args.effort or effort
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     try:
-        output = durable_root(args.output_dir.expanduser(), '--output-dir') if args.output_dir else (
+        candidate = args.output_dir or (
             ops_root() / 'evidence/codex' / f'{stamp}-{args.role}-{uuid.uuid4().hex[:8]}')
+        output = durable_root(candidate.expanduser(), 'review evidence directory')
     except ValueError as error:
         parser.error(str(error))
     if output.is_relative_to(root):
