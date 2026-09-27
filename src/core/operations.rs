@@ -1797,21 +1797,100 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     Ok(normalized)
 }
 
-/// Whether the file's first APP13 Photoshop segment (which carries the
-/// standard IPTC resource) comes before its first XMP APP1 segment.
+/// Whether the file's first APP13 Photoshop segment that actually carries
+/// the standard IPTC resource comes before its first XMP APP1 segment.
+///
+/// An APP13 with the `"Photoshop 3.0\0"` signature but no IPTC (0x0404)
+/// resource inside contributes nothing to `process_iptc_segments`'s output,
+/// so its file position cannot stand in for "where IPTC is found" -- an
+/// interleaved file with an empty Photoshop APP13 before XMP and the real
+/// IPTC-bearing APP13 after it must still order IPTC after XMP, matching
+/// `process_iptc_segments`/`process_photoshop_segments`'s own read.
 fn app13_precedes_xmp(segments: &[crate::parsers::jpeg::segment_parser::Segment]) -> bool {
-    const APP13_MARKER: u16 = 0xFFED;
     let app13 = segments
         .iter()
-        .find(|segment| {
-            segment.marker == APP13_MARKER && segment.data.starts_with(b"Photoshop 3.0\0")
-        })
+        .find(|segment| crate::parsers::jpeg::iptc_parser::app13_segment_carries_iptc_resource(segment))
         .map(|segment| segment.offset);
     let xmp = segments
         .iter()
         .find(|segment| crate::parsers::jpeg::xmp_parser::is_xmp_segment(segment))
         .map(|segment| segment.offset);
     matches!((app13, xmp), (Some(app13), Some(xmp)) if app13 < xmp)
+}
+
+#[cfg(test)]
+mod app13_precedes_xmp_tests {
+    use super::app13_precedes_xmp;
+    use crate::parsers::jpeg::segment_parser::Segment;
+
+    const APP13_MARKER: u16 = 0xFFED;
+    const APP1_MARKER: u16 = 0xFFE1;
+
+    fn resource(id: u16, data: &[u8]) -> Vec<u8> {
+        let mut out = b"8BIM".to_vec();
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&[0, 0]); // empty name, padded
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn xmp_segment(offset: u64, data: &'static [u8]) -> Segment<'static> {
+        Segment::new(APP1_MARKER, offset, data)
+    }
+
+    /// Codex #4113270297-adjacent finding on this PR: an APP13 with the
+    /// Photoshop signature but no IPTC (0x0404) resource inside -- an IRB of
+    /// a thumbnail only -- must not stand in for "where IPTC is found".
+    /// `t/images/MWG.jpg`-shaped file: an empty Photoshop APP13 first, XMP
+    /// second, and the real IPTC-bearing APP13 last. Before the fix,
+    /// `app13_precedes_xmp` matched on the empty segment's earlier offset
+    /// and reported `true`, so `read_jpeg_metadata`'s bare-name arbitration
+    /// processed IPTC before XMP and let XMP win a tag both carry -- the
+    /// reverse of ExifTool's own later-wins-the-tie file-order read, which
+    /// finds the real IPTC directory after XMP here and lets IPTC win.
+    #[test]
+    fn empty_photoshop_app13_before_xmp_does_not_count_as_app13_before_xmp() {
+        let mut empty_app13 = b"Photoshop 3.0\0".to_vec();
+        empty_app13.extend(resource(0x040c, b"thumb"));
+
+        let iptc = b"\x1c\x02\x00\x00\x02\x00\x02";
+        let mut real_app13 = b"Photoshop 3.0\0".to_vec();
+        real_app13.extend(resource(0x0404, iptc));
+
+        let xmp_data: &'static [u8] = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>";
+
+        let segments = [
+            Segment::new(APP13_MARKER, 100, &empty_app13),
+            xmp_segment(200, xmp_data),
+            Segment::new(APP13_MARKER, 300, &real_app13),
+        ];
+
+        assert!(
+            !app13_precedes_xmp(&segments),
+            "the real IPTC-bearing APP13 comes after XMP, so IPTC must win, not XMP"
+        );
+    }
+
+    /// The ordinary case this function exists for keeps working: a real
+    /// IPTC-bearing APP13 before XMP still reports `true`.
+    #[test]
+    fn iptc_bearing_app13_before_xmp_is_still_detected() {
+        let iptc = b"\x1c\x02\x00\x00\x02\x00\x02";
+        let mut real_app13 = b"Photoshop 3.0\0".to_vec();
+        real_app13.extend(resource(0x0404, iptc));
+        let xmp_data: &'static [u8] = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>";
+
+        let segments = [
+            Segment::new(APP13_MARKER, 100, &real_app13),
+            xmp_segment(200, xmp_data),
+        ];
+
+        assert!(app13_precedes_xmp(&segments));
+    }
 }
 
 /// One JPEG trailer [`process_jpeg_trailers`] reads by position.
