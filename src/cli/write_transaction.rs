@@ -453,7 +453,7 @@ fn apply_sets(
         .filter(|(_, value)| value.is_empty())
         .map(|(tag, _)| TagChange::delete(tag.strip_suffix('#').unwrap_or(tag).to_string()))
         .collect();
-    let deletions = request_deletions(scratch, &deletions);
+    let deletions = request_deletions(scratch, &deletions, None);
     let mut changes = Vec::with_capacity(sets.len());
     for (set_tag, value) in sets {
         let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {

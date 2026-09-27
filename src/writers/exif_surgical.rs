@@ -358,6 +358,21 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002e;
 /// note ExifTool files under MakerNotes.
 const DNG_PRIVATE_DATA: u16 = 0xc634;
 
+/// Whether `entry` is an IFD0 `DNGPrivateData` with an Adobe `MakN` record:
+/// a maker note ExifTool files under MakerNotes (`MakerNotes:All` deletes
+/// it).
+fn is_dng_makernote(entry: &RawEntry) -> bool {
+    entry.ifd == IfdKind::Ifd0
+        && entry.tag_id == DNG_PRIVATE_DATA
+        && entry.value.starts_with(b"Adobe\0")
+        && entry.value.windows(4).any(|w| w == b"MakN")
+}
+
+/// Whether `scan` carries a `DNGPrivateData` maker note ([`is_dng_makernote`]).
+pub(crate) fn has_dng_makernote(scan: &ExifScan) -> bool {
+    scan.entries.iter().any(is_dng_makernote)
+}
+
 /// Resolves the group-wide `<group>:All` removals of a write to a
 /// TIFF-structured file (`file_bytes`, read by the reader into `baseline`)
 /// against what pinned ExifTool 13.59 does there, and returns `removed`
@@ -391,8 +406,7 @@ pub(crate) fn resolve_tiff_group_removals(
             .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
             .map(|entry| entry.value.as_slice())
     };
-    let dng_makernote = ifd0_value(DNG_PRIVATE_DATA)
-        .is_some_and(|data| data.starts_with(b"Adobe\0") && data.windows(4).any(|w| w == b"MakN"));
+    let dng_makernote = has_dng_makernote(&scan);
     // The embedded JPEG's EXIF, if the file has one ExifTool writes into.
     let embedded = ifd0_value(PANASONIC_JPG_FROM_RAW)
         .and_then(|jpeg| jpeg_exif_payload(jpeg).ok().flatten())
@@ -2523,11 +2537,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                 ) {
                     census.tag_bearing += 1;
                 }
-            } else if entry.ifd == IfdKind::Ifd0
-                && entry.tag_id == DNG_PRIVATE_DATA
-                && entry.value.starts_with(b"Adobe\0")
-                && entry.value.windows(4).any(|w| w == b"MakN")
-            {
+            } else if is_dng_makernote(entry) {
                 census.notes += 1;
                 census.tag_bearing += 1;
             }

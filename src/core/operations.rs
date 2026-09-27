@@ -1697,16 +1697,15 @@ pub(crate) fn resolve_write_address(
 /// `removal` says whether the request is a deletion, which 13.59 applies
 /// to fewer copies than a set.
 ///
-/// A transaction asks this only of the requests left after its same-field
-/// reduction (`core::write_transaction::plan_changes`): a set a later
+/// A transaction asks the same question of the requests left after its
+/// same-field reduction, on one census of the file ([`mie_census`], taken
+/// once by `core::write_transaction::plan_changes`): a set a later
 /// deletion of the field overrides is never ExifTool's to write (13.59:
 /// `-IFD0:XPTitle=x -IFD0:XPTitle=` on t/images/ExifTool.jpg is
 /// `unchanged`, `-IFD0:Artist=x -IFD0:Artist=` deletes the main Artist and
 /// leaves the MIE trailer's 90 bytes as they were). ExifTool reads a MIE
 /// trailer after a JPEG or a TIFF-structured file (DNG, CR2), not after a
-/// PNG's IEND; oxidex's reader surfaces rows for the JPEG's only. A `.mie`
-/// document itself is no trailer carrier: oxidex writes no MIE file at all,
-/// and its writer's refusal answers for it.
+/// PNG's IEND.
 pub(crate) fn ensure_no_mie_copy_for(
     path: &Path,
     tag_name: &str,
@@ -1714,24 +1713,41 @@ pub(crate) fn ensure_no_mie_copy_for(
     baseline: &MetadataMap,
     removal: bool,
 ) -> Result<()> {
-    let reader = MMapReader::new(path)?;
-    let format = detect_format(&reader)?;
-    if matches!(format, FileFormat::MIE) {
-        return Ok(());
-    }
-    let trailer_file =
-        if matches!(format, FileFormat::JPEG) || is_surgical_tiff_target(format, &reader) {
-            Some(reader.read(0, reader.size() as usize)?)
-        } else {
-            None
-        };
     crate::writers::write_request::ensure_no_mie_copy(
         tag_name.strip_suffix('#').unwrap_or(tag_name),
         key,
         baseline,
         removal,
-        trailer_file,
+        &mie_census(path)?,
     )
+}
+
+/// The MIE census of the file at `path` (`write_request::MieCensus`), for
+/// [`ensure_no_mie_copy_for`] and a write transaction, which takes it once
+/// for all of its requests: the MIE trailers of a JPEG (whose trailer chain
+/// ends at the byte after its EOI) or a TIFF-structured file; any other
+/// file is no trailer carrier to ExifTool. A `.mie` document is not either:
+/// oxidex writes no MIE file at all, and its writer's refusal answers for
+/// it.
+pub(crate) fn mie_census(path: &Path) -> Result<crate::writers::write_request::MieCensus> {
+    use crate::writers::write_request::MieCensus;
+    let reader = MMapReader::new(path)?;
+    let format = detect_format(&reader)?;
+    if matches!(format, FileFormat::MIE) {
+        return Ok(MieCensus::NoTrailer);
+    }
+    let jpeg = matches!(format, FileFormat::JPEG);
+    if !jpeg && !is_surgical_tiff_target(format, &reader) {
+        return Ok(MieCensus::NotATrailerCarrier);
+    }
+    let file = reader.read(0, reader.size() as usize)?;
+    let trailer_start = if jpeg {
+        crate::writers::exif_surgical::jpeg_scan_start(file)
+            .and_then(|from| crate::parsers::vivo::jpeg_trailer_start(file, from))
+    } else {
+        None
+    };
+    Ok(MieCensus::of_trailers(file, trailer_start))
 }
 
 /// [`resolve_write_address`] in two parts: the resolved key (or the error
@@ -2139,6 +2155,7 @@ pub(crate) fn plan_group_deletion(
     path: &Path,
     tag_name: &str,
     group: &str,
+    mie: &crate::writers::write_request::MieCensus,
 ) -> Result<Option<String>> {
     let key = format!("{group}:All");
     let reader = MMapReader::new(path)?;
@@ -2150,16 +2167,15 @@ pub(crate) fn plan_group_deletion(
         // EXIF directory too, where that holds the group (`-EXIF:All=`
         // shrinks the 188-byte trailer an `-IFD0:Artist=x` leaves on
         // t/images/ExifTool.jpg back to 90 bytes), which oxidex does not
-        // write (`write_request::ensure_no_mie_copy`).
-        if matches!(format, FileFormat::JPEG) || surgical {
-            crate::writers::write_request::ensure_no_mie_copy(
-                tag_name,
-                &key,
-                &MetadataMap::new(),
-                true,
-                Some(reader.read(0, reader.size() as usize)?),
-            )?;
-        }
+        // write (`write_request::ensure_no_mie_copy`; `mie` is the file's
+        // census, [`mie_census`], taken once by the caller).
+        crate::writers::write_request::ensure_no_mie_copy(
+            tag_name,
+            &key,
+            &MetadataMap::new(),
+            true,
+            mie,
+        )?;
         if expanded {
             return Ok(Some(key));
         }

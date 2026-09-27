@@ -43,13 +43,14 @@
 
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    ensure_no_mie_copy_for, exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata,
+    exif_group_in_pdf, field_spellings, mie_census, plan_group_deletion, read_metadata,
     removal_is_no_op, remove_field, resolve_write_key_in_request, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::write_request::group_deletion;
+use crate::writers::write_request::{MieCensus, ensure_no_mie_copy};
 use std::fs;
 use std::path::Path;
 
@@ -359,19 +360,32 @@ struct Pending<'a> {
 /// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)):
 /// only a deletion [`plan_group_deletion`] plans for real counts -- one it
 /// proves a no-op (a note ExifTool files under EXIF) removes nothing.
-/// Pinned 13.59 applies them in either argument order.
+/// Pinned 13.59 applies them in either argument order. `mie` is the file's
+/// MIE census where the caller holds one; otherwise it is taken here, once,
+/// if a group deletion asks for it (`operations::mie_census`).
 pub(crate) fn request_deletions(
     path: &Path,
     changes: &[TagChange],
+    mie: Option<&MieCensus>,
 ) -> crate::writers::exif_surgical::RequestDeletions {
     use crate::writers::exif_surgical::RequestDeletions;
+    let taken: std::cell::OnceCell<Option<MieCensus>> = std::cell::OnceCell::new();
     changes
         .iter()
         .filter(|change| change.value().is_none())
         .filter_map(|change| {
             let group = group_deletion(change.tag())?;
-            matches!(plan_group_deletion(path, change.tag(), group), Ok(Some(_)))
-                .then(|| RequestDeletions::of(change.tag()))
+            // A census that cannot be taken fails the plan below, as the
+            // file that cannot be read would.
+            let mie = match mie {
+                Some(mie) => mie,
+                None => taken.get_or_init(|| mie_census(path).ok()).as_ref()?,
+            };
+            matches!(
+                plan_group_deletion(path, change.tag(), group, mie),
+                Ok(Some(_))
+            )
+            .then(|| RequestDeletions::of(change.tag()))
         })
         .fold(RequestDeletions::default(), RequestDeletions::union)
 }
@@ -392,6 +406,10 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     // The file's bytes, for the Panasonic RAW no-op decisions below (#956's
     // `rw2_ifd0`, which answer `false` for any other file).
     let file_bytes = fs::read(path)?;
+    // What the file carries of MIE, taken once for every request below
+    // (`operations::mie_census`): each request's MIE question reads it, and
+    // never the file again.
+    let mie = mie_census(path)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     // Refusals of one request, by its position: a later group deletion can
     // still cancel the request (see below), and its refusal with it.
@@ -400,7 +418,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let mut pending: Vec<Pending<'a>> = Vec::new();
     // What the request's group deletions remove, for the bare names it
     // also sets (`request_deletions`).
-    let deletions = request_deletions(path, changes);
+    let deletions = request_deletions(path, changes, Some(&mie));
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -430,7 +448,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                     && !group_covers(group, &earlier.request.key)
             });
             request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-            match plan_group_deletion(path, change.tag(), group) {
+            match plan_group_deletion(path, change.tag(), group, &mie) {
                 Ok(Some(key)) => groups.push((at, key)),
                 // Provably nothing of the group in the file.
                 Ok(None) => {}
@@ -506,13 +524,15 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // request that survived the same-field reduction (a set a later
         // deletion overrides is never written), and before the no-op
         // decision below, which sees the main EXIF alone (a deletion MIE's
-        // copy holds is no no-op). `operations::ensure_no_mie_copy_for`.
-        match ensure_no_mie_copy_for(
-            path,
-            candidate.request.requested,
+        // copy holds is no no-op). `write_request::ensure_no_mie_copy`, on
+        // the census taken once above.
+        let requested = candidate.request.requested;
+        match ensure_no_mie_copy(
+            requested.strip_suffix('#').unwrap_or(requested),
             &candidate.request.key,
             &baseline,
             candidate.request.value.is_none(),
+            &mie,
         ) {
             Ok(()) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
@@ -1030,6 +1050,35 @@ mod tests {
 
     fn s(text: &str) -> TagValue {
         TagValue::new_string(text)
+    }
+
+    /// PR #966 review 4112736391: a transaction walks the file's MIE
+    /// trailers once, whatever its number of requests -- not once per
+    /// surviving request and group deletion (each walk is file-sized).
+    #[test]
+    fn a_transaction_takes_one_mie_census() {
+        let Some(source) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mie.jpg");
+        std::fs::copy(&source, &path).unwrap();
+        let changes = [
+            TagChange::delete("IFD0:Artist"),
+            TagChange::delete("IFD0:Software"),
+            TagChange::delete("ExifIFD:UserComment"),
+            TagChange::delete("IFD0:Copyright"),
+            TagChange::delete("GPS:All"),
+            TagChange::delete("IFD1:All"),
+        ];
+        crate::parsers::mie::TRAILER_WALKS.with(|walks| walks.set(0));
+        let _ = plan_changes(&path, &changes);
+        assert_eq!(
+            crate::parsers::mie::TRAILER_WALKS.with(std::cell::Cell::get),
+            1,
+            "one MIE census for {} requests",
+            changes.len()
+        );
     }
 
     /// A map read from the file, then edited: the rows the caller

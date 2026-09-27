@@ -134,7 +134,11 @@ fn grade(
             mie_cases += 1;
             if ox.status.success()
                 || ox_bytes != original
-                || !stderr.contains(&format!("Cannot write tag '{named}'"))
+                // oxidex names the tag in its canonical spelling
+                // (`-gps:all=` is refused as 'GPS:All').
+                || !stderr
+                    .to_ascii_lowercase()
+                    .contains(&format!("cannot write tag '{}'", named.to_ascii_lowercase()))
                 || !stderr.contains("MIE")
             {
                 failures.push(format!(
@@ -355,6 +359,173 @@ fn review_966_mie_cases_match_the_oracle_or_are_refused() {
             ("ExifTool.jpg overrides", 0),
             ("Writer.jpg+MIE-EXIF(magic 43)", 2),
             ("Writer.jpg+MIE-EXIF+MIE", 2),
+            ("Writer.jpg+MIE-Canon-EXIF", 1),
+        ]
+    );
+}
+
+/// Writer.jpg with `object` inside an APP15 segment ahead of its first
+/// marker after SOI: a MIE object no trailer walk reaches.
+fn in_app15(jpeg: &[u8], object: &[u8]) -> Vec<u8> {
+    let mut out = jpeg[..2].to_vec();
+    out.extend_from_slice(&[0xFF, 0xEF]);
+    out.extend_from_slice(&((object.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(object);
+    out.extend_from_slice(&jpeg[2..]);
+    out
+}
+
+/// A big-endian MIE trailer holding `tiff` as an `EXIF` leaf of its
+/// `0MIE` / `Meta` / `Document` group -- no EXIF directory to ExifTool.
+fn mie_holding_document_exif(tiff: &[u8]) -> Vec<u8> {
+    let mut out =
+        b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\x10\x08\0Document~\0\x04\xfeEXIF".to_vec();
+    out.extend_from_slice(&(tiff.len() as u32).to_be_bytes());
+    out.extend_from_slice(tiff);
+    out.extend_from_slice(b"~\0\0\0~\0\0\0~\0\x04\0zmie~\0\0\x06");
+    let length = out.len() as u32 + 6;
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(&[0x10, 4]);
+    out
+}
+
+/// A big-endian TIFF: IFD0 `Make` "FooCam", and an ExifIFD whose 0x927c
+/// MakerNote is plain text no maker parser claims -- pinned 13.59 reads it
+/// as `[ExifIFD] MakerNoteUnknownText`.
+fn tiff_with_unknown_text_note() -> Vec<u8> {
+    let make: &[u8] = b"FooCam\0";
+    let note: &[u8] = b"Plain text maker note\0";
+    let make_at = 8 + 2 + 2 * 12 + 4;
+    let exif_at = make_at + make.len() + (make.len() & 1);
+    let note_at = exif_at + 2 + 12 + 4;
+    let mut out = b"MM\0*\0\0\0\x08\0\x02".to_vec();
+    for (tag, kind, count, value) in [
+        (0x010f_u16, 2_u16, make.len(), make_at),
+        (0x8769, 4, 1, exif_at),
+    ] {
+        out.extend_from_slice(&tag.to_be_bytes());
+        out.extend_from_slice(&kind.to_be_bytes());
+        out.extend_from_slice(&(count as u32).to_be_bytes());
+        out.extend_from_slice(&(value as u32).to_be_bytes());
+    }
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(make);
+    if make.len() & 1 == 1 {
+        out.push(0);
+    }
+    out.extend_from_slice(b"\0\x01\x92\x7c\0\x07");
+    out.extend_from_slice(&(note.len() as u32).to_be_bytes());
+    out.extend_from_slice(&(note_at as u32).to_be_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(note);
+    out
+}
+
+/// PR #966 review threads on f1bec0f6 / 4df75fa4, graded against the
+/// oracle as above (evidence `20260921-beta1-direct/mie-grouped`):
+///
+/// - 4112736390: `-gps:all=` is `-GPS:All=` in any spelling; 13.59 deletes
+///   the GPS a MIE copy holds (ExifTool.jpg after the oracle's own
+///   `-GPS:GPSLatitude=1`): refused.
+/// - 4112736393: a MIE object inside an APP15 segment is no trailer; 13.59
+///   leaves it (`-IFD0:Make=`: unchanged) and writes `-IFD0:Artist=x` into
+///   the main EXIF only.
+/// - 4112736395: an `EXIF` leaf under MIE `Document` is no EXIF directory;
+///   `-IFD0:Make=` and `-IFD0:Model=` are unchanged.
+/// - 4112736397: `-MakerNotes:All=` deletes a DNGPrivateData maker note in
+///   MIE's EXIF (Writer.jpg + MIE holding DNG.dng: 13967 -> 5593 bytes).
+/// - 4113020034: a 0x927c note 13.59 files under ExifIFD
+///   (`MakerNoteUnknownText`) is left by `-MakerNotes:All=` (unchanged).
+/// - 4113020039: a bare deletion also edits MIE's maker note:
+///   `-WhiteBalance=` resolves to ExifIFD, which Nikon.jpg's EXIF lacks, but
+///   13.59 deletes `[Nikon] WhiteBalance` in a MIE holding that EXIF
+///   (1747 -> 1731 bytes; 4df75fa4 reported `unchanged`). A maker-note
+///   group's own name, `-Canon:OwnerName=`, edits it too (2741 -> 2747).
+#[test]
+fn review_966_round_two_mie_cases_match_the_oracle_or_are_refused() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let jpeg = std::fs::read(fixtures::required_t_images_fixture_path("ExifTool.jpg")).unwrap();
+    let writer = std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap();
+    let canon = std::fs::read(fixtures::required_t_images_fixture_path("Canon.jpg")).unwrap();
+    let dng = std::fs::read(fixtures::required_t_images_fixture_path("DNG.dng")).unwrap();
+    let nikon = std::fs::read(fixtures::required_t_images_fixture_path("Nikon.jpg")).unwrap();
+    let canon_tiff = jpeg_exif_tiff(&canon);
+
+    // 4112736390: ExifTool.jpg whose main EXIF and MIE copy both hold GPS.
+    let dir = tempfile::tempdir().unwrap();
+    let gps_path = dir.path().join("mie-gps.jpg");
+    std::fs::write(&gps_path, &jpeg).unwrap();
+    let status = oracle
+        .command()
+        .args(["-q", "-overwrite_original", "-GPS:GPSLatitude=1"])
+        .arg(&gps_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let gps = std::fs::read(&gps_path).unwrap();
+    assert!(
+        mie_trailer(&gps).unwrap().len() > mie_trailer(&jpeg).unwrap().len(),
+        "the oracle's set created MIE's EXIF"
+    );
+    // 4112736393: a MIE holding Canon.jpg's EXIF inside an APP15 segment.
+    let app15 = in_app15(&writer, &mie_holding_exif(&canon_tiff));
+    // 4112736395: a MIE whose Document group holds Canon.jpg's EXIF.
+    let document = [&writer[..], &mie_holding_document_exif(&canon_tiff)].concat();
+    // 4112736397 / 4113020034 / 4113020039.
+    let dng_mie = [&writer[..], &mie_holding_exif(&dng)].concat();
+    let unknown_note = [
+        &writer[..],
+        &mie_holding_exif(&tiff_with_unknown_text_note()),
+    ]
+    .concat();
+    let canon_mie = [&writer[..], &mie_holding_exif(&canon_tiff)].concat();
+    let nikon_mie = [&writer[..], &mie_holding_exif(&jpeg_exif_tiff(&nikon))].concat();
+
+    const GPS: &[Case] = &[(&["-gps:all="], "GPS:All"), (&["-GPS:All="], "GPS:All")];
+    const EMBEDDED: &[Case] = &[
+        (&["-IFD0:Make="], "Make"),
+        (&["-IFD0:Artist=main only"], "Artist"),
+    ];
+    const DOCUMENT: &[Case] = &[(&["-IFD0:Make="], "Make"), (&["-IFD0:Model="], "Model")];
+    const MAKERNOTES_ALL: &[Case] = &[
+        (&["-MakerNotes:All="], "MakerNotes:All"),
+        (&["-makernotes:all="], "MakerNotes:All"),
+    ];
+    const BARE: &[Case] = &[(&["-WhiteBalance="], "WhiteBalance")];
+    const MAKERNOTE_GROUP: &[Case] = &[(&["-Canon:OwnerName="], "OwnerName")];
+    let mut failures = Vec::new();
+    let mut mie_cases = Vec::new();
+    for (label, bytes, cases) in [
+        ("ExifTool.jpg+MIE-GPS", &gps, GPS),
+        ("Writer.jpg+APP15-MIE", &app15, EMBEDDED),
+        ("Writer.jpg+MIE-Document-EXIF", &document, DOCUMENT),
+        ("Writer.jpg+MIE-DNG", &dng_mie, MAKERNOTES_ALL),
+        ("Writer.jpg+MIE-unknown-note", &unknown_note, MAKERNOTES_ALL),
+        ("Writer.jpg+MIE-Nikon-EXIF", &nikon_mie, BARE),
+        ("Writer.jpg+MIE-Canon-EXIF", &canon_mie, MAKERNOTE_GROUP),
+    ] {
+        match grade(oracle, label, "jpg", bytes, cases) {
+            Ok(count) => mie_cases.push((label, count)),
+            Err(departures) => failures.extend(departures),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} departures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    assert_eq!(
+        mie_cases,
+        [
+            ("ExifTool.jpg+MIE-GPS", 2),
+            ("Writer.jpg+APP15-MIE", 0),
+            ("Writer.jpg+MIE-Document-EXIF", 0),
+            ("Writer.jpg+MIE-DNG", 2),
+            ("Writer.jpg+MIE-unknown-note", 0),
+            ("Writer.jpg+MIE-Nikon-EXIF", 1),
             ("Writer.jpg+MIE-Canon-EXIF", 1),
         ]
     );
