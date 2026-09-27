@@ -332,9 +332,12 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
     // date/time -- `$val =~ /(\d{4}).*?(\d{2}).*?(\d{2})/ ? "$1:$2:$3" :
     // undef` -- after adjusting a zoned date/time to UTC. No date is no
     // value (13.59 does not copy t/images/InfiRay.jpg's empty stamp); the
-    // UTC adjustment and `now` are refused rather than approximated.
+    // UTC adjustment and `now` are refused rather than approximated. The
+    // adjustment runs only when the value holds a `-`/`+` *and* is a full
+    // date/time `GetUnixTime` parses (`gps_date_stamp_adjusts_to_utc`), so a
+    // hyphen used as a date separator (`2024-01-02`) is just a separator.
     if declared_tag_name.rsplit(':').next() == Some("GPSDateStamp") {
-        if raw.eq_ignore_ascii_case("now") || raw.contains(['-', '+']) {
+        if raw.eq_ignore_ascii_case("now") || gps_date_stamp_adjusts_to_utc(raw) {
             return Err(invalid(
                 tag_name,
                 "oxidex does not adjust a zoned GPSDateStamp to UTC; give the date",
@@ -765,6 +768,51 @@ pub fn parse_cli_tag_value(tag_name: &str, raw: &str) -> Result<TagValue> {
             "Structured values cannot be set from the command line",
         )),
     }
+}
+
+/// Whether GPS.pm 13.59's GPSDateStamp `PrintConvInv` would adjust `raw` to
+/// UTC before taking its date: `$val =~ /[-+]/ and ($secs =
+/// GetUnixTime($val, 1))`. `GetUnixTime` (ExifTool.pm 13.59) parses only
+/// `^(\d+)[-:](\d+)[-:](\d+)\s+(\d+):(\d+):(\d+)` -- a full date/time --
+/// and treats a time without a zone as local, so the result depends on the
+/// zone either way; any other value (`2024-01-02`, `2024-01-02T10:11:12`)
+/// keeps its hyphens as separators and goes straight to the date scan.
+fn gps_date_stamp_adjusts_to_utc(raw: &str) -> bool {
+    if !raw.contains(['-', '+']) {
+        return false;
+    }
+    let bytes = raw.as_bytes();
+    let mut at = 0;
+    let digits = |at: &mut usize| {
+        let start = *at;
+        while bytes.get(*at).is_some_and(u8::is_ascii_digit) {
+            *at += 1;
+        }
+        *at > start
+    };
+    let sep = |at: &mut usize, allowed: &[u8]| {
+        let ok = bytes.get(*at).is_some_and(|b| allowed.contains(b));
+        *at += usize::from(ok);
+        ok
+    };
+    let date = digits(&mut at)
+        && sep(&mut at, b"-:")
+        && digits(&mut at)
+        && sep(&mut at, b"-:")
+        && digits(&mut at);
+    if !date {
+        return false;
+    }
+    let space_start = at;
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    at > space_start
+        && digits(&mut at)
+        && sep(&mut at, b":")
+        && digits(&mut at)
+        && sep(&mut at, b":")
+        && digits(&mut at)
 }
 
 fn invert_subsec_time(value: &str) -> Option<&str> {
@@ -2252,6 +2300,32 @@ mod tests {
         );
         assert!(parse("GPS:GPSDateStamp", "").is_err());
         assert!(parse("GPS:GPSDateStamp", "2024:01:02 10:11:12+02:00").is_err());
+    }
+
+    /// PR #957 review (Codex, 4112862931): a hyphen separates the date's
+    /// parts unless the value is a full date/time `GetUnixTime` would adjust
+    /// to UTC (GPS.pm 13.59 0x001d PrintConvInv).
+    #[test]
+    fn gps_date_stamp_hyphens_are_separators_unless_a_date_time() {
+        for raw in [
+            "2024-01-02",
+            "2024-01-02T10:11:12",
+            "2024-01-02T10:11:12+02:00",
+        ] {
+            assert_eq!(
+                parse("GPS:GPSDateStamp", raw).unwrap(),
+                TagValue::String("2024:01:02".into()),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "2024-01-02 10:11:12",
+            "2024:01:02 10:11:12-05:00",
+            "2024:01:02 10:11:12+02:00",
+            "now",
+        ] {
+            assert!(parse("GPS:GPSDateStamp", raw).is_err(), "{raw}");
+        }
     }
 
     #[test]

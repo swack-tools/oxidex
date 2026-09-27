@@ -225,9 +225,7 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
 /// wildcards.
 fn copy_group_matches(wanted: &str, key_group: &str, group1: &str) -> bool {
     if wanted.eq_ignore_ascii_case("EXIF") {
-        return ["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "EXIF"]
-            .iter()
-            .any(|group| group.eq_ignore_ascii_case(key_group));
+        return is_exif_family_group(key_group);
     }
     if wanted.eq_ignore_ascii_case("XMP") {
         return key_group.eq_ignore_ascii_case("XMP")
@@ -236,6 +234,26 @@ fn copy_group_matches(wanted: &str, key_group: &str, group1: &str) -> bool {
                 .is_some_and(|p| p.eq_ignore_ascii_case("XMP-"));
     }
     glob_matches(wanted, key_group) || glob_matches(wanted, group1)
+}
+
+/// Whether a source row's family-0 key group is one of the EXIF family's
+/// directories, which an `EXIF:all` selection spans: IFD0, IFD1, ExifIFD,
+/// GPS, InteropIFD, `EXIF` itself, and a SubIFD -- `SubIFD`, or the numbered
+/// `SubIFD0`/`SubIFD1`/... a DNG's chain is keyed under (pinned 13.59 prints
+/// them `[EXIF:SubIFD]`, `[EXIF:SubIFD1]`). A SubIFD row the destination's
+/// writer cannot write is then named in the copy report rather than
+/// dropped before it (PR #957 review, Codex 4112788430).
+fn is_exif_family_group(key_group: &str) -> bool {
+    if ["IFD0", "IFD1", "ExifIFD", "GPS", "InteropIFD", "EXIF"]
+        .iter()
+        .any(|group| group.eq_ignore_ascii_case(key_group))
+    {
+        return true;
+    }
+    key_group
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("SubIFD"))
+        && key_group[6..].bytes().all(|b| b.is_ascii_digit())
 }
 
 /// The value 13.59 copies for `occurrence` into `key`: the value as it

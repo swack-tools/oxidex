@@ -76,6 +76,29 @@ def main() -> int:
     shortcuts = perl(args.perl, lib,
                      "use Image::ExifTool::Shortcuts; "
                      "print lc($_), qq(\\n) for keys %Image::ExifTool::Shortcuts::Main").split()
+    # Each shortcut's expansion, in the module's own order (SetNewValue sets
+    # every member in turn, Writer.pl:562-578; the exiftool application
+    # expands a grouped shortcut with ExpandShortcuts, ExifTool.pm 5668-).
+    expansion_lines = perl(args.perl, lib,
+                           "use Image::ExifTool::Shortcuts; "
+                           "my %m = %Image::ExifTool::Shortcuts::Main; "
+                           "for my $k (sort keys %m) { print join(qq(\\t), $k, @{$m{$k}}), qq(\\n) }"
+                           ).splitlines()
+    expansions = [(line.split("\t")[0], line.split("\t")[1:]) for line in expansion_lines if line]
+    if sorted(key.lower() for key, _ in expansions) != sorted(shortcuts):
+        raise SystemExit("Shortcuts::Main keys and expansions disagree")
+    if any(not members or any(not m or '"' in m or "\\" in m for m in members)
+           for _, members in expansions):
+        raise SystemExit("a shortcut expansion is empty or not a plain name")
+    # SetNewValue consults Shortcuts::Main only when FindTagInfo finds no tag
+    # of that name (Writer.pl:542-562); every key must be shortcut-only, or
+    # expanding it unconditionally would shadow a real tag.
+    shadowed = perl(args.perl, lib,
+                    "use Image::ExifTool; use Image::ExifTool::Shortcuts; "
+                    "print join(q( ), grep { my @m = Image::ExifTool::FindTagInfo($_); @m } "
+                    "sort keys %Image::ExifTool::Shortcuts::Main)").strip()
+    if shadowed:
+        raise SystemExit(f"shortcut keys that are also tags: {shadowed}")
 
     names = sorted(set(writable) | set(existing) | set(shortcuts))
     # Prove every extracted TagLookup key against the interpreter's own test.
@@ -110,6 +133,14 @@ def main() -> int:
         "pub(crate) const TAG_EXISTS: &[&str] = &[\n",
     ]
     out.extend(f"    \"{name}\",\n" for name in names)
+    out.append("];\n")
+    out.append("/// `%Image::ExifTool::Shortcuts::Main`: each shortcut and the tags it\n")
+    out.append("/// stands for, in the module's order, keyed by the shortcut's own spelling\n")
+    out.append("/// (sorted; ExifTool matches the key without regard to case).\n")
+    out.append("pub(crate) const SHORTCUTS: &[(&str, &[&str])] = &[\n")
+    for key, members in expansions:
+        body = ", ".join(f"\"{member}\"" for member in members)
+        out.append(f"    (\"{key}\", &[{body}]),\n")
     out.append("];\n")
     args.output.write_text("".join(out))
     print(f"wrote {args.output}: {len(names)} names", file=sys.stderr)

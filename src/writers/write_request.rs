@@ -49,7 +49,7 @@
 use super::generated_setnewvalue_address_rules::{
     SET_NEW_VALUE_LOOKUP, StaticNativeLookupCandidate,
 };
-use super::generated_tag_exists::TAG_EXISTS;
+use super::generated_tag_exists::{SHORTCUTS, TAG_EXISTS};
 use crate::core::FileFormat;
 use crate::core::metadata_map::MetadataMap;
 use crate::error::{ExifToolError, Result};
@@ -104,6 +104,40 @@ pub fn exiftool_tag_exists(name: &str) -> bool {
     TAG_EXISTS
         .binary_search(&name.to_ascii_lowercase().as_str())
         .is_ok()
+}
+
+/// The tags a `-TAG=VALUE` / `-TAG=` request stands for when `TAG` names a
+/// `Shortcuts::Main` key (any case), or `None` for any other name.
+///
+/// Pinned ExifTool 13.59's `SetNewValue` sets every tag of the shortcut in
+/// turn with the request's options (Writer.pl:562-578): a member's own group
+/// replaces the request's (`-XMP:CommonIFD0=` still writes `IFD0:Make`), a
+/// member without one takes the request's (`-XMP:AllDates=` writes
+/// `XMP-exif:DateTimeOriginal`), and a trailing `#` (`ValueConv`) applies to
+/// every member. The expansion is the generated table
+/// ([`SHORTCUTS`](super::generated_tag_exists::SHORTCUTS)), never a hand
+/// list: `-CommonIFD0=` deletes the seventeen IFD0 fields ExifTool deletes.
+pub fn expand_write_shortcut(tag: &str) -> Option<Vec<String>> {
+    let (group, name) = match tag.rsplit_once(':') {
+        Some((group, name)) => (Some(group), name),
+        None => (None, tag),
+    };
+    let (name, suffix) = match name.strip_suffix('#') {
+        Some(name) => (name, "#"),
+        None => (name, ""),
+    };
+    let (_, members) = SHORTCUTS
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))?;
+    Some(
+        members
+            .iter()
+            .map(|member| match group {
+                Some(group) if !member.contains(':') => format!("{group}:{member}{suffix}"),
+                _ => format!("{member}{suffix}"),
+            })
+            .collect(),
+    )
 }
 
 /// ExifTool 13.59's fixed wording for a name `SetNewValue` finds no writable
@@ -665,6 +699,32 @@ pub(crate) fn generated_route_resolves(key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
+
+    /// PR #957 review (Codex, 4112788433): every `Shortcuts::Main` key
+    /// expands, with SetNewValue's group and `#` rules (Writer.pl:562-578).
+    #[test]
+    fn write_shortcuts_expand_with_setnewvalues_group_rules() {
+        assert_eq!(
+            expand_write_shortcut("AllDates").unwrap(),
+            ["DateTimeOriginal", "CreateDate", "ModifyDate"]
+        );
+        assert_eq!(
+            expand_write_shortcut("XMP:alldates").unwrap(),
+            ["XMP:DateTimeOriginal", "XMP:CreateDate", "XMP:ModifyDate"]
+        );
+        let common = expand_write_shortcut("commonifd0").unwrap();
+        assert_eq!(common.len(), 17);
+        assert_eq!(common[1], "IFD0:Make");
+        // A member's own group replaces the request's; `#` reaches every one.
+        let grouped = expand_write_shortcut("XMP:CommonIFD0#").unwrap();
+        assert_eq!(grouped[1], "IFD0:Make#");
+        assert_eq!(
+            expand_write_shortcut("ImageDataMD5").unwrap(),
+            ["ImageDataHash"]
+        );
+        assert!(expand_write_shortcut("Make").is_none());
+        assert!(expand_write_shortcut("IFD0:Artist").is_none());
+    }
 
     #[test]
     fn tag_exists_capture_is_sorted_lowercase_and_pinned() {

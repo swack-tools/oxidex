@@ -30,7 +30,7 @@ use crate::core::write_transaction::{
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
-    canonical_request_tag, sorry_not_writable, undefined_tag_warning,
+    canonical_request_tag, expand_write_shortcut, sorry_not_writable, undefined_tag_warning,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -171,22 +171,16 @@ impl WritePlan {
         let mut sets = Vec::new();
         let mut sets_before_copy = 0;
         for (at, tag, value) in &raw_sets {
-            // ExifTool's `AllDates` shortcut (Shortcuts.pm): the three EXIF
-            // dates, in its order, each under the shortcut's group if any.
-            let (group, name) = match tag.rsplit_once(':') {
-                Some((group, name)) => (Some(group), name),
-                None => (None, tag.as_str()),
-            };
-            let expanded: Vec<(String, OsString)> = if name.eq_ignore_ascii_case("AllDates") {
-                ["DateTimeOriginal", "CreateDate", "ModifyDate"]
-                    .iter()
-                    .map(|date| {
-                        let tag = group.map_or_else(|| date.to_string(), |g| format!("{g}:{date}"));
-                        (tag, value.clone())
-                    })
-                    .collect()
-            } else {
-                vec![(tag.clone(), value.clone())]
+            // A `Shortcuts::Main` name (`AllDates`, `CommonIFD0`, ...) stands
+            // for its tags, each set in turn as pinned ExifTool's
+            // `SetNewValue` sets them (`write_request::expand_write_shortcut`),
+            // before any of them is judged or resolved.
+            let expanded: Vec<(String, OsString)> = match expand_write_shortcut(tag) {
+                Some(members) => members
+                    .into_iter()
+                    .map(|member| (member, value.clone()))
+                    .collect(),
+                None => vec![(tag.clone(), value.clone())],
             };
             let (mut warned, defined) = partition_defined(&expanded);
             warnings.append(&mut warned);
