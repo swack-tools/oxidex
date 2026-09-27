@@ -140,7 +140,7 @@ fn engine_occurrence(row: crate::exiftool_tables::Emitted) -> (String, TagOccurr
             group1: intern(row.group1),
             group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
             instance: Instance::default(),
-            raw: row.stored.clone(),
+            raw: row.value.clone(),
             value: Some(value),
             print: Some(row.value),
             stored: Some(row.stored),
@@ -272,5 +272,45 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert!(tags.is_empty());
+    }
+
+    /// `engine_occurrence`'s `raw` must carry the display form
+    /// (`row.value`, PrintConv'd), matching every other generated adapter
+    /// (`panasonic_generated_occurrence`) -- not `row.stored`, the file's
+    /// typed source value. `MetadataMap::get`/`iter`/serialization all
+    /// project through `raw` (`TagSink::get`, `core/tag_sink.rs`); only the
+    /// CLI resolver explicitly re-selects `print`, so this bug was invisible
+    /// there. `Kodak::Main`'s `MeteringMode` (index 28, `IntEnum(0 =>
+    /// "Multi-segment", 1 => "Center-weighted average", 2 => "Spot")`) is
+    /// stored as a plain integer, so a `raw: row.stored` regression would
+    /// leave `TagValue::Integer(1)` where ExifTool's label belongs.
+    #[test]
+    fn test_engine_occurrence_raw_is_the_display_form_not_the_stored_form() {
+        use crate::core::TagValue;
+
+        let mut data = b"KDK INFO".to_vec();
+        let mut record = vec![0u8; 108];
+        record[28] = 1; // MeteringMode: Center-weighted average
+        data.extend_from_slice(&record);
+
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let parser = KodakParser::new();
+        let rows = parser
+            .main_rows(&data, &mut cond_ctx)
+            .expect("KDK INFO payload parses as Kodak::Main");
+        let metering_row = rows
+            .into_iter()
+            .find(|row| row.name == "MeteringMode")
+            .expect("Kodak::Main emits MeteringMode");
+        assert_eq!(metering_row.stored, TagValue::Integer(1));
+
+        let (key, occurrence) = engine_occurrence(metering_row);
+        assert_eq!(key, "Kodak:MeteringMode");
+        assert_eq!(
+            occurrence.raw,
+            TagValue::new_string("Center-weighted average"),
+            "raw must be the PrintConv'd display form, not the stored integer"
+        );
     }
 }
