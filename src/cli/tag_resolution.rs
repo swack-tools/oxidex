@@ -28,7 +28,7 @@ use crate::cli::args::CliArgs;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use crate::core::{MetadataMap, TagValue};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Maps a stored occurrence's `group0` to ExifTool's real family-0 group.
 ///
@@ -758,6 +758,30 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .collect()
         };
         resolved.sort_by_key(|entry| entry.occurrence.order);
+        // With `-G`, the `exiftool` script sorts the full listing by that
+        // group (`exiftool` 13.59:1852-1855, `Sort => "Group$showGroup"`):
+        // groups in order of first appearance, file order within each
+        // (ExifTool.pm 13.59:3373-3397). File order alone is not it: the
+        // IFD0 entries after `ExifOffset` are found after the whole ExifIFD
+        // subtree, yet print with the rest of IFD0.
+        if let Some(families) = &args.group_display
+            && !args.csv
+        {
+            let mut rank: HashMap<String, usize> = HashMap::new();
+            let ranks: Vec<usize> = resolved
+                .iter()
+                .map(|entry| {
+                    let next = rank.len();
+                    *rank
+                        .entry(joined_family_label(entry.occurrence, families))
+                        .or_insert(next)
+                })
+                .collect();
+            let mut ranked: Vec<(usize, ResolvedOccurrence)> =
+                ranks.into_iter().zip(resolved).collect();
+            ranked.sort_by_key(|(rank, _)| *rank);
+            resolved = ranked.into_iter().map(|(_, entry)| entry).collect();
+        }
 
         if short_text {
             return ResolvedFileOutput::Lines(render_short_lines(
