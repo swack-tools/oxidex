@@ -15,7 +15,7 @@ class ProseHookTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name)
+        self.repo = Path(self.tmp.name).resolve()
         (self.repo / '.vale/styles/Google').mkdir(parents=True)
         (self.repo / '.vale.ini').write_text('StylesPath = .vale/styles\n')
         (self.repo / 'doc with spaces.md').write_text('bad prose')
@@ -32,7 +32,8 @@ class ProseHookTests(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(self.repo)], check=True)
 
     def invoke(self, tool, inputs, **extra):
-        payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse', tool_name=tool, tool_input=inputs, **extra)
+        payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse', tool_name=tool, tool_input=inputs)
+        payload.update(extra)
         return subprocess.run(['bash', str(HOOK)], input=json.dumps(payload), env=self.env,
                               text=True, capture_output=True, cwd=self.repo)
 
@@ -60,58 +61,120 @@ class ProseHookTests(unittest.TestCase):
         self.assertIn('Google.WordList', result.stderr)
         self.assertIn('doc with spaces.md', self.log.read_text())
 
-    def test_shell_edit_checks_untracked_prose(self):
-        result = self.invoke('Bash', {'command': 'write document'}, turn_id='codex-turn')
-        self.assertEqual(result.returncode, 2, result)
-        self.assertIn('doc with spaces.md', self.log.read_text())
-
     def test_outside_project_file_is_not_linted(self):
         result = self.invoke('Edit', {'file_path': '/outside/doc.md'})
         self.assertEqual(result.returncode, 0, result)
         self.assertFalse(self.log.exists())
 
-    def test_read_only_shell_does_not_repeat_unchanged_feedback(self):
-        self.env['VALE_TEST_EXIT'] = '0'
-        first = self.invoke('Bash', {'command': 'edit file'}, session_id='same-session')
-        self.assertEqual(first.returncode, 0, first)
-        before = self.log.read_text()
-        second = self.invoke('Bash', {'command': 'true'}, session_id='same-session')
-        self.assertEqual(second.returncode, 0, second)
-        self.assertEqual(self.log.read_text(), before)
-        (self.repo/'doc with spaces.md').write_text('new prose')
-        self.env['VALE_TEST_EXIT'] = '1'
-        third = self.invoke('Bash', {'command': 'edit file'}, session_id='same-session')
-        self.assertEqual(third.returncode, 2, third)
-        self.assertNotEqual(self.log.read_text(), before)
+    def shell(self, event, call='call', workdir=None, **extra):
+        return self.invoke('Bash', {'command': 'command', **({'cwd': str(workdir)} if workdir else {})},
+                           hook_event_name=event, tool_use_id=call, session_id='session', **extra)
 
-    def test_changed_config_rechecks_unchanged_dirty_prose(self):
-        self.env['VALE_TEST_EXIT'] = '0'
-        self.invoke('Bash', {'command': 'true'}, session_id='config-change')
+    def test_readonly_never_lints_existing_bad_untracked_prose(self):
+        self.assertEqual(self.shell('PreToolUse').returncode, 0)
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_shell_new_and_edited_prose_then_readonly_after_failure(self):
+        for name in ['doc with spaces.md', 'new café doc.md']:
+            self.assertEqual(self.shell('PreToolUse', name).returncode, 0)
+            (self.repo/name).write_text('new bad prose')
+            result = self.shell('PostToolUse', name)
+            self.assertEqual(result.returncode, 2, result)
+            self.assertIn(str(self.repo/name), json.loads(self.log.read_text().splitlines()[-1]))
         before = self.log.read_text()
-        (self.repo/'.vale.ini').write_text('StylesPath = .vale/styles\nMinAlertLevel = error\n')
-        self.env['VALE_TEST_EXIT'] = '1'
-        result = self.invoke('Bash', {'command': 'true'}, session_id='config-change')
+        self.shell('PreToolUse', 'readonly')
+        self.assertEqual(self.shell('PostToolUse', 'readonly').returncode, 0)
+        self.assertEqual(before, self.log.read_text())
+
+    def test_missing_duplicate_and_wrong_call_snapshots_skip(self):
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.shell('PreToolUse')
+        (self.repo/'doc with spaces.md').write_text('changed')
+        self.assertEqual(self.shell('PostToolUse', 'other').returncode, 0)
+        self.assertEqual(self.shell('PostToolUse').returncode, 2)
+        before = self.log.read_text()
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertEqual(before, self.log.read_text())
+
+    def test_malformed_snapshot_skips(self):
+        self.shell('PreToolUse')
+        for state in (self.repo/'.git/prose-lint-snapshots').glob('*.json'):
+            state.write_text('{"files":[]}')
+        (self.repo/'doc with spaces.md').write_text('changed')
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_shell_without_call_identity_does_not_guess(self):
+        self.invoke('Bash', {'command': 'command'}, hook_event_name='PreToolUse')
+        (self.repo/'doc with spaces.md').write_text('changed')
+        self.assertEqual(self.invoke('Bash', {'command': 'command'}).returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_explicit_workdir_targets_second_worktree(self):
+        subprocess.run(['git', '-C', str(self.repo), 'add', '.vale.ini', 'doc with spaces.md'], check=True)
+        subprocess.run(['git', '-C', str(self.repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'initial'], check=True)
+        second = self.repo/'second tree'
+        subprocess.run(['git', '-C', str(self.repo), 'worktree', 'add', '-qb', 'second', str(second)], check=True)
+        (second/'.vale/styles/Google').mkdir(parents=True)
+        self.shell('PreToolUse', workdir=second)
+        (second/'doc with spaces.md').write_text('second changed')
+        (self.repo/'doc with spaces.md').write_text('unrelated changed')
+        self.assertEqual(self.shell('PostToolUse', workdir=second).returncode, 2)
+        args = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertIn(str(second/'doc with spaces.md'), args)
+        self.assertNotIn(str(self.repo/'doc with spaces.md'), args)
+        result = self.invoke('Edit', {'file_path': str(second/'doc with spaces.md')})
         self.assertEqual(result.returncode, 2, result)
-        self.assertNotEqual(self.log.read_text(), before)
-
-    def test_changed_style_rechecks_unchanged_dirty_prose(self):
-        self.env['VALE_TEST_EXIT'] = '0'
-        self.invoke('Bash', {'command': 'true'}, session_id='style-change')
-        before = self.log.read_text()
-        (self.repo/'.vale/styles/Google/New.yml').write_text('extends: existence\n')
-        self.env['VALE_TEST_EXIT'] = '1'
-        result = self.invoke('Bash', {'command': 'true'}, session_id='style-change')
+        args = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertIn(str(second/'.vale.ini'), args)
+        result = self.invoke('apply_patch', {'command': f'*** Update File: {second}/doc with spaces.md'})
         self.assertEqual(result.returncode, 2, result)
-        self.assertNotEqual(self.log.read_text(), before)
 
-    def test_failed_vale_run_is_not_cached(self):
-        self.env['VALE_TEST_EXIT'] = '2'
-        self.invoke('Bash', {'command': 'true'}, session_id='failed-check')
-        before = self.log.read_text()
-        self.env['VALE_TEST_EXIT'] = '0'
-        result = self.invoke('Bash', {'command': 'true'}, session_id='failed-check')
-        self.assertEqual(result.returncode, 0, result)
-        self.assertNotEqual(self.log.read_text(), before)
+    def test_installed_codex_normalization_does_not_guess_second_worktree(self):
+        # CLI 0.157.1 loses exec_command.workdir: cwd is the session root,
+        # tool_name is Bash, and only command survives in tool_input.
+        second = self.repo/'other'
+        second.mkdir()
+        (second/'new.md').write_text('old')
+        subprocess.run(['git', 'init', '-q', str(second)], check=True)
+        self.shell('PreToolUse')
+        (second/'new.md').write_text('changed')
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_out_of_order_and_changed_inputs_skip(self):
+        self.shell('PreToolUse')
+        (self.repo/'doc with spaces.md').write_text('changed')
+        result = self.invoke('Bash', {'command': 'different'}, session_id='session', tool_use_id='call')
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_ignored_and_generated_files_excluded(self):
+        (self.repo/'.gitignore').write_text('ignored.md\n')
+        self.shell('PreToolUse')
+        (self.repo/'ignored.md').write_text('bad')
+        generated = self.repo/'src/exiftool_tables/a.rs'
+        generated.parent.mkdir(parents=True)
+        generated.write_text('bad')
+        (self.repo/'generated.md').write_text('<!-- Auto-generated. -->\nbad')
+        self.assertEqual(self.shell('PostToolUse').returncode, 0)
+        self.assertFalse(self.log.exists())
+        self.assertEqual(self.invoke('Edit', {'file_path': str(self.repo/'ignored.md')}).returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_unrelated_repo_and_symlink_file_are_not_linted(self):
+        unrelated = self.repo/'unrelated'
+        unrelated.mkdir()
+        subprocess.run(['git', 'init', '-q', str(unrelated)], check=True)
+        doc = unrelated/'doc.md'
+        doc.write_text('bad')
+        self.assertEqual(self.invoke('Edit', {'file_path': str(doc)}).returncode, 0)
+        link = self.repo/'link.md'
+        link.symlink_to(self.repo/'doc with spaces.md')
+        self.assertEqual(self.invoke('Edit', {'file_path': str(link)}).returncode, 0)
+        self.assertFalse(self.log.exists())
 
     def test_clean_prose_returns_success(self):
         self.env['VALE_TEST_EXIT'] = '0'

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 EXTENSIONS = {'.md', '.rs', '.py', '.sh', '.pl'}
 
@@ -25,19 +26,13 @@ def selected_paths(payload, root, cwd):
         names = [direct]
     elif payload.get('tool_name') in {'apply_patch', 'Edit', 'Write'}:
         patch = inputs.get('command', '')
+        if not isinstance(patch, str):
+            return []
         names = []
         for line in patch.splitlines():
             for prefix in ('*** Add File: ', '*** Update File: ', '*** Move to: '):
                 if line.startswith(prefix):
                     names.append(line[len(prefix):])
-    elif payload.get('tool_name') in {'Bash', 'exec_command'}:
-        # A shell can write files without exposing paths in its command text.
-        # NUL-separated Git output preserves whitespace and non-ASCII names.
-        data = git(root, 'diff', '--name-only', '-z')
-        data += git(root, 'diff', '--cached', '--name-only', '-z')
-        data += git(root, 'ls-files', '--others', '--exclude-standard', '-z')
-        names = [os.fsdecode(name) for name in data.split(b'\0') if name]
-        cwd = root
     else:
         names = []
     paths = set()
@@ -45,74 +40,177 @@ def selected_paths(payload, root, cwd):
         path = Path(name)
         if not path.is_absolute():
             path = cwd / path
+        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+            continue
         path = path.resolve()
-        if path.is_relative_to(root) and path.is_file() and path.suffix in EXTENSIONS:
-            paths.add(path)
+        if not path.is_file() or path.suffix not in EXTENSIONS:
+            continue
+        try:
+            target_root = Path(os.fsdecode(git(path.parent, 'rev-parse', '--show-toplevel')).strip()).resolve()
+            common = git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+            target_common = git(target_root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+        except RuntimeError:
+            continue
+        if common == target_common and path.is_relative_to(target_root):
+            name = str(path.relative_to(target_root))
+            if name.startswith(('src/exiftool_tables/', 'oxidex-tags-', '.vale/')):
+                continue
+            ignored = subprocess.run(['git', '-C', str(target_root), 'check-ignore', '--no-index', '-q', '--', name])
+            if ignored.returncode != 0:
+                paths.add(path)
     return sorted(paths)
+
+
+SHELL_TOOLS = {'Bash', 'exec_command'}
+MAX_SNAPSHOT_FILES = 20000
+MAX_LINT_FILES = 100
+MAX_LINT_BYTES = 1024 * 1024
+
+
+def shell_snapshot(root):
+    """Stat eligible Git files; never hash the checkout on a read command."""
+    data = git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
+    names = {os.fsdecode(name) for name in data.split(b'\0') if name}
+    if len(names) > MAX_SNAPSHOT_FILES:
+        return None
+    ignored = subprocess.run(['git', '-C', str(root), 'check-ignore', '--no-index', '-z', '--stdin'],
+                             input=b'\0'.join(os.fsencode(name) for name in names)+b'\0',
+                             capture_output=True).stdout
+    names -= {os.fsdecode(name) for name in ignored.split(b'\0') if name}
+    result = {}
+    for name in names:
+        path = root / name
+        if (path.suffix not in EXTENSIONS or path.is_symlink() or not path.is_file()
+                or not path.resolve().is_relative_to(root)):
+            continue
+        if name.startswith(('src/exiftool_tables/', 'oxidex-tags-', '.vale/')):
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        result[name] = [stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino]
+    return result
+
+
+def shell_paths(payload, root, cwd):
+    """Consume a matching pre-call baseline once, including failed lint runs."""
+    session = payload.get('session_id')
+    call = payload.get('tool_use_id')
+    event = payload.get('hook_event_name')
+    if not isinstance(session, str) or not session or not isinstance(call, str) or not call:
+        return []
+    key = hashlib.sha256(json.dumps([session, call]).encode()).hexdigest()
+    git_dir = Path(os.fsdecode(git(root, 'rev-parse', '--absolute-git-dir')).strip())
+    state_dir = git_dir / 'prose-lint-snapshots'
+    state = state_dir / (key + '.json')
+    if event == 'PreToolUse':
+        snapshot = shell_snapshot(root)
+        if snapshot is None:
+            return []
+        state_dir.mkdir(exist_ok=True)
+        pending = state.with_suffix(f'.{os.getpid()}.tmp')
+        try:
+            pending.write_text(json.dumps({'root': str(root), 'cwd': str(cwd),
+                                          'input': payload.get('tool_input'),
+                                          'created': time.time(), 'files': snapshot}))
+            pending.replace(state)
+        finally:
+            pending.unlink(missing_ok=True)
+        return []
+    if event != 'PostToolUse':
+        return []
+    try:
+        before = json.loads(state.read_text())
+    except (OSError, ValueError):
+        return []
+    finally:
+        state.unlink(missing_ok=True)
+    if not isinstance(before, dict):
+        return []
+    if (before.get('root') != str(root) or before.get('cwd') != str(cwd)
+            or before.get('input') != payload.get('tool_input')
+            or not isinstance(before.get('created'), (float, int))
+            or not 0 <= time.time() - before['created'] <= 3600
+            or not isinstance(before.get('files'), dict)):
+        return []
+    if any(not isinstance(signature, list) or len(signature) != 4
+           or any(type(value) is not int or value < 0 for value in signature)
+           for signature in before['files'].values()):
+        return []
+    after = shell_snapshot(root)
+    if after is None:
+        return []
+    return [root / name for name, signature in sorted(after.items())
+            if before['files'].get(name) != signature]
 
 
 def main():
     try:
-        payload = json.load(sys.stdin)
+        try:
+            payload = json.load(sys.stdin)
+        except ValueError:
+            return 0
+        if not isinstance(payload, dict):
+            return 0
         inputs = payload.get('tool_input') or {}
-        cwd = Path(inputs.get('workdir') or payload.get('cwd') or
-                   os.environ.get('CLAUDE_PROJECT_DIR') or Path.cwd()).resolve()
-        root = Path(os.fsdecode(git(cwd, 'rev-parse', '--show-toplevel')).strip()).resolve()
-        paths = selected_paths(payload, root, cwd)
-        config = root / '.vale.ini'
-        if paths and not config.is_file():
-            raise RuntimeError('project root .vale.ini is missing')
-        cache = None
-        fingerprints = {}
-        if payload.get('tool_name') in {'Bash', 'exec_command'} and paths:
-            # A read-only shell command should not repeat lint feedback for
-            # unchanged dirty files. State is private to this Git worktree
-            # and session; explicit patch/file edits always run the checker.
-            git_dir = Path(os.fsdecode(git(root, 'rev-parse', '--absolute-git-dir')).strip())
-            session = hashlib.sha256(str(payload.get('session_id', 'local')).encode()).hexdigest()[:16]
-            cache = git_dir / f'prose-lint-{session}.json'
-            try:
-                old = json.loads(cache.read_text())
-            except (OSError, ValueError):
-                old = {}
-            context = hashlib.sha256(config.read_bytes())
-            for style in sorted((root / '.vale/styles').rglob('*')):
-                if style.is_file():
-                    context.update(str(style.relative_to(root)).encode())
-                    context.update(style.read_bytes())
-            config_bytes = context.digest()
-            fingerprints = {str(path): hashlib.sha256(config_bytes + b'\0' + path.read_bytes()).hexdigest() for path in paths}
-            paths = [path for path in paths if old.get(str(path)) != fingerprints[str(path)]]
-        if not paths:
+        if not isinstance(inputs, dict):
             return 0
-        vale = shutil.which('vale')
-        if not vale:
-            print('prose-lint: vale not installed, skipping', file=sys.stderr)
+        cwd_name = inputs.get('workdir') or inputs.get('cwd') or payload.get('cwd')
+        if not isinstance(cwd_name, str) or not cwd_name:
             return 0
-        if not (root / '.vale/styles/Google').is_dir():
-            sync = subprocess.run([vale, '--config', str(config), 'sync'], cwd=root,
-                                  capture_output=True, text=True, timeout=15)
-            if sync.returncode:
-                raise RuntimeError('vale sync failed: '+sync.stdout+sync.stderr)
-        result = subprocess.run([vale, '--config', str(config), '--output=line',
-                                 *map(str, paths)], cwd=root, capture_output=True,
-                                text=True, timeout=20)
-        if cache is not None and result.returncode == 0:
-            # Concurrent completions can replace an older snapshot. A later
-            # content mismatch causes another check, never an unchecked skip.
-            pending = cache.with_name(cache.name + f'.{os.getpid()}.tmp')
-            try:
-                pending.write_text(json.dumps(fingerprints))
-                pending.replace(cache)
-            finally:
-                pending.unlink(missing_ok=True)
-        if result.returncode:
-            print('Fix these style errors: '+result.stdout+result.stderr, file=sys.stderr)
-            return 2
-        return 0
+        cwd = Path(cwd_name).resolve()
+        try:
+            root = Path(os.fsdecode(git(cwd, 'rev-parse', '--show-toplevel')).strip()).resolve()
+        except RuntimeError:
+            return 0
+        if payload.get('tool_name') in SHELL_TOOLS:
+            paths = shell_paths(payload, root, cwd)
+        elif payload.get('hook_event_name') == 'PreToolUse':
+            return 0
+        else:
+            paths = selected_paths(payload, root, cwd)
+        # Keep feedback bounded and exclude generated headers on changed paths.
+        selected = []
+        for path in paths[:MAX_LINT_FILES]:
+            if path.stat().st_size > MAX_LINT_BYTES:
+                continue
+            with path.open('rb') as source:
+                header = b'\n'.join(source.read(2048).splitlines()[:15]).lower()
+            if any(marker in header for marker in (b'auto-generated', b'autogenerated', b'@generated', b'do not edit')):
+                continue
+            selected.append(path)
+        paths = selected
+        groups = {}
+        for path in paths:
+            target_root = Path(os.fsdecode(git(path.parent, 'rev-parse', '--show-toplevel')).strip()).resolve()
+            groups.setdefault(target_root, []).append(path)
+        return max((lint_paths(target_root, files) for target_root, files in groups.items()), default=0)
     except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'prose-lint: {error}', file=sys.stderr)
         return 2
+
+
+def lint_paths(root, paths):
+    config = root / '.vale.ini'
+    if not config.is_file():
+        raise RuntimeError('project root .vale.ini is missing')
+    vale = shutil.which('vale')
+    if not vale:
+        print('prose-lint: vale not installed, skipping', file=sys.stderr)
+        return 0
+    if not (root / '.vale/styles/Google').is_dir():
+        sync = subprocess.run([vale, '--config', str(config), 'sync'], cwd=root,
+                              capture_output=True, text=True, timeout=15)
+        if sync.returncode:
+            raise RuntimeError('vale sync failed: '+sync.stdout+sync.stderr)
+    result = subprocess.run([vale, '--config', str(config), '--output=line',
+                             *map(str, paths)], cwd=root, capture_output=True,
+                            text=True, timeout=20)
+    if result.returncode:
+        print('Fix these style errors: '+result.stdout+result.stderr, file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == '__main__':
