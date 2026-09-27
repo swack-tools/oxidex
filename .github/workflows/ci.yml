@@ -608,19 +608,30 @@ jobs:
       # This keeps a module-complete native writer capture: CheckExif's
       # freshness ledger records every omitted source table as well as its
       # one admitted recipe, so an Exif-only capture would silently weaken
-      # coverage. The three captures are independent Perl processes, so they
-      # run concurrently on this runner's cores.
+      # coverage. The captures are independent Perl processes, so they run
+      # concurrently on this runner's cores. Each of the two dumps is split
+      # into shards (merge_dump_shards.py, dump_tables_shard.pl): every shard
+      # runs the complete, unmodified dump_tables.pl capture but deparses,
+      # walks and encodes only its share of the dominant units, and the merge
+      # refuses unless the shared skeleton -- every global fact -- is
+      # byte-identical across shards, so the merged files are the exact
+      # bytes a single dump_tables.pl run prints.
       - name: Capture hydrated reader graph, full dump, processor inventory and Garmin FIT protocol
         env:
           ET_VERSION: ${{ steps.exiftool.outputs.version }}
+          HYDRATED_SHARDS: 5
+          FULL_SHARDS: 9
         run: |
           set -euo pipefail
           unset PERL5LIB PERLLIB PERL5OPT
           OUT="$RUNNER_TEMP/verify-tables-capture"
           mkdir -p "$OUT"
-          perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
-            "$EXIFTOOL_SOURCE/lib" > "$OUT/hydrated-reader.json" & hydrated=$!
-          perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/catalog-writer-source.json" & full=$!
+          python3 tools/exiftool-tables/merge_dump_shards.py run --perl perl \
+            --shards "$HYDRATED_SHARDS" --out "$OUT/hydrated-reader.json" -- \
+            --reader-only --hydrated-layouts "$EXIFTOOL_SOURCE/lib" & hydrated=$!
+          python3 tools/exiftool-tables/merge_dump_shards.py run --perl perl \
+            --shards "$FULL_SHARDS" --out "$OUT/catalog-writer-source.json" -- \
+            "$EXIFTOOL_SOURCE/lib" & full=$!
           perl tools/exiftool-tables/oracle.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/native-processors-${ET_VERSION}.tsv" & processors=$!
           perl tools/exiftool-tables/capture_garmin_fit_fact.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/garmin-fit-protocol.json" & garmin=$!
           wait "$hydrated"; wait "$full"; wait "$processors"; wait "$garmin"
