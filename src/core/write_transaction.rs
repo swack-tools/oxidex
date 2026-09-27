@@ -970,12 +970,10 @@ pub(crate) fn transact_with<E>(
     // Streamed, never held whole (PR #957 review, Codex): a large JPEG, PNG
     // or PDF used to cost three whole-file buffers here (the original, the
     // written copy, and the commit's) on top of the writer's own.
-    let mut original =
-        fs::File::open(path).map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
-    let permissions = original
-        .metadata()
-        .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?
-        .permissions();
+    let mut original = super::filesystem_metadata::open_destination(path)
+        .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
+    let metadata = super::filesystem_metadata::Snapshot::read(&original)
+        .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
     let dir = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -992,24 +990,24 @@ pub(crate) fn transact_with<E>(
         .map_err(|e| fail(ScratchStep::CreateCopy, e.into()))?;
     std::io::copy(&mut original, &mut scratch.as_file())
         .map_err(|e| fail(ScratchStep::CreateCopy, e.into()))?;
-    drop(original);
-
     apply(scratch.path())?;
 
     if same_bytes(path, scratch.path()).map_err(|e| fail(ScratchStep::ReadCopy, e.into()))? {
         return Ok(WriteOutcome::Unchanged);
     }
-    on_commit()?;
     // The commit is `write_atomic`'s: the replacement (the scratch copy,
-    // which lives beside `path`) is flushed, takes the original's
-    // permissions, and is renamed over `path`. A writer may have replaced
+    // which lives beside `path`) takes the original's filesystem metadata,
+    // is flushed, and is renamed over `path`. A writer may have replaced
     // the scratch file by a rename of its own, so it is reopened by path.
     let commit = || -> std::io::Result<()> {
-        fs::File::open(scratch.path())?.sync_all()?;
-        fs::set_permissions(scratch.path(), permissions)?;
+        let replacement = super::filesystem_metadata::open_destination(scratch.path())?;
+        metadata.restore(&original, &replacement)?;
+        replacement.sync_all()?;
+        super::filesystem_metadata::check_identity(path, &original)?;
         Ok(())
     };
     commit().map_err(|e| fail(ScratchStep::Commit, e.into()))?;
+    on_commit()?;
     scratch
         .persist(path)
         .map_err(|e| fail(ScratchStep::Commit, e.error.into()))?;
