@@ -644,8 +644,7 @@ fn makernote_request_gone(
     if !named {
         return false;
     }
-    let decoded = crate::writers::exif_surgical::makernote_row_groups(baseline);
-    gone.ciff || !(decoded.contains("CIFF") || decoded.contains("CanonRaw"))
+    gone.ciff || !crate::writers::exif_surgical::has_ciff_rows(baseline)
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`

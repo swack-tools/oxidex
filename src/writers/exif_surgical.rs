@@ -4286,6 +4286,19 @@ pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::
     makernote_row_groups_where(baseline, |_| true)
 }
 
+/// Whether `baseline` holds a row of a JPEG's CIFF segment (a separate
+/// APP0 maker-note block): the reader keys every such row `CIFF:<name>`
+/// (`parsers::jpeg::ciff_app0`), whatever family-1 group it records -- a
+/// segment holding only a nested `Canon::FocalLength` row records `Canon`,
+/// so its family-1 groups alone miss it.
+pub(crate) fn has_ciff_rows(baseline: &MetadataMap) -> bool {
+    let ciff =
+        |group: &str| group.eq_ignore_ascii_case("CIFF") || group.eq_ignore_ascii_case("CanonRaw");
+    baseline.keyed_occurrences().any(|(key, occurrence)| {
+        key.split_once(':').is_some_and(|(group, _)| ciff(group)) || ciff(&occurrence.group1)
+    })
+}
+
 /// [`makernote_row_groups`] less the rows of a Samsung SEFT trailer
 /// (`samsung_trailer::TRAILER_ROW_KEYS`): pinned 13.59 files those under
 /// family 0 `MakerNotes`, family 1 `Samsung` -- the groups of a Samsung

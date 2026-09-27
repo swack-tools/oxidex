@@ -795,7 +795,7 @@ pub(crate) fn makernote_may_hold(
     // edit; a CIFF segment (a separate APP0 maker-note block) survives it
     // unless the deletion is `MakerNotes:All`, which takes CIFF too.
     let deletions = census.deletions;
-    let ciff = decoded.contains("CIFF") || decoded.contains("CanonRaw");
+    let ciff = super::exif_surgical::has_ciff_rows(baseline);
     if deletions.makernotes && (!ciff || deletions.ciff) {
         return None;
     }
@@ -1250,6 +1250,16 @@ mod tests {
         let mut ciff = canon.clone();
         ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
         assert!(makernote_may_hold("FocalLength", &ciff, &exif_ifd_all).is_some());
+        // A CIFF segment holding only a nested Canon row (keyed
+        // `CIFF:FocalLength`, family 1 `Canon`) is still a CIFF segment
+        // that `ExifIFD:All` keeps (pinned 13.59 updates its FocalLength).
+        let mut ciff_only = MetadataMap::new();
+        ciff_only.insert_with_group1("CIFF:FocalLength", TagValue::new_string("5 mm"), "Canon");
+        let exif_ifd_all_no_note = || MakerNoteCensus {
+            deletions: super::super::exif_surgical::RequestDeletions::of("ExifIFD:All"),
+            ..no_note()
+        };
+        assert!(makernote_may_hold("FocalLength", &ciff_only, &exif_ifd_all_no_note).is_some());
         // `MakerNotes:All` takes the CIFF segment too.
         let makernotes_all = || MakerNoteCensus {
             deletions: super::super::exif_surgical::RequestDeletions::of("MakerNotes:All"),
