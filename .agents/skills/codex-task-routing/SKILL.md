@@ -59,7 +59,8 @@ python3 tools/codex_task.py inventory --brief <task-file> --dry-run
 `--dry-run` prints the command without making a model call. Runs default to a
 30-minute limit and write a receipt, result, events, and errors below
 `$OXIDEX_OPS_DIR/evidence/codex` (default `~/oxidex-ops`). `--output-dir` must be
-new and outside the checkout. Use a durable location for retained evidence.
+absolute, new, outside the checkout, and on durable storage. Temporary paths
+and paths through symlinks are rejected.
 
 The helper invokes `codex exec review` for review roles with a read-only
 sandbox, explicit `model` and `review_model`, and an immutable base SHA. It
@@ -76,5 +77,6 @@ repository CI, unresolved-thread, or independent behavior-verification gates.
 
 Keep one active candidate per dependency cluster and at most two heavy builds.
 Update HANDOFF.md and record review rounds, routing reasons, and available token
-usage. A SubagentStart hook cannot choose a model before that subagent starts;
+usage. Missing or all-zero CLI usage is recorded as unknown, not free work.
+A SubagentStart hook cannot choose a model before that subagent starts;
 use explicit launch arguments rather than relying on an advisory hook.

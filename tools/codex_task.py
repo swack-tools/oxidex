@@ -14,7 +14,7 @@ import sys
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from ops_paths import ops_root
+from ops_paths import durable_root, ops_root
 
 ROUTES = {
     'inventory': ('gpt-6-luna', 'low'),
@@ -53,7 +53,8 @@ def usage_from(path):
             for key, value in (event.get('usage') or {}).items():
                 if isinstance(value, int):
                     total[key] = total.get(key, 0) + value
-    return total or None
+    # Some Codex review versions emit all-zero usage despite running a model.
+    return total if any(total.values()) else None
 
 
 def main():
@@ -90,8 +91,11 @@ def main():
     model, effort = ROUTES[args.role]
     model, effort = args.model or model, args.effort or effort
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    output = (args.output_dir or ops_root() / 'evidence/codex' /
-              f'{stamp}-{args.role}-{uuid.uuid4().hex[:8]}').expanduser().resolve()
+    try:
+        output = durable_root(args.output_dir.expanduser(), '--output-dir') if args.output_dir else (
+            ops_root() / 'evidence/codex' / f'{stamp}-{args.role}-{uuid.uuid4().hex[:8]}')
+    except ValueError as error:
+        parser.error(str(error))
     if output.is_relative_to(root):
         parser.error('evidence must be outside the reviewed checkout')
     if output.exists():

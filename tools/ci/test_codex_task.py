@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'codex_task.py'
 
 class CodexTaskTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(prefix='.oxidex-codex-task-', dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.repo = self.root / 'repo'
@@ -36,7 +36,7 @@ import json, os, pathlib, sys
 pathlib.Path(os.environ['ARGS_LOG']).write_text(json.dumps(sys.argv[1:]))
 args = sys.argv
 pathlib.Path(args[args.index('--output-last-message')+1]).write_text('Review findings require inspection.')
-print(json.dumps({'type':'turn.completed','usage':{'input_tokens':10,'output_tokens':2}}))
+print(json.dumps({'type':'turn.completed','usage':{'input_tokens':0 if os.environ.get('ZERO_USAGE') else 10,'output_tokens':0 if os.environ.get('ZERO_USAGE') else 2}}))
 if os.environ.get('MUTATE'):
     pathlib.Path('file.md').write_text('changed during review')
 sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
@@ -87,6 +87,21 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('clean', result.stderr)
         self.assertFalse(self.args_log.exists())
+
+    def test_temporary_evidence_override_is_refused(self):
+        out = Path(tempfile.gettempdir()) / self.root.name
+        result = self.run_task('review', '--base', self.base, '--output-dir', str(out))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('durable', result.stderr)
+        self.assertFalse(self.args_log.exists())
+
+    def test_zero_reported_usage_is_unknown(self):
+        self.env['ZERO_USAGE'] = '1'
+        out = self.root/'run'
+        result = self.run_task('review', '--base', self.base, '--output-dir', str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads((out/'receipt.json').read_text())
+        self.assertIsNone(receipt['usage'])
 
     def test_failed_process_has_failed_receipt(self):
         self.env['FAKE_EXIT'] = '3'
