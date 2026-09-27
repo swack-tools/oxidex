@@ -11,6 +11,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -55,6 +56,27 @@ def usage_from(path):
                     total[key] = total.get(key, 0) + value
     # Some Codex review versions emit all-zero usage despite running a model.
     return total if any(total.values()) else None
+
+
+def stop_process_group(process):
+    """Stop this launcher's child and any subprocesses still in its session."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        # The leader may exit before its descendants. Reap it and stop any
+        # remaining group members even when the leader has already finished.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def main():
@@ -124,21 +146,39 @@ def main():
     record = output / 'receipt.json'
     write_receipt(record, receipt)
     code = 1
+    interrupted = None
+
+    def request_stop(signum, _frame):
+        nonlocal interrupted
+        # Set a flag instead of raising between Popen returning and assigning
+        # its handle. The supervisor then always owns and cleans up the child.
+        interrupted = signum
+
+    handlers = {sig: signal.signal(sig, request_stop)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
     try:
         with (output/'events.jsonl').open('w') as events, (output/'stderr.log').open('w') as errors:
             process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=events,
                                        stderr=errors, text=True, start_new_session=True)
             try:
-                process.communicate(None if review else brief, timeout=args.timeout)
-                code = process.returncode
-            except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
-                code = 124
+                deadline = time.monotonic() + args.timeout
+                task_input = None if review else brief
+                while True:
+                    if interrupted:
+                        code = 128 + interrupted
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        code = 124
+                        break
+                    try:
+                        process.communicate(task_input, timeout=min(1, remaining))
+                        code = process.returncode
+                        break
+                    except subprocess.TimeoutExpired:
+                        task_input = None
+            finally:
+                stop_process_group(process)
         receipt['status'] = 'completed' if code == 0 else 'failed'
         receipt['usage'] = usage_from(output/'events.jsonl')
         receipt['after'] = snapshot(root)
@@ -151,9 +191,13 @@ def main():
         receipt['status'] = 'failed'
         receipt['error'] = str(error)
     finally:
+        if interrupted:
+            receipt['status'], code = 'interrupted', 128 + interrupted
         receipt['exit_code'] = code
         receipt['finished'] = datetime.now(timezone.utc).isoformat()
         write_receipt(record, receipt)
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
     print(record)
     return code
 

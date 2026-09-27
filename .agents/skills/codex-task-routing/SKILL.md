@@ -78,5 +78,7 @@ repository CI, unresolved-thread, or independent behavior-verification gates.
 Keep one active candidate per dependency cluster and at most two heavy builds.
 Update HANDOFF.md and record review rounds, routing reasons, and available token
 usage. Missing or all-zero CLI usage is recorded as unknown, not free work.
+The launcher stops its child process group on timeout, `SIGTERM`, `SIGHUP`,
+or `SIGINT` and records the interrupted run.
 A SubagentStart hook cannot choose a model before that subagent starts;
 use explicit launch arguments rather than relying on an advisory hook.

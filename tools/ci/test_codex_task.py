@@ -2,9 +2,11 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'codex_task.py'
@@ -32,8 +34,11 @@ class CodexTaskTests(unittest.TestCase):
         self.args_log = self.root/'args.json'
         codex = self.bin/'codex'
         codex.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 pathlib.Path(os.environ['ARGS_LOG']).write_text(json.dumps(sys.argv[1:]))
+if os.environ.get('SLEEP_PID_PATH'):
+    pathlib.Path(os.environ['SLEEP_PID_PATH']).write_text(str(os.getpid()))
+    time.sleep(30)
 args = sys.argv
 pathlib.Path(args[args.index('--output-last-message')+1]).write_text('Review findings require inspection.')
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':0 if os.environ.get('ZERO_USAGE') else 10,'output_tokens':0 if os.environ.get('ZERO_USAGE') else 2}}))
@@ -130,6 +135,51 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         receipt = json.loads((out/'receipt.json').read_text())
         self.assertEqual(receipt['status'], 'stale')
         self.assertEqual(receipt['approval'], 'not_assessed')
+
+    def assert_stopped_run(self, stop_signal=None):
+        out = self.root / ('timeout' if stop_signal is None else f'signal-{stop_signal}')
+        pid_path = self.root / (out.name + '.pid')
+        self.env['SLEEP_PID_PATH'] = str(pid_path)
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPT), '--cwd', str(self.repo), 'review',
+             '--base', self.base, '--output-dir', str(out),
+             '--timeout', '1' if stop_signal is None else '20'],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        child_pid = None
+        try:
+            deadline = time.monotonic() + 10
+            while not pid_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(pid_path.exists(), 'fake Codex did not start')
+            child_pid = int(pid_path.read_text())
+            if stop_signal is not None:
+                process.send_signal(stop_signal)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 124 if stop_signal is None else 128 + stop_signal,
+                             stdout + stderr)
+            receipt = json.loads((out / 'receipt.json').read_text())
+            self.assertEqual(receipt['status'], 'failed' if stop_signal is None else 'interrupted')
+            self.assertEqual(receipt['approval'], 'not_assessed')
+            self.assertIn('finished', receipt)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+            if child_pid is not None:
+                try:
+                    os.killpg(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_termination_stops_child_and_finalizes_receipt(self):
+        for stop_signal in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            with self.subTest(signal=stop_signal):
+                self.assert_stopped_run(stop_signal)
+
+    def test_timeout_stops_child_and_finalizes_receipt(self):
+        self.assert_stopped_run()
 
 
 if __name__ == '__main__':
