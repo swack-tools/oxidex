@@ -1,13 +1,13 @@
 # Agent operational runbooks
 
 Read the applicable procedure before remote publication, cleanup, or stack operations.
-The mandatory summary lives in [AGENTS.md](../AGENTS.md).
+The mandatory summary lives in [AGENTS.md](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/AGENTS.md).
 
 ## Local execution and concurrency
 
 Use native desktop agents first, up to three workers, and CLI workers for
 additional independent work. Select explicit models and efforts with
-[Codex task routing](../.agents/skills/codex-task-routing/SKILL.md). Each writer
+[Codex task routing](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/.agents/skills/codex-task-routing/SKILL.md). Each writer
 owns a separate worktree, branch and target directory. Keep one active published
 candidate per dependency cluster.
 
@@ -264,7 +264,7 @@ target, use separate replacement PRs against the integration branch. Link and
 close superseded PRs only after verifying the replacement mapping; preserve
 unresolved findings and old branches. PR closure never proves a fix.
 
-Local review follows [Codex task routing](../.agents/skills/codex-task-routing/SKILL.md):
+Local review follows [Codex task routing](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/.agents/skills/codex-task-routing/SKILL.md):
 one scoped full review, repair, and review of subsequent deltas. Review the full
 candidate again when its base or a shared safety boundary changes. Use the
 prescribed composed-core acceptance review for write-core changes. Do not require
