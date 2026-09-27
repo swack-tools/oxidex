@@ -243,6 +243,83 @@ class ProseHookTests(unittest.TestCase):
         self.assertFalse(state.exists())
         self.assertFalse(self.log.exists())
 
+    def test_tracked_ignored_example_remains_eligible(self):
+        doc = self.repo/'oxidex-tags/examples/render_domain.rs'
+        doc.parent.mkdir(parents=True)
+        doc.write_text('// bad prose')
+        subprocess.run(['git', '-C', str(self.repo), 'add', str(doc)], check=True)
+        (self.repo/'.gitignore').write_text('examples/\n')
+        self.assertEqual(self.invoke('Edit', {'file_path': str(doc)}).returncode, 2)
+        self.shell('PreToolUse')
+        doc.write_text('// changed bad prose')
+        self.assertEqual(self.shell('PostToolUse').returncode, 2)
+        self.assertIn(str(doc), self.log.read_text())
+
+    def test_quoted_generated_header_is_prose(self):
+        doc = self.repo/'header_test.py'
+        doc.write_text('HEADER = "//! generated -- DO NOT EDIT\\n"\n# bad prose\n')
+        self.assertEqual(self.invoke('Edit', {'file_path': str(doc)}).returncode, 2)
+        self.shell('PreToolUse')
+        doc.write_text(doc.read_text()+'# changed prose\n')
+        self.assertEqual(self.shell('PostToolUse').returncode, 2)
+
+    def test_noneligible_inventory_does_not_exhaust_prose_cap(self):
+        for n in range(8):
+            (self.repo/f'corpus{n}.bin').write_bytes(b'\0')
+        payload = dict(tool_input={'command': 'command'}, session_id='session',
+                       tool_use_id='bulk', hook_event_name='PreToolUse')
+        with patch.object(prose_lint, 'MAX_SNAPSHOT_FILES', 2):
+            snapshot = prose_lint.shell_snapshot(self.repo)
+            self.assertIsNotNone(snapshot)
+            self.assertIn('doc with spaces.md', snapshot)
+            prose_lint.shell_paths(payload, self.repo, self.repo)
+            (self.repo/'doc with spaces.md').write_text('changed alongside corpus')
+            payload['hook_event_name'] = 'PostToolUse'
+            self.assertEqual(prose_lint.shell_paths(payload, self.repo, self.repo),
+                             [self.repo/'doc with spaces.md'])
+
+    def test_overlapping_shell_completions_claim_changes_once(self):
+        for order in [('A', 'B'), ('B', 'A')]:
+            with self.subTest(order=order):
+                self.log.unlink(missing_ok=True)
+                self.shell('PreToolUse', 'A')
+                self.shell('PreToolUse', 'B')
+                (self.repo/'doc with spaces.md').write_text(str(order))
+                self.assertEqual(self.shell('PostToolUse', order[0]).returncode, 2)
+                self.assertEqual(self.shell('PostToolUse', order[1]).returncode, 0)
+                self.assertEqual(len(self.log.read_text().splitlines()), 1)
+
+    def test_simultaneous_posts_claim_changes_once(self):
+        self.shell('PreToolUse', 'A')
+        self.shell('PreToolUse', 'B')
+        (self.repo/'doc with spaces.md').write_text('changed during overlap')
+        processes = []
+        for call in ['A', 'B']:
+            payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse',
+                           tool_name='Bash', tool_input={'command': 'command'},
+                           session_id='session', tool_use_id=call)
+            process = subprocess.Popen(['bash', str(HOOK)], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, env=self.env, cwd=self.repo)
+            process.stdin.write(json.dumps(payload))
+            process.stdin.close()
+            process.stdin = None
+            processes.append(process)
+        for process in processes:
+            process.communicate(timeout=10)
+        self.assertEqual(sorted(p.returncode for p in processes), [0, 2])
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+
+    def test_overlap_later_edit_is_still_reported(self):
+        self.shell('PreToolUse', 'A')
+        self.shell('PreToolUse', 'B')
+        doc = self.repo/'doc with spaces.md'
+        doc.write_text('first change')
+        self.assertEqual(self.shell('PostToolUse', 'A').returncode, 2)
+        doc.write_text('second change')
+        self.assertEqual(self.shell('PostToolUse', 'B').returncode, 2)
+        self.assertEqual(len(self.log.read_text().splitlines()), 2)
+
     def test_clean_prose_returns_success(self):
         self.env['VALE_TEST_EXIT'] = '0'
         result = self.invoke('apply_patch', {'command': '*** Begin Patch\n*** Update File: doc with spaces.md\n*** End Patch'}, turn_id='codex-turn')

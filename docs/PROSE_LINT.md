@@ -16,12 +16,40 @@ A missing Vale executable reports a skip; a missing configuration, failed
 style download, or timeout reports an error. The first check downloads the
 Google style package if it is absent.
 
-Codex patch edits check the paths named in the patch. Shell completions check
-tracked changes and untracked prose files. Deleted files and paths outside the
-repository are excluded. Read-only shell commands skip files whose contents
-already passed lint in that session; the cache lives in the worktree's Git
-metadata. Configuration or style changes invalidate the cache. Failed checks
-are never cached. Explicit file and patch edits always check again.
+Explicit file and patch edits check the named paths every time. Tracked files
+remain eligible even when an ignore pattern matches them. Ignored untracked
+files, deleted files, generated paths, and paths outside the repository are
+excluded. Generated markers must appear in leading comments; quoted markers
+in source code do not identify a generated file.
+
+Shell feedback requires matching PreToolUse and PostToolUse events with a
+session ID, call ID, working directory, and tool inputs. The pre event records
+file timestamps, sizes, and inode numbers in the worktree's Git metadata. The
+post event consumes that baseline once and checks new or changed eligible
+files. It consumes the baseline even when Vale fails. A later read-only shell
+command does not repeat those diagnostics. There is no passed-content cache,
+and changing styles or configuration does not recheck untouched files.
+Explicit edits or another file change can trigger a new check.
+
+Overlapping shell calls share a short metadata lock. The first completion to
+observe a changed file claims its signature and advances other active
+baselines, so the same signature is reported once. A later edit remains
+eligible. The lock covers snapshot operations, never the shell command or
+Vale. This policy cannot identify which overlapping call made an edit: a
+read-only call that finishes first can receive the feedback. Changes made by
+other processes during the same interval are also observable.
+
+Missing, mismatched, malformed, or expired baselines skip shell attribution.
+Baselines expire after one hour; at most 64 calls can have pending baselines.
+The inventory limit is 20,000 eligible prose files. Each feedback run checks
+at most 100 changed files, each no larger than 1 MiB. The hook stats eligible
+files rather than hashing the checkout or rescanning all dirty file contents.
+Reload the session after changing hook registration to receive both events.
+
+Installed Codex 0.157.1 converts exec_command to Bash with a command field and
+drops its workdir field, retaining the session directory. The hook cannot
+infer a hidden sibling worktree from that payload. Explicit file paths and
+payloads that supply a working directory can target linked worktrees.
 
 Run the protocol tests with:
 

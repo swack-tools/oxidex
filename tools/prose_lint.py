@@ -7,6 +7,7 @@ edits still receive feedback. Installed Codex 0.157.1 normalizes exec_command
 into Bash/command and drops workdir, retaining the session cwd. Hidden sibling
 shell workdirs cannot be observed; explicit file paths and supplied workdir can.
 """
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -64,7 +65,7 @@ def selected_paths(payload, root, cwd):
             name = str(path.relative_to(target_root))
             if name.startswith(('src/exiftool_tables/', 'oxidex-tags-', '.vale/')):
                 continue
-            ignored = subprocess.run(['git', '-C', str(target_root), 'check-ignore', '--no-index', '-q', '--', name])
+            ignored = subprocess.run(['git', '-C', str(target_root), 'check-ignore', '-q', '--', name])
             if ignored.returncode != 0:
                 paths.add(path)
     return sorted(paths)
@@ -83,12 +84,6 @@ def shell_snapshot(root):
     """Stat eligible Git files; never hash the checkout on a read command."""
     data = git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
     names = {os.fsdecode(name) for name in data.split(b'\0') if name}
-    if len(names) > MAX_SNAPSHOT_FILES:
-        return None
-    ignored = subprocess.run(['git', '-C', str(root), 'check-ignore', '--no-index', '-z', '--stdin'],
-                             input=b'\0'.join(os.fsencode(name) for name in names)+b'\0',
-                             capture_output=True).stdout
-    names -= {os.fsdecode(name) for name in ignored.split(b'\0') if name}
     result = {}
     for name in names:
         path = root / name
@@ -101,6 +96,8 @@ def shell_snapshot(root):
             stat = path.stat()
         except FileNotFoundError:
             continue
+        if len(result) >= MAX_SNAPSHOT_FILES:
+            return None
         result[name] = [stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino]
     return result
 
@@ -110,38 +107,49 @@ def input_digest(inputs):
     return hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def store_snapshot(state_dir, state, snapshot):
-    """Prune owned expired files; preserve active baselines when capacity is full."""
+@contextmanager
+def snapshot_lock(state_dir):
+    """Lock only metadata operations, never a shell call or a Vale run."""
     state_dir.mkdir(exist_ok=True)
-    if state_dir.is_symlink():
-        return
     lock = state_dir / '.lock'
-    if lock.is_symlink():
+    if state_dir.is_symlink() or lock.is_symlink():
+        yield False
         return
     with lock.open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        active = 0
-        now = time.time()
-        for path in state_dir.iterdir():
-            if not OWNED_SNAPSHOT.fullmatch(path.name) or path.is_symlink() or not path.is_file():
-                continue
-            try:
-                age = now - path.stat().st_mtime
-                if age > SNAPSHOT_TTL:
-                    path.unlink(missing_ok=True)
-                else:
-                    active += 1
-            except FileNotFoundError:
-                continue
-        # A repeated pre event must not replace an active call's baseline.
-        if state.exists() or active >= MAX_PENDING_SNAPSHOTS:
-            return
-        pending = state.with_suffix(f'.{os.getpid()}.tmp')
+        yield True
+
+
+def store_snapshot(state_dir, state, snapshot):
+    """Prune owned expired files; preserve active baselines when capacity is full."""
+    with snapshot_lock(state_dir) as locked:
+        if locked:
+            store_snapshot_locked(state_dir, state, snapshot)
+
+
+def store_snapshot_locked(state_dir, state, snapshot):
+    active = 0
+    now = time.time()
+    for path in state_dir.iterdir():
+        if not OWNED_SNAPSHOT.fullmatch(path.name) or path.is_symlink() or not path.is_file():
+            continue
         try:
-            pending.write_text(json.dumps(snapshot))
-            pending.replace(state)
-        finally:
-            pending.unlink(missing_ok=True)
+            age = now - path.stat().st_mtime
+            if age > SNAPSHOT_TTL:
+                path.unlink(missing_ok=True)
+            else:
+                active += 1
+        except FileNotFoundError:
+            continue
+    # A repeated pre event must not replace an active call's baseline.
+    if state.exists() or active >= MAX_PENDING_SNAPSHOTS:
+        return
+    pending = state.with_suffix(f'.{os.getpid()}.tmp')
+    try:
+        pending.write_text(json.dumps(snapshot))
+        pending.replace(state)
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def shell_paths(payload, root, cwd):
@@ -157,11 +165,18 @@ def shell_paths(payload, root, cwd):
     state = state_dir / (key + '.json')
     if state_dir.is_symlink() or state.is_symlink():
         return []
+    with snapshot_lock(state_dir) as locked:
+        if not locked:
+            return []
+        return shell_paths_locked(payload, root, cwd, state_dir, state, event)
+
+
+def shell_paths_locked(payload, root, cwd, state_dir, state, event):
     if event == 'PreToolUse':
         snapshot = shell_snapshot(root)
         if snapshot is None:
             return []
-        store_snapshot(state_dir, state, {'root': str(root), 'cwd': str(cwd),
+        store_snapshot_locked(state_dir, state, {'root': str(root), 'cwd': str(cwd),
                                          'input_digest': input_digest(payload.get('tool_input')),
                                          'created': time.time(), 'files': snapshot})
         return []
@@ -188,8 +203,55 @@ def shell_paths(payload, root, cwd):
     after = shell_snapshot(root)
     if after is None:
         return []
-    return [root / name for name, signature in sorted(after.items())
-            if before['files'].get(name) != signature]
+    changed = {name: signature for name, signature in after.items()
+               if before['files'].get(name) != signature}
+    # The first completion claims each observed signature, even when Vale fails.
+    # Advance overlapping baselines so another completion cannot claim it again.
+    # A subsequent edit has a different signature and remains eligible.
+    for other in state_dir.glob('*.json'):
+        if not OWNED_SNAPSHOT.fullmatch(other.name) or other.is_symlink():
+            continue
+        try:
+            pending = json.loads(other.read_text())
+        except (OSError, ValueError):
+            continue
+        if (not isinstance(pending, dict) or pending.get('root') != str(root)
+                or not isinstance(pending.get('files'), dict)):
+            continue
+        if not changed:
+            continue
+        pending['files'].update(changed)
+        temporary = other.with_suffix(f'.{os.getpid()}.tmp')
+        try:
+            temporary.write_text(json.dumps(pending))
+            temporary.replace(other)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return [root / name for name in sorted(changed)]
+
+
+def generated_header(header):
+    """Accept markers only in leading comments, not quoted program literals."""
+    comments = []
+    in_block = False
+    for line in header.decode(errors='replace').splitlines()[:15]:
+        line = line.strip().lower()
+        if not line or line.startswith('#!'):
+            continue
+        if in_block:
+            comments.append(line)
+            if '*/' in line or '-->' in line:
+                in_block = False
+            continue
+        if line.startswith(('/*', '<!--')):
+            comments.append(line)
+            in_block = not ('*/' in line or '-->' in line)
+        elif line.startswith(('//', '#')):
+            comments.append(line)
+        else:
+            break
+    return any(marker in line for line in comments
+               for marker in ('auto-generated', 'autogenerated', '@generated', 'do not edit'))
 
 
 def main():
@@ -223,8 +285,8 @@ def main():
             if path.stat().st_size > MAX_LINT_BYTES:
                 continue
             with path.open('rb') as source:
-                header = b'\n'.join(source.read(2048).splitlines()[:15]).lower()
-            if any(marker in header for marker in (b'auto-generated', b'autogenerated', b'@generated', b'do not edit')):
+                header = source.read(2048)
+            if generated_header(header):
                 continue
             selected.append(path)
         paths = selected
