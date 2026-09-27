@@ -401,15 +401,19 @@ live agent or an open PR still builds there. Delete only directories you
 created, by exact path, never by glob across other agents' directories.
 
 A scratch clone or bundle is not build output: it can hold the only copy of
-a commit graph. Delete one only after proving that every ref it carries is
-reachable from `origin`. For a clone, first run `git fetch --prune origin` in
-the clone, so its `origin/*` refs match the live remote; a stale tracking ref
-can hide commits that are gone from `origin`. Then run
-`git rev-list --all --not --remotes=origin`. For a bundle, list
-its heads with `git bundle list-heads` and check each one with
-`git merge-base --is-ancestor <sha> origin/<branch>`, or check that
-`git branch -r --contains <sha>` names a remote branch. Anything unreachable
-must be pushed or archived first.
+a commit graph. Delete one only after proving, against the live remote, that
+every commit it carries is reachable from `origin`:
+- **Clone.** In the clone, run `git fetch --prune origin` so its `origin/*` refs
+  match the live remote; a stale tracking ref hides commits that are gone.
+  Then `git rev-list --all --not --remotes=origin` must print nothing.
+- **Bundle.** Its objects can't be inspected from another repository, so import
+  them first. In a scratch bare repository, run
+  `git fetch <origin-url> '+refs/heads/*:refs/remotes/origin/*'`, then
+  `git fetch <bundle> '+refs/*:refs/bundle/*'`. Then
+  `git rev-list --glob=refs/bundle --not --remotes=origin` must print nothing.
+  Delete the scratch repository afterwards.
+
+Anything unreachable must be pushed or archived first.
 
 A worktree is removable only when all of these hold:
 - it has no uncommitted or untracked files (`git status --porcelain` is empty);
@@ -419,7 +423,7 @@ A worktree is removable only when all of these hold:
   ignored files without asking, and `git status` does not show them, so list
   them with `git status --porcelain --ignored`. `HANDOFF.md` is ignored, and it
   is the resume record, so copy it and any ignored evidence to
-  `~/oxidex-ops/evidence/<run>/` before removing the worktree, unless the
+  `${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/<run>/` before removing the worktree, unless the
   maintainer has said it is disposable.
 
 Use `git worktree remove`, never `rm -rf`.
@@ -430,15 +434,16 @@ therefore takes whatever was stashed last in any worktree, possibly another
 agent's work-in-progress from a different branch. It has already happened
 here once. Git kept the other stash only because the pop conflicted. Prefer a
 WIP commit on your own branch, or a patch file in your evidence directory,
-over the stash. If you must stash, give it a message naming your branch
-(`git stash push -m "<branch>: <why>"`), and record its object ID at once:
-run `git rev-parse stash@{0}` right after the push, then confirm with
-`git log -1 --format=%s <sha>` that the entry carries your message. Another
-agent may have stashed in between; if so, find yours in `git stash list`. To apply it later, use that
-recorded ID: `git stash apply <sha>`. `stash@{N}` is a reflog position, and
-another agent's push renumbers it between your `git stash list` and your
-`apply`. If you didn't record the ID, find the entry with `git stash list`,
-resolve it with `git rev-parse stash@{N}`, re-read its message with
+over the stash. If you must stash, name your branch in the message and
+record its object ID without re-reading the shared `stash@{0}`. Create the
+entry and capture its ID in one step, then store it:
+`sha=$(git stash create "<branch>: <why>") && git stash store -m "<branch>: <why>" "$sha"`.
+`git stash create` doesn't clean the tree, and it doesn't include untracked
+files, so check `git stash show -p "$sha"` before discarding your changes.
+To apply it later, use that recorded ID: `git stash apply "$sha"`.
+`stash@{N}` is a reflog position that another agent's push renumbers. If you
+don't have the ID, find the entry with `git stash list`, resolve it with
+`git rev-parse stash@{N}`, check its message with
 `git log -1 --format=%s <sha>`, and only then apply that ID. Never run a bare
 `pop`, `apply` or `drop`, never apply by position, and never `git stash clear`.
 
@@ -529,7 +534,10 @@ So stacked branches are kept current by rebasing, not by merge commits.
     `git rebase --onto origin/<layer below> <old base sha> <branch>`, then
     `git push --force-with-lease=<branch>:<sha it last pushed> origin <branch>`.
     Never use a bare `--force`.
-  - `commit.gpgsign=true` re-signs every rebased commit. Never use the
+  - Before any rebase, make sure it signs. Either set
+    `git config commit.gpgsign true` in the worktree, or pass `--gpg-sign` to
+    `git rebase`. Afterwards, check that every rebased commit shows a good
+    signature with `git log --show-signature <base>..<branch>`. Never use the
     website's "Rebase stack" button: GitHub makes those commits unsigned.
   - Resolve conflicts in favour of the lower layer's structure.
   - Re-run the layer's gates on the rebased head before pushing, and update
@@ -582,12 +590,15 @@ So stacked branches are kept current by rebasing, not by merge commits.
 - **After a partial merge of a GitHub stack.** (For a merge-based stack, follow "Existing merge-based stacks" instead: retarget, then merge the new tip. Never rebase its reviewed branches.) `gh stack sync` is not just cleanup: it also
   rebases and force-pushes every remaining layer, which would publish heads
   nobody has gated. So after lower layers land:
-  1. Rebase the remaining layers onto the new trunk, bottom to top
-     (`gh stack rebase` in a single-worktree stack; `git rebase --onto` per
-     owner across worktrees).
-  2. Re-run each layer's gates on its rebased head.
-  3. Push each layer with `--force-with-lease=<branch>:<sha>`.
-  4. Delete merged local branches by hand, or run `gh stack sync --prune`
+  1. `git fetch origin`, so the local `origin/refactor/tag-machinery` is the
+     post-merge trunk.
+  2. Work bottom to top, one layer at a time. For each remaining layer:
+     rebase it onto the layer below as it now is on `origin` (fetch again
+     first when another worktree owns that layer), re-run its gates, and push
+     it with `--force-with-lease=<branch>:<sha>`. Only then move to the child.
+     `gh stack rebase` does the same in one pass for a single-worktree stack;
+     still gate every layer before `gh stack push`.
+  3. Delete merged local branches by hand, or run `gh stack sync --prune`
      only once nothing remains to rebase.
 
   A stack linked with `gh stack link` has no local tracking, so skip
