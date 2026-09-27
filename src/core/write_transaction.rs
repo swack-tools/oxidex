@@ -41,13 +41,16 @@
 //! skips every group it does not write: `write_metadata` with an `XMP:Title`
 //! in a JPEG returned `Ok(())` and wrote nothing.
 
-use crate::core::metadata_map::MetadataMap;
+use crate::core::FileReader;
+use crate::core::metadata_map::{MetadataMap, SourceIdentity, handle_identity};
 use crate::core::operations::{
-    exif_group_in_pdf, field_spellings, plan_group_deletion, read_metadata, removal_is_no_op,
-    remove_field, resolve_write_key_for, write_metadata_transaction,
+    exif_group_in_pdf_with_reader, field_spellings, plan_group_deletion_with_reader, read_metadata,
+    removal_is_no_op_with_reader, remove_field, resolve_write_key_for_with_reader,
+    write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
+use crate::io::MMapReader;
 use crate::writers::write_request::group_deletion;
 use std::fs;
 use std::path::Path;
@@ -148,46 +151,79 @@ pub(crate) struct AppliedWrite {
     pub(crate) outcome: WriteOutcome,
     pub(crate) sets: usize,
     pub(crate) caller_fields: Vec<(String, String)>,
+    pub(crate) original: Option<SourceIdentity>,
+    pub(crate) written: Option<SourceIdentity>,
 }
 
 pub(crate) fn apply_tag_changes_with_receipt(
     path: &Path,
     changes: &[TagChange],
 ) -> Result<AppliedWrite> {
+    apply_with_planning_hook(path, changes, || {})
+}
+
+fn apply_with_planning_hook(
+    path: &Path,
+    changes: &[TagChange],
+    after_plan: impl FnOnce(),
+) -> Result<AppliedWrite> {
+    let original = super::filesystem_metadata::open_destination(path)?;
+    apply_on_opened_with_hook(path, changes, original, after_plan)
+}
+
+pub(crate) fn apply_tag_changes_on_opened(
+    path: &Path,
+    changes: &[TagChange],
+    original: fs::File,
+) -> Result<AppliedWrite> {
+    apply_on_opened_with_hook(path, changes, original, || {})
+}
+
+fn apply_on_opened_with_hook(
+    path: &Path,
+    changes: &[TagChange],
+    original: fs::File,
+    after_plan: impl FnOnce(),
+) -> Result<AppliedWrite> {
     // Every request is resolved, and every no-op decided, against the file
     // itself -- before any scratch file exists. A request that is all no-ops
     // (an absent tag's deletion, an EXIF group in a PDF, nothing at all)
     // writes nothing and so needs no writable directory.
-    let plan = plan_changes(path, changes)?;
+    // Planning and copying share one authoritative opened inode. A mapped
+    // reader never resolves the destination again for field/no-op decisions.
+    let reader = MMapReader::from_file(original.try_clone()?)?;
+    let original_identity = handle_identity(&original);
+    let plan = plan_changes(path, changes, &reader, &original)?;
+    drop(reader);
+    after_plan();
+    super::filesystem_metadata::check_identity(path, &original)?;
     if plan.steps.is_empty() {
         return Ok(AppliedWrite {
             outcome: WriteOutcome::Unchanged,
             sets: 0,
             caller_fields: Vec::new(),
+            original: original_identity,
+            written: original_identity,
         });
     }
     let mut proven_sets = 0;
-    let outcome = transact(path, |scratch| {
-        proven_sets = execute_plan(scratch, &plan)?;
-        Ok(())
-    })?;
-    let caller_fields = if outcome == WriteOutcome::Updated {
-        plan.steps
-            .iter()
-            .filter_map(|step| match step {
-                Step::Field(request) if request.value.is_some() => {
-                    Some((request.requested.to_owned(), request.key.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let mut caller_fields = Vec::new();
+    let (outcome, written) = transact_opened_with(
+        path,
+        original,
+        |scratch| {
+            (proven_sets, caller_fields) = execute_plan(scratch, &plan)?;
+            Ok(())
+        },
+        || Ok(()),
+        |_, err| err,
+    )?;
     Ok(AppliedWrite {
         outcome,
         sets: proven_sets,
         caller_fields,
+        original: original_identity,
+        written,
     })
 }
 
@@ -409,15 +445,28 @@ struct Pending<'a> {
 /// and only then is a surviving deletion asked whether it names nothing
 /// (#945's `removal_is_no_op`) -- an earlier set of the field cannot be
 /// written by a deletion the baseline alone calls a no-op.
-fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
-    let baseline = read_metadata(path)?;
+fn plan_changes<'a>(
+    path: &Path,
+    changes: &'a [TagChange],
+    reader: &MMapReader,
+    original: &fs::File,
+) -> Result<Plan<'a>> {
+    let mut baseline = super::operations::read_metadata_from_reader(
+        path,
+        crate::parsers::DetectorMode::Signature,
+        &crate::core::ReadOptions::default_full_listing(),
+        reader,
+    )?;
+    baseline.mark_read_complete();
+    baseline.set_read_handle(original);
     // The file's bytes, for the Panasonic RAW no-op decisions below (#956's
     // `rw2_ifd0`, which answer `false` for any other file) -- read only for a
     // Panasonic RAW, never the whole of every file (PR #957 review, Codex).
-    let file_bytes = if crate::writers::rw2_ifd0::is_panasonic_raw_file(path)? {
-        fs::read(path)?
+    let head = reader.read(0, reader.size().min(4) as usize)?;
+    let file_bytes = if matches!(head, [b'I', b'I', 0x55, 0] | [b'M', b'M', 0, 0x55]) {
+        reader.read(0, reader.size() as usize)?
     } else {
-        Vec::new()
+        &[]
     };
     let mut refused: Vec<TagNotWritten> = Vec::new();
     // Refusals of one request, by its position: a later group deletion can
@@ -454,7 +503,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                     && !group_covers(group, &earlier.request.key)
             });
             request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-            match plan_group_deletion(path, change.tag(), group) {
+            match plan_group_deletion_with_reader(change.tag(), group, &baseline, reader) {
                 Ok(Some(key)) => groups.push((at, key)),
                 // Provably nothing of the group in the file.
                 Ok(None) => {}
@@ -471,7 +520,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // any module names (`SensorWidth`) is pinned 13.59's "1 image files
         // unchanged", a set or a deletion alike.
         if matches!(
-            crate::writers::rw2_ifd0::route_rw2_name(&file_bytes, change.tag()),
+            crate::writers::rw2_ifd0::route_rw2_name(file_bytes, change.tag()),
             crate::writers::rw2_ifd0::Rw2Name::NoOp
         ) {
             continue;
@@ -480,7 +529,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // (a PDF carries no EXIF block), a set or a deletion alike -- for a
         // name `SetNewValue` accepts in that group; any other is refused by
         // name with the rest of the request.
-        match exif_group_in_pdf(path, change.tag()) {
+        match exif_group_in_pdf_with_reader(change.tag(), reader) {
             Ok(true) => continue,
             Ok(false) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
@@ -489,7 +538,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for(path, change.tag(), &baseline) {
+        match resolve_write_key_for_with_reader(change.tag(), &baseline, reader) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
@@ -531,7 +580,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // exif_request_is_no_op`) -- is a no-op, decided before the writer's
         // address guard (ExifTool 13.59: `1 image files unchanged`).
         if candidate.request.value.is_none()
-            && removal_is_no_op(path, &candidate.request.key, &baseline)?
+            && removal_is_no_op_with_reader(&candidate.request.key, &baseline, reader)?
         {
             absent_deletions.push(candidate.request);
             continue;
@@ -541,7 +590,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         // already holding the value) leaves the file unchanged there.
         if let Some(value) = candidate.request.value
             && crate::writers::rw2_ifd0::rw2_set_is_no_op(
-                &file_bytes,
+                file_bytes,
                 &baseline,
                 &candidate.request.key,
                 value,
@@ -638,7 +687,7 @@ pub(crate) fn group_covers(group: &str, tag: &str) -> bool {
 /// request). The writer's own no-op decision and post-write check
 /// (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`, #943) run
 /// inside every pass (`write_metadata_transaction`).
-fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
+fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, String)>)> {
     let mut index = 0;
     while index < plan.steps.len() {
         let is_group = matches!(plan.steps[index], Step::Group(_));
@@ -706,10 +755,12 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
         .chain(plan.absent_deletions.iter())
         .collect();
     prove_in_effect(path, &proven, &plan.baseline)?;
-    Ok(proven
+    let caller_fields: Vec<_> = proven
         .iter()
         .filter(|request| request.value.is_some())
-        .count())
+        .map(|request| (request.requested.to_owned(), request.key.clone()))
+        .collect();
+    Ok((caller_fields.len(), caller_fields))
 }
 
 /// A format writer's own refusal of one key (`exif_surgical`,
@@ -1012,8 +1063,18 @@ pub(crate) fn transact_with<E>(
     // Streamed, never held whole (PR #957 review, Codex): a large JPEG, PNG
     // or PDF used to cost three whole-file buffers here (the original, the
     // written copy, and the commit's) on top of the writer's own.
-    let mut original = super::filesystem_metadata::open_destination(path)
+    let original = super::filesystem_metadata::open_destination(path)
         .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
+    transact_opened_with(path, original, apply, on_commit, fail).map(|(outcome, _)| outcome)
+}
+
+fn transact_opened_with<E>(
+    path: &Path,
+    mut original: fs::File,
+    apply: impl FnOnce(&Path) -> std::result::Result<(), E>,
+    on_commit: impl FnOnce() -> std::result::Result<(), E>,
+    fail: impl Fn(ScratchStep, ExifToolError) -> E,
+) -> std::result::Result<(WriteOutcome, Option<SourceIdentity>), E> {
     let metadata = super::filesystem_metadata::Snapshot::read(&original)
         .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
     let dir = path
@@ -1034,32 +1095,42 @@ pub(crate) fn transact_with<E>(
         .map_err(|e| fail(ScratchStep::CreateCopy, e.into()))?;
     apply(scratch.path())?;
 
-    if same_bytes(path, scratch.path()).map_err(|e| fail(ScratchStep::ReadCopy, e.into()))? {
-        return Ok(WriteOutcome::Unchanged);
+    super::filesystem_metadata::check_identity(path, &original)
+        .map_err(|e| fail(ScratchStep::ReadOriginal, e.into()))?;
+    if same_bytes_opened(&mut original, scratch.path())
+        .map_err(|e| fail(ScratchStep::ReadCopy, e.into()))?
+    {
+        return Ok((WriteOutcome::Unchanged, handle_identity(&original)));
     }
     // The commit is `write_atomic`'s: the replacement (the scratch copy,
     // which lives beside `path`) takes the original's filesystem metadata,
     // is flushed, and is renamed over `path`. A writer may have replaced
     // the scratch file by a rename of its own, so it is reopened by path.
-    let commit = || -> std::io::Result<()> {
+    let commit = || -> std::io::Result<Option<SourceIdentity>> {
         let replacement = super::filesystem_metadata::open_destination(scratch.path())?;
         metadata.restore(&original, &replacement)?;
         replacement.sync_all()?;
         super::filesystem_metadata::check_identity(path, &original)?;
-        Ok(())
+        Ok(handle_identity(&replacement))
     };
-    commit().map_err(|e| fail(ScratchStep::Commit, e.into()))?;
+    let written = commit().map_err(|e| fail(ScratchStep::Commit, e.into()))?;
     on_commit()?;
     scratch
         .persist(path)
         .map_err(|e| fail(ScratchStep::Commit, e.error.into()))?;
-    Ok(WriteOutcome::Updated)
+    Ok((WriteOutcome::Updated, written))
 }
 
 /// Whether the files at `a` and `b` hold the same bytes, compared in chunks.
+#[cfg(test)]
 fn same_bytes(a: &Path, b: &Path) -> std::io::Result<bool> {
-    use std::io::Read;
-    let (mut a, mut b) = (fs::File::open(a)?, fs::File::open(b)?);
+    same_bytes_opened(&mut fs::File::open(a)?, b)
+}
+
+fn same_bytes_opened(a: &mut fs::File, b: &Path) -> std::io::Result<bool> {
+    use std::io::{Read, Seek};
+    a.rewind()?;
+    let mut b = fs::File::open(b)?;
     if a.metadata()?.len() != b.metadata()?.len() {
         return Ok(false);
     }
@@ -1106,6 +1177,134 @@ mod tests {
         assert!(!same_bytes(&a, &write("c", &changed)).unwrap());
         assert!(!same_bytes(&a, &write("d", &big[..big.len() - 1])).unwrap());
         assert!(same_bytes(&write("e", b""), &write("f", b"")).unwrap());
+    }
+
+    #[test]
+    fn replacement_after_planning_refuses_active_and_absent_delete_plans() {
+        let mut accepted = Vec::new();
+        for active in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("original.jpg");
+            let replacement = dir.path().join("replacement.jpg");
+            fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+            apply_tag_changes(&path, &[TagChange::delete("IFD0:Artist")]).unwrap();
+            fs::copy(&path, &replacement).unwrap();
+            apply_tag_changes(
+                &replacement,
+                &[TagChange::set("IFD0:Artist", s("replacement"))],
+            )
+            .unwrap();
+            let bytes = fs::read(&replacement).unwrap();
+            let changes = if active {
+                vec![TagChange::set("IFD0:Make", s("planned on original"))]
+            } else {
+                vec![TagChange::delete("IFD0:Artist")]
+            };
+            let result = apply_with_planning_hook(&path, &changes, || {
+                fs::rename(&replacement, &path).unwrap();
+            });
+            if result.is_ok() {
+                accepted.push(active);
+            }
+            if result.is_err() {
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+        assert!(
+            accepted.is_empty(),
+            "replacement accepted for active plans: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn cancelled_and_superseded_sets_have_only_surviving_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipt.jpg");
+        fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        let cancelled = apply_tag_changes_with_receipt(
+            &path,
+            &[
+                TagChange::set("EXIF:Artist", s("cancelled")),
+                TagChange::delete("EXIF:All"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(cancelled.sets, 0);
+        assert!(cancelled.caller_fields.is_empty());
+        let surviving = apply_tag_changes_with_receipt(
+            &path,
+            &[
+                TagChange::set("Artist", s("superseded")),
+                TagChange::set("EXIF:Artist", s("surviving")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(surviving.sets, 1);
+        assert_eq!(
+            surviving.caller_fields,
+            vec![("EXIF:Artist".to_string(), "IFD0:Artist".to_string())]
+        );
+        assert!(
+            apply_tag_changes_with_receipt(
+                &path,
+                &[
+                    TagChange::set("Artist", s("surviving")),
+                    TagChange::set("NotAGroup:NotATag", s("refused")),
+                ]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn planning_reads_the_opened_inode_even_after_path_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.jpg");
+        let replacement = dir.path().join("replacement.jpg");
+        fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        apply_tag_changes(&path, &[TagChange::delete("IFD0:Artist")]).unwrap();
+        fs::copy(&path, &replacement).unwrap();
+        apply_tag_changes(
+            &replacement,
+            &[TagChange::set("IFD0:Artist", s("replacement"))],
+        )
+        .unwrap();
+        let original = super::super::filesystem_metadata::open_destination(&path).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        let reader = MMapReader::from_file(original.try_clone().unwrap()).unwrap();
+        let changes = [TagChange::delete("IFD0:Artist")];
+        let plan = plan_changes(&path, &changes, &reader, &original).unwrap();
+        assert!(!plan.baseline.contains_key("IFD0:Artist"));
+        assert!(plan.steps.is_empty());
+        drop(reader);
+        assert!(apply_tag_changes_on_opened(&path, &changes, original).is_err());
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("replacement")
+        );
+    }
+
+    #[test]
+    fn replaced_original_is_refused_even_when_scratch_matches_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jpg");
+        let replacement = dir.path().join("replacement.jpg");
+        fs::write(&path, b"original").unwrap();
+        fs::write(&replacement, b"replacement").unwrap();
+        let result = transact_with(
+            &path,
+            |scratch| -> Result<()> {
+                fs::rename(&replacement, &path)?;
+                fs::write(scratch, b"replacement")?;
+                Ok(())
+            },
+            || panic!("no backup for a refused replacement"),
+            |_, error| error,
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     fn map(rows: &[(&str, TagValue)]) -> MetadataMap {

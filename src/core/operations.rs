@@ -388,6 +388,16 @@ fn read_metadata_unmarked(
     detector_mode: DetectorMode,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
+    let reader = MMapReader::new(path)?;
+    read_metadata_from_reader(path, detector_mode, options, &reader)
+}
+
+pub(crate) fn read_metadata_from_reader(
+    path: &Path,
+    detector_mode: DetectorMode,
+    options: &ReadOptions,
+    reader: &MMapReader,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -399,9 +409,6 @@ fn read_metadata_unmarked(
         }
     };
 
-    // Step 2: Open file with MMapReader for zero-copy access
-    let reader = MMapReader::new(path)?;
-
     // Step 3: Detect format using specified detector mode
     //
     // A format we cannot parse is not the same as a file we cannot recognise.
@@ -409,10 +416,10 @@ fn read_metadata_unmarked(
     // SWF and ~40 other formats OxiDex has no parser for; returning Err here
     // meant emitting nothing at all for those files, including the file-system
     // metadata already gathered above. Identify what we can and return that.
-    let mut format = match detect_format_with_mode(&reader, detector_mode) {
+    let mut format = match detect_format_with_mode(reader, detector_mode) {
         Ok(f) => f,
         Err(e) => {
-            if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+            if is_unsupported(&e) && add_identity_tags(&mut metadata, reader, path) {
                 crate::composite::apply(&mut metadata);
                 return Ok(metadata);
             }
@@ -482,10 +489,10 @@ fn read_metadata_unmarked(
     // ~40 formats OxiDex has no parser for. Failing the whole read there threw
     // away the file-system metadata too, so those files produced no output at
     // all rather than partial output.
-    let format_metadata = match dispatch_format_parser(&reader, format, options) {
+    let format_metadata = match dispatch_format_parser(reader, format, options) {
         Ok(m) => m,
         Err(e) => {
-            if is_unsupported(&e) && add_identity_tags(&mut metadata, &reader, path) {
+            if is_unsupported(&e) && add_identity_tags(&mut metadata, reader, path) {
                 crate::composite::apply(&mut metadata);
                 return Ok(metadata);
             }
@@ -509,7 +516,7 @@ fn read_metadata_unmarked(
     // and a correct `File:FileType` mutually exclusive: LNK, EXR and ICC files
     // parsed fine and still reported `FileType: Unknown`. Only placeholders are
     // filled, so a parser that names the type itself still wins.
-    add_identity_tags(&mut metadata, &reader, path);
+    add_identity_tags(&mut metadata, reader, path);
 
     // Step 5a': One answer per identity tag, under the group ExifTool uses.
     //
@@ -1027,9 +1034,20 @@ pub(crate) fn write_metadata_counted(
 ) -> Result<(WriteOutcome, usize)> {
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
-    let baseline = read_metadata(path)?;
-    let unverifiable = metadata.unverifiable_read_identity(path);
-    let read = metadata.read_from(path) || unverifiable;
+    // Infer the request and plan it against the same handle that is copied.
+    let original = super::filesystem_metadata::open_destination(path)?;
+    let identity = super::metadata_map::handle_identity(&original);
+    let reader = MMapReader::from_file(original.try_clone()?)?;
+    let mut baseline = read_metadata_from_reader(
+        path,
+        DetectorMode::Signature,
+        &ReadOptions::default_full_listing(),
+        &reader,
+    )?;
+    baseline.mark_read_complete();
+    baseline.set_read_handle(&original);
+    let unverifiable = metadata.unverifiable_source_identity(identity);
+    let read = metadata.read_from_identity(identity) || unverifiable;
     let mut changes = changes_between(&baseline, metadata, read);
     if read {
         removals_in_call_order(metadata, mutations, &mut changes);
@@ -1044,7 +1062,7 @@ pub(crate) fn write_metadata_counted(
             .iter()
             .filter(|change| change.value().is_some())
             .filter_map(|change| {
-                resolve_write_key_for(path, change.tag(), &baseline)
+                resolve_write_key_for_with_reader(change.tag(), &baseline, &reader)
                     .ok()
                     .map(|(field, _)| field)
             })
@@ -1099,17 +1117,16 @@ pub(crate) fn write_metadata_counted(
     // Stable: changes at one position keep the map's own order.
     ordered.sort_by_key(|(at, _)| *at);
     let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
-    if changes.is_empty() {
-        // the file already holds this map: nothing to write
-        return Ok((WriteOutcome::Unchanged, 0));
-    }
-    let receipt = crate::core::write_transaction::apply_tag_changes_with_receipt(path, &changes)?;
+    drop(reader);
+    let receipt =
+        crate::core::write_transaction::apply_tag_changes_on_opened(path, &changes, original)?;
     Ok(finish_metadata_write(
         metadata,
-        &baseline,
         read,
         (receipt.outcome, receipt.sets),
         &receipt.caller_fields,
+        receipt.original,
+        receipt.written,
         || read_metadata(path),
     ))
 }
@@ -1118,17 +1135,18 @@ pub(crate) fn write_metadata_counted(
 /// into an error promising unchanged bytes, or advance deletion authority.
 fn finish_metadata_write(
     metadata: &MetadataMap,
-    baseline: &MetadataMap,
     read: bool,
     result: (WriteOutcome, usize),
     caller_fields: &[(String, String)],
+    original: Option<super::metadata_map::SourceIdentity>,
+    written: Option<super::metadata_map::SourceIdentity>,
     reread: impl FnOnce() -> Result<MetadataMap>,
 ) -> (WriteOutcome, usize) {
     if read
-        && result.0 == WriteOutcome::Updated
+        && (result.0 == WriteOutcome::Updated || !caller_fields.is_empty())
         && let Ok(saved) = reread()
     {
-        metadata.record_write_success(&saved, baseline, caller_fields);
+        metadata.record_write_success(&saved, original, written, caller_fields);
     }
     result
 }
@@ -1763,6 +1781,15 @@ pub(crate) fn resolve_write_key_for(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
+    let reader = MMapReader::new(path)?;
+    resolve_write_key_for_with_reader(tag_name, baseline, &reader)
+}
+
+pub(crate) fn resolve_write_key_for_with_reader(
+    tag_name: &str,
+    baseline: &MetadataMap,
+    reader: &MMapReader,
+) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
         ensure_not_also_updated, ensure_writer_addresses, generated_route_resolves,
         png_prefers_text, resolve_exif_family_key, resolve_write_key,
@@ -1783,9 +1810,8 @@ pub(crate) fn resolve_write_key_for(
         respelled
     };
     let tag_name = respelled.as_str();
-    let reader = MMapReader::new(path)?;
-    let format = detect_format(&reader)?;
-    let surgical = is_surgical_tiff_target(format, &reader);
+    let format = detect_format(reader)?;
+    let surgical = is_surgical_tiff_target(format, reader);
     let png = matches!(format, FileFormat::PNG);
     // ExifTool reads IFD0 with Exif::Main unless the TIFF header's identifier
     // is Panasonic's 0x55, which selects PanasonicRaw::Main (ExifTool.pm:
@@ -1887,7 +1913,11 @@ pub(crate) fn resolve_write_key_for(
 /// tag the map lacks names nothing. Pinned ExifTool 13.59 answers such a
 /// deletion `0 image files updated` / `1 image files unchanged`, bytes
 /// untouched.
-pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -> Result<bool> {
+pub(crate) fn removal_is_no_op_with_reader(
+    key: &str,
+    metadata: &MetadataMap,
+    reader: &MMapReader,
+) -> Result<bool> {
     use crate::writers::exif_surgical::{
         EXIF_BLOCK_MAGICS, exif_request_is_no_op, jpeg_exif_payloads,
     };
@@ -1910,14 +1940,13 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
         return Ok(false);
     }
     let removed = [key.to_string()];
-    let reader = MMapReader::new(path)?;
-    let format = detect_format(&reader)?;
+    let format = detect_format(reader)?;
     let file_bytes = reader.read(0, reader.size() as usize)?;
     // A PNG with a bad chunk CRC is refused before any no-op decision, as the
     // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned
     // 13.59 checks every CRC before it learns nothing changed.
     if matches!(format, FileFormat::PNG) {
-        crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
+        crate::writers::png_writer::refuse_bad_chunk_crcs(reader)?;
     }
     // A single-tag removal acts on every block alike (only a group-wide
     // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
@@ -1927,7 +1956,7 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
             blocks, blocks, magics, embedded, metadata, metadata, &removed,
         )
     };
-    Ok(if is_surgical_tiff_target(format, &reader) {
+    Ok(if is_surgical_tiff_target(format, reader) {
         // The block scan below reads only the outer directories; a tag held
         // only in a Panasonic RW2's embedded JpgFromRaw EXIF is not absent
         // (ExifTool deletes it there), and #943 refuses that edit by name
@@ -1956,7 +1985,7 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
             // the sRGB chunk, `1 image files updated`).
             FileFormat::PNG if group == "PNG" => {
                 match crate::writers::png_writer::chunk_tag_chunk(key) {
-                    Some(kind) => !crate::writers::png_writer::png_has_chunk(&reader, kind)?,
+                    Some(kind) => !crate::writers::png_writer::png_has_chunk(reader, kind)?,
                     None => true,
                 }
             }
@@ -1966,7 +1995,7 @@ pub(crate) fn removal_is_no_op(path: &Path, key: &str, metadata: &MetadataMap) -
                 let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
                 no_op(&blocks, EXIF_BLOCK_MAGICS, true)
             }
-            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(&reader)? {
+            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(reader)? {
                 Some(payloads) => {
                     let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
                     no_op(&blocks, EXIF_BLOCK_MAGICS, false)
@@ -1995,7 +2024,7 @@ pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
 /// files unchanged`, bytes untouched. oxidex does the same instead of
 /// refusing -- for a name `SetNewValue` accepts in that group
 /// (`write_request::exif_group_answer`); any other is refused.
-pub(crate) fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
+pub(crate) fn exif_group_in_pdf_with_reader(tag_name: &str, reader: &MMapReader) -> Result<bool> {
     use crate::writers::write_request::{ExifGroupAnswer, exif_group_answer};
     let Some((group, name)) = tag_name.rsplit_once(':') else {
         return Ok(false);
@@ -2003,8 +2032,7 @@ pub(crate) fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
     let Some(answer) = exif_group_answer(group, name) else {
         return Ok(false);
     };
-    let reader = MMapReader::new(path)?;
-    if !matches!(detect_format(&reader)?, FileFormat::PDF) {
+    if !matches!(detect_format(reader)?, FileFormat::PDF) {
         return Ok(false);
     }
     // Only a name `SetNewValue` accepts in that group is ExifTool's
@@ -2051,17 +2079,17 @@ pub(crate) fn exif_group_in_pdf(path: &Path, tag_name: &str) -> Result<bool> {
 /// the file holds none of it; otherwise the deletion is refused by name
 /// ([`ExifToolError::TagsNotWritten`]) -- never reported as an update that
 /// stripped nothing.
-pub(crate) fn plan_group_deletion(
-    path: &Path,
+pub(crate) fn plan_group_deletion_with_reader(
     tag_name: &str,
     group: &str,
+    baseline: &MetadataMap,
+    reader: &MMapReader,
 ) -> Result<Option<String>> {
     let key = format!("{group}:All");
-    let reader = MMapReader::new(path)?;
-    let format = detect_format(&reader)?;
+    let format = detect_format(reader)?;
     if crate::writers::exif_surgical::group_removal(&key).is_some() {
         let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
-            || is_surgical_tiff_target(format, &reader);
+            || is_surgical_tiff_target(format, reader);
         if expanded {
             return Ok(Some(key));
         }
@@ -2069,8 +2097,7 @@ pub(crate) fn plan_group_deletion(
             return Ok(None);
         }
     } else {
-        drop(reader);
-        if group_is_empty(group, &read_metadata(path)?) {
+        if group_is_empty(group, baseline) {
             return Ok(None);
         }
     }
@@ -4148,6 +4175,74 @@ mod provenance_refresh_tests {
     use super::*;
 
     #[test]
+    fn successful_same_value_receipt_does_not_authorize_a_replaced_reread() {
+        use crate::core::write_transaction::{TagChange, apply_tag_changes_with_receipt};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("refresh.jpg");
+        let replacement = directory.path().join("replacement.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        let mut desired = read_metadata(&path).unwrap();
+        let value = desired.get("IFD0:Artist").unwrap().clone();
+        desired.insert("Artist", value.clone());
+        let receipt =
+            apply_tag_changes_with_receipt(&path, &[TagChange::set("Artist", value)]).unwrap();
+        assert_eq!(receipt.outcome, WriteOutcome::Unchanged);
+        std::fs::copy(&path, &replacement).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let result = finish_metadata_write(
+            &desired,
+            true,
+            (receipt.outcome, receipt.sets),
+            &receipt.caller_fields,
+            receipt.original,
+            receipt.written,
+            || read_metadata(&path),
+        );
+        assert_eq!(result, (WriteOutcome::Unchanged, 1));
+        desired.remove("Artist");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            write_metadata(&path, &desired).unwrap(),
+            WriteOutcome::Unchanged
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn unchanged_proven_set_remains_successful_when_provenance_reread_fails() {
+        use crate::core::write_transaction::{TagChange, apply_tag_changes_with_receipt};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("refresh.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        let mut desired = read_metadata(&path).unwrap();
+        let value = desired.get("IFD0:Artist").unwrap().clone();
+        desired.insert("Artist", value.clone());
+        let receipt =
+            apply_tag_changes_with_receipt(&path, &[TagChange::set("Artist", value)]).unwrap();
+        let result = finish_metadata_write(
+            &desired,
+            true,
+            (receipt.outcome, receipt.sets),
+            &receipt.caller_fields,
+            receipt.original,
+            receipt.written,
+            || {
+                Err(ExifToolError::IoError(std::io::Error::other(
+                    "injected refresh failure",
+                )))
+            },
+        );
+        assert_eq!(result, (WriteOutcome::Unchanged, 1));
+        desired.remove("Artist");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            write_metadata(&path, &desired).unwrap(),
+            WriteOutcome::Unchanged
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
     fn committed_write_remains_successful_when_provenance_reread_fails() {
         use crate::core::write_transaction::{TagChange, apply_tag_changes_counted};
         let directory = tempfile::TempDir::new().unwrap();
@@ -4165,7 +4260,7 @@ mod provenance_refresh_tests {
             )],
         )
         .unwrap();
-        let result = finish_metadata_write(&desired, &baseline, true, committed, &[], || {
+        let result = finish_metadata_write(&desired, true, committed, &[], None, None, || {
             Err(ExifToolError::IoError(std::io::Error::other(
                 "injected reread failure after commit",
             )))

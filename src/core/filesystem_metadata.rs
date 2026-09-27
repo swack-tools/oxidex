@@ -62,6 +62,19 @@ pub(super) fn check_identity(path: &Path, original: &File) -> io::Result<()> {
             return Err(refused("destination inode changed during metadata write"));
         }
     }
+    #[cfg(windows)]
+    {
+        // Compare actual handles, not just pathname attributes, on Windows too.
+        let current = File::open(path)?;
+        let opened = super::metadata_map::handle_identity(original);
+        let current = super::metadata_map::handle_identity(&current);
+        if !opened
+            .zip(current)
+            .is_some_and(|(opened, current)| opened.same_file(current))
+        {
+            return Err(refused("destination inode changed during metadata write"));
+        }
+    }
     Ok(())
 }
 

@@ -120,11 +120,22 @@ pub(crate) struct SourceIdentity {
     links: u64,
 }
 
+#[cfg(windows)]
+impl SourceIdentity {
+    pub(crate) fn same_file(self, other: Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
 fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
+    handle_identity(&std::fs::File::open(path).ok()?)
+}
+
+pub(crate) fn handle_identity(file: &std::fs::File) -> Option<SourceIdentity> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::metadata(path).ok()?;
+        let metadata = file.metadata().ok()?;
         let birth = metadata.created().ok().map(|created| {
             match created.duration_since(std::time::UNIX_EPOCH) {
                 Ok(duration) => duration.as_nanos() as i128,
@@ -164,7 +175,6 @@ fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
                 information: *mut FileInformation,
             ) -> i32;
         }
-        let file = std::fs::File::open(path).ok()?;
         let mut information = FileInformation::default();
         // SAFETY: File owns a live handle and information has the Win32
         // BY_HANDLE_FILE_INFORMATION layout and is writable for this call.
@@ -183,7 +193,7 @@ fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = path;
+        let _ = file;
         None
     }
 }
@@ -317,6 +327,11 @@ impl MetadataMap {
         file_identity(path)
     }
 
+    pub(crate) fn set_read_handle(&mut self, file: &std::fs::File) {
+        let identity = handle_identity(file);
+        self.set_read_source_observations(identity, identity);
+    }
+
     pub(crate) fn set_read_source_identity(
         &mut self,
         path: &std::path::Path,
@@ -382,9 +397,13 @@ impl MetadataMap {
     /// Stable file identity, shared across successful saves and clones.
     /// Path spellings never establish deletion authority.
     pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
+        self.read_from_identity(file_identity(path))
+    }
+
+    pub(crate) fn read_from_identity(&self, target: Option<SourceIdentity>) -> bool {
         self.read_source.as_ref().is_some_and(|read| {
             let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
-            file_identity(path).is_some_and(|target| {
+            target.is_some_and(|target| {
                 target.identity.birth.is_some() && saved.identities.contains(&target.identity)
             })
         })
@@ -393,9 +412,13 @@ impl MetadataMap {
     /// An unverified object match can support caller assignments, but never
     /// implicit removals. The write boundary explicitly refuses such removals.
     pub(crate) fn unverifiable_read_identity(&self, path: &std::path::Path) -> bool {
+        self.unverifiable_source_identity(file_identity(path))
+    }
+
+    pub(crate) fn unverifiable_source_identity(&self, target: Option<SourceIdentity>) -> bool {
         self.read_source.as_ref().is_some_and(|read| {
             let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
-            file_identity(path).is_some_and(|target| {
+            target.is_some_and(|target| {
                 saved.identities.iter().any(|source| {
                     source.device == target.identity.device
                         && source.index == target.identity.index
@@ -429,27 +452,30 @@ impl MetadataMap {
             || self.removed_saved_field(key)
     }
 
-    /// Refresh only after an updated transaction and its successful read-back.
+    /// Refresh after a proven successful transaction and its successful read-back.
     /// Writer seeds never enter caller_fields; the map's public rows stay intact.
     pub(crate) fn record_write_success(
         &self,
         saved_map: &MetadataMap,
-        baseline: &MetadataMap,
+        original: Option<SourceIdentity>,
+        expected: Option<SourceIdentity>,
         caller_fields: &[(String, String)],
     ) {
         if let (Some(read), Some(written)) = (&self.read_source, &saved_map.read_source) {
-            let Some(written) = written.source else {
+            let Some(written) = written.source.filter(|source| {
+                expected.is_some_and(|expected| source.identity == expected.identity)
+            }) else {
                 return;
             };
             let mut saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(previous) = baseline.read_source.as_ref().and_then(|read| read.source)
+            if let Some(previous) = original
                 && previous.links <= 1
             {
                 saved.identities.remove(&previous.identity);
             }
             saved.identities.insert(written.identity);
             for (request, field) in caller_fields {
-                if self.is_assigned(request) && saved_map.contains_key(field) {
+                if self.is_assigned(request) {
                     saved.caller_fields.insert(request.clone(), field.clone());
                 }
             }

@@ -389,3 +389,100 @@ fn switching_saved_alias_spelling_keeps_the_new_assignment() {
     assert_eq!(write_metadata(&path, &map).unwrap(), WriteOutcome::Updated);
     assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
 }
+
+#[test]
+fn same_value_alias_save_retains_attribution_for_next_removal() {
+    let mut failures = Vec::new();
+    for key in ["Artist", "EXIF:Artist", "ifd0:artist", "IFD0:Artist"] {
+        let (_directory, path) = fixture();
+        let mut seed = MetadataMap::new();
+        artist(&mut seed);
+        write_metadata(&path, &seed).unwrap();
+        let mut map = read_metadata(&path).unwrap();
+        map.insert(key, TagValue::new_string("added by caller"));
+        let before_save = map.clone();
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            write_metadata(&path, &map).unwrap(),
+            WriteOutcome::Unchanged
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        for mut view in [map.clone(), map.without_print_conv(), before_save] {
+            assert!(view.remove(key).is_some());
+            let removed = write_metadata(&path, &view).unwrap();
+            if removed != WriteOutcome::Updated
+                || read_metadata(&path).unwrap().get("IFD0:Artist").is_some()
+            {
+                failures.push(key);
+            }
+            view.insert(key, TagValue::new_string("added by caller"));
+            write_metadata(&path, &view).unwrap();
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "same-value removal failed for {failures:?}"
+    );
+}
+
+#[test]
+fn refused_same_value_alias_does_not_acquire_removal_attribution() {
+    for key in ["Artist", "EXIF:Artist", "ifd0:artist"] {
+        let (_directory, path) = fixture();
+        let mut seed = MetadataMap::new();
+        artist(&mut seed);
+        write_metadata(&path, &seed).unwrap();
+        let mut map = read_metadata(&path).unwrap();
+        map.insert(key, TagValue::new_string("added by caller"));
+        map.insert(
+            "NotAGroup:NotATag",
+            TagValue::new_string("refuse whole plan"),
+        );
+        let bytes = fs::read(&path).unwrap();
+        assert!(write_metadata(&path, &map).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        map.remove("NotAGroup:NotATag");
+        map.remove(key);
+        assert_eq!(
+            write_metadata(&path, &map).unwrap(),
+            WriteOutcome::Unchanged
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn ffi_same_value_alias_survives_finish_and_next_removal() {
+    use oxidex::ffi::*;
+    use std::ffi::CString;
+    for key in ["Artist", "EXIF:Artist", "ifd0:artist", "IFD0:Artist"] {
+        let (_directory, path) = fixture();
+        let mut seed = MetadataMap::new();
+        artist(&mut seed);
+        write_metadata(&path, &seed).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let name = CString::new(path.to_str().unwrap()).unwrap();
+        let key = CString::new(key).unwrap();
+        let handle = exiftool_create();
+        assert_eq!(exiftool_read_file(handle, name.as_ptr()), EXIFTOOL_OK);
+        assert_eq!(
+            exiftool_set_tag_string(handle, key.as_ptr(), c"added by caller".as_ptr()),
+            EXIFTOOL_OK
+        );
+        let mut outcome = -1;
+        assert_eq!(
+            exiftool_write_file_with_outcome(handle, name.as_ptr(), &mut outcome),
+            EXIFTOOL_OK
+        );
+        assert_eq!(outcome, EXIFTOOL_WRITE_UNCHANGED);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(exiftool_remove_tag(handle, key.as_ptr()), EXIFTOOL_OK);
+        assert_eq!(
+            exiftool_write_file_with_outcome(handle, name.as_ptr(), &mut outcome),
+            EXIFTOOL_OK
+        );
+        assert_eq!(outcome, EXIFTOOL_WRITE_UPDATED);
+        exiftool_destroy(handle);
+        assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_none());
+    }
+}
