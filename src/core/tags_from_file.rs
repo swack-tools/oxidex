@@ -32,6 +32,7 @@ use crate::writers::copy_targets::{
     CopyMode, CopyRequest, Destination, DestinationFile, destinations, is_copyable,
     is_protected_binary_source, retained_destinations,
 };
+use std::collections::HashSet;
 use std::path::Path;
 
 /// One `-TagsFromFile` argument's selection: an optional group and a tag
@@ -600,7 +601,23 @@ pub(crate) fn copy_tags(
         }
     }
 
-    // Resolve each destination to a key and value oxidex writes, or name it.
+    // A later selector replaces the earlier copy's value and strictness.
+    // Reduce before either capability or conversion validation, so a dead
+    // named copy cannot refuse a surviving best-effort selection. Keep
+    // direct and derived candidates separate: direct writes still take
+    // precedence over derived WriteAlso/structure fields below.
+    let mut surviving = HashSet::new();
+    planned.reverse();
+    planned.retain(|plan| {
+        surviving.insert((
+            plan.destination.derived,
+            plan.destination.group1.to_ascii_lowercase(),
+            plan.destination.name.to_ascii_lowercase(),
+        ))
+    });
+    planned.reverse();
+
+    // Resolve each surviving destination to a value oxidex writes, or name it.
     let direct: Vec<(String, String)> = planned
         .iter()
         .filter(|plan| !plan.destination.derived)

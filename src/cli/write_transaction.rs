@@ -369,11 +369,7 @@ pub fn write_plan_file(
         },
     )?;
     let proven_copies = copy.as_ref().map_or(0, |report| report.copied);
-    if outcome == WriteOutcome::Unchanged
-        && !plan.clear_all
-        && plan.shifts.is_empty()
-        && proven_sets + proven_copies > 0
-    {
+    if outcome == WriteOutcome::Unchanged && proven_sets + proven_copies > 0 {
         // Nothing was rewritten, yet the transaction's read-back proved a set
         // in effect (and every other request in effect or a no-op): the
         // request is what the file holds, which ExifTool reports as an

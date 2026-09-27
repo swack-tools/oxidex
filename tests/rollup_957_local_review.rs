@@ -49,12 +49,12 @@ fn individual_copy_and_set_keep_distinct_exif_directories() {
     fs::copy(JPEG, &source).unwrap();
     fs::copy(JPEG, &ours).unwrap();
     seed(
-        &oracle,
+        oracle,
         &source,
         &["-ExifIFD:CreateDate=2011:02:03 04:05:06"],
     );
     seed(
-        &oracle,
+        oracle,
         &ours,
         &[
             "-ExifIFD:CreateDate=2001:02:03 04:05:06",
@@ -82,7 +82,7 @@ fn individual_copy_and_set_keep_distinct_exif_directories() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    assert_eq!(tags(&oracle, &ours), tags(&oracle, &native));
+    assert_eq!(tags(oracle, &ours), tags(oracle, &native));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn later_group_deletion_cancels_unsupported_named_copies_before_validation() {
         fs::copy(JPEG, &source).unwrap();
         fs::copy(JPEG, &ours).unwrap();
         seed(
-            &oracle,
+            oracle,
             &source,
             &["-IFD0:Artist=source", "-XMP-dc:Title=source"],
         );
@@ -150,7 +150,7 @@ fn clear_all_cancels_only_copies_that_precede_it() {
         let native = dir.path().join("native.jpg");
         fs::copy(JPEG, &source).unwrap();
         fs::copy(JPEG, &ours).unwrap();
-        seed(&oracle, &source, &["-IFD0:Make=source maker"]);
+        seed(oracle, &source, &["-IFD0:Make=source maker"]);
         fs::copy(&ours, &native).unwrap();
         let selectors: Vec<_> = selectors
             .into_iter()
@@ -176,7 +176,7 @@ fn clear_all_cancels_only_copies_that_precede_it() {
             .output()
             .unwrap();
         assert!(result.status.success(), "case {index}: {result:?}");
-        assert_eq!(tags(&oracle, &ours), tags(&oracle, &native), "case {index}");
+        assert_eq!(tags(oracle, &ours), tags(oracle, &native), "case {index}");
     }
 }
 
@@ -204,7 +204,7 @@ fn copy_selector_order_and_exclusions_match_the_pinned_oracle() {
         fs::copy(JPEG, &source).unwrap();
         fs::copy(JPEG, &ours).unwrap();
         seed(
-            &oracle,
+            oracle,
             &source,
             &[
                 "-IFD0:Artist=source artist",
@@ -213,7 +213,7 @@ fn copy_selector_order_and_exclusions_match_the_pinned_oracle() {
             ],
         );
         seed(
-            &oracle,
+            oracle,
             &ours,
             &[
                 "-IFD0:Artist=destination artist",
@@ -237,11 +237,7 @@ fn copy_selector_order_and_exclusions_match_the_pinned_oracle() {
             .output()
             .unwrap();
         assert!(result.status.success(), "{selectors:?}: {result:?}");
-        assert_eq!(
-            tags(&oracle, &ours),
-            tags(&oracle, &native),
-            "{selectors:?}"
-        );
+        assert_eq!(tags(oracle, &ours), tags(oracle, &native), "{selectors:?}");
     }
 }
 
@@ -254,7 +250,7 @@ fn cancelled_copies_do_not_create_directories_for_surviving_copies() {
     let source = dir.path().join("source.jpg");
     fs::copy(JPEG, &source).unwrap();
     seed(
-        &oracle,
+        oracle,
         &source,
         &[
             "-IFD0:Make=source maker",
@@ -276,7 +272,7 @@ fn cancelled_copies_do_not_create_directories_for_surviving_copies() {
         let ours = dir.path().join(format!("ours.{extension}"));
         let native = dir.path().join(format!("native.{extension}"));
         fs::copy(fixture, &ours).unwrap();
-        seed(&oracle, &ours, &["-all="]);
+        seed(oracle, &ours, &["-all="]);
         fs::copy(&ours, &native).unwrap();
         let expected = oracle
             .command()
@@ -294,11 +290,7 @@ fn cancelled_copies_do_not_create_directories_for_surviving_copies() {
             .output()
             .unwrap();
         assert!(result.status.success(), "{selectors:?}: {result:?}");
-        assert_eq!(
-            tags(&oracle, &ours),
-            tags(&oracle, &native),
-            "{selectors:?}"
-        );
+        assert_eq!(tags(oracle, &ours), tags(oracle, &native), "{selectors:?}");
     }
 }
 
@@ -318,12 +310,152 @@ fn png_gps_date_stamp_keyword_remains_opaque_text() {
     assert_eq!(&bytes[iend + 4..iend + 8], b"IEND");
     bytes.splice(iend..iend, b"\x00\x00\x00\x10\x74\x45\x58\x74\x47\x50\x53\x44\x61\x74\x65\x53\x74\x61\x6d\x70\x00\x6f\x6c\x64\x1b\x99\x44\x66".iter().copied());
     fs::write(&ours, bytes).unwrap();
-    assert_eq!(tags(&oracle, &ours)["PNG:GPSDateStamp"], "old");
+    assert_eq!(tags(oracle, &ours)["PNG:GPSDateStamp"], "old");
     let result = Command::new(env!("CARGO_BIN_EXE_oxidex"))
         .arg("-PNG:GPSDateStamp=2024-01-02")
         .arg(&ours)
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    assert_eq!(tags(&oracle, &ours)["PNG:GPSDateStamp"], "2024-01-02");
+    assert_eq!(tags(oracle, &ours)["PNG:GPSDateStamp"], "2024-01-02");
+}
+
+#[test]
+fn deletion_of_an_absent_field_remains_a_final_postcondition() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for args in [
+        ["-ExifIFD:ISO=200", "-ExifIFD:ColorSpace="],
+        ["-ExifIFD:ColorSpace=", "-ExifIFD:ISO=200"],
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("blank.jpg");
+        fs::copy(JPEG, &path).unwrap();
+        seed(oracle, &path, &["-all="]);
+        let before = fs::read(&path).unwrap();
+        // An absent deletion by itself still needs no write or backup.
+        let noop = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["--backup", "-ExifIFD:ColorSpace="])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(noop.status.success(), "{noop:?}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!dir.path().join("blank.jpg.bak").exists());
+        // ISO creates ExifIFD's mandatory ColorSpace. The strict transaction
+        // must refuse rather than commit a field explicitly requested absent.
+        let result = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .arg("--backup")
+            .args(args)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{args:?}: {result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("ColorSpace"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!dir.path().join("blank.jpg.bak").exists());
+        // A later explicit set replaces the deletion's postcondition.
+        let replacement = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args([
+                "-ExifIFD:ColorSpace=",
+                "-ExifIFD:ISO=200",
+                "-ExifIFD:ColorSpace=1",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(replacement.status.success(), "{replacement:?}");
+    }
+}
+
+#[test]
+fn the_last_copy_selector_controls_destination_strictness() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("source.jpg");
+    fs::copy(JPEG, &source).unwrap();
+    seed(
+        oracle,
+        &source,
+        &[
+            "-all=",
+            "-IFD0:Make=source maker",
+            "-XMP-dc:Title=source title",
+        ],
+    );
+    for (index, filters, succeeds) in [
+        (0, ["-XMP-dc:Title", "-all"], true),
+        (1, ["-all", "-XMP-dc:Title"], false),
+    ] {
+        let path = dir.path().join(format!("dest{index}.jpg"));
+        fs::copy(JPEG, &path).unwrap();
+        seed(oracle, &path, &["-all="]);
+        let before = fs::read(&path).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-TagsFromFile", source.to_str().unwrap()])
+            .args(filters)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.success(), succeeds, "{filters:?}: {result:?}");
+        if succeeds {
+            assert_eq!(tags(oracle, &path)["IFD0:Make"], "source maker");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("XMP"),
+                "{result:?}"
+            );
+        } else {
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn surviving_same_value_sets_count_with_noop_shifts_or_clears() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for prefix in ["-DateTimeOriginal+=1", "-all="] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ours.jpg");
+        let native = dir.path().join("native.jpg");
+        fs::copy(JPEG, &path).unwrap();
+        let seed = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-all=", "-IFD0:Artist=x"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(seed.status.success(), "{seed:?}");
+        fs::copy(&path, &native).unwrap();
+        let before = fs::read(&path).unwrap();
+        let expected = oracle
+            .command()
+            .args(["-overwrite_original", prefix, "-IFD0:Artist=x"])
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(expected.status.success(), "{expected:?}");
+        assert!(
+            String::from_utf8_lossy(&expected.stdout).contains("1 image files updated"),
+            "{expected:?}"
+        );
+        let result = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["--backup", prefix, "-IFD0:Artist=x"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 image files updated"),
+            "{prefix}: {result:?}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(dir.path().join("ours.jpg.bak")).unwrap(), before);
+    }
 }

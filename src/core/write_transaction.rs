@@ -337,6 +337,9 @@ struct Plan<'a> {
     baseline: MetadataMap,
     /// The requests that are not no-ops, in request order.
     steps: Vec<Step<'a>>,
+    /// Deletions already satisfied by the baseline must remain satisfied
+    /// after other writes, which can create mandatory fields implicitly.
+    absent_deletions: Vec<Resolved<'a>>,
 }
 
 /// Whether two resolved keys address the same field (a PDF Info field has
@@ -479,6 +482,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         .collect();
 
     let mut fields: Vec<(usize, Resolved<'a>)> = Vec::new();
+    let mut absent_deletions = Vec::new();
     for candidate in last {
         // #945 / #943: a deletion that names nothing -- no row under any
         // spelling, and no entry of any EXIF block (`exif_surgical::
@@ -487,6 +491,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         if candidate.request.value.is_none()
             && removal_is_no_op(path, &candidate.request.key, &baseline)?
         {
+            absent_deletions.push(candidate.request);
             continue;
         }
         // #956: a set pinned 13.59 makes nowhere in a Panasonic RAW (no outer
@@ -531,6 +536,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     Ok(Plan {
         baseline,
         steps: steps.into_iter().map(|(_, step)| step).collect(),
+        absent_deletions,
     })
 }
 
@@ -655,6 +661,7 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<usize> {
             }
             Step::Group(_) => None,
         })
+        .chain(plan.absent_deletions.iter())
         .collect();
     prove_in_effect(path, &proven, &plan.baseline)?;
     Ok(proven
