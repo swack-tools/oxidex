@@ -23,3 +23,7 @@ self-hosted-runner:
     - warp-ubuntu-latest-arm64-2x
     # WarpBuild macOS
     - warp-macos-15-arm64-6x
+    # Ubicloud (GitHub App): standard-N = N vCPU x64. Used for CI's
+    # CPU-bound jobs; see the benchmark note above `jobs:` in ci.yml.
+    - ubicloud-standard-4
+    - ubicloud-standard-8
