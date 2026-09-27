@@ -836,7 +836,8 @@ fn samsung_soundshot_trailer() -> Vec<u8> {
 ///   `-ExifIFD:All=` the file is unchanged);
 /// - `-MakerNotes:*=` is `-MakerNotes:All=`; a value its address cannot
 ///   type is left for a later deletion to cancel (`-ColorSpace#=junk
-///   -EXIF:All=` on GPS.jpg deletes EXIF);
+///   -EXIF:All=` on GPS.jpg deletes EXIF); and a maker-note tag or entry
+///   named beside a deletion that takes the note away is a no-op;
 /// - a Samsung SEFT trailer's `Samsung` rows do not identify the EXIF
 ///   note (4113017918): Nikon.jpg with a trailer appended, where 13.59
 ///   also edits `[Nikon] WhiteBalance`; oxidex wrote EXIF only;
@@ -935,6 +936,58 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
             s(&["-WhiteBalance#=1", "-MakerNotes:*="]),
             Expect::Match,
         ),
+        // A maker-note request beside a group deletion that takes the note
+        // away is a no-op: 13.59 deletes the note and nothing else. Where
+        // the deletion is itself a no-op (a raw type) the note is edited,
+        // which oxidex cannot do.
+        (
+            "Canon.jpg",
+            &canon[..],
+            "jpg",
+            "MakerNoteCanon",
+            s(&["-MakerNotes:All=", "-ExifIFD:MakerNoteCanon="]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon[..],
+            "jpg",
+            "MakerNoteCanon",
+            s(&["-ExifIFD:MakerNoteCanon=", "-MakerNotes:All="]),
+            Expect::Match,
+        ),
+        (
+            "Canon.jpg",
+            &canon[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:All=", "-MakerNotes:WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon[..],
+            "jpg",
+            "FocusMode",
+            s(&["-MakerNotes:All=", "-MakerNotes:FocusMode="]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon[..],
+            "jpg",
+            "FocusMode",
+            s(&["-EXIF:All=", "-MakerNotes:FocusMode="]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.nef",
+            &nef[..],
+            "nef",
+            "FocusMode",
+            s(&["-MakerNotes:All=", "-MakerNotes:FocusMode="]),
+            Expect::Refused,
+        ),
         // A value its address cannot type, cancelled by a later deletion:
         // 13.59 warns and deletes EXIF.
         (
@@ -952,7 +1005,7 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
             run_args(oracle, bytes, ext, file, name, args, *expect).err()
         })
         .collect();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 28);
     assert!(
         failures.is_empty(),
         "{} of {} cases departed from the pinned outcome:\n{}",

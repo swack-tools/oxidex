@@ -399,6 +399,17 @@ impl GroupDeletions {
     ///   groups it names, whether or not the deletion itself takes effect
     ///   (`-WhiteBalance#=1 -MakerNotes:All=` on Nikon.nef writes `[ExifIFD]`
     ///   alone and keeps the note; on Canon.jpg it also deletes the note).
+    /// What the deletions that take effect remove, wherever they sit in the
+    /// request: what is gone from the file once it is written.
+    fn effective(&self) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(_, _, effective)| *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
+
     pub(crate) fn for_set_at(&self, at: usize) -> crate::writers::exif_surgical::RequestDeletions {
         use crate::writers::exif_surgical::RequestDeletions;
         self.0
@@ -441,6 +452,7 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             .filter(|(_, change)| change.value().is_none())
             .map(|(at, change)| (at, change.tag())),
     );
+    let gone = deletions.effective();
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -504,6 +516,17 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
                 continue;
             }
             Err(other) => return Err(other),
+        }
+        // A maker-note request in a request whose group deletion takes the
+        // maker note away is a no-op: ExifTool never creates a maker-note
+        // tag, and a tag or entry of a note that is gone is nothing to
+        // delete. 13.59: `-MakerNotes:All= -MakerNotes:FocusMode=` on
+        // t/images/Nikon.jpg, `-MakerNotes:All= -ExifIFD:MakerNoteCanon=`
+        // (either order) and `-MakerNotes:All= -MakerNotes:WhiteBalance#=1`
+        // on Canon.jpg each delete the note and nothing else. Where the
+        // deletion does not take effect (a raw type) the note is edited.
+        if makernote_request_gone(change, gone, &baseline) {
+            continue;
         }
         match resolve_write_key_in_request(path, change.tag(), &baseline, deletions.for_set_at(at))
         {
@@ -584,6 +607,45 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
         baseline,
         steps: steps.into_iter().map(|(_, step)| step).collect(),
     })
+}
+
+/// Whether `change` names only the maker note, which the request's effective
+/// group deletions (`gone`) remove from the file at `baseline`: a tag of a
+/// maker-note group (`MakerNotes:FocusMode`, `Canon:WhiteBalance`), set or
+/// deleted, or the deletion of a maker-note entry (`ExifIFD:MakerNoteCanon`,
+/// `MakerNotes:MakerNoteCanon`). A JPEG's CIFF segment is a maker note too,
+/// which only `MakerNotes:All` removes: while one survives, nothing is gone.
+fn makernote_request_gone(
+    change: &TagChange,
+    gone: crate::writers::exif_surgical::RequestDeletions,
+    baseline: &MetadataMap,
+) -> bool {
+    use crate::writers::generated_makernote_groups::MAKERNOTE_ROOTS;
+    if !gone.makernotes {
+        return false;
+    }
+    let Some((group, name)) = change.tag().split_once(':') else {
+        return false;
+    };
+    let name = name.strip_suffix('#').unwrap_or(name);
+    let entry = MAKERNOTE_ROOTS
+        .iter()
+        .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
+    let makernote_group = group.eq_ignore_ascii_case("MakerNotes")
+        || crate::writers::exif_surgical::is_makernote_group(group);
+    let named = if entry {
+        change.value().is_none()
+            && (makernote_group
+                || group.eq_ignore_ascii_case("ExifIFD")
+                || group.eq_ignore_ascii_case("EXIF"))
+    } else {
+        makernote_group
+    };
+    if !named {
+        return false;
+    }
+    let decoded = crate::writers::exif_surgical::makernote_row_groups(baseline);
+    gone.ciff || !(decoded.contains("CIFF") || decoded.contains("CanonRaw"))
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
