@@ -313,8 +313,9 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     // 1 the moment `path` is confirmed to be a directory below, since a
     // `max_depth(1)` walk never descends into a subdirectory to justify
     // counting it. Recursive: start at 0 and count every directory entry the
-    // unbounded walk actually yields (the root included), matching one
-    // `ScanDir` call apiece.
+    // unbounded walk actually yields (the root included, ordinarily -- see
+    // the root-symlink carve-out below) plus the root itself when it is a
+    // symlink, matching one `ScanDir` call apiece.
     let mut directories_scanned = 0usize;
 
     if path.is_file() {
@@ -330,6 +331,30 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     } else if path.is_dir() {
         // Directory - walk and collect files
         let walker = if recursive {
+            // `WalkDir`'s `follow_root_links` (on by default, independent of
+            // `follow_links(false)` below) already makes it descend into
+            // `path` even when `path` is itself a symlink to a directory --
+            // pinned 13.59 does too, since `IsDirectory`/`-d` follows a
+            // symlink, and `path.is_dir()` above already relied on the same
+            // following to route us into this branch. But the root
+            // `DirEntry` the walk yields still reports itself with
+            // `symlink_metadata`'s type (a symlink, never a directory) so
+            // that `follow_links(false)`'s contract holds for it too -- so
+            // the ordinary `entry.file_type().is_dir()` branch in the loop
+            // below never fires for the root, and its own `ScanDir` call
+            // went uncounted entirely (`directories_scanned` stayed 0 for a
+            // symlink whose target held no subdirectories -- no line at
+            // all -- instead of pinned 13.59's `1 directories scanned`;
+            // PRRT_kwDOQNbr5M6mTzLO). Count the root here instead, by its
+            // own (unresolved) `symlink_metadata`, whenever it is a
+            // symlink; an ordinary directory root is left at 0 here and
+            // counted the normal way, by the loop, when the walk yields it.
+            // Nested symlinks are still never followed -- `follow_links`
+            // stays `false` for everything past the root, avoiding symlink
+            // loops -- so only the explicitly named root is affected.
+            if fs::symlink_metadata(path).is_ok_and(|md| md.file_type().is_symlink()) {
+                directories_scanned = 1;
+            }
             WalkDir::new(path).follow_links(false) // Avoid symlink loops
         } else {
             directories_scanned = 1;
@@ -337,22 +362,9 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
         };
 
         // `filter_entry` prunes a directory entry it rejects along with
-        // everything under it, before the walk ever descends into it -- so a
-        // dot-prefixed subdirectory (PRRT_kwDOQNbr5M6mTOLF) is neither
-        // counted nor read from, matching ExifTool's own default `-r`
-        // (`exiftool:4358-4359`, `next if $file =~ /^\./ and $recurse ==
-        // 1`): only `-r.` (`$recurse == 2`, which oxidex does not have a
-        // separate flag for) would include it. The root itself (depth 0) is
-        // exempt, so a hidden directory named explicitly on the command line
-        // is still scanned.
-        for entry in walker.into_iter().filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry.file_type().is_dir()
-                || !entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.starts_with('.'))
-        }) {
+        // everything under it, before the walk ever descends into it -- see
+        // `keep_recursive_entry`'s doc comment for what it keeps and why.
+        for entry in walker.into_iter().filter_entry(keep_recursive_entry) {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().is_dir() {
@@ -383,6 +395,143 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     }
 
     Ok((files, unidentified, directories_scanned))
+}
+
+/// Whether a recursive walk should keep (not prune) `entry`.
+///
+/// `WalkDir::filter_entry` prunes a directory entry it rejects along with
+/// everything under it, before the walk ever descends into it -- so a
+/// dot-prefixed subdirectory (PRRT_kwDOQNbr5M6mTOLF) is neither counted nor
+/// read from, matching ExifTool's own default `-r` (`exiftool:4358-4359`,
+/// `next if $file =~ /^\./ and $recurse == 1`): only `-r.` (`$recurse == 2`,
+/// which oxidex does not have a separate flag for) would include it. The
+/// root itself (depth 0) is exempt, so a hidden directory named explicitly
+/// on the command line is still scanned.
+///
+/// The check reads the name's raw bytes ([`os_bytes`]) rather than going
+/// through `to_str()`: a non-UTF-8 name such as `.private\xff` still starts
+/// with an ASCII `.` byte, but `to_str()` returns `None` for it, and
+/// `None.is_some_and(..)` is `false` -- which used to let a hidden directory
+/// with an invalid-UTF-8 name pass through unpruned (PRRT_kwDOQNbr5M6mTzLL).
+/// ExifTool's own check (`$file =~ /^\./`) is a byte-string match against
+/// whatever `readdir` returned, with no UTF-8 validity requirement, so this
+/// matches it for a name Perl's regex would also see as leading with `.`.
+fn keep_recursive_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() == 0
+        || !entry.file_type().is_dir()
+        || !os_bytes(entry.file_name()).starts_with(b".")
+}
+
+#[cfg(test)]
+mod keep_recursive_entry_tests {
+    use super::*;
+
+    /// Builds a real temp directory tree so a `WalkDir` traversal (which
+    /// needs actual filesystem entries) yields real `DirEntry` values --
+    /// exercising `keep_recursive_entry` exactly as `collect_files` calls
+    /// it, without depending on `collect_files`'s own file-collection logic.
+    fn dir_entries_at_depth_1(root: &Path) -> Vec<walkdir::DirEntry> {
+        WalkDir::new(root)
+            .follow_links(false)
+            .max_depth(1)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .collect()
+    }
+
+    #[test]
+    fn root_is_always_kept_even_when_its_own_name_starts_with_a_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden_root = dir.path().join(".hidden-root");
+        std::fs::create_dir(&hidden_root).unwrap();
+        let root_entry = WalkDir::new(&hidden_root)
+            .follow_links(false)
+            .max_depth(0)
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(root_entry.depth(), 0);
+        assert!(keep_recursive_entry(&root_entry));
+    }
+
+    #[test]
+    fn a_plain_ascii_dot_prefixed_subdirectory_is_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::create_dir(dir.path().join("visible")).unwrap();
+        let entries = dir_entries_at_depth_1(dir.path());
+        let hidden = entries
+            .iter()
+            .find(|e| e.file_name() == std::ffi::OsStr::new(".git"))
+            .unwrap();
+        let visible = entries
+            .iter()
+            .find(|e| e.file_name() == std::ffi::OsStr::new("visible"))
+            .unwrap();
+        assert!(!keep_recursive_entry(hidden), "`.git` must be pruned");
+        assert!(keep_recursive_entry(visible), "`visible` must be kept");
+    }
+
+    /// The regression this thread is about: on a filesystem that accepts
+    /// arbitrary bytes in a name (Unix), a hidden directory whose name is
+    /// not valid UTF-8 -- `.private\xff` -- must still be recognized as
+    /// hidden. Building the name from raw bytes and never decoding it to a
+    /// `str` is exactly the scenario `to_str()` handled wrong.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_hidden_subdirectory_is_pruned() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b".private\xff");
+        assert!(
+            name.to_str().is_none(),
+            "the name must actually be invalid UTF-8 for this test to mean anything"
+        );
+        let hidden = dir.path().join(name);
+        if std::fs::create_dir(&hidden).is_err() {
+            // Some filesystems (notably macOS's APFS/HFS+) refuse to create
+            // a directory entry with invalid UTF-8 bytes at all -- there is
+            // then nothing here for a real `WalkDir` traversal to yield, so
+            // this environment cannot exercise the regression and the test
+            // is skipped rather than failed. Linux (ext4, tmpfs, and CI's
+            // runners) accepts arbitrary bytes and does exercise it.
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        let entries = dir_entries_at_depth_1(dir.path());
+        let entry = entries
+            .iter()
+            .find(|e| e.file_name() == name)
+            .expect("the non-UTF-8 directory must still appear in the listing");
+        assert!(
+            !keep_recursive_entry(entry),
+            "a non-UTF-8 name starting with `.` must be pruned, not kept"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_hidden_non_utf8_subdirectory_is_kept() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"caf\xe9");
+        let visible = dir.path().join(name);
+        if std::fs::create_dir(&visible).is_err() {
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        let entries = dir_entries_at_depth_1(dir.path());
+        let entry = entries
+            .iter()
+            .find(|e| e.file_name() == name)
+            .expect("the non-UTF-8 directory must still appear in the listing");
+        assert!(
+            keep_recursive_entry(entry),
+            "a non-UTF-8 name not starting with `.` must still be kept"
+        );
+    }
 }
 
 /// Whether a file's extension is one that identification can recognize at

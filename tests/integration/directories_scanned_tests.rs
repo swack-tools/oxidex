@@ -480,8 +480,8 @@ fn plain_file_arguments_have_no_directories_scanned_line() {
 
 // --- Codex review threads on PR #965 ---------------------------------------
 //
-// Three P2 findings against 206f336c, verified against the pinned oracle
-// (see PR #965's review threads, `chatgpt-codex-connector`):
+// Five P2 findings against 206f336c and b103c909, verified against the
+// pinned oracle (see PR #965's review threads, `chatgpt-codex-connector`):
 //
 // 1. `PRRT_kwDOQNbr5M6mTOK-`: a mixed-argument expansion that finds no files
 //    at all (every directory among the arguments empty or unsupported, no
@@ -499,6 +499,26 @@ fn plain_file_arguments_have_no_directories_scanned_line() {
 //    files from) a dot-prefixed subdirectory such as `.git`. ExifTool's
 //    default `-r` (`exiftool:4358`, `$recurse == 1`) never descends into a
 //    directory whose name starts with `.` -- only `-r.` does.
+// 4. `PRRT_kwDOQNbr5M6mTzLL`: the hidden-subdirectory prune from (3) checked
+//    the name through `OsStr::to_str()`, so a hidden directory whose name is
+//    not valid UTF-8 (Unix only, e.g. `.private\xff`) passed through
+//    unpruned -- `to_str()` returns `None` for it, and
+//    `None.is_some_and(..)` is `false`. Fixed by checking the name's raw
+//    encoded bytes instead (`batch_processor::keep_recursive_entry`, unit
+//    tested directly in that module since most local filesystems, including
+//    this repo's usual macOS dev machines, refuse to create a non-UTF-8
+//    directory name at all).
+// 5. `PRRT_kwDOQNbr5M6mTzLO`: `-r` given a command-line path that is itself
+//    a symlink to a directory read that directory's files (`WalkDir`'s
+//    `follow_root_links`, on by default, already follows the root) but
+//    never counted the root itself in `directories_scanned`, because the
+//    `DirEntry` `WalkDir` yields for a `follow_links(false)` root still
+//    reports itself as a symlink, not a directory. A symlinked root whose
+//    target holds no subdirectories used to print no
+//    `directories_scanned` line at all where pinned 13.59 prints `1`.
+//    Nested symlinks are still never followed (`follow_links(false)`
+//    remains in force below the root), matching this CLI's pre-existing
+//    symlink-loop guard.
 
 #[test]
 fn structured_output_stays_clean_when_mixed_expansion_finds_nothing() {
@@ -622,5 +642,161 @@ fn recursive_walk_prunes_hidden_subdirectories_like_exiftool() {
     assert!(
         !stdout(&ours).contains("QV-3000EX"),
         "Casio.jpg must not have been read"
+    );
+}
+
+// --- PRRT_kwDOQNbr5M6mTzLO: an explicitly named root directory symlink ----
+
+/// A root symlink whose target holds files directly (no subdirectory of its
+/// own): pinned 13.59 still counts the root once (`ScanDir` is called on it
+/// regardless of how it was reached), so this is `1 directories scanned`,
+/// not the `0` (no line printed at all) oxidex used to produce.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_follows_a_flat_root_symlink_and_counts_it() {
+    let oracle = require_oracle!();
+    let their_target = TempDir::new().expect("temp dir");
+    let our_target = TempDir::new().expect("temp dir");
+    for target in [their_target.path(), our_target.path()] {
+        if copy_jpeg("Canon.jpg", target, "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", target, "Casio.jpg").is_none() {
+            return;
+        }
+    }
+    let their_link_dir = TempDir::new().expect("temp dir");
+    let our_link_dir = TempDir::new().expect("temp dir");
+    let their_root = their_link_dir.path().join("link");
+    let our_root = our_link_dir.path().join("link");
+    std::os::unix::fs::symlink(their_target.path(), &their_root).unwrap();
+    std::os::unix::fs::symlink(our_target.path(), &our_root).unwrap();
+
+    let theirs = run_oracle(oracle, &["-r", their_root.to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.to_str().unwrap()]);
+
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    2 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk of an explicitly named directory symlink must both read its files \
+         and count the root once; got: {}",
+        stdout(&ours)
+    );
+}
+
+/// A root symlink whose target also holds a real (non-symlink) subdirectory:
+/// both the root and the nested subdirectory must be counted -- the root via
+/// the new symlink carve-out, the nested directory via the ordinary walk.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_follows_a_root_symlink_and_still_counts_nested_directories() {
+    let oracle = require_oracle!();
+    let their_target = TempDir::new().expect("temp dir");
+    let our_target = TempDir::new().expect("temp dir");
+    for target in [their_target.path(), our_target.path()] {
+        std::fs::create_dir(target.join("nested")).unwrap();
+        if copy_jpeg("Canon.jpg", target, "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &target.join("nested"), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+    let their_link_dir = TempDir::new().expect("temp dir");
+    let our_link_dir = TempDir::new().expect("temp dir");
+    let their_root = their_link_dir.path().join("link");
+    let our_root = our_link_dir.path().join("link");
+    std::os::unix::fs::symlink(their_target.path(), &their_root).unwrap();
+    std::os::unix::fs::symlink(our_target.path(), &our_root).unwrap();
+
+    let theirs = run_oracle(oracle, &["-r", their_root.to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    2 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "the root symlink and the real nested subdirectory must both be counted; got: {}",
+        stdout(&ours)
+    );
+}
+
+// --- PRRT_kwDOQNbr5M6mTzLL: a hidden directory with a non-UTF-8 name ------
+
+/// The same hidden-subdirectory prune as
+/// `recursive_walk_prunes_hidden_subdirectories_like_exiftool`, but the
+/// hidden directory's name is not valid UTF-8 (`.private\xff`, Unix only).
+/// Some filesystems (macOS's APFS/HFS+ among them) refuse to create such a
+/// name at all -- `std::fs::create_dir` returns an OS error -- in which case
+/// there is nothing here for either tool to disagree about, and the test is
+/// skipped rather than failed; a unit test in
+/// `batch_processor::keep_recursive_entry_tests` pins the same fix without
+/// touching the filesystem. Linux (ext4, tmpfs, and this repo's CI runners)
+/// does allow the name and exercises the real regression end to end.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_prunes_a_hidden_subdirectory_with_a_non_utf8_name() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    let name = std::ffi::OsStr::from_bytes(b".private\xff");
+    for root in [their_root.path(), our_root.path()] {
+        std::fs::create_dir(root.join("visible")).unwrap();
+        if std::fs::create_dir(root.join(name)).is_err() {
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        if copy_jpeg("Canon.jpg", &root.join("visible"), "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &root.join(name), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(oracle, &["-r", their_root.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.path().to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk must skip a hidden directory with a non-UTF-8 name exactly like an \
+         ASCII one (not descend, not count, not read its files); got: {}",
+        stdout(&ours)
+    );
+    assert!(
+        !stdout(&ours).contains("QV-3000EX"),
+        "the hidden non-UTF-8 directory's file must not have been read"
     );
 }
