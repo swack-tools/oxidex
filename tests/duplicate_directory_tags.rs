@@ -29,7 +29,6 @@
 
 use oxidex::exiftool_oracle;
 use serde_json::Value;
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -177,8 +176,9 @@ fn tag_args(prefix: &[&str], tags: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// `-a -G1 -s` rows as a set: every copy, compared without ordering.
-fn rows(text: &str) -> BTreeSet<String> {
+/// Output lines in order: `-a` prints every copy in ExifTool's encounter
+/// order (`FILE_ORDER`), so the order is part of what is graded.
+fn rows(text: &str) -> Vec<String> {
     text.lines().map(str::to_string).collect()
 }
 
@@ -253,11 +253,34 @@ fn grade(
     let ours = rows(&run(oxidex(), &all, &file));
     if ours != theirs {
         failures.push(format!(
-            "{} -a -G1: missing {:?}, extra {:?}",
-            label,
-            theirs.difference(&ours).collect::<Vec<_>>(),
-            ours.difference(&theirs).collect::<Vec<_>>()
+            "{label} -a -G1:\n  oracle {theirs:#?}\n  oxidex {ours:#?}"
         ));
+    }
+
+    // Where the copies fall among the file's other rows: the full `-a -G1
+    // -s` listing (grouped) and the full `-a -s` listing (file order),
+    // each cut down to the lines of `tags`, order kept.
+    for listing in [&["-a", "-G1", "-s"][..], &["-a", "-s"][..]] {
+        let args: Vec<String> = listing.iter().map(|arg| arg.to_string()).collect();
+        let named = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|line| {
+                    let row = line.split_once(']').map_or(*line, |(_, row)| row);
+                    row.split_whitespace()
+                        .next()
+                        .is_some_and(|name| tags.contains(&name))
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        let theirs = named(&run(oracle.command(), &args, &file));
+        let ours = named(&run(oxidex(), &args, &file));
+        if ours != theirs {
+            failures.push(format!(
+                "{label} full {}:\n  oracle {theirs:#?}\n  oxidex {ours:#?}",
+                listing.join(" ")
+            ));
+        }
     }
 
     // The default copy: plain `-s`, `-j` and `-s3 -<Name>`.
@@ -265,12 +288,7 @@ fn grade(
     let theirs = rows(&run(oracle.command(), &plain, &file));
     let ours = rows(&run(oxidex(), &plain, &file));
     if ours != theirs {
-        failures.push(format!(
-            "{} -s: oracle {:?}, oxidex {:?}",
-            label,
-            theirs.difference(&ours).collect::<Vec<_>>(),
-            ours.difference(&theirs).collect::<Vec<_>>()
-        ));
+        failures.push(format!("{label} -s: oracle {theirs:?}, oxidex {ours:?}"));
     }
     // `-j` without `-G`: one row per name, the default copy.
     let json = tag_args(&["-j"], tags);
@@ -365,6 +383,8 @@ enum Entry {
     Value(u16, u16, Vec<u8>),
     ExifPointer,
     InteropPointer,
+    /// A second 0x8769 `ExifOffset`, to the extra directory.
+    ExtraExifPointer,
     /// `(tag, type, count, value-or-offset)` written verbatim: a malformed
     /// entry whose value lies past the end of the block.
     Raw(u16, u16, u32, u32),
@@ -394,64 +414,56 @@ fn rational(tag: u16, numerator: u32) -> Entry {
     Entry::Value(tag, RATIONAL, bytes)
 }
 
-/// A little-endian TIFF block: IFD0, the ExifIFD, an optional InteropIFD,
-/// then every out-of-line value, entries kept in the order given.
-fn tiff(ifd0: &[Entry], exif: &[Entry], interop: &[Entry]) -> Vec<u8> {
+/// A little-endian TIFF block: IFD0, the ExifIFD, the InteropIFD and an
+/// extra directory (each written even when empty), then every out-of-line
+/// value, entries kept in the order given.
+fn tiff(dirs: [&[Entry]; 4]) -> Vec<u8> {
     let size = |entries: &[Entry]| 2 + 12 * entries.len() + 4;
-    let exif_at = 8 + size(ifd0);
-    let interop_at = exif_at + size(exif);
-    let mut data_at = interop_at + if interop.is_empty() { 0 } else { size(interop) };
+    let mut at = [8usize; 4];
+    for i in 1..4 {
+        at[i] = at[i - 1] + size(dirs[i - 1]);
+    }
+    let data_start = at[3] + size(dirs[3]);
     let mut out = b"II*\0".to_vec();
     out.extend_from_slice(&8u32.to_le_bytes());
     let mut blobs = Vec::new();
-    for (entries, at) in [(ifd0, 8), (exif, exif_at), (interop, interop_at)] {
-        if entries.is_empty() {
-            continue;
-        }
+    for (entries, here) in dirs.iter().zip(at) {
         out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-        for entry in entries {
-            if let Entry::Raw(tag, kind, count, value) = entry {
-                out.extend_from_slice(&tag.to_le_bytes());
-                out.extend_from_slice(&kind.to_le_bytes());
-                out.extend_from_slice(&count.to_le_bytes());
-                out.extend_from_slice(&value.to_le_bytes());
-                continue;
-            }
-            if let Entry::IntoOwnDirectory(tag, kind, count) = entry {
-                out.extend_from_slice(&tag.to_le_bytes());
-                out.extend_from_slice(&kind.to_le_bytes());
-                out.extend_from_slice(&count.to_le_bytes());
-                out.extend_from_slice(&((at + 2) as u32).to_le_bytes());
-                continue;
-            }
-            let (tag, kind, bytes) = match entry {
-                Entry::Value(tag, kind, bytes) => (*tag, *kind, bytes.clone()),
-                Entry::ExifPointer => (0x8769, LONG, (exif_at as u32).to_le_bytes().to_vec()),
-                Entry::InteropPointer => (0xa005, LONG, (interop_at as u32).to_le_bytes().to_vec()),
-                Entry::Raw(..) | Entry::IntoOwnDirectory(..) => unreachable!(),
-            };
-            let unit = match kind {
-                SHORT => 2,
-                LONG => 4,
-                RATIONAL => 8,
-                _ => 1,
+        for entry in entries.iter() {
+            let (tag, kind, count, field) = match entry {
+                Entry::Raw(tag, kind, count, value) => (*tag, *kind, *count, value.to_le_bytes()),
+                Entry::IntoOwnDirectory(tag, kind, count) => {
+                    (*tag, *kind, *count, ((here + 2) as u32).to_le_bytes())
+                }
+                Entry::ExifPointer => (0x8769, LONG, 1, (at[1] as u32).to_le_bytes()),
+                Entry::InteropPointer => (0xa005, LONG, 1, (at[2] as u32).to_le_bytes()),
+                Entry::ExtraExifPointer => (0x8769, LONG, 1, (at[3] as u32).to_le_bytes()),
+                Entry::Value(tag, kind, bytes) => {
+                    let unit = match *kind {
+                        SHORT => 2,
+                        LONG => 4,
+                        RATIONAL => 8,
+                        _ => 1,
+                    };
+                    let field = if bytes.len() <= 4 {
+                        let mut inline = bytes.clone();
+                        inline.resize(4, 0);
+                        [inline[0], inline[1], inline[2], inline[3]]
+                    } else {
+                        let offset = (data_start + blobs.len()) as u32;
+                        blobs.extend_from_slice(bytes);
+                        if bytes.len() % 2 == 1 {
+                            blobs.push(0);
+                        }
+                        offset.to_le_bytes()
+                    };
+                    (*tag, *kind, (bytes.len() / unit) as u32, field)
+                }
             };
             out.extend_from_slice(&tag.to_le_bytes());
             out.extend_from_slice(&kind.to_le_bytes());
-            out.extend_from_slice(&((bytes.len() / unit) as u32).to_le_bytes());
-            if bytes.len() <= 4 {
-                let mut inline = bytes.clone();
-                inline.resize(4, 0);
-                out.extend_from_slice(&inline);
-            } else {
-                out.extend_from_slice(&(data_at as u32).to_le_bytes());
-                blobs.extend_from_slice(&bytes);
-                if bytes.len() % 2 == 1 {
-                    blobs.push(0);
-                }
-                data_at =
-                    interop_at + if interop.is_empty() { 0 } else { size(interop) } + blobs.len();
-            }
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&field);
         }
         out.extend_from_slice(&0u32.to_le_bytes());
     }
@@ -459,13 +471,23 @@ fn tiff(ifd0: &[Entry], exif: &[Entry], interop: &[Entry]) -> Vec<u8> {
     out
 }
 
-/// `tiff` as the APP1 Exif segment of [`BASE_JPEG_HEX`].
-fn jpeg(tiff: &[u8]) -> Vec<u8> {
+/// A JFIF APP0 segment with 72 dpi density, which ExifTool reads at
+/// `Priority => -1` (ExifTool.pm 13.59:2218-2233).
+const JFIF_APP0: [u8; 18] = [
+    0xff, 0xe0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0, 1, 2, 1, 0, 72, 0, 72, 0, 0,
+];
+
+/// `tiff` as the APP1 Exif segment of [`BASE_JPEG_HEX`], after a JFIF
+/// APP0 segment when `jfif`.
+fn jpeg(tiff: &[u8], jfif: bool) -> Vec<u8> {
     let base: Vec<u8> = (0..BASE_JPEG_HEX.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&BASE_JPEG_HEX[i..i + 2], 16).unwrap())
         .collect();
     let mut out = base[..2].to_vec();
+    if jfif {
+        out.extend_from_slice(&JFIF_APP0);
+    }
     out.extend_from_slice(&[0xff, 0xe1]);
     out.extend_from_slice(&((tiff.len() + 8) as u16).to_be_bytes());
     out.extend_from_slice(b"Exif\0\0");
@@ -474,11 +496,19 @@ fn jpeg(tiff: &[u8]) -> Vec<u8> {
     out
 }
 
+#[derive(Default)]
 struct Crafted {
     label: &'static str,
     ifd0: Vec<Entry>,
     exif: Vec<Entry>,
     interop: Vec<Entry>,
+    /// The directory a second `ExifOffset` ([`Entry::ExtraExifPointer`])
+    /// points at.
+    extra: Vec<Entry>,
+    /// Precede the Exif segment with a JFIF APP0 segment.
+    jfif: bool,
+    /// Write the TIFF block as a standalone `.tif` instead of a JPEG.
+    tiff_file: bool,
     tags: &'static [&'static str],
     must_have: &'static [(&'static str, &'static str)],
 }
@@ -494,6 +524,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["WhiteBalance"],
             must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+            ..Default::default()
         },
         // ... unless IFD0 is the priority directory (SubfileType 0), which
         // raises its defined 0 to 1.
@@ -509,6 +540,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["WhiteBalance"],
             must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+            ..Default::default()
         },
         // Finding 1 for the InteropIFD and an unsorted IFD0: IFD0's
         // ImageDescription/XResolution after the pointer lose to the
@@ -538,6 +570,7 @@ fn crafted_cases() -> Vec<Crafted> {
                 ("IFD0", "CreateDate"),
                 ("ExifIFD", "CreateDate"),
             ],
+            ..Default::default()
         },
         // Review finding 2: one name, two ids, two priorities. IFD0's
         // 0xfde8 OwnerName (`Avoid`) after the pointer cannot displace the
@@ -553,6 +586,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["OwnerName"],
             must_have: &[("IFD0", "OwnerName"), ("ExifIFD", "OwnerName")],
+            ..Default::default()
         },
         // ... while IFD0's 0xa430 does displace an ExifIFD 0xfde8.
         Crafted {
@@ -566,6 +600,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["OwnerName"],
             must_have: &[("IFD0", "OwnerName"), ("ExifIFD", "OwnerName")],
+            ..Default::default()
         },
         // Before the pointer, IFD0's copy is first: a `Priority => 0` or
         // `Avoid` sub-IFD copy cannot displace it, a priority-1 one does.
@@ -585,6 +620,7 @@ fn crafted_cases() -> Vec<Crafted> {
                 ("IFD0", "Make"),
                 ("ExifIFD", "Make"),
             ],
+            ..Default::default()
         },
         // Review round 3, finding 1: 0x920e has no `tag_db` name, so the
         // IFD0 twin must be keyed by the name the generated table reports
@@ -604,6 +640,7 @@ fn crafted_cases() -> Vec<Crafted> {
                 ("IFD0", "FocalPlaneXResolution"),
                 ("ExifIFD", "FocalPlaneXResolution"),
             ],
+            ..Default::default()
         },
         // Finding 2: a malformed IFD0 copy after the pointer (its value
         // lies past the block) is skipped, as ExifTool skips it, so it
@@ -621,6 +658,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["OwnerName"],
             must_have: &[("IFD0", "OwnerName"), ("ExifIFD", "OwnerName")],
+            ..Default::default()
         },
         // Finding 3: two priority-0 ExifIFD copies and a priority-0 IFD0
         // twin after the pointer: the first ExifIFD copy, found first, is
@@ -632,6 +670,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["WhiteBalance"],
             must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+            ..Default::default()
         },
         // Local review of the round-3 fix: an earlier copy that is never
         // found (its value overlaps its own directory) does not count as
@@ -643,6 +682,248 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["WhiteBalance"],
             must_have: &[("IFD0", "WhiteBalance"), ("ExifIFD", "WhiteBalance")],
+            ..Default::default()
+        },
+        // Review round 4: an IFD0 entry after the pointer whose RawConv
+        // returns undef (an all-NUL PanasonicTitle) never reaches FoundTag,
+        // so the ExifIFD copy displaces the valid IFD0 copy before the
+        // pointer and nothing displaces it.
+        Crafted {
+            label: "RawConv-dropped IFD0 duplicate after the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::Value(0xc6d2, 7, b"IFD0Title\0".to_vec()),
+                Entry::ExifPointer,
+                Entry::Value(0xc6d2, 7, vec![0; 64]),
+            ],
+            exif: vec![Entry::Value(0xc6d2, 7, b"ExifTitle\0".to_vec())],
+            interop: vec![],
+            tags: &["PanasonicTitle"],
+            must_have: &[("IFD0", "PanasonicTitle"), ("ExifIFD", "PanasonicTitle")],
+            ..Default::default()
+        },
+        // Local review of the round-4 fix: a SubfileType 0 stored after the
+        // pointer makes IFD0 the priority directory for the entries after
+        // it, so their priority-0 copies arrive at 1 and displace.
+        Crafted {
+            label: "priority directory marked after the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                long(0x00fe, 0),
+                short(0xa403, 0),
+                ascii(0x010e, "IFD0Desc"),
+            ],
+            exif: vec![short(0xa403, 1), ascii(0x010e, "ExifDesc")],
+            interop: vec![],
+            tags: &["WhiteBalance", "ImageDescription"],
+            must_have: &[
+                ("IFD0", "WhiteBalance"),
+                ("ExifIFD", "WhiteBalance"),
+                ("IFD0", "ImageDescription"),
+                ("ExifIFD", "ImageDescription"),
+            ],
+            ..Default::default()
+        },
+        // Local review, second pair of runs: an IFD0 entry before the
+        // pointer that only the generated reader accepts (format 13, the
+        // `ifd` int32u) is still found before the ExifIFD.
+        Crafted {
+            label: "engine-only IFD0 entry before the pointer",
+            ifd0: vec![Entry::Raw(0x010f, 13, 1, 0x1234), Entry::ExifPointer],
+            exif: vec![ascii(0x010f, "ExifMake")],
+            interop: vec![],
+            tags: &["Make"],
+            must_have: &[("ExifIFD", "Make")],
+            ..Default::default()
+        },
+        // Local review, round 4 (three xhigh runs on 0d257243):
+        // GeoTIFF keys are derived after every IFD0 entry, including those
+        // after the pointer (a standalone TIFF).
+        Crafted {
+            label: "GeoTIFF keys after IFD0 entries past the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                ascii(0x010e, "IFD0Desc"),
+                Entry::Value(
+                    0x87af,
+                    SHORT,
+                    [1u16, 1, 0, 1, 1024, 0, 1, 2]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect(),
+                ),
+            ],
+            exif: vec![ascii(0x010e, "ExifDesc")],
+            tiff_file: true,
+            tags: &["ImageDescription", "GeoTiffVersion", "GTModelType"],
+            must_have: &[
+                ("IFD0", "ImageDescription"),
+                ("ExifIFD", "ImageDescription"),
+            ],
+            ..Default::default()
+        },
+        // JFIF's density tags rank below every EXIF copy: a priority-0 IFD0
+        // copy after the pointer still displaces them ...
+        Crafted {
+            label: "JFIF density and a priority 0 IFD0 copy after the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                rational(0x011a, 180),
+            ],
+            exif: vec![short(0xa001, 1)],
+            jfif: true,
+            tags: &["XResolution"],
+            must_have: &[("JFIF", "XResolution"), ("IFD0", "XResolution")],
+            ..Default::default()
+        },
+        // ... but not an ExifIFD copy found before it.
+        Crafted {
+            label: "JFIF density, an ExifIFD copy and a later IFD0 copy",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                rational(0x011a, 180),
+            ],
+            exif: vec![rational(0x011a, 300)],
+            jfif: true,
+            tags: &["XResolution"],
+            must_have: &[
+                ("JFIF", "XResolution"),
+                ("ExifIFD", "XResolution"),
+                ("IFD0", "XResolution"),
+            ],
+            ..Default::default()
+        },
+        // Two `ExifOffset` entries: each sub-directory is read at its own
+        // entry.
+        Crafted {
+            label: "two ExifOffset entries",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                rational(0x011a, 180),
+                Entry::ExtraExifPointer,
+            ],
+            exif: vec![short(0xa001, 1)],
+            extra: vec![rational(0x011a, 300)],
+            tags: &["XResolution", "ColorSpace"],
+            must_have: &[("IFD0", "XResolution"), ("ExifIFD", "XResolution")],
+            ..Default::default()
+        },
+        // An entry only the generated reader accepts (format 13), after
+        // the pointer, is found at its own position: the later ASCII Make
+        // still arrives after it.
+        Crafted {
+            label: "engine-only IFD0 entry after the pointer",
+            ifd0: vec![
+                Entry::ExifPointer,
+                Entry::Raw(0x010f, 13, 1, 0x1234),
+                ascii(0x010f, "IFD0Make"),
+            ],
+            exif: vec![ascii(0x010f, "ExifMake")],
+            tags: &["Make"],
+            must_have: &[("IFD0", "Make"), ("ExifIFD", "Make")],
+            ..Default::default()
+        },
+        // ... and ranked by the priority-directory state at its own entry,
+        // before a later SubfileType 0.
+        Crafted {
+            label: "engine-only priority 0 entry before a later SubfileType",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                Entry::Raw(0x0100, 13, 1, 100),
+                long(0x00fe, 0),
+            ],
+            exif: vec![long(0x0100, 300)],
+            tiff_file: true,
+            tags: &["ImageWidth"],
+            must_have: &[("IFD0", "ImageWidth"), ("ExifIFD", "ImageWidth")],
+            ..Default::default()
+        },
+        // Local review of c7323dfb: a priority-0 copy in a second ExifIFD
+        // cannot displace the first ExifIFD's.
+        Crafted {
+            label: "priority 0 copies in two ExifIFDs",
+            ifd0: vec![
+                ascii(0x010f, "Test"),
+                Entry::ExifPointer,
+                Entry::ExtraExifPointer,
+            ],
+            exif: vec![short(0xa403, 1)],
+            extra: vec![short(0xa403, 2)],
+            tiff_file: true,
+            tags: &["WhiteBalance"],
+            must_have: &[("ExifIFD", "WhiteBalance")],
+            ..Default::default()
+        },
+        // ... and a MakerNote stored in IFD0 before the pointer is read at
+        // its own entry, before the ExifIFD.
+        Crafted {
+            label: "IFD0 MakerNote before the pointer",
+            ifd0: vec![
+                ascii(0x010f, "Canon"),
+                Entry::Value(
+                    0x927c,
+                    7,
+                    [
+                        &1u16.to_le_bytes()[..],
+                        &0x0009u16.to_le_bytes(),
+                        &2u16.to_le_bytes(),
+                        &4u32.to_le_bytes(),
+                        b"MOW\0",
+                        &0u32.to_le_bytes(),
+                    ]
+                    .concat(),
+                ),
+                Entry::ExifPointer,
+            ],
+            exif: vec![ascii(0xa430, "EEX")],
+            tiff_file: true,
+            tags: &["OwnerName"],
+            must_have: &[("Canon", "OwnerName"), ("ExifIFD", "OwnerName")],
+            ..Default::default()
+        },
+        // Local review of 90d9633e: the InteropIFD is read at its pointer
+        // entry, before the ExifIFD entries after it ...
+        Crafted {
+            label: "InteropIFD pointer before an ExifIFD twin",
+            ifd0: vec![ascii(0x010f, "Test"), Entry::ExifPointer],
+            exif: vec![Entry::InteropPointer, rational(0x011a, 300)],
+            interop: vec![ascii(0x0001, "R98"), rational(0x011a, 200)],
+            tiff_file: true,
+            tags: &["XResolution"],
+            must_have: &[("ExifIFD", "XResolution"), ("InteropIFD", "XResolution")],
+            ..Default::default()
+        },
+        // ... and an IFD0 `Avoid` copy after an IFD0 MakerNote copy cannot
+        // displace it, with no ExifIFD at all.
+        Crafted {
+            label: "IFD0 Avoid copy after an IFD0 MakerNote",
+            ifd0: vec![
+                ascii(0x010f, "Canon"),
+                Entry::Value(
+                    0x927c,
+                    7,
+                    [
+                        &1u16.to_le_bytes()[..],
+                        &0x0009u16.to_le_bytes(),
+                        &2u16.to_le_bytes(),
+                        &4u32.to_le_bytes(),
+                        b"MOW\0",
+                        &0u32.to_le_bytes(),
+                    ]
+                    .concat(),
+                ),
+                ascii(0xfde8, "Owner's Name: IFD"),
+            ],
+            tiff_file: true,
+            tags: &["OwnerName"],
+            must_have: &[("Canon", "OwnerName"), ("IFD0", "OwnerName")],
+            ..Default::default()
         },
         // ... and without any IFD0 twin.
         Crafted {
@@ -652,6 +933,7 @@ fn crafted_cases() -> Vec<Crafted> {
             interop: vec![],
             tags: &["WhiteBalance"],
             must_have: &[("ExifIFD", "WhiteBalance")],
+            ..Default::default()
         },
     ]
 }
@@ -668,13 +950,20 @@ fn crafted_directory_orders_follow_exiftools_found_tag_arbitration() {
     let mut failures = Vec::new();
     for case in crafted_cases() {
         let path = dir.path().join(format!(
-            "{}.jpg",
+            "{}.{}",
             case.label
                 .chars()
                 .filter(char::is_ascii_alphanumeric)
-                .collect::<String>()
+                .collect::<String>(),
+            if case.tiff_file { "tif" } else { "jpg" }
         ));
-        std::fs::write(&path, jpeg(&tiff(&case.ifd0, &case.exif, &case.interop))).unwrap();
+        let block = tiff([&case.ifd0, &case.exif, &case.interop, &case.extra]);
+        let bytes = if case.tiff_file {
+            block
+        } else {
+            jpeg(&block, case.jfif)
+        };
+        std::fs::write(&path, bytes).unwrap();
         grade(
             oracle,
             &path,

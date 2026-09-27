@@ -9,8 +9,8 @@ use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::{exif_entry_to_tag_value, exif_main_entry_forms};
 use crate::core::tiff_helpers::{
-    parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
-    physical_entry_indices,
+    Ifd0Arbiter, Ifd0Subdir, ReadSubdir, parse_exif_subifd_with_session_and_options,
+    parse_gps_subifd, parse_ifd1_with_session, physical_entry_indices,
 };
 use crate::exiftool_tables::session::Session;
 use crate::exiftool_tables::{Ctx, decode_binary_table, find_table};
@@ -289,44 +289,52 @@ pub(crate) fn process_exif_segments_with_options(
                             &mut cond_ctx,
                         )
                     });
-                    let (exif_ifd_offset, gps_ifd_offset) = process_ifd0_tags(
+                    // The EXIF Sub-IFD is read inline, at IFD0's pointer
+                    // entry, as ExifTool reads it (`Ifd0Arbiter`).
+                    // `tiff_offset` is the absolute file position of the TIFF
+                    // header, which ExifTool adds to stored offsets (e.g. the
+                    // Interop IFD's OtherImageStart). `tiff_data.len()` is the
+                    // APP1 segment's EXIF payload -- what ExifTool calls
+                    // `$dataLen` -- and bounds how far a MakerNote decoder may
+                    // resolve its own value offsets. `tiff_reader` itself runs
+                    // to the end of the file, so this is the tighter of the two
+                    // limits and keeps a MakerNote out of the JPEG's compressed
+                    // scan data.
+                    // The GPS Sub-IFD is read at its own entry too.
+                    let mut read_subdir =
+                        |subdir: Ifd0Subdir<'_>, metadata: &mut MetadataMap, copies: &mut _| {
+                            match subdir {
+                                Ifd0Subdir::ExifIfd(offset) => {
+                                    parse_exif_subifd_with_session_and_options(
+                                        &tiff_reader,
+                                        offset,
+                                        byte_order,
+                                        tiff_offset,
+                                        tiff_data.len() as u64,
+                                        options,
+                                        &mut session,
+                                        &mut cond_ctx,
+                                        copies,
+                                        metadata,
+                                    );
+                                }
+                                Ifd0Subdir::Gps(offset) => {
+                                    parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
+                                }
+                                Ifd0Subdir::MakerNote(_) => {}
+                            }
+                        };
+                    process_ifd0_tags(
                         &tags,
                         physical_indices.as_deref(),
                         byte_order,
                         engine.as_mut(),
                         metadata,
+                        &mut read_subdir,
                         diagnostics,
                     );
                     if let Some(engine) = engine {
                         engine.finish_ifd0(metadata);
-                    }
-
-                    // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
-                    // file position of the TIFF header, which ExifTool adds to
-                    // stored offsets (e.g. the Interop IFD's OtherImageStart).
-                    // `tiff_data.len()` is the APP1 segment's EXIF payload -- what
-                    // ExifTool calls `$dataLen` -- and bounds how far a MakerNote
-                    // decoder may resolve its own value offsets. `tiff_reader`
-                    // itself runs to the end of the file, so this is the tighter
-                    // of the two limits and keeps a MakerNote out of the JPEG's
-                    // compressed scan data.
-                    if let Some(offset) = exif_ifd_offset {
-                        parse_exif_subifd_with_session_and_options(
-                            &tiff_reader,
-                            offset,
-                            byte_order,
-                            tiff_offset,
-                            tiff_data.len() as u64,
-                            options,
-                            &mut session,
-                            &mut cond_ctx,
-                            metadata,
-                        );
-                    }
-
-                    // Parse GPS Sub-IFD if present
-                    if let Some(offset) = gps_ifd_offset {
-                        parse_gps_subifd(&tiff_reader, offset, byte_order, metadata);
                     }
 
                     // IFD0's on-disk entry count, needed to locate its own
@@ -391,8 +399,9 @@ pub(crate) fn process_exif_segments_with_options(
 
 /// Processes IFD0 tags from JPEG EXIF data.
 ///
-/// Extracts tags from the main IFD (IFD0) and identifies pointers to
-/// EXIF and GPS sub-IFDs for further processing.
+/// Extracts tags from the main IFD (IFD0) and reads the EXIF and GPS
+/// sub-IFDs through `read_subdir` at their pointer entries, where ExifTool
+/// reads them (`tiff_helpers::Ifd0Arbiter`).
 ///
 /// # Arguments
 ///
@@ -402,22 +411,27 @@ pub(crate) fn process_exif_segments_with_options(
 ///   (`exif_dir_engine::ifd0_walk`), asked first for every ordinary entry;
 ///   `None` = the hand arm alone
 /// * `metadata` - MetadataMap to populate
+/// * `read_subdir` - Reads a sub-IFD into the map at its pointer entry
 /// * `diagnostics` - Sink for problems that don't stop the read (an
 ///   unparseable embedded ICC profile is skipped, not fatal)
 ///
 /// # Returns
 ///
-/// A tuple of (exif_ifd_offset, gps_ifd_offset) for sub-IFD parsing
+/// A tuple of (exif_ifd_offset, gps_ifd_offset): the last of each pointer,
+/// already read through `read_subdir`
 fn process_ifd0_tags(
     tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
     physical_indices: Option<&[usize]>,
     byte_order: ByteOrder,
     mut engine: Option<&mut crate::core::exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
+    read_subdir: &mut ReadSubdir<'_>,
     diagnostics: &mut DiagnosticSink,
 ) -> (Option<u64>, Option<u64>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
+    // ExifTool's encounter order and priorities (`Ifd0Arbiter`).
+    let mut arbiter = Ifd0Arbiter::default();
 
     // Convert raw tag data to MetadataMap entries
     for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in tags.iter().enumerate() {
@@ -427,18 +441,32 @@ fn process_ifd0_tags(
             .unwrap_or(survivor_index);
         // Convert Cow<[u8]> to &[u8] for processing
         let bytes = raw_bytes.as_ref();
+        // Rows of entries the parser skipped, at their own position.
+        if let Some(engine) = engine.as_deref_mut() {
+            arbiter.route_unreached(engine, Some(entry_index), metadata, |name| {
+                format!("IFD0:{name}")
+            });
+        }
+        arbiter.see_entry(*tag_id, *field_type, bytes, byte_order);
 
-        // Check for EXIF Sub-IFD pointer (tag 0x8769)
+        // Check for EXIF Sub-IFD pointer (tag 0x8769): ExifTool reads the
+        // sub-directory here, before the IFD0 entries after it.
         if *tag_id == 0x8769 && bytes.len() >= 4 {
             let offset = read_u32(bytes, byte_order);
             exif_ifd_offset = Some(offset as u64);
+            read_subdir(
+                Ifd0Subdir::ExifIfd(offset as u64),
+                metadata,
+                arbiter.copies(),
+            );
             continue; // Don't add the pointer tag to metadata
         }
 
-        // Check for GPS Sub-IFD pointer (tag 0x8825)
+        // Check for GPS Sub-IFD pointer (tag 0x8825), read here too
         if *tag_id == 0x8825 && bytes.len() >= 4 {
             let offset = read_u32(bytes, byte_order);
             gps_ifd_offset = Some(offset as u64);
+            read_subdir(Ifd0Subdir::Gps(offset as u64), metadata, arbiter.copies());
             continue; // Don't add the pointer tag to metadata
         }
 
@@ -508,6 +536,7 @@ fn process_ifd0_tags(
         // position, or the hand arm below when the engine leaves it.
         let opcode_residual = matches!(*tag_id, 0xC740 | 0xC741 | 0xC74E);
         if let Some(engine) = engine.as_deref_mut() {
+            arbiter.rank_entry(engine, entry_index, metadata);
             match engine.route_entry(
                 entry_index,
                 *tag_id,
@@ -536,6 +565,13 @@ fn process_ifd0_tags(
 
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
+        let hand_priority = arbiter.hand_priority(
+            metadata,
+            *tag_id,
+            tag_name
+                .split_once(':')
+                .map_or(tag_name.as_str(), |(_, name)| name),
+        );
 
         if let Some(forms) = exif_main_entry_forms(*tag_id, bytes) {
             metadata.insert_occurrence_with_forms(
@@ -543,7 +579,7 @@ fn process_ifd0_tags(
                 forms.print,
                 forms.value,
                 Some(forms.stored),
-                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                hand_priority,
                 "",
                 crate::core::tag_occurrence::Instance::default(),
             );
@@ -554,13 +590,26 @@ fn process_ifd0_tags(
                 tag_value,
                 binary.clone(),
                 Some(binary),
-                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                hand_priority,
                 "",
                 crate::core::tag_occurrence::Instance::default(),
             );
-        } else {
+        } else if hand_priority == crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY {
             metadata.insert(tag_name, tag_value);
+        } else {
+            metadata.insert_occurrence(
+                tag_name,
+                tag_value,
+                hand_priority,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
         }
+    }
+
+    // Rows of skipped entries after the last one the loop reached.
+    if let Some(engine) = engine.as_deref_mut() {
+        arbiter.route_unreached(engine, None, metadata, |name| format!("IFD0:{name}"));
     }
 
     (exif_ifd_offset, gps_ifd_offset)
@@ -3530,6 +3579,7 @@ mod transfer_function_tests {
             ByteOrder::LittleEndian,
             None,
             &mut metadata,
+            &mut |_, _, _| {},
             &mut Vec::new(),
         );
 

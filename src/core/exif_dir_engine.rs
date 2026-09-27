@@ -306,6 +306,55 @@ impl DirEngineRows {
         self
     }
 
+    /// Records, in entry order, the unrecorded rows of entries before
+    /// `before` (every remaining row when `None`): rows of entries the hand
+    /// walk's parser skipped (an entry only the generated reader accepts),
+    /// which [`Self::route_entry`] never reaches. Calling this before each
+    /// routed entry places them at their own entry position, as ExifTool
+    /// finds them. `zero(metadata, name, table_priority_zero, value)` is
+    /// asked once per row, in order, just before it is recorded; `true`
+    /// records the row at priority 0.
+    pub(crate) fn route_unreached(
+        &mut self,
+        before: Option<usize>,
+        metadata: &mut MetadataMap,
+        key: impl Fn(&str) -> String,
+        mut zero: impl FnMut(&MetadataMap, &str, bool, &TagValue) -> bool,
+    ) {
+        for row in self
+            .rows
+            .iter_mut()
+            .filter(|row| !row.consumed && before.is_none_or(|before| row.entry_index < before))
+        {
+            row.consumed = true;
+            if zero(
+                metadata,
+                row.name,
+                row.table_priority_zero,
+                &row.no_print_conv,
+            ) {
+                row.priority = 0;
+                row.keeps_priority = true;
+            }
+            record(row, self.stored_forms, metadata, key(row.name));
+        }
+    }
+
+    /// [`Self::demote`] for the one row [`Self::take_ifd0`] would record next
+    /// for entry `id` (the id-keyed replay of the embedded IFD0 walk).
+    pub(crate) fn demote_next_row(&mut self, id: u16, loses: impl FnOnce(&str, bool) -> bool) {
+        let table = self.table;
+        if let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| !row.consumed && declares(table, id, row.name))
+            && loses(row.name, row.table_priority_zero)
+        {
+            row.priority = 0;
+            row.keeps_priority = true;
+        }
+    }
+
     /// [`Self::demote`] for the rows not yet recorded, in emission order:
     /// those of entry `entry_index` (the entry the hand walk is about to
     /// route), or every one left for [`Self::finish`] when `None`. `loses`
