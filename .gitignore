@@ -84,6 +84,13 @@ benches/target/
 !.claude/skills/exiftool-parity/
 !.claude/skills/oxidex-release-finalization/
 !.claude/skills/oxidex-release-documentation/
+# ...and the shared project settings and hooks (prose-lint Vale hook).
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
+
+# Vale style package, downloaded by `vale sync`
+.vale/styles/Google/
 # Codex project skills are tracked mirrors of the canonical Claude skills.
 # Regenerate/check them with tools/ci/sync_agent_skills.py.
 
