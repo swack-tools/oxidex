@@ -88,6 +88,53 @@ mod platform {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
 
+    // A resource fork can be as large as the file. Snapshot, source recheck,
+    // replacement comparison and verification all retain attribute values,
+    // so bound each read before allocating any of those buffers.
+    const MAX_XATTR_LIST_BYTES: usize = 64 * 1024;
+    const MAX_XATTR_VALUE_BYTES: usize = 8 * 1024 * 1024;
+    const MAX_XATTR_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+
+    fn bounded_size(size: usize, limit: usize) -> io::Result<usize> {
+        if size > limit {
+            Err(refused(
+                "metadata writes refuse oversized extended attributes",
+            ))
+        } else {
+            Ok(size)
+        }
+    }
+
+    fn checked_total(total: usize, size: usize) -> io::Result<usize> {
+        bounded_size(
+            total
+                .checked_add(size)
+                .ok_or_else(|| refused("extended attribute total size overflow"))?,
+            MAX_XATTR_TOTAL_BYTES,
+        )
+    }
+
+    fn buffer(size: usize) -> io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| io::Error::other("cannot allocate extended attribute buffer"))?;
+        bytes.resize(size, 0);
+        Ok(bytes)
+    }
+
+    fn check_attr_name(name: &[u8]) -> io::Result<()> {
+        if matches!(
+            name,
+            b"security.capability" | b"security.ima" | b"security.evm"
+        ) {
+            return Err(refused(
+                "metadata writes refuse content-bound security attributes",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) struct Snapshot {
         mode: u32,
         uid: u32,
@@ -163,16 +210,23 @@ mod platform {
         }
     }
     fn attrs(file: &File) -> io::Result<BTreeMap<CString, Vec<u8>>> {
-        let mut names = vec![0; list(file, &mut [])?];
+        let mut names = buffer(bounded_size(list(file, &mut [])?, MAX_XATTR_LIST_BYTES)?)?;
         let n = list(file, &mut names)?;
         if n > names.len() {
             return Err(io::Error::other("xattr list changed during snapshot"));
         }
         names.truncate(n);
+        // Reject integrity metadata before reading even one attribute value.
+        for name in names.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+            check_attr_name(name)?;
+        }
         let mut result = BTreeMap::new();
+        let mut total = 0usize;
         for name in names.split(|b| *b == 0).filter(|s| !s.is_empty()) {
             let name = CString::new(name).map_err(io::Error::other)?;
-            let mut value = vec![0; get(file, &name, &mut [])?];
+            let size = bounded_size(get(file, &name, &mut [])?, MAX_XATTR_VALUE_BYTES)?;
+            total = checked_total(total, size)?;
+            let mut value = buffer(size)?;
             let n = get(file, &name, &mut value)?;
             if n > value.len() {
                 return Err(io::Error::other("xattr value changed during snapshot"));
@@ -271,10 +325,6 @@ mod platform {
                 ));
             }
             let attrs = attrs(file)?;
-            // Restoring capabilities to changed bytes can confer privileges.
-            if attrs.contains_key(c"security.capability") {
-                return Err(refused("metadata writes refuse files with capabilities"));
-            }
             Ok(Self {
                 mode: m.mode(),
                 uid: m.uid(),
@@ -349,6 +399,55 @@ mod platform {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn integrity_names_are_rejected_exactly() {
+            for name in [
+                b"security.capability".as_slice(),
+                b"security.ima",
+                b"security.evm",
+            ] {
+                assert_eq!(
+                    check_attr_name(name).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+            }
+            for name in [
+                b"user.security.ima".as_slice(),
+                b"security.ima.extra",
+                b"security.evm2",
+                b"security.capabilities",
+                b"user.oxidex.regression",
+                b"system.posix_acl_access",
+            ] {
+                check_attr_name(name).unwrap();
+            }
+        }
+
+        #[test]
+        fn attribute_limits_include_boundary_and_overflow() {
+            assert_eq!(
+                bounded_size(MAX_XATTR_LIST_BYTES, MAX_XATTR_LIST_BYTES).unwrap(),
+                MAX_XATTR_LIST_BYTES
+            );
+            assert!(bounded_size(MAX_XATTR_LIST_BYTES + 1, MAX_XATTR_LIST_BYTES).is_err());
+            assert_eq!(
+                bounded_size(MAX_XATTR_VALUE_BYTES, MAX_XATTR_VALUE_BYTES).unwrap(),
+                MAX_XATTR_VALUE_BYTES
+            );
+            assert!(bounded_size(MAX_XATTR_VALUE_BYTES + 1, MAX_XATTR_VALUE_BYTES).is_err());
+            assert_eq!(
+                checked_total(MAX_XATTR_TOTAL_BYTES - 1, 1).unwrap(),
+                MAX_XATTR_TOTAL_BYTES
+            );
+            assert!(checked_total(MAX_XATTR_TOTAL_BYTES, 1).is_err());
+            assert!(checked_total(usize::MAX, 1).is_err());
+        }
+    }
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) use platform::Snapshot;
@@ -399,6 +498,44 @@ impl Snapshot {
 mod tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn oversized_real_resource_fork_refuses_before_scratch_or_backup() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jpg");
+        let backup = dir.path().join("source.jpg.bak");
+        fs::write(&path, b"original").unwrap();
+        fs::write(&backup, b"existing backup").unwrap();
+        let fork_path = path.join("..namedfork/rsrc");
+        let mut fork = File::create(&fork_path).unwrap();
+        let chunk = [b'R'; 1024 * 1024];
+        for _ in 0..8 {
+            fork.write_all(&chunk).unwrap();
+        }
+        fork.write_all(b"R").unwrap();
+        fork.sync_all().unwrap();
+        assert_eq!(fs::metadata(&fork_path).unwrap().len(), 8 * 1024 * 1024 + 1);
+        let before = fs::read(&path).unwrap();
+        let identity = fs::metadata(&path).unwrap().ino();
+        let result = crate::core::write_transaction::transact_with(
+            &path,
+            |_| -> io::Result<()> { panic!("oversized fork must refuse before scratch") },
+            || -> io::Result<()> { panic!("oversized fork must refuse before backup") },
+            |_, error| io::Error::other(error),
+        );
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("oversized extended attributes"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::metadata(&path).unwrap().ino(), identity);
+        assert_eq!(fs::metadata(&fork_path).unwrap().len(), 8 * 1024 * 1024 + 1);
+        assert_eq!(fs::read(&backup).unwrap(), b"existing backup");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn changed_source_security_refuses_before_backup() {
