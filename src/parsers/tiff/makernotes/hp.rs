@@ -187,41 +187,48 @@ impl MakerNoteParser for HpParser {
             return self.parse_with_model(ctx.payload(), byte_order, model, tags);
         }
         for row in self.type4_rows(ctx.payload(), cond_ctx) {
-            let key = format!("{}:{}", row.group1, row.name);
-            let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
-            occurrences.push((
-                key,
-                TagOccurrence {
-                    id: row.source_id,
-                    name: intern(row.name),
-                    group0: intern(row.group0),
-                    group1: intern(row.group1),
-                    // HP.pm:65-69 overrides Type4's Camera group for this
-                    // field. Binary engine rows currently carry the table
-                    // group2, so retain the field override at this adapter.
-                    group2: Some(intern(if row.name == "CameraDateTime" {
-                        "Time"
-                    } else {
-                        row.group2
-                    })),
-                    instance: Instance::default(),
-                    raw: row.stored.clone(),
-                    value: Some(value),
-                    print: Some(row.value),
-                    stored: Some(row.stored),
-                    priority: u8::from(!(row.low_priority || row.avoid)),
-                    is_list: row.is_list,
-                    order: 0,
-                    origin: Provenance {
-                        module: Some(row.module),
-                        table: Some(row.table),
-                        byte_range: None,
-                    },
-                },
-            ));
+            occurrences.push(type4_occurrence(row));
         }
         Ok(())
     }
+}
+
+/// Builds the `HP::Type4` occurrence for one engine row. `raw` is the
+/// PrintConv'd display form, as `MetadataMap::get` and serialization project
+/// through it; the file's typed value belongs only in `stored`.
+fn type4_occurrence(row: crate::exiftool_tables::Emitted) -> (String, TagOccurrence) {
+    let key = format!("{}:{}", row.group1, row.name);
+    let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+    (
+        key,
+        TagOccurrence {
+            id: row.source_id,
+            name: intern(row.name),
+            group0: intern(row.group0),
+            group1: intern(row.group1),
+            // HP.pm:65-69 overrides Type4's Camera group for this
+            // field. Binary engine rows currently carry the table
+            // group2, so retain the field override at this adapter.
+            group2: Some(intern(if row.name == "CameraDateTime" {
+                "Time"
+            } else {
+                row.group2
+            })),
+            instance: Instance::default(),
+            raw: row.value.clone(),
+            value: Some(value),
+            print: Some(row.value),
+            stored: Some(row.stored),
+            priority: u8::from(!(row.low_priority || row.avoid)),
+            is_list: row.is_list,
+            order: 0,
+            origin: Provenance {
+                module: Some(row.module),
+                table: Some(row.table),
+                byte_range: None,
+            },
+        },
+    )
 }
 
 #[cfg(test)]
@@ -257,5 +264,35 @@ mod tests {
             .parse(&data, ByteOrder::LittleEndian, &mut tags)
             .expect("HP maker note should parse");
         assert!(tags.is_empty(), "unexpected HP tags: {tags:?}");
+    }
+    /// HP.pm Type4 0x10 ExposureTime: int32u microseconds, ValueConv
+    /// `$val / 1e6`, PrintConv `PrintExposureTime`. Stored 10000 must reach
+    /// `raw` as the display form "1/100", not the stored integer.
+    #[test]
+    fn test_type4_occurrence_raw_is_the_display_form_not_the_stored_form() {
+        use crate::core::TagValue;
+
+        let mut data = b"IIII\x04\x00".to_vec();
+        data.resize(0x80, 0);
+        data[0x10..0x14].copy_from_slice(&10_000u32.to_le_bytes());
+        assert!(is_type4(&data));
+
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let row = HpParser::new()
+            .type4_rows(&data, &mut cond_ctx)
+            .into_iter()
+            .find(|row| row.name == "ExposureTime")
+            .expect("HP::Type4 emits ExposureTime");
+        assert_eq!(row.stored, TagValue::Integer(10_000));
+
+        let (key, occurrence) = type4_occurrence(row);
+        assert_eq!(key, "HP:ExposureTime");
+        assert_eq!(
+            occurrence.raw,
+            TagValue::new_string("1/100"),
+            "raw must be the PrintConv'd display form, not the stored integer"
+        );
+        assert_eq!(occurrence.stored, Some(TagValue::Integer(10_000)));
     }
 }
