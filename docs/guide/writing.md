@@ -86,6 +86,13 @@ oxidex -TagsFromFile src.jpg -EXIF:Artist dest.jpg
 - `-all=` writes an empty tag set through the same format writer. What that
   removes depends on the writer, and it has not been compared with
   ExifTool's `-all=`.
+- `-TagsFromFile` copies each tag by name, as ExifTool does: to the name's
+  preferred group, and to every group the destination already carries it
+  in. A JPEG's `ImageWidth` goes to XMP-tiff, `Make` into a PNG goes to its
+  text chunk and to an existing eXIf IFD0. Where ExifTool would write a
+  group OxiDex cannot (XMP into a JPEG, a maker note block), the copy says
+  so: `Warning: Not copied from src.jpg: oxidex cannot write the XMP-tiff
+  group(s) here`, and `copy_metadata_report` lists each tag.
 
 ## From Rust
 

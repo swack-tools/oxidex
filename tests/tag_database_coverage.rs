@@ -1,6 +1,7 @@
 //! Integration tests for active tag database coverage
 
-use oxidex::core::{MetadataMap, TagValue, validate_tag_value, write_metadata};
+use oxidex::core::{TagValue, read_metadata, validate_tag_value, write_metadata};
+use oxidex::error::ExifToolError;
 use oxidex::tag_db::{generated_tags::generated_tag_count, get_tag_descriptor, tag_count};
 use std::fs;
 use tempfile::tempdir;
@@ -39,19 +40,31 @@ fn test_yaml_backed_descriptors_do_not_reject_parser_value_types() {
     let temp_dir = tempdir().expect("create temp directory");
     let png_path = temp_dir.path().join("sample.png");
     fs::copy("tests/fixtures/png/sample.png", &png_path).expect("copy PNG fixture");
+    let before = fs::read(&png_path).expect("read PNG fixture");
 
     let descriptor =
         get_tag_descriptor("PNG:ImageWidth").expect("expected YAML-backed PNG descriptor");
     assert!(!descriptor.is_writable());
-    validate_tag_value(descriptor, &TagValue::new_integer(640))
+    validate_tag_value(descriptor, &TagValue::new_integer(641))
         .expect("public validation must share unreliable YAML type semantics");
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(640));
-    write_metadata(&png_path, &metadata)
-        .expect("untyped YAML descriptors must not reject parser-compatible integer values");
+    // Validation accepts the integer; the write is then refused because no
+    // writer writes a PNG's IHDR width -- which `Ok(())` used to hide.
+    let mut metadata = read_metadata(&png_path).expect("read PNG");
+    metadata.insert("PNG:ImageWidth".to_string(), TagValue::new_integer(641));
+    let error = write_metadata(&png_path, &metadata)
+        .expect_err("a width no writer writes must not be reported written");
+    assert!(
+        matches!(error, ExifToolError::TagsNotWritten { .. }),
+        "untyped YAML descriptors must not reject parser-compatible integer values: {error:?}"
+    );
+    assert_eq!(
+        fs::read(&png_path).unwrap(),
+        before,
+        "refused write changed the file"
+    );
 
-    let mut invalid = MetadataMap::new();
+    let mut invalid = read_metadata(&png_path).expect("read PNG");
     invalid.insert("PNG:ImageWidth".to_string(), TagValue::new_rational(1, 0));
     let error = write_metadata(&png_path, &invalid).expect_err("zero denominator must be rejected");
     assert!(error.to_string().contains("denominator cannot be zero"));

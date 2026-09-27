@@ -187,123 +187,127 @@ fn lookup(tag: u16) -> Option<(&'static str, Conv)> {
 
 /// Extract Redcode R3D metadata (`Image::ExifTool::Red::ProcessR3D`).
 pub fn parse_r3d_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let file_size = reader.size();
-    if file_size < HEADER_PREFIX_LEN as u64 {
-        return Err("R3D file is too short for the 8-byte block header".to_string());
-    }
-    let prefix = reader
-        .read(0, HEADER_PREFIX_LEN)
-        .map_err(|error| error.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let file_size = reader.size();
+        if file_size < HEADER_PREFIX_LEN as u64 {
+            return Err("R3D file is too short for the 8-byte block header".to_string());
+        }
+        let prefix = reader
+            .read(0, HEADER_PREFIX_LEN)
+            .map_err(|error| error.to_string())?;
 
-    // Red.pm:225: `^\0\0..RED(1|2)` -- two NULs, two size bytes, then the
-    // block type. The leading NULs are the top half of the big-endian size.
-    if prefix[0] != 0 || prefix[1] != 0 || &prefix[4..7] != b"RED" {
-        return Err("invalid R3D block header".to_string());
-    }
-    let version = match prefix[7] {
-        b'1' => 1u8,
-        b'2' => 2u8,
-        _ => return Err("unsupported Redcode version".to_string()),
-    };
+        // Red.pm:225: `^\0\0..RED(1|2)` -- two NULs, two size bytes, then the
+        // block type. The leading NULs are the top half of the big-endian size.
+        if prefix[0] != 0 || prefix[1] != 0 || &prefix[4..7] != b"RED" {
+            return Err("invalid R3D block header".to_string());
+        }
+        let version = match prefix[7] {
+            b'1' => 1u8,
+            b'2' => 2u8,
+            _ => return Err("unsupported Redcode version".to_string()),
+        };
 
-    // Red.pm:226-227: the block size is the leading big-endian int32u.
-    let size = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
-    if size < MIN_BLOCK_SIZE {
-        return Err("R3D block size is smaller than its own header".to_string());
-    }
-    let size = size as usize;
-    if size as u64 > file_size {
-        // Red.pm:234, `$raf->Read($buf2, $size - 8) == $size - 8 or return $et->Warn($errTrunc)`.
-        return Err("truncated R3D file".to_string());
-    }
+        // Red.pm:226-227: the block size is the leading big-endian int32u.
+        let size = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+        if size < MIN_BLOCK_SIZE {
+            return Err("R3D block size is smaller than its own header".to_string());
+        }
+        let size = size as usize;
+        if size as u64 > file_size {
+            // Red.pm:234, `$raf->Read($buf2, $size - 8) == $size - 8 or return $et->Warn($errTrunc)`.
+            return Err("truncated R3D file".to_string());
+        }
 
-    // Red.pm:229-231: R3D is big-endian throughout (`SetByteOrder('MM')`).
-    let first_block = reader.read(0, size).map_err(|error| error.to_string())?;
+        // Red.pm:229-231: R3D is big-endian throughout (`SetByteOrder('MM')`).
+        let first_block = reader.read(0, size).map_err(|error| error.to_string())?;
 
-    let mut metadata = MetadataMap::new();
+        let mut metadata = MetadataMap::new();
 
-    // Red.pm:238: the file header itself is decoded through the
-    // version-specific binary table.
-    let header_table = if version == 1 { "RED1" } else { "RED2" };
-    if let Some(table) = find_table("Red", header_table) {
-        let decode = decode_binary_table(table, &first_block, ByteOrder::Big);
-        for decoded in decode.fields() {
-            if let Some(value) = decoded.emit() {
-                metadata.insert(format!("Red:{}", decoded.field.name), value);
+        // Red.pm:238: the file header itself is decoded through the
+        // version-specific binary table.
+        let header_table = if version == 1 { "RED1" } else { "RED2" };
+        if let Some(table) = find_table("Red", header_table) {
+            let decode = decode_binary_table(table, &first_block, ByteOrder::Big);
+            for decoded in decode.fields() {
+                if let Some(value) = decoded.emit() {
+                    metadata.insert(format!("Red:{}", decoded.field.name), value);
+                }
             }
         }
-    }
 
-    // Red.pm:196-203: RED2's FrameRate carries a `ValueConv` the generator
-    // declines to model (`($a[1] * 0x10000 + $a[2]) / $a[0]` over an
-    // int16u[3]), so it is decoded here against the cited Perl.
-    if version == 2 {
-        if let Some(rate) = red2_frame_rate(&first_block) {
-            metadata.insert("Red:FrameRate".to_string(), TagValue::new_string(rate));
+        // Red.pm:196-203: RED2's FrameRate carries a `ValueConv` the generator
+        // declines to model (`($a[1] * 0x10000 + $a[2]) / $a[0]` over an
+        // int16u[3]), so it is decoded here against the cited Perl.
+        if version == 2 {
+            if let Some(rate) = red2_frame_rate(&first_block) {
+                metadata.insert("Red:FrameRate".to_string(), TagValue::new_string(rate));
+            }
         }
-    }
 
-    // Red.pm:241-254: locate the Red directory.
-    let (dir_buf, mut pos) = if version == 1 {
-        // Red.pm:243-248: a version 1 file's directory lives in the second
-        // block, at a fixed offset.
-        let want = V1_SECOND_BLOCK_READ.min((file_size as usize).saturating_sub(size));
-        if want == 0 {
-            return Err("truncated R3D file".to_string());
-        }
-        let buf = reader.read(size as u64, want).map_err(|e| e.to_string())?;
-        (buf.to_vec(), V1_DIR_OFFSET)
-    } else {
-        if first_block.len() < V2_DIR_BASE {
-            return Err("truncated R3D file".to_string());
-        }
-        // Red.pm:250-253: skip the `rdi`, `rda` and `rdx` record arrays.
-        let pos = V2_DIR_BASE
-            + first_block[V2_RDI_COUNT_OFFSET] as usize * V2_RDI_RECORD_LEN
-            + first_block[V2_RDA_COUNT_OFFSET] as usize * V2_RDA_RECORD_LEN
-            + first_block[V2_RDX_COUNT_OFFSET] as usize * V2_RDX_RECORD_LEN;
-        (first_block.to_vec(), pos)
-    };
-
-    // Red.pm:255-268: read the directory length, then sanity-check it. When
-    // the check fails ExifTool falls back to scanning for the 0x1000 tag;
-    // that path also emits a "this R3D file is different" warning, i.e. it
-    // is explicitly a guess about an unknown layout. This parser stops
-    // instead of guessing -- the header tags found above are still emitted.
-    let dir_end = if pos + 8 > dir_buf.len() {
-        return Ok(metadata);
-    } else {
-        let dir_len = u16::from_be_bytes([dir_buf[pos], dir_buf[pos + 1]]) as usize;
-        pos += 2;
-        if dir_len < DIR_LEN_MIN || dir_len >= DIR_LEN_MAX || pos + dir_len > dir_buf.len() {
-            return Ok(metadata);
-        }
-        pos + dir_len
-    };
-
-    // Red.pm:274-291: walk the tag-length-value directory.
-    while pos + 4 <= dir_end {
-        let len = u16::from_be_bytes([dir_buf[pos], dir_buf[pos + 1]]) as usize;
-        if len < 4 || pos + len > dir_end {
-            break;
-        }
-        let tag = u16::from_be_bytes([dir_buf[pos + 2], dir_buf[pos + 3]]);
-        // Red.pm:283: the format code is the top four bits of the tag ID.
-        let Some(fmt) = red_format(tag >> 12) else {
-            // Red.pm:284: `$fmt or ... last` -- an unmodelled format code
-            // ends the walk rather than being guessed at.
-            break;
+        // Red.pm:241-254: locate the Red directory.
+        let (dir_buf, mut pos) = if version == 1 {
+            // Red.pm:243-248: a version 1 file's directory lives in the second
+            // block, at a fixed offset.
+            let want = V1_SECOND_BLOCK_READ.min((file_size as usize).saturating_sub(size));
+            if want == 0 {
+                return Err("truncated R3D file".to_string());
+            }
+            let buf = reader.read(size as u64, want).map_err(|e| e.to_string())?;
+            (buf.to_vec(), V1_DIR_OFFSET)
+        } else {
+            if first_block.len() < V2_DIR_BASE {
+                return Err("truncated R3D file".to_string());
+            }
+            // Red.pm:250-253: skip the `rdi`, `rda` and `rdx` record arrays.
+            let pos = V2_DIR_BASE
+                + first_block[V2_RDI_COUNT_OFFSET] as usize * V2_RDI_RECORD_LEN
+                + first_block[V2_RDA_COUNT_OFFSET] as usize * V2_RDA_RECORD_LEN
+                + first_block[V2_RDX_COUNT_OFFSET] as usize * V2_RDX_RECORD_LEN;
+            (first_block.to_vec(), pos)
         };
-        let body = &dir_buf[pos + 4..pos + len];
-        if let Some((name, conv)) = lookup(tag)
-            && let Some(value) = decode_entry(fmt, body, conv)
-        {
-            metadata.insert(format!("Red:{name}"), value);
-        }
-        pos += len;
-    }
 
-    Ok(metadata)
+        // Red.pm:255-268: read the directory length, then sanity-check it. When
+        // the check fails ExifTool falls back to scanning for the 0x1000 tag;
+        // that path also emits a "this R3D file is different" warning, i.e. it
+        // is explicitly a guess about an unknown layout. This parser stops
+        // instead of guessing -- the header tags found above are still emitted.
+        let dir_end = if pos + 8 > dir_buf.len() {
+            return Ok(metadata);
+        } else {
+            let dir_len = u16::from_be_bytes([dir_buf[pos], dir_buf[pos + 1]]) as usize;
+            pos += 2;
+            if dir_len < DIR_LEN_MIN || dir_len >= DIR_LEN_MAX || pos + dir_len > dir_buf.len() {
+                return Ok(metadata);
+            }
+            pos + dir_len
+        };
+
+        // Red.pm:274-291: walk the tag-length-value directory.
+        while pos + 4 <= dir_end {
+            let len = u16::from_be_bytes([dir_buf[pos], dir_buf[pos + 1]]) as usize;
+            if len < 4 || pos + len > dir_end {
+                break;
+            }
+            let tag = u16::from_be_bytes([dir_buf[pos + 2], dir_buf[pos + 3]]);
+            // Red.pm:283: the format code is the top four bits of the tag ID.
+            let Some(fmt) = red_format(tag >> 12) else {
+                // Red.pm:284: `$fmt or ... last` -- an unmodelled format code
+                // ends the walk rather than being guessed at.
+                break;
+            };
+            let body = &dir_buf[pos + 4..pos + len];
+            if let Some((name, conv)) = lookup(tag)
+                && let Some(value) = decode_entry(fmt, body, conv)
+            {
+                metadata.insert(format!("Red:{name}"), value);
+            }
+            pos += len;
+        }
+
+        Ok(metadata)
+    })
 }
 
 /// Red.pm:196-203: `Format => 'int16u[3]'` at 0x56 with

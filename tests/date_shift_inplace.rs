@@ -119,16 +119,19 @@ fn inplace_shift_missing_tag_returns_zero() {
     assert!(diff_indices(&src, dst.path()).is_empty());
 }
 
+/// A JPEG with no EXIF has no date to shift: nothing is written (13.59:
+/// `unchanged`); it was an error (#957 round 7).
 #[test]
-fn inplace_shift_no_exif_errors() {
+fn inplace_shift_without_exif_shifts_nothing() {
     // A JPEG with no EXIF APP1 segment at all
     let dst = NamedTempFile::new().unwrap();
     std::fs::write(dst.path(), [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
 
     let spec = build_shift_spec("1", ShiftOperation::Subtract).unwrap();
-    let err =
-        shift_jpeg_exif_dates(dst.path(), &[ExifDateTag::DateTimeOriginal], &spec).unwrap_err();
-    assert!(err.to_string().contains("No EXIF data"), "got: {}", err);
+    let shifted =
+        shift_jpeg_exif_dates(dst.path(), &[ExifDateTag::DateTimeOriginal], &spec).unwrap();
+    assert_eq!(shifted, 0);
+    assert_eq!(std::fs::read(dst.path()).unwrap(), [0xFF, 0xD8, 0xFF, 0xD9]);
 }
 
 #[test]
@@ -256,24 +259,23 @@ fn shift_metadata_dates_unsupported_jpeg_tag_errors_cleanly() {
     assert!(diff_indices(&src, dst.path()).is_empty());
 }
 
+/// A shift that finds nothing to shift leaves the file as it is, as pinned
+/// 13.59 does (`0 image files updated` / `1 image files unchanged`); it was
+/// an error (#957 round 7).
 #[test]
-fn shift_metadata_dates_missing_tag_errors() {
+fn shift_metadata_dates_missing_tag_is_a_no_op() {
     // sample_with_exif.jpg has no DateTimeOriginal
     let src = fixture("sample_with_exif.jpg");
-    let dst = temp_copy(&src, "missing_err.jpg");
+    let dst = temp_copy(&src, "missing_noop.jpg");
 
-    let err = oxidex::core::date_shift::shift_metadata_dates(
+    oxidex::core::date_shift::shift_metadata_dates(
         dst.path(),
         "DateTimeOriginal",
         "1",
         ShiftOperation::Subtract,
     )
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("No date/time tags matching"),
-        "got: {}",
-        err
-    );
+    .unwrap();
+    assert!(diff_indices(&src, dst.path()).is_empty());
 }
 
 // ============================================================================
@@ -364,17 +366,18 @@ fn cli_modify_date_on_sample_fixture() {
     assert_eq!(dt.to_rfc3339(), "2025-01-15T09:30:00+00:00");
 }
 
+/// 13.59: a shift of a date the file lacks is `0 image files updated` /
+/// `1 image files unchanged`, exit 0, file untouched.
 #[test]
-fn cli_failure_exits_nonzero_with_clear_message() {
+fn cli_shift_of_an_absent_date_is_unchanged() {
     let src = fixture("sample_with_exif.jpg"); // no DateTimeOriginal
-    let dst = temp_copy(&src, "cli_fail.jpg");
+    let dst = temp_copy(&src, "cli_absent.jpg");
 
     let output = run_oxidex("-DateTimeOriginal-=1:00:00", dst.path());
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("No date/time tags matching"),
-        "stderr: {}",
-        stderr
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "    0 image files updated\n    1 image files unchanged\n"
     );
+    assert!(diff_indices(&src, dst.path()).is_empty());
 }

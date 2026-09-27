@@ -170,14 +170,22 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
     for block in map.raw_blocks() {
         normalized.retain_raw_block(block.clone());
     }
-    for (key, occurrence) in map.all_occurrences() {
-        let normalized_key = normalize_tag_family(&key);
+    // Each occurrence keeps its provenance: a normalized copy of a read map
+    // is still the file's rows, and a caller's assignment stays one.
+    for (key, occurrence, assigned) in map.keyed_occurrences_with_provenance() {
+        let normalized_key = normalize_tag_family(key);
         if occurrence.origin.module.is_some() && occurrence.origin.table.is_some() {
             normalized.record_occurrence(normalized_key, occurrence.clone());
         } else {
             normalized.insert_renamed_occurrence(normalized_key, occurrence);
         }
+        normalized.set_last_assigned(assigned);
     }
+    // And the map keeps the read's own provenance: a normalized read is still
+    // that complete read (every key a reader emits is already in ExifTool's
+    // spelling, so no row is renamed away), and a row its caller removes is
+    // a deletion `write_metadata` applies -- not a silently skipped one.
+    normalized.inherit_read_source(map);
     normalized
 }
 

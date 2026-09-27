@@ -381,6 +381,163 @@ pub(crate) fn encode_mandatory_defaults(
     }
     Ok(encoded)
 }
+/// The `WriteValue` operands of a mandatory row the generated recipe carries
+/// no numeric encoding for, read from the row's transcribed IFD table entry
+/// (`exiftool_tables::find_ifd_table`, generated from the pinned tree's own
+/// `%Image::ExifTool::Exif::Main` / `GPS::Main` hashes and checked by
+/// `just verify-tables`): the packing format `Format || Writable`, the IFD
+/// format code of `Writable` (the generated `%formatNumber` registry,
+/// Exif.pm), and the row's `Count`. WriteExif packs a mandatory default
+/// raw with exactly these (`$newVal = $$mandatory{$newID}`, then
+/// `WriteValue` with `$newFormName` and the row's count, WriteExif.pl
+/// 13.59:1197-1216). Nothing is copied by hand: a regenerated row changes
+/// the operand, and a row this packer cannot model is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CreationOperand {
+    write_format: &'static str,
+    tiff_type: u16,
+    count: Option<u32>,
+}
+
+/// The transcribed table a mandatory directory's rows live in: IFD0, IFD1,
+/// ExifIFD and InteropIFD are all `Exif::Main` directories, GPS is
+/// `GPS::Main` (WriteExif looks each id up in the directory's table).
+fn creation_table(directory: &str) -> Option<&'static crate::exiftool_tables::IfdTable> {
+    match directory {
+        "IFD0" | "IFD1" | "ExifIFD" | "InteropIFD" => {
+            crate::exiftool_tables::find_ifd_table("Exif", "Main")
+        }
+        "GPS" => crate::exiftool_tables::find_ifd_table("GPS", "Main"),
+        _ => None,
+    }
+}
+
+fn creation_operand(
+    recipe: &MandatoryRecipe,
+    directory: &str,
+    tag_id: u16,
+) -> Result<CreationOperand, String> {
+    use crate::exiftool_tables::Fmt;
+    let registry =
+        crate::writers::generated_tiff_scalar_final_rules::TIFF_SCALAR_FINAL_FORMAT_REGISTRY
+            .ok_or_else(|| refusal("TIFF format registry is absent"))?;
+    // Both operands must come from the tree the recipe was captured from.
+    if crate::exiftool_tables::IFD_EXIFTOOL_VERSION != crate::exiftool_oracle::REPO_PIN.trim()
+        || registry.source_file != "Image/ExifTool/Exif.pm"
+        || registry.source_sha256 != recipe.exif_source_sha256
+    {
+        return Err(refusal("mandatory creation operand sources differ"));
+    }
+    let table = creation_table(directory)
+        .ok_or_else(|| refusal("mandatory directory has no transcribed table"))?;
+    if table.variant_group(tag_id).is_some() {
+        return Err(refusal("mandatory row is a conditional variant"));
+    }
+    let row = table
+        .tag(tag_id)
+        .ok_or_else(|| refusal("mandatory row is not transcribed"))?;
+    // Only a Condition bears on which row WriteExif writes; the read-side
+    // omissions (a RawConv the reader withholds, ...) do not touch the raw
+    // packing of a mandatory value.
+    if row.condition.is_some() || row.omitted.condition || row.subdir.is_some() {
+        return Err(refusal("mandatory row is conditional or a sub-directory"));
+    }
+    let writable = row
+        .writable
+        .ok_or_else(|| refusal("mandatory row has no Writable"))?;
+    let write_format = match row.format {
+        None => writable,
+        Some(Fmt::Int8u) => "int8u",
+        Some(Fmt::Int16u) => "int16u",
+        Some(Fmt::Undef(0)) => "undef",
+        Some(_) => return Err(refusal("mandatory row Format is outside the packer")),
+    };
+    let tiff_type = registry
+        .facts
+        .iter()
+        .map(|fact| (fact.name, fact.number))
+        .chain(
+            registry
+                .aliases
+                .iter()
+                .map(|alias| (alias.name, alias.number)),
+        )
+        .find(|(name, _)| *name == writable)
+        .map(|(_, number)| number)
+        .ok_or_else(|| refusal("mandatory row Writable has no TIFF format number"))?;
+    Ok(CreationOperand {
+        write_format,
+        tiff_type,
+        count: row.count,
+    })
+}
+
+/// The entries WriteExif adds to `directory` when it creates it (`unless
+/// ($numEntries)`, WriteExif.pl 13.59:714-719): the generated recipe's
+/// defaults for that directory -- with its JFIF substitutions, from
+/// `properties` -- packed in `byte_order`. A numeric default the recipe
+/// carries an encoding for takes that encoding; any other takes its
+/// transcribed row's [`CreationOperand`]. A default whose row this packer
+/// cannot model is refused, never guessed.
+pub(crate) fn encode_creation_defaults(
+    recipe: &MandatoryRecipe,
+    directory: &str,
+    byte_order: TiffByteOrder,
+    properties: &std::collections::BTreeMap<String, i64>,
+) -> Result<Vec<EncodedMandatoryDefault>, String> {
+    let defaults = defaults_with_properties(recipe, directory, false, 0, properties)?;
+    let mut encoded = Vec::with_capacity(defaults.len());
+    for default in defaults {
+        if recipe
+            .encodings
+            .iter()
+            .any(|item| item.tag_id == default.tag_id)
+        {
+            encoded.extend(encode_mandatory_defaults(recipe, &[default], byte_order)?);
+            continue;
+        }
+        let operand = creation_operand(recipe, directory, default.tag_id)?;
+        let (width, bytes) = match (operand.write_format, default.value) {
+            ("undef", MandatoryValue::Text(text)) => (1, text.as_bytes().to_vec()),
+            ("int8u", MandatoryValue::Text(text)) => (
+                1,
+                text.split(' ')
+                    .map(str::parse::<u8>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| refusal("int8u mandatory operand is outside native range"))?,
+            ),
+            ("int16u", MandatoryValue::Integer(value)) => {
+                let value = u16::try_from(value)
+                    .map_err(|_| refusal("int16u mandatory operand is outside native range"))?;
+                let bytes = match byte_order {
+                    TiffByteOrder::Little => value.to_le_bytes(),
+                    TiffByteOrder::Big => value.to_be_bytes(),
+                };
+                (2, bytes.to_vec())
+            }
+            _ => {
+                return Err(refusal(
+                    "mandatory creation operand does not fit its default",
+                ));
+            }
+        };
+        let count = u32::try_from(bytes.len() / width)
+            .map_err(|_| refusal("mandatory default count exceeds u32"))?;
+        if operand.count.is_some_and(|declared| declared != count) {
+            return Err(refusal(
+                "mandatory default does not fill its declared count",
+            ));
+        }
+        encoded.push(EncodedMandatoryDefault {
+            tag_id: default.tag_id,
+            tiff_type: operand.tiff_type,
+            count,
+            bytes,
+        });
+    }
+    Ok(encoded)
+}
+
 /// Compatibility wrapper for the admitted IFD0 fresh-carrier caller.
 pub(crate) fn encode_ifd0_defaults(
     recipe: &MandatoryRecipe,
@@ -640,4 +797,216 @@ pub(crate) fn defaults_with_properties(
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod creation_tests {
+    use super::*;
+    use crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    use std::collections::BTreeMap;
+
+    fn fields(directory: &str, order: TiffByteOrder) -> Vec<(u16, u16, u32, Vec<u8>)> {
+        let mut out: Vec<_> =
+            encode_creation_defaults(&MANDATORY_DEFAULTS, directory, order, &BTreeMap::new())
+                .unwrap()
+                .into_iter()
+                .map(|e| (e.tag_id, e.tiff_type, e.count, e.bytes))
+                .collect();
+        out.sort();
+        out
+    }
+
+    /// The entries pinned ExifTool 13.59 writes into a directory it creates
+    /// (WriteExif.pl 13.59:25-50), as its own output holds them.
+    #[test]
+    fn created_directory_entries_are_writeexifs() {
+        for (order, ffff, one) in [
+            (TiffByteOrder::Little, vec![0xff, 0xff], vec![1, 0]),
+            (TiffByteOrder::Big, vec![0xff, 0xff], vec![0, 1]),
+        ] {
+            assert_eq!(
+                fields("ExifIFD", order),
+                vec![
+                    (0x9000, 7, 4, b"0232".to_vec()),
+                    (0x9101, 7, 4, vec![1, 2, 3, 0]),
+                    (0xa001, 3, 1, ffff),
+                ]
+            );
+            assert_eq!(fields("GPS", order), vec![(0x0000, 1, 4, vec![2, 3, 0, 0])]);
+            assert_eq!(
+                fields("InteropIFD", order),
+                vec![(0x0002, 7, 4, b"0100".to_vec())]
+            );
+            assert_eq!(fields("IFD0", order), vec![(0x0213, 3, 1, one)]);
+        }
+    }
+
+    /// JFIF resolution replaces a created IFD0's defaults as WriteExif's
+    /// `$$et{JFIFYResolution}` branch does (WriteExif.pl 13.59:705-711).
+    #[test]
+    fn a_created_ifd0_takes_the_jfif_resolution() {
+        let properties = BTreeMap::from([
+            ("JFIFXResolution".to_owned(), 300),
+            ("JFIFYResolution".to_owned(), 300),
+            ("JFIFResolutionUnit".to_owned(), 1),
+        ]);
+        let mut got: Vec<_> =
+            encode_creation_defaults(&MANDATORY_DEFAULTS, "IFD0", TiffByteOrder::Big, &properties)
+                .unwrap()
+                .into_iter()
+                .map(|e| (e.tag_id, e.tiff_type, e.bytes))
+                .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                (0x011a, 5, vec![0, 0, 1, 0x2c, 0, 0, 0, 1]),
+                (0x011b, 5, vec![0, 0, 1, 0x2c, 0, 0, 0, 1]),
+                (0x0128, 3, vec![0, 2]),
+                (0x0213, 3, vec![0, 1]),
+            ]
+        );
+    }
+
+    fn recipe_with(
+        directory: &'static str,
+        defaults: &'static [MandatoryDefault],
+    ) -> MandatoryRecipe {
+        let directories: &'static [MandatoryDirectory] =
+            Box::leak(Box::new([MandatoryDirectory {
+                directory,
+                defaults,
+            }]));
+        MandatoryRecipe {
+            directories,
+            ..MANDATORY_DEFAULTS
+        }
+    }
+
+    /// Every entry a created directory gets agrees with its transcribed
+    /// `Exif::Main` / `GPS::Main` row (the generated IFD tables, checked by
+    /// `just verify-tables`): IFD type = `%formatNumber` of the row's
+    /// Writable, count = the row's Count where it declares one. This covers
+    /// the recipe's own numeric encodings too, so a regenerated row that the
+    /// recipe capture did not follow fails here rather than packing a stale
+    /// type.
+    #[test]
+    fn every_created_entry_agrees_with_its_transcribed_row() {
+        let registry =
+            crate::writers::generated_tiff_scalar_final_rules::TIFF_SCALAR_FINAL_FORMAT_REGISTRY
+                .unwrap();
+        let number = |name: &str| {
+            registry
+                .facts
+                .iter()
+                .map(|fact| (fact.name, fact.number))
+                .chain(
+                    registry
+                        .aliases
+                        .iter()
+                        .map(|alias| (alias.name, alias.number)),
+                )
+                .find(|(n, _)| *n == name)
+                .map(|(_, number)| number)
+                .unwrap()
+        };
+        let mut checked = 0;
+        for directory in MANDATORY_DEFAULTS.directories {
+            let table = creation_table(directory.directory).unwrap();
+            for order in [TiffByteOrder::Little, TiffByteOrder::Big] {
+                for entry in encode_creation_defaults(
+                    &MANDATORY_DEFAULTS,
+                    directory.directory,
+                    order,
+                    &BTreeMap::new(),
+                )
+                .unwrap()
+                {
+                    let row = table.tag(entry.tag_id).unwrap();
+                    assert_eq!(
+                        entry.tiff_type,
+                        number(row.writable.unwrap()),
+                        "{} 0x{:04x} {}",
+                        directory.directory,
+                        entry.tag_id,
+                        row.name
+                    );
+                    if let Some(count) = row.count {
+                        assert_eq!(entry.count, count, "{} {}", directory.directory, row.name);
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        // IFD0 1, IFD1 4, ExifIFD 3, GPS 1, InteropIFD 1 -- in both orders.
+        assert_eq!(checked, 20);
+    }
+
+    /// A default the recipe gains is packed from its transcribed row, not
+    /// from a list kept beside it: ExifTool 13.59 comments FlashpixVersion
+    /// out of `%mandatory` ("optional as of 3.0"), but its row (Writable
+    /// 'undef') is transcribed, so a recipe listing it packs `undef[4]`.
+    /// Before, the operand list was a hand copy that knew only today's five
+    /// rows and refused it.
+    #[test]
+    fn a_default_the_recipe_gains_is_packed_from_its_row() {
+        const FLASHPIX: &[MandatoryDefault] = &[MandatoryDefault {
+            tag_id: 0xa000,
+            value: MandatoryValue::Text("0100"),
+        }];
+        let recipe = recipe_with("ExifIFD", FLASHPIX);
+        let got =
+            encode_creation_defaults(&recipe, "ExifIFD", TiffByteOrder::Big, &BTreeMap::new())
+                .unwrap();
+        assert_eq!(
+            got.into_iter()
+                .map(|e| (e.tag_id, e.tiff_type, e.count, e.bytes))
+                .collect::<Vec<_>>(),
+            vec![(0xa000, 7, 4, b"0100".to_vec())]
+        );
+    }
+
+    /// A default its row cannot hold is refused: a value that does not
+    /// fill the row's Count, a text default for an int16u row.
+    #[test]
+    fn a_default_its_row_cannot_hold_is_refused() {
+        const SHORT_VERSION: &[MandatoryDefault] = &[MandatoryDefault {
+            tag_id: 0x0000,
+            value: MandatoryValue::Text("2 3 0"),
+        }];
+        const TEXT_ISO: &[MandatoryDefault] = &[MandatoryDefault {
+            tag_id: 0x8827,
+            value: MandatoryValue::Text("100"),
+        }];
+        for (directory, defaults) in [("GPS", SHORT_VERSION), ("ExifIFD", TEXT_ISO)] {
+            let recipe = recipe_with(directory, defaults);
+            assert!(
+                encode_creation_defaults(&recipe, directory, TiffByteOrder::Big, &BTreeMap::new())
+                    .is_err(),
+                "{directory}"
+            );
+        }
+    }
+
+    /// A default with neither a recipe encoding nor a transcribed row is
+    /// refused rather than packed by guess.
+    #[test]
+    fn a_default_without_an_operand_is_refused() {
+        const UNKNOWN: &[MandatoryDefault] = &[MandatoryDefault {
+            tag_id: 0x1234,
+            value: MandatoryValue::Text("1"),
+        }];
+        const DIRECTORIES: &[MandatoryDirectory] = &[MandatoryDirectory {
+            directory: "ExifIFD",
+            defaults: UNKNOWN,
+        }];
+        let recipe = MandatoryRecipe {
+            directories: DIRECTORIES,
+            ..MANDATORY_DEFAULTS
+        };
+        assert!(
+            encode_creation_defaults(&recipe, "ExifIFD", TiffByteOrder::Big, &BTreeMap::new())
+                .is_err()
+        );
+    }
 }

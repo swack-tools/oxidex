@@ -79,118 +79,122 @@ const FOCAL_LENGTH: PerlCitation = citation("FocalLength", "Sony.pm:10712-10719"
 
 /// Extract Sony PMP metadata (`Image::ExifTool::Sony::ProcessPMP`).
 pub fn parse_pmp_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("PMP file is too short for the 128-byte header".to_string());
-    }
-    let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("PMP file is too short for the 128-byte header".to_string());
+        }
+        let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
 
-    // Sony.pm:11374, `$buff =~ /^.{8}\0{3}\x7c.{112}\xff\xd8\xff\xdb$/s` --
-    // three NULs and a 0x7c header length at offset 8, and the JPEG SOI plus
-    // a DQT marker exactly at offset 124.
-    if header[8..11] != [0, 0, 0] || header[11] != 0x7c {
-        return Err("invalid PMP header length field".to_string());
-    }
-    if header[124..128] != [0xff, 0xd8, 0xff, 0xdb] {
-        return Err("PMP header is not followed by a JPEG SOI/DQT".to_string());
-    }
+        // Sony.pm:11374, `$buff =~ /^.{8}\0{3}\x7c.{112}\xff\xd8\xff\xdb$/s` --
+        // three NULs and a 0x7c header length at offset 8, and the JPEG SOI plus
+        // a DQT marker exactly at offset 124.
+        if header[8..11] != [0, 0, 0] || header[11] != 0x7c {
+            return Err("invalid PMP header length field".to_string());
+        }
+        if header[124..128] != [0xff, 0xd8, 0xff, 0xdb] {
+            return Err("PMP header is not followed by a JPEG SOI/DQT".to_string());
+        }
 
-    let mut metadata = MetadataMap::new();
-    // Sony.pm:11377-11378: both are stamped unconditionally, not read.
-    metadata.insert("ExifTool:Make".to_string(), TagValue::new_string("Sony"));
-    metadata.insert("ExifTool:Model".to_string(), TagValue::new_string("DSC-F1"));
+        let mut metadata = MetadataMap::new();
+        // Sony.pm:11377-11378: both are stamped unconditionally, not read.
+        metadata.insert("ExifTool:Make".to_string(), TagValue::new_string("Sony"));
+        metadata.insert("ExifTool:Model".to_string(), TagValue::new_string("DSC-F1"));
 
-    let table = find_table("Sony", "PMP").ok_or("missing Sony::PMP table")?;
-    // Sony.pm:11376, `SetByteOrder('MM')`.
-    let decode = decode_binary_table(table, &header, ByteOrder::Big);
+        let table = find_table("Sony", "PMP").ok_or("missing Sony::PMP table")?;
+        // Sony.pm:11376, `SetByteOrder('MM')`.
+        let decode = decode_binary_table(table, &header, ByteOrder::Big);
 
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("Sony:{name}");
-        let value = match name {
-            // Sony.pm:10668-10692: `int8u[6]`, year pivoted at 70.
-            "DateTimeOriginal" | "ModifyDate" => {
-                let cite = if name == "DateTimeOriginal" {
-                    &DATE_TIME_ORIGINAL
-                } else {
-                    &MODIFY_DATE
-                };
-                RawAccess::new(decoded, Acknowledged::VALUE_CONV, cite)
-                    .and_then(|access| format_pmp_date(access.raw()))
-                    .map(TagValue::new_string)
-            }
-            // Sony.pm:10693-10699.
-            "ExposureTime" => {
-                RawAccess::new(
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("Sony:{name}");
+            let value = match name {
+                // Sony.pm:10668-10692: `int8u[6]`, year pivoted at 70.
+                "DateTimeOriginal" | "ModifyDate" => {
+                    let cite = if name == "DateTimeOriginal" {
+                        &DATE_TIME_ORIGINAL
+                    } else {
+                        &MODIFY_DATE
+                    };
+                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, cite)
+                        .and_then(|access| format_pmp_date(access.raw()))
+                        .map(TagValue::new_string)
+                }
+                // Sony.pm:10693-10699.
+                "ExposureTime" => {
+                    RawAccess::new(
+                        decoded,
+                        Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                        &EXPOSURE_TIME,
+                    )
+                    .and_then(|access| access.raw().as_integer())
+                    // `RawConv => '$val <= 0 ? undef : $val'`.
+                    .filter(|raw| *raw > 0)
+                    // `ValueConv => '2 ** (-$val / 100)'`, then
+                    // `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
+                    .map(|raw| {
+                        let seconds = 2f64.powf(-(raw as f64) / 100.0);
+                        TagValue::new_string(print_exposure_time(seconds))
+                    })
+                }
+                // Sony.pm:10700-10705. ExifTool's own comment calls the scaling
+                // "(likely wrong)"; it is reproduced as declared, not replaced.
+                "FNumber" => RawAccess::new(
                     decoded,
                     Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                    &EXPOSURE_TIME,
+                    &F_NUMBER,
                 )
                 .and_then(|access| access.raw().as_integer())
-                // `RawConv => '$val <= 0 ? undef : $val'`.
                 .filter(|raw| *raw > 0)
-                // `ValueConv => '2 ** (-$val / 100)'`, then
-                // `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
-                .map(|raw| {
-                    let seconds = 2f64.powf(-(raw as f64) / 100.0);
-                    TagValue::new_string(print_exposure_time(seconds))
-                })
+                .map(|raw| TagValue::new_float(raw as f64 / 100.0)),
+                // Sony.pm:10706-10711.
+                "ExposureCompensation" => RawAccess::new(
+                    decoded,
+                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                    &EXPOSURE_COMPENSATION,
+                )
+                .and_then(|access| access.raw().as_integer())
+                .filter(|raw| *raw != -1 && *raw != -32768)
+                .map(|raw| TagValue::new_float(raw as f64 / 100.0)),
+                // Sony.pm:10712-10719, `PrintConv => 'sprintf("%.1f mm",$val)'`.
+                "FocalLength" => RawAccess::new(
+                    decoded,
+                    Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
+                    &FOCAL_LENGTH,
+                )
+                .and_then(|access| access.raw().as_integer())
+                .filter(|raw| *raw > 0)
+                .map(|raw| TagValue::new_string(format!("{:.1} mm", raw as f64 / 100.0))),
+                _ => decoded.emit(),
+            };
+            if let Some(value) = value {
+                metadata.insert(key, value);
             }
-            // Sony.pm:10700-10705. ExifTool's own comment calls the scaling
-            // "(likely wrong)"; it is reproduced as declared, not replaced.
-            "FNumber" => RawAccess::new(
-                decoded,
-                Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                &F_NUMBER,
-            )
-            .and_then(|access| access.raw().as_integer())
-            .filter(|raw| *raw > 0)
-            .map(|raw| TagValue::new_float(raw as f64 / 100.0)),
-            // Sony.pm:10706-10711.
-            "ExposureCompensation" => RawAccess::new(
-                decoded,
-                Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                &EXPOSURE_COMPENSATION,
-            )
-            .and_then(|access| access.raw().as_integer())
-            .filter(|raw| *raw != -1 && *raw != -32768)
-            .map(|raw| TagValue::new_float(raw as f64 / 100.0)),
-            // Sony.pm:10712-10719, `PrintConv => 'sprintf("%.1f mm",$val)'`.
-            "FocalLength" => RawAccess::new(
-                decoded,
-                Acknowledged::VALUE_CONV | Acknowledged::RAW_CONV,
-                &FOCAL_LENGTH,
-            )
-            .and_then(|access| access.raw().as_integer())
-            .filter(|raw| *raw > 0)
-            .map(|raw| TagValue::new_string(format!("{:.1} mm", raw as f64 / 100.0))),
-            _ => decoded.emit(),
-        };
-        if let Some(value) = value {
-            metadata.insert(key, value);
         }
-    }
 
-    // Sony.pm:10639-10645: `JpgFromRawStart`/`JpgFromRawLength` describe an
-    // extractable JPEG block, which ExifTool reports as a binary-data
-    // placeholder under `-a -G1 -s`.
-    if let Some(TagValue::Integer(length)) = metadata.get("Sony:JpgFromRawLength").cloned() {
-        let start = metadata
-            .get("Sony:JpgFromRawStart")
-            .and_then(|v| v.as_integer());
-        if start == Some(i64::from(JPEG_OFFSET))
-            && length > 0
-            && (JPEG_OFFSET as u64 + length as u64) <= reader.size()
-        {
-            metadata.insert(
-                "Sony:JpgFromRaw".to_string(),
-                TagValue::new_string(format!(
-                    "(Binary data {length} bytes, use -b option to extract)"
-                )),
-            );
+        // Sony.pm:10639-10645: `JpgFromRawStart`/`JpgFromRawLength` describe an
+        // extractable JPEG block, which ExifTool reports as a binary-data
+        // placeholder under `-a -G1 -s`.
+        if let Some(TagValue::Integer(length)) = metadata.get("Sony:JpgFromRawLength").cloned() {
+            let start = metadata
+                .get("Sony:JpgFromRawStart")
+                .and_then(|v| v.as_integer());
+            if start == Some(i64::from(JPEG_OFFSET))
+                && length > 0
+                && (JPEG_OFFSET as u64 + length as u64) <= reader.size()
+            {
+                metadata.insert(
+                    "Sony:JpgFromRaw".to_string(),
+                    TagValue::new_string(format!(
+                        "(Binary data {length} bytes, use -b option to extract)"
+                    )),
+                );
+            }
         }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Sony.pm:10672-10678 (and the identical block at :10685-10691):

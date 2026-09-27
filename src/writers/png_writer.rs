@@ -87,6 +87,73 @@ fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     output.extend_from_slice(&crc.to_be_bytes());
 }
 
+/// Copies an original chunk as it stands, CRC bytes included. ExifTool
+/// writes back the `$cbuf` it read for every chunk it does not rebuild
+/// (PNG.pm 13.59:1621, :1672), so a CRC it never checks -- IEND's,
+/// or an oversized IDAT's (see [`crc_is_checked`]) -- survives a write
+/// unrepaired; every other carried CRC was verified before anything was
+/// written, so copying it equals recomputing it.
+fn write_carried_chunk(output: &mut Vec<u8>, chunk: &PngChunk) {
+    output.extend_from_slice(&(chunk.data.len() as u32).to_be_bytes());
+    output.extend_from_slice(&chunk.chunk_type);
+    output.extend_from_slice(&chunk.data);
+    output.extend_from_slice(&chunk.crc.to_be_bytes());
+}
+
+/// `$chunkSizeLimit` (PNG.pm 13.59:1577): a data chunk larger than this is
+/// copied with `CopyBlock`, unread, so its CRC is never checked.
+const PNG_CHUNK_SIZE_LIMIT: usize = 10_000_000;
+
+/// Whether ExifTool checks this chunk's CRC when it rewrites the file. Every
+/// chunk is checked (PNG.pm 13.59:1612-1619) except IEND, whose branch reads
+/// its CRC and writes it straight back (:1546-1556), and an IDAT over
+/// [`PNG_CHUNK_SIZE_LIMIT`] (:1577-1584).
+fn crc_is_checked(chunk: &PngChunk) -> bool {
+    match &chunk.chunk_type {
+        b"IEND" => false,
+        b"IDAT" => chunk.data.len() <= PNG_CHUNK_SIZE_LIMIT,
+        _ => true,
+    }
+}
+
+/// Refuses a PNG with a bad chunk CRC, before anything is written. ExifTool
+/// 13.59 raises `Error("Bad CRC for $chunk chunk", 1)` -- a minor error, which
+/// without `-m` (ignore minor errors) leaves the file untouched and exits 1.
+/// That covers critical and ancillary, known and unknown chunks alike. This
+/// writer has no `-m` equivalent, so it always refuses.
+fn check_chunk_crcs(chunks: &[PngChunk]) -> Result<()> {
+    match chunks.iter().find(|chunk| {
+        crc_is_checked(chunk) && chunk.crc != calculate_crc(&chunk.chunk_type, &chunk.data)
+    }) {
+        Some(chunk) => Err(ExifToolError::parse_error(format!(
+            "Bad CRC for {} chunk (a [minor] error that ExifTool also refuses to write \
+             over without -m); the file was not changed",
+            chunk.type_str()
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// [`check_chunk_crcs`] over the PNG `reader` holds, for a caller that
+/// decides a request is a no-op without running this writer: pinned
+/// ExifTool 13.59 checks every CRC while it copies the file, before it knows
+/// whether anything changed, so a deletion of an absent tag over a bad CRC
+/// is refused too (`tests/png_bad_crc.rs`).
+pub(crate) fn refuse_bad_chunk_crcs(reader: &dyn FileReader) -> Result<()> {
+    let mut chunks = Vec::new();
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(reader, offset)?;
+        let is_iend = chunk.chunk_type == *b"IEND";
+        chunks.push(chunk);
+        if is_iend {
+            break;
+        }
+        offset = next;
+    }
+    check_chunk_crcs(&chunks)
+}
+
 /// Serializes a tEXt chunk from keyword and text.
 ///
 /// tEXt chunk format: `keyword\0text`
@@ -207,15 +274,23 @@ fn is_exif_key(key: &str) -> bool {
     EXIF_KEY_PREFIXES
         .iter()
         .any(|prefix| key.starts_with(prefix))
+        || crate::writers::exif_surgical::chain_key_dir(key).is_some()
 }
 
 /// The EXIF-family rows of a map.
 fn exif_rows(map: &MetadataMap) -> MetadataMap {
-    let mut rows = MetadataMap::new();
-    for (key, value) in map.iter() {
-        if is_exif_key(key) {
-            rows.insert(key, value.clone());
-        }
+    // Filtered from a clone, not re-inserted into a fresh map: each row keeps
+    // its occurrence, so a caller's assignment stays distinguishable from a
+    // value the read produced (`MetadataMap::is_assigned`, which
+    // `xp_strings::is_explicit_xp_set` asks).
+    let mut rows = map.clone();
+    let other: Vec<String> = map
+        .iter()
+        .map(|(key, _)| key.clone())
+        .filter(|key| !is_exif_key(key))
+        .collect();
+    for key in other {
+        rows.remove(&key);
     }
     rows
 }
@@ -225,16 +300,20 @@ fn exif_rows(map: &MetadataMap) -> MetadataMap {
 /// rewrites the `eXIf` directory only when a tag in it is being edited
 /// (`$$et{EDIT_DIRS}{IFD0}`, PNG.pm 13.59:1395-1399) and otherwise copies
 /// the chunk untouched, so an unrelated edit (`-XMP-dc:Title=`, a `PNG:`
-/// text key) must leave every EXIF byte as it was.
+/// text key) must leave every EXIF byte as it was. An XP string the caller
+/// assigned is an edit even at its baseline value
+/// (`xp_strings::is_explicit_xp_set`): ExifTool re-encodes the assigned text.
 fn exif_changed(metadata: &MetadataMap, baseline: &MetadataMap, removed: &[String]) -> bool {
     // A decoded maker-note row (`Canon:MacroMode`) left out of the map is an
     // EXIF change too, whatever its family-1 group.
     !crate::writers::exif_surgical::dropped_makernote_rows(baseline, metadata, &[]).is_empty()
         || !crate::writers::exif_surgical::changed_makernote_rows(baseline, metadata).is_empty()
         || removed.iter().any(|key| is_exif_key(key))
-        || metadata
-            .iter()
-            .any(|(key, value)| is_exif_key(key) && baseline.get(key) != Some(value))
+        || metadata.iter().any(|(key, value)| {
+            is_exif_key(key)
+                && (baseline.get(key) != Some(value)
+                    || crate::writers::xp_strings::is_explicit_xp_set(metadata, key))
+        })
         || baseline
             .iter()
             .any(|(key, _)| is_exif_key(key) && !metadata.contains_key(key))
@@ -274,7 +353,7 @@ fn rewrite_exif_payload(
                 .split_once(':')
                 .is_some_and(|(group, _)| group.eq_ignore_ascii_case("EXIF"))
     }) {
-        crate::writers::exif_surgical::FreshOrder::BigEndian
+        crate::writers::exif_surgical::FreshOrder::SetPreferred
     } else {
         crate::writers::exif_surgical::FreshOrder::KeepReadableMark
     };
@@ -326,6 +405,30 @@ fn rewrite_exif_payload(
         &payload,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
     )?;
+    // A chain past IFD1 that locates data outside the chunk is kept by no
+    // write: pinned ExifTool 13.59 refuses it ("Error reading StripOffsets
+    // data in IFD2"), and nothing past an `eXIf` chunk belongs to it. A
+    // carrier the write deletes is not read.
+    if let Some(original) = original
+        && !crate::writers::exif_surgical::removes_carrier(&removed)
+    {
+        crate::writers::ifd_chain::refuse_unmovable_outside(original, &payload, false)?;
+    }
+    // And every maker-note value still reads back, including data the note
+    // locates outside itself (`makernote_guard`). Checked within the block:
+    // an `eXIf` chunk is self-contained, nothing past it belongs to it.
+    // Never on a clear (an empty payload) or a carrier removal (a deleted
+    // carrier is not read); a no-op never reaches here.
+    if let Some(original) = original
+        && !payload.is_empty()
+        && !crate::writers::exif_surgical::removes_carrier(&removed)
+    {
+        crate::writers::makernote_guard::verify_makernote_preserved(
+            crate::writers::makernote_guard::Carrier::block(original),
+            crate::writers::makernote_guard::Carrier::block(&payload),
+            crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+        )?;
+    }
     Ok(payload)
 }
 
@@ -905,6 +1008,167 @@ fn build_new_text_chunk(name: &str, text: &str) -> Option<([u8; 4], Vec<u8>)> {
 /// write_png_metadata(path, &reader, &metadata)?;
 /// # Ok::<(), oxidex::error::ExifToolError>(())
 /// ```
+/// The 7-byte tIME payload (PNG 1.2 11.3.6.1: year, month, day, hour,
+/// minute, second) for a `PNG:ModifyDate` value: a date, or its
+/// `YYYY:MM:DD HH:MM:SS` text.
+fn time_chunk_data(tag_name: &str, value: &TagValue) -> Result<Vec<u8>> {
+    use chrono::{Datelike, Timelike};
+    let date = match value {
+        TagValue::DateTime(date) => Some(*date),
+        TagValue::String(text) => crate::core::date_shift::parse_absolute_datetime(text).ok(),
+        _ => None,
+    };
+    let date = date
+        .filter(|date| (0..=0xFFFF).contains(&date.year()))
+        .ok_or_else(|| {
+            ExifToolError::tag_not_written(
+                tag_name,
+                "the PNG tIME chunk holds a YYYY:MM:DD HH:MM:SS date",
+            )
+        })?;
+    let mut data = (date.year() as u16).to_be_bytes().to_vec();
+    data.extend([
+        date.month() as u8,
+        date.day() as u8,
+        date.hour() as u8,
+        date.minute() as u8,
+        date.second() as u8,
+    ]);
+    Ok(data)
+}
+
+/// The PNG tags ExifTool keeps in a chunk of their own rather than in a text
+/// keyword, and deletes by name: the main-table chunks PNG.pm (13.59) marks
+/// `Writable` -- `tIME` (ModifyDate), `gAMA` (Gamma), `sRGB`
+/// (SRGBRendering). `-PNG:<Name>=` sets the chunk's new value to nothing
+/// (`$$outBuff = ''`, PNG.pm:1080-1082) and the chunk is dropped. Pinned
+/// 13.59 on a PNG carrying all three: `-PNG:ModifyDate=`, `-PNG:Gamma=` and
+/// `-PNG:SRGBRendering=` each print `1 image files updated` and leave every
+/// other chunk in place. `pHYs` is not here: its tags "may only be deleted as
+/// a group" (`-PNG-pHYs:PixelsPerUnitX=` is 13.59's `unchanged`), nor is
+/// `iCCP` (the `ICC_Profile` block), nor a chunk ExifTool does not write
+/// (`bKGD`, `cHRM`: `Sorry, PNG:BackgroundColor doesn't exist or isn't
+/// writable`).
+const CHUNK_TAGS: &[(&str, [u8; 4])] = &[
+    ("PNG:ModifyDate", *b"tIME"),
+    ("PNG:Gamma", *b"gAMA"),
+    ("PNG:SRGBRendering", *b"sRGB"),
+];
+
+/// The chunk a [`CHUNK_TAGS`] key names (group and tag case-insensitive, as
+/// ExifTool's names are), or `None` for any other key.
+pub(crate) fn chunk_tag_chunk(key: &str) -> Option<[u8; 4]> {
+    CHUNK_TAGS
+        .iter()
+        .find(|(tag, _)| tag.eq_ignore_ascii_case(key))
+        .map(|(_, kind)| *kind)
+}
+
+/// Whether the PNG in `reader` carries a `kind` chunk before IEND.
+pub(crate) fn png_has_chunk(reader: &dyn FileReader, kind: [u8; 4]) -> Result<bool> {
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(reader, offset)?;
+        if chunk.chunk_type == kind {
+            return Ok(true);
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(false)
+}
+
+/// The [`CHUNK_TAGS`] chunks this write deletes: a tag named for deletion
+/// (`removed`: `-PNG:ModifyDate=`, `remove_tag`), or one the reader surfaced
+/// that the caller took out of the map (`write_metadata` with the row
+/// dropped) -- and in either case not set again in `metadata`. A key still
+/// in the map with its baseline value is unchanged, and its chunk is carried
+/// byte for byte; only a removal drops it (#957, PRRT_kwDOQNbr5M6mTtBM: the
+/// `tIME` chunk used to be carried for both, so the read-back found
+/// `PNG:ModifyDate` still present and the deletion could never succeed).
+fn dropped_chunk_tags(
+    metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
+) -> Vec<[u8; 4]> {
+    CHUNK_TAGS
+        .iter()
+        .filter(|(key, _)| {
+            !metadata.contains_key(key)
+                && (baseline.contains_key(key)
+                    || removed.iter().any(|name| name.eq_ignore_ascii_case(key)))
+        })
+        .map(|(_, kind)| *kind)
+        .collect()
+}
+
+/// Chunks ExifTool's `-all=` deletes from a PNG (PNG.pm 13.59): every
+/// textual chunk (TextualData), the EXIF (`eXIf`, `zxIf`) and XMP (`tXMP`)
+/// blocks, the ICC profile (`iCCP`), `pHYs` (PNG-pHYs), C2PA (`caBX`,
+/// JUMBF), SEAL (`seAl`), XML (`meTa`), and the writable main-table tags
+/// (`tIME`, `gAMA`, `sRGB`). Pinned 13.59 on a PNG carrying gAMA, sRGB,
+/// cICP, sBIT, oFFs and vpAg keeps exactly cICP, sBIT, oFFs and vpAg.
+const CLEARED_CHUNKS: &[&[u8; 4]] = &[
+    b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tXMP", b"iCCP", b"pHYs", b"tIME", b"gAMA", b"sRGB",
+    b"caBX", b"seAl", b"meTa",
+];
+
+/// ExifTool's `-all=` on a PNG (`clear_all_metadata`): the
+/// [`CLEARED_CHUNKS`] go, and everything after IEND (the `Trailer` group);
+/// every other chunk is kept byte for byte. `None` for bytes that are not a
+/// PNG. The clear this replaces removed the text and eXIf chunks only, and
+/// left pHYs, tIME, iCCP and an XMP iTXt behind a reported update.
+pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Ok(None);
+    }
+    let mut output = PNG_SIGNATURE.to_vec();
+    let mut at = PNG_SIGNATURE.len();
+    loop {
+        let header = bytes
+            .get(at..at + 8)
+            .ok_or_else(|| ExifToolError::parse_error("PNG ends before IEND"))?;
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        let kind: [u8; 4] = [header[4], header[5], header[6], header[7]];
+        let end = at
+            .checked_add(12)
+            .and_then(|start| start.checked_add(length))
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| ExifToolError::parse_error("Truncated PNG chunk"))?;
+        // A bad CRC is refused here as by every other PNG write (13.59's
+        // minor `Bad CRC for ... chunk` error, file untouched).
+        let data = &bytes[at + 8..end - 4];
+        let crc = u32::from_be_bytes([
+            bytes[end - 4],
+            bytes[end - 3],
+            bytes[end - 2],
+            bytes[end - 1],
+        ]);
+        let checked = match &kind {
+            b"IEND" => false,
+            b"IDAT" => length <= PNG_CHUNK_SIZE_LIMIT,
+            _ => true,
+        };
+        if checked && crc != calculate_crc(&kind, data) {
+            return Err(ExifToolError::parse_error(format!(
+                "Bad CRC for {} chunk (a [minor] error that ExifTool also refuses to write \
+                 over without -m); the file was not changed",
+                String::from_utf8_lossy(&kind)
+            )));
+        }
+        let cleared = CLEARED_CHUNKS.contains(&&kind) || kind.eq_ignore_ascii_case(b"zxIf");
+        if !cleared {
+            output.extend_from_slice(&bytes[at..end]);
+        }
+        at = end;
+        if &kind == b"IEND" {
+            return Ok(Some(output));
+        }
+    }
+}
+
 pub fn write_png_metadata(
     path: &Path,
     original_reader: &dyn FileReader,
@@ -939,6 +1203,43 @@ pub fn write_png_metadata_with_baseline(
 /// before the first IDAT (`AddChunks`, then `AddChunks(..., 'IFD0')`); an
 /// edited `eXIf` chunk is rewritten where it stands. Bytes after IEND are
 /// copied, as ExifTool copies a trailer.
+/// The TIFF payloads of a PNG's `eXIf` chunks (a leading `Exif\0\0` header
+/// stripped), or `None` when the file also carries EXIF in a raw-profile
+/// text chunk -- a carrier this helper does not decode, so no removal can be
+/// judged a no-op from the chunks alone.
+pub(crate) fn png_exif_payloads(reader: &dyn FileReader) -> Result<Option<Vec<Vec<u8>>>> {
+    let mut payloads = Vec::new();
+    let mut namer = TextTagNamer::new();
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(reader, offset)?;
+        if chunk.chunk_type == *b"eXIf" {
+            payloads.push(
+                chunk
+                    .data
+                    .strip_prefix(b"Exif\0\0".as_slice())
+                    .unwrap_or(&chunk.data)
+                    .to_vec(),
+            );
+        } else if chunk.is_text_chunk()
+            && let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data)
+        {
+            let keyword = decode_latin(&record.keyword);
+            let lang = record.lang.as_deref().map(decode_latin);
+            if matches!(namer.resolve(&keyword, lang.as_deref()),
+                TextTagRoute::Profile(name) if RAW_EXIF_PROFILE_NAMES.contains(&name))
+            {
+                return Ok(None);
+            }
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(Some(payloads))
+}
+
 pub(crate) fn write_png_metadata_with_removals(
     path: &Path,
     original_reader: &dyn FileReader,
@@ -988,6 +1289,10 @@ pub(crate) fn write_png_metadata_with_removals(
         .position(|chunk| chunk.chunk_type == *b"IDAT")
         .ok_or_else(|| ExifToolError::parse_error("Missing IDAT chunks"))?;
 
+    // A chunk whose CRC does not match is refused, as ExifTool refuses it,
+    // before anything else is decided or written.
+    check_chunk_crcs(&chunks)?;
+
     // Decide the EXIF block's fate first: a refused EXIF edit must leave the
     // file untouched.
     let exif_fate = plan_exif(&chunks, modified_metadata, baseline, removed)?;
@@ -998,10 +1303,24 @@ pub(crate) fn write_png_metadata_with_removals(
     // New text chunks for caller-authored `PNG:<Name>` keys that no original
     // chunk answers (those were rebuilt in place).
     let mut new_chunks: Vec<([u8; 4], Vec<u8>)> = Vec::new();
+    // `PNG:ModifyDate` is the tIME chunk (PNG.pm: `tIME` => ModifyDate), not
+    // a text keyword: 13.59 rewrites that chunk for `-PNG:ModifyDate=` and
+    // for a shift of it (`-AllDates+=`), and adds one where there is none.
+    let mut time_chunk: Option<Vec<u8>> = None;
     for (tag_name, tag_value) in modified_metadata.iter() {
         let Some(name) = tag_name.strip_prefix("PNG:") else {
             continue;
         };
+        if name == "ModifyDate" {
+            if baseline
+                .get(tag_name)
+                .is_some_and(|b| same_value(tag_value, b))
+            {
+                continue;
+            }
+            time_chunk = Some(time_chunk_data(tag_name, tag_value)?);
+            continue;
+        }
         if answered.contains(tag_name.as_str()) {
             continue;
         }
@@ -1019,6 +1338,16 @@ pub(crate) fn write_png_metadata_with_removals(
             new_chunks.push(chunk);
         }
     }
+    let dropped = dropped_chunk_tags(modified_metadata, baseline, removed);
+    let drops_a_chunk = chunks
+        .iter()
+        .any(|chunk| dropped.contains(&chunk.chunk_type));
+    let has_time_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"tIME");
+    if let Some(data) = &time_chunk
+        && !has_time_chunk
+    {
+        new_chunks.push((*b"tIME", data.clone()));
+    }
     // A new eXIf chunk follows the new text chunks.
     let has_exif_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"eXIf");
     if let ExifFate::Replace(payload) = &exif_fate
@@ -1026,6 +1355,31 @@ pub(crate) fn write_png_metadata_with_removals(
         && !payload.is_empty()
     {
         new_chunks.push((*b"eXIf", payload.clone()));
+    }
+
+    // Nothing changes -- the EXIF block carried, every text chunk carried,
+    // nothing added: the output is the source, byte for byte, chunk order
+    // included. `output_order` moves text chunks that follow IDAT ahead of
+    // it, and pinned ExifTool 13.59 does that only when it writes a chunk:
+    // on t/images/PNG.png (IHDR bKGD IDAT tEXt iTXt IEND) `-IFD0:Artist=`,
+    // `-GPS:All=`, `-EXIF:All=` ... print `0 image files updated` / `1 image
+    // files unchanged` and leave the bytes alone. The same holds for a
+    // library `write_metadata` / `remove_tag` that changes nothing; a caller
+    // writing to another path still gets the (identical) file.
+    if matches!(exif_fate, ExifFate::Carry)
+        && time_chunk.is_none()
+        && !drops_a_chunk
+        && new_chunks.is_empty()
+        && text_fates
+            .values()
+            .all(|fate| matches!(fate, TextFate::Carry))
+    {
+        let source = original_reader.read(0, original_reader.size() as usize)?;
+        if std::fs::read(path).is_ok_and(|target| target.as_slice() == source) {
+            return Ok(());
+        }
+        write_atomic(path, source)?;
+        return Ok(());
     }
 
     let order = output_order(&chunks, first_idat);
@@ -1039,18 +1393,20 @@ pub(crate) fn write_png_metadata_with_removals(
             continue;
         };
         let chunk = &chunks[index];
+        // A chunk-backed tag named for deletion: its chunk goes.
+        if dropped.contains(&chunk.chunk_type) {
+            continue;
+        }
         match &chunk.chunk_type {
             b"tEXt" | b"iTXt" | b"zTXt" => match text_fates.remove(&index) {
                 Some(TextFate::Rebuild(chunk_type, data)) => {
                     write_chunk(&mut output, &chunk_type, &data);
                 }
                 Some(TextFate::Drop) => {}
-                Some(TextFate::Carry) | None => {
-                    write_chunk(&mut output, &chunk.chunk_type, &chunk.data);
-                }
+                Some(TextFate::Carry) | None => write_carried_chunk(&mut output, chunk),
             },
             b"eXIf" => match &exif_fate {
-                ExifFate::Carry => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+                ExifFate::Carry => write_carried_chunk(&mut output, chunk),
                 // Nothing left in the EXIF block: the chunk goes.
                 ExifFate::Replace(payload) if payload.is_empty() => {}
                 ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
@@ -1062,7 +1418,11 @@ pub(crate) fn write_png_metadata_with_removals(
                     }
                 }
             },
-            _ => write_chunk(&mut output, &chunk.chunk_type, &chunk.data),
+            b"tIME" => match &time_chunk {
+                Some(data) => write_chunk(&mut output, b"tIME", data),
+                None => write_carried_chunk(&mut output, chunk),
+            },
+            _ => write_carried_chunk(&mut output, chunk),
         }
     }
     // Bytes after IEND (a trailer) are copied unchanged.

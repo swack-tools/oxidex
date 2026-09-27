@@ -87,46 +87,52 @@ use super::info_parser::{ObjectRef, PdfContext};
 ///
 /// Returns empty metadata if no /Perms dictionary is found.
 pub fn parse_permissions_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF navigation context (xref table and trailer)
-    let context = PdfContext::load(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF navigation context (xref table and trailer)
+        let context = PdfContext::load(reader)?;
 
-    // Navigate: Trailer -> Root -> Perms
-    let perms_data = match navigate_to_perms(reader, &context) {
-        Ok(data) => data,
-        Err(_) => {
-            // No /Perms found - return empty metadata (not an error)
-            return Ok(MetadataMap::new());
+        // Navigate: Trailer -> Root -> Perms
+        let perms_data = match navigate_to_perms(reader, &context) {
+            Ok(data) => data,
+            Err(_) => {
+                // No /Perms found - return empty metadata (not an error)
+                return Ok(MetadataMap::new());
+            }
+        };
+
+        let mut metadata = MetadataMap::new();
+
+        // Extract DocMDP
+        if let Ok(docmdp_level) = extract_permission_level(reader, &context, &perms_data, "/DocMDP")
+        {
+            metadata.insert(
+                "PDF:DocMDP".to_string(),
+                TagValue::new_integer(docmdp_level),
+            );
         }
-    };
 
-    let mut metadata = MetadataMap::new();
+        // Extract FieldMDP
+        if let Ok(fieldmdp_level) =
+            extract_permission_level(reader, &context, &perms_data, "/FieldMDP")
+        {
+            metadata.insert(
+                "PDF:FieldMDP".to_string(),
+                TagValue::new_integer(fieldmdp_level),
+            );
+        }
 
-    // Extract DocMDP
-    if let Ok(docmdp_level) = extract_permission_level(reader, &context, &perms_data, "/DocMDP") {
-        metadata.insert(
-            "PDF:DocMDP".to_string(),
-            TagValue::new_integer(docmdp_level),
-        );
-    }
+        // Extract UR3 (just check presence)
+        if check_ur3_presence(&perms_data) {
+            metadata.insert(
+                "PDF:UR3".to_string(),
+                TagValue::new_string("Yes".to_string()),
+            );
+        }
 
-    // Extract FieldMDP
-    if let Ok(fieldmdp_level) = extract_permission_level(reader, &context, &perms_data, "/FieldMDP")
-    {
-        metadata.insert(
-            "PDF:FieldMDP".to_string(),
-            TagValue::new_integer(fieldmdp_level),
-        );
-    }
-
-    // Extract UR3 (just check presence)
-    if check_ur3_presence(&perms_data) {
-        metadata.insert(
-            "PDF:UR3".to_string(),
-            TagValue::new_string("Yes".to_string()),
-        );
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 //

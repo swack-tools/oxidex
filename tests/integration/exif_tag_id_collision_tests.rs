@@ -122,18 +122,41 @@ fn alias_colliding_with_a_present_tag_fails_loudly() {
     let path = path_of(&temp);
     let out = oxidex(&["-ExifIFD:ExposureBiasValue=-0.5", &path]);
 
-    assert!(
-        !out.status.success(),
+    // The CLI now answers exactly as pinned ExifTool 13.59 does (module
+    // docs): the name is not defined in any table, so `SetNewValue` warns and
+    // nothing is written.
+    assert_eq!(
+        out.status.code(),
+        Some(1),
         "a write that cannot be applied must not report success; stdout={}",
         String::from_utf8_lossy(&out.stdout),
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("ExposureBiasValue") && stderr.contains("0x9204"),
-        "error must name the tag and the colliding id, got: {stderr}",
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "Warning: Tag 'ExifIFD:ExposureBiasValue' is not defined\nNothing to do.\n",
     );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
 
     let after = fs::read(temp.path()).expect("read copy after refusal");
+    assert_eq!(before, after, "a refused write must not touch the file");
+
+    // Below the CLI, the writer's collision guard still refuses the same
+    // spelling loudly, naming the tag and the id it would have collided on.
+    let err = oxidex::core::operations::modify_tag(
+        temp.path(),
+        "ExifIFD:ExposureBiasValue",
+        oxidex::core::tag_value::TagValue::Rational {
+            numerator: -1,
+            denominator: 2,
+        },
+    )
+    .expect_err("the colliding spelling must be refused")
+    .to_string();
+    assert!(
+        err.contains("ExposureBiasValue") && err.contains("0x9204"),
+        "error must name the tag and the colliding id, got: {err}",
+    );
+    let after = fs::read(temp.path()).expect("read copy after API refusal");
     assert_eq!(before, after, "a refused write must not touch the file");
 }
 

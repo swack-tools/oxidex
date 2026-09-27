@@ -56,14 +56,17 @@ pub mod write_tags;
 pub use error::{
     EXIFTOOL_ERR_INTERNAL, EXIFTOOL_ERR_INVALID_TAG_VALUE, EXIFTOOL_ERR_IO,
     EXIFTOOL_ERR_NULL_POINTER, EXIFTOOL_ERR_PARSE, EXIFTOOL_ERR_TAG_NOT_FOUND,
-    EXIFTOOL_ERR_UNSUPPORTED_FORMAT, EXIFTOOL_OK,
+    EXIFTOOL_ERR_TAG_NOT_WRITTEN, EXIFTOOL_ERR_UNSUPPORTED_FORMAT, EXIFTOOL_OK,
 };
 
 // Re-export the opaque handle type
 pub use context::ExifToolHandle;
 
 // Re-export all FFI functions for C API
-pub use error::exiftool_get_last_error;
+pub use error::{
+    exiftool_get_last_error, exiftool_get_last_error_tag, exiftool_get_last_error_tag_count,
+    exiftool_get_last_error_tag_reason,
+};
 pub use lifecycle::{exiftool_create, exiftool_destroy};
 pub use read_tags::{
     exiftool_get_tag_count, exiftool_get_tag_float, exiftool_get_tag_integer,
@@ -71,6 +74,7 @@ pub use read_tags::{
     exiftool_has_tag, exiftool_read_file,
 };
 pub use write_tags::{
-    exiftool_remove_tag, exiftool_set_tag_float, exiftool_set_tag_integer, exiftool_set_tag_string,
-    exiftool_write_file,
+    EXIFTOOL_WRITE_UNCHANGED, EXIFTOOL_WRITE_UPDATED, exiftool_remove_tag, exiftool_set_tag_float,
+    exiftool_set_tag_integer, exiftool_set_tag_string, exiftool_write_file,
+    exiftool_write_file_with_outcome,
 };

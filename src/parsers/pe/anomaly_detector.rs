@@ -134,88 +134,92 @@ impl AnomalyDetector {
         entry_point: u32,
         _image_base: u64,
     ) -> MetadataMap {
-        let mut metadata = MetadataMap::new();
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> MetadataMap {
+            let mut metadata = MetadataMap::new();
 
-        // Section anomalies
-        let section_anomalies = Self::detect_section_anomalies(sections);
-        if !section_anomalies.is_empty() {
-            metadata.insert(
-                "EXE:SectionAnomalies".to_string(),
-                TagValue::new_array(
-                    section_anomalies
-                        .iter()
-                        .map(|s| TagValue::String(s.clone()))
-                        .collect(),
-                ),
-            );
-            metadata.insert(
-                "EXE:SuspiciousSections".to_string(),
-                TagValue::String("Yes".to_string()),
-            );
-        }
+            // Section anomalies
+            let section_anomalies = Self::detect_section_anomalies(sections);
+            if !section_anomalies.is_empty() {
+                metadata.insert(
+                    "EXE:SectionAnomalies".to_string(),
+                    TagValue::new_array(
+                        section_anomalies
+                            .iter()
+                            .map(|s| TagValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
+                metadata.insert(
+                    "EXE:SuspiciousSections".to_string(),
+                    TagValue::String("Yes".to_string()),
+                );
+            }
 
-        // Calculate section entropies
-        let mut high_entropy_sections = Vec::new();
-        for section in sections {
-            if section.size_of_raw_data > 0 && section.size_of_raw_data < 10_000_000 {
-                let offset = section.pointer_to_raw_data as u64;
-                let size = section.size_of_raw_data.min(65536) as usize; // Sample first 64KB
+            // Calculate section entropies
+            let mut high_entropy_sections = Vec::new();
+            for section in sections {
+                if section.size_of_raw_data > 0 && section.size_of_raw_data < 10_000_000 {
+                    let offset = section.pointer_to_raw_data as u64;
+                    let size = section.size_of_raw_data.min(65536) as usize; // Sample first 64KB
 
-                if let Ok(data) = reader.read(offset, size) {
-                    let entropy = Self::calculate_entropy(data);
-                    let name = Self::section_name_string(section);
+                    if let Ok(data) = reader.read(offset, size) {
+                        let entropy = Self::calculate_entropy(data);
+                        let name = Self::section_name_string(section);
 
-                    if entropy > 7.0 {
-                        high_entropy_sections.push(format!("{}: {:.2}", name, entropy));
+                        if entropy > 7.0 {
+                            high_entropy_sections.push(format!("{}: {:.2}", name, entropy));
+                        }
                     }
                 }
             }
-        }
 
-        if !high_entropy_sections.is_empty() {
-            metadata.insert(
-                "EXE:HighEntropySections".to_string(),
-                TagValue::new_array(
-                    high_entropy_sections
-                        .iter()
-                        .map(|s| TagValue::String(s.clone()))
-                        .collect(),
-                ),
-            );
-            metadata.insert(
-                "EXE:PossiblyPacked".to_string(),
-                TagValue::String("Yes".to_string()),
-            );
-        }
-
-        // Check entry point location
-        let mut entry_in_section = false;
-        for section in sections {
-            if entry_point >= section.virtual_address
-                && entry_point < section.virtual_address + section.virtual_size
-            {
-                entry_in_section = true;
-                let name = Self::section_name_string(section);
-
-                // Entry point in non-code section is suspicious
-                if !name.starts_with(".text") && !name.starts_with("CODE") {
-                    metadata.insert(
-                        "EXE:UnusualEntrySection".to_string(),
-                        TagValue::String(format!("Entry point in '{}'", name)),
-                    );
-                }
-                break;
+            if !high_entropy_sections.is_empty() {
+                metadata.insert(
+                    "EXE:HighEntropySections".to_string(),
+                    TagValue::new_array(
+                        high_entropy_sections
+                            .iter()
+                            .map(|s| TagValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
+                metadata.insert(
+                    "EXE:PossiblyPacked".to_string(),
+                    TagValue::String("Yes".to_string()),
+                );
             }
-        }
 
-        if !entry_in_section {
-            metadata.insert(
-                "EXE:EntryPointAnomaly".to_string(),
-                TagValue::String("Entry point outside all sections".to_string()),
-            );
-        }
+            // Check entry point location
+            let mut entry_in_section = false;
+            for section in sections {
+                if entry_point >= section.virtual_address
+                    && entry_point < section.virtual_address + section.virtual_size
+                {
+                    entry_in_section = true;
+                    let name = Self::section_name_string(section);
 
-        metadata
+                    // Entry point in non-code section is suspicious
+                    if !name.starts_with(".text") && !name.starts_with("CODE") {
+                        metadata.insert(
+                            "EXE:UnusualEntrySection".to_string(),
+                            TagValue::String(format!("Entry point in '{}'", name)),
+                        );
+                    }
+                    break;
+                }
+            }
+
+            if !entry_in_section {
+                metadata.insert(
+                    "EXE:EntryPointAnomaly".to_string(),
+                    TagValue::String("Entry point outside all sections".to_string()),
+                );
+            }
+
+            metadata
+        })
     }
 }
 

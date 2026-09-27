@@ -157,195 +157,205 @@ pub fn dispatch_format_parser(
     format: FileFormat,
     options: &ReadOptions,
 ) -> Result<MetadataMap> {
-    let mut metadata = match format {
-        FileFormat::JPEG => parse_jpeg_metadata(reader, options),
-        FileFormat::TIFF => parse_tiff_metadata_with_options(reader, options),
-        FileFormat::PNG => parse_png_metadata(reader),
-        FileFormat::PDF => parse_pdf_metadata(reader),
-        FileFormat::PE => parse_pe_metadata(reader),
-        FileFormat::QuickTime => {
-            convert_string_error(parse_quicktime_metadata(reader), "QuickTime")
-        }
-        FileFormat::CasioCAM => parse_casio_cam_metadata(reader),
-        FileFormat::CameraRaw(raw_format) => {
-            // Parse camera raw format using raw metadata parser
-            // Read entire file for raw parsing (raw formats need full file access)
-            let size = reader.size() as usize;
-            let data = reader.read(0, size)?;
-            crate::parsers::raw::parse_raw_metadata(data, raw_format)
-        }
-        FileFormat::MKV => convert_string_error(parse_mkv_metadata(reader), "MKV"),
-        FileFormat::WEBM => convert_string_error(parse_webm_metadata(reader), "WebM"),
-        FileFormat::FLV => convert_string_error(parse_flv_metadata(reader), "FLV"),
-        FileFormat::SWF => convert_string_error(parse_swf_metadata(reader), "SWF"),
-        FileFormat::AVI => convert_string_error(parse_avi_metadata(reader), "AVI"),
-        FileFormat::MTS => convert_string_error(parse_mts_metadata(reader), "MTS"),
-        FileFormat::ASF => convert_string_error(parse_asf_metadata(reader), "ASF"),
-        FileFormat::MXF => convert_string_error(parse_mxf_metadata(reader), "MXF"),
-        FileFormat::MP3 => convert_string_error(parse_mp3_metadata(reader), "MP3"),
-        FileFormat::FLAC => convert_string_error(parse_flac_metadata(reader), "FLAC"),
-        FileFormat::AAC => convert_string_error(parse_aac_metadata(reader), "AAC"),
-        FileFormat::WAV => convert_string_error(parse_wav_metadata(reader), "WAV"),
-        FileFormat::AIFF => convert_string_error(parse_aiff_metadata(reader), "AIFF"),
-        FileFormat::OGG => convert_string_error(parse_ogg_metadata(reader), "OGG"),
-        FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
-        FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
-        FileFormat::MPC => convert_string_error(parse_mpc_metadata(reader), "MPC"),
-        FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
-        FileFormat::RA => convert_string_error(parse_real_audio_metadata(reader), "RA"),
-        FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
-        FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
-        FileFormat::EIP => convert_string_error(parse_eip_metadata(reader), "EIP"),
-        FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
-        FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
-        FileFormat::PPTX => convert_string_error(parse_pptx_metadata(reader), "PPTX"),
-        FileFormat::Pages => convert_string_error(parse_pages_metadata(reader), "Pages"),
-        FileFormat::Numbers => convert_string_error(parse_numbers_metadata(reader), "Numbers"),
-        FileFormat::Keynote => convert_string_error(parse_keynote_metadata(reader), "Keynote"),
-        FileFormat::EPUB => convert_string_error(parse_epub_metadata(reader), "EPUB"),
-        FileFormat::RAR => convert_string_error(parse_rar_metadata(reader), "RAR"),
-        FileFormat::SevenZ => convert_string_error(parse_7z_metadata(reader), "7z"),
-        FileFormat::ISO => convert_string_error(parse_iso_metadata(reader), "ISO"),
-        FileFormat::TAR => convert_string_error(parse_tar_metadata(reader), "TAR"),
-        FileFormat::AR => convert_string_error(parse_ar_metadata(reader), "AR"),
-        FileFormat::GZ => convert_string_error(parse_gz_metadata(reader), "GZ"),
-        // Font formats
-        FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
-        FileFormat::OTF => convert_string_error(parse_otf_metadata(reader), "OTF"),
-        FileFormat::AFM => convert_string_error(parse_afm_metadata(reader), "AFM"),
-        // Mac OS resource fork; a font suitcase (.dfont) is this too
-        FileFormat::RSRC => {
-            convert_string_error(crate::parsers::rsrc::parse_rsrc_metadata(reader), "RSRC")
-        }
-        FileFormat::WOFF => convert_string_error(parse_woff_metadata(reader), "WOFF"),
-        FileFormat::WOFF2 => convert_string_error(parse_woff2_metadata(reader), "WOFF2"),
-        // Advanced image formats
-        // AVIF uses ISOBMFF container (same as MP4/HEIF), use QuickTime parser for full metadata
-        FileFormat::AVIF => convert_string_error(parse_quicktime_metadata(reader), "AVIF"),
-        // HEIF uses ISOBMFF container (same as MP4/MOV), use QuickTime parser for full EXIF extraction
-        FileFormat::HEIF => convert_string_error(parse_quicktime_metadata(reader), "HEIF"),
-        FileFormat::JXL => convert_string_error(parse_jxl_metadata(reader), "JXL"),
-        FileFormat::Jpeg2000 => convert_string_error(parse_jpeg2000_metadata(reader), "JPEG 2000"),
-        FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
-        FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
-        FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
-        FileFormat::PCD => convert_string_error(parse_pcd_metadata(reader), "PCD"),
-        // `.pfm` is two unrelated formats behind one `FileType: PFM`, told
-        // apart by the header exactly as `crate::filetype::refine` tells the
-        // MIME types apart. ExifTool tries the Font module first
-        // (`%fileTypeLookup{pfm} => [['Font','PFM2'], ...]`, ExifTool.pm), and
-        // its test is disjoint from the Portable FloatMap magic -- a FloatMap
-        // file starts `P`, a Printer Font Metrics file `\0\x01`/`\0\x02` --
-        // so the order is ExifTool's rather than a tie-break. Before this arm
-        // existed, every Printer Font Metrics file fell into the FloatMap
-        // parser, failed, and was reported `Status: IdentifiedOnly` with all
-        // 26 of its Font tags missing and no error raised.
-        FileFormat::PFM => {
-            if PrinterFontMetricsParser::verify_signature(reader) {
-                convert_string_error(parse_printer_font_metrics(reader), "PFM")
-            } else {
-                convert_string_error(parse_pfm_metadata(reader), "PFM")
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = match format {
+            FileFormat::JPEG => parse_jpeg_metadata(reader, options),
+            FileFormat::TIFF => parse_tiff_metadata_with_options(reader, options),
+            FileFormat::PNG => parse_png_metadata(reader),
+            FileFormat::PDF => parse_pdf_metadata(reader),
+            FileFormat::PE => parse_pe_metadata(reader),
+            FileFormat::QuickTime => {
+                convert_string_error(parse_quicktime_metadata(reader), "QuickTime")
+            }
+            FileFormat::CasioCAM => parse_casio_cam_metadata(reader),
+            FileFormat::CameraRaw(raw_format) => {
+                // Parse camera raw format using raw metadata parser
+                // Read entire file for raw parsing (raw formats need full file access)
+                let size = reader.size() as usize;
+                let data = reader.read(0, size)?;
+                crate::parsers::raw::parse_raw_metadata(data, raw_format)
+            }
+            FileFormat::MKV => convert_string_error(parse_mkv_metadata(reader), "MKV"),
+            FileFormat::WEBM => convert_string_error(parse_webm_metadata(reader), "WebM"),
+            FileFormat::FLV => convert_string_error(parse_flv_metadata(reader), "FLV"),
+            FileFormat::SWF => convert_string_error(parse_swf_metadata(reader), "SWF"),
+            FileFormat::AVI => convert_string_error(parse_avi_metadata(reader), "AVI"),
+            FileFormat::MTS => convert_string_error(parse_mts_metadata(reader), "MTS"),
+            FileFormat::ASF => convert_string_error(parse_asf_metadata(reader), "ASF"),
+            FileFormat::MXF => convert_string_error(parse_mxf_metadata(reader), "MXF"),
+            FileFormat::MP3 => convert_string_error(parse_mp3_metadata(reader), "MP3"),
+            FileFormat::FLAC => convert_string_error(parse_flac_metadata(reader), "FLAC"),
+            FileFormat::AAC => convert_string_error(parse_aac_metadata(reader), "AAC"),
+            FileFormat::WAV => convert_string_error(parse_wav_metadata(reader), "WAV"),
+            FileFormat::AIFF => convert_string_error(parse_aiff_metadata(reader), "AIFF"),
+            FileFormat::OGG => convert_string_error(parse_ogg_metadata(reader), "OGG"),
+            FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
+            FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
+            FileFormat::MPC => convert_string_error(parse_mpc_metadata(reader), "MPC"),
+            FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
+            FileFormat::RA => convert_string_error(parse_real_audio_metadata(reader), "RA"),
+            FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
+            FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
+            FileFormat::EIP => convert_string_error(parse_eip_metadata(reader), "EIP"),
+            FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
+            FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
+            FileFormat::PPTX => convert_string_error(parse_pptx_metadata(reader), "PPTX"),
+            FileFormat::Pages => convert_string_error(parse_pages_metadata(reader), "Pages"),
+            FileFormat::Numbers => convert_string_error(parse_numbers_metadata(reader), "Numbers"),
+            FileFormat::Keynote => convert_string_error(parse_keynote_metadata(reader), "Keynote"),
+            FileFormat::EPUB => convert_string_error(parse_epub_metadata(reader), "EPUB"),
+            FileFormat::RAR => convert_string_error(parse_rar_metadata(reader), "RAR"),
+            FileFormat::SevenZ => convert_string_error(parse_7z_metadata(reader), "7z"),
+            FileFormat::ISO => convert_string_error(parse_iso_metadata(reader), "ISO"),
+            FileFormat::TAR => convert_string_error(parse_tar_metadata(reader), "TAR"),
+            FileFormat::AR => convert_string_error(parse_ar_metadata(reader), "AR"),
+            FileFormat::GZ => convert_string_error(parse_gz_metadata(reader), "GZ"),
+            // Font formats
+            FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
+            FileFormat::OTF => convert_string_error(parse_otf_metadata(reader), "OTF"),
+            FileFormat::AFM => convert_string_error(parse_afm_metadata(reader), "AFM"),
+            // Mac OS resource fork; a font suitcase (.dfont) is this too
+            FileFormat::RSRC => {
+                convert_string_error(crate::parsers::rsrc::parse_rsrc_metadata(reader), "RSRC")
+            }
+            FileFormat::WOFF => convert_string_error(parse_woff_metadata(reader), "WOFF"),
+            FileFormat::WOFF2 => convert_string_error(parse_woff2_metadata(reader), "WOFF2"),
+            // Advanced image formats
+            // AVIF uses ISOBMFF container (same as MP4/HEIF), use QuickTime parser for full metadata
+            FileFormat::AVIF => convert_string_error(parse_quicktime_metadata(reader), "AVIF"),
+            // HEIF uses ISOBMFF container (same as MP4/MOV), use QuickTime parser for full EXIF extraction
+            FileFormat::HEIF => convert_string_error(parse_quicktime_metadata(reader), "HEIF"),
+            FileFormat::JXL => convert_string_error(parse_jxl_metadata(reader), "JXL"),
+            FileFormat::Jpeg2000 => {
+                convert_string_error(parse_jpeg2000_metadata(reader), "JPEG 2000")
+            }
+            FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
+            FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
+            FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
+            FileFormat::PCD => convert_string_error(parse_pcd_metadata(reader), "PCD"),
+            // `.pfm` is two unrelated formats behind one `FileType: PFM`, told
+            // apart by the header exactly as `crate::filetype::refine` tells the
+            // MIME types apart. ExifTool tries the Font module first
+            // (`%fileTypeLookup{pfm} => [['Font','PFM2'], ...]`, ExifTool.pm), and
+            // its test is disjoint from the Portable FloatMap magic -- a FloatMap
+            // file starts `P`, a Printer Font Metrics file `\0\x01`/`\0\x02` --
+            // so the order is ExifTool's rather than a tie-break. Before this arm
+            // existed, every Printer Font Metrics file fell into the FloatMap
+            // parser, failed, and was reported `Status: IdentifiedOnly` with all
+            // 26 of its Font tags missing and no error raised.
+            FileFormat::PFM => {
+                if PrinterFontMetricsParser::verify_signature(reader) {
+                    convert_string_error(parse_printer_font_metrics(reader), "PFM")
+                } else {
+                    convert_string_error(parse_pfm_metadata(reader), "PFM")
+                }
+            }
+            FileFormat::HDR => convert_string_error(parse_radiance_metadata(reader), "HDR"),
+            FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
+            FileFormat::XCF => convert_string_error(parse_xcf_metadata(reader), "XCF"),
+            FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),
+            FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
+            FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
+            FileFormat::PSD => convert_string_error(parse_psd_metadata(reader), "PSD"),
+            FileFormat::WPG => convert_string_error(parse_wpg_metadata(reader), "WPG"),
+            FileFormat::DJVU => convert_string_error(parse_djvu_metadata(reader), "DjVu"),
+            // Specialized formats
+            FileFormat::ELF => convert_string_error(parse_elf_metadata(reader), "ELF"),
+            FileFormat::MachO => convert_string_error(parse_macho_metadata(reader), "Mach-O"),
+            FileFormat::DWG => convert_string_error(parse_dwg_metadata(reader), "DWG"),
+            FileFormat::DXF => convert_string_error(parse_dxf_metadata(reader), "DXF"),
+            FileFormat::STL => convert_string_error(parse_stl_metadata(reader), "STL"),
+            FileFormat::OBJ => convert_string_error(parse_obj_metadata(reader), "OBJ"),
+            FileFormat::GLTF => convert_string_error(parse_gltf_metadata(reader), "glTF"),
+            FileFormat::FIT => convert_string_error(parse_fit_metadata(reader), "FIT"),
+            FileFormat::FITS => convert_string_error(parse_fits_metadata(reader), "FITS"),
+            FileFormat::DICOM => parse_dicom_metadata(reader),
+            FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
+            FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
+            FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
+            FileFormat::CSV => convert_string_error(parse_csv_metadata(reader), "CSV"),
+            FileFormat::HTML => convert_string_error(parse_html_metadata(reader), "HTML"),
+            FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
+            FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
+            FileFormat::SQLite => convert_string_error(parse_sqlite_metadata(reader), "SQLite"),
+            FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
+            FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),
+            FileFormat::TNEF => convert_string_error(parse_tnef_metadata(reader), "TNEF"),
+            FileFormat::OLE => convert_string_error(parse_ole_metadata(reader), "OLE"),
+            FileFormat::Prefetch => {
+                convert_string_error(parse_prefetch_metadata(reader), "Prefetch")
+            }
+            FileFormat::Registry => {
+                convert_string_error(parse_registry_metadata(reader), "Registry")
+            }
+            FileFormat::EVTX => convert_string_error(parse_evtx_metadata(reader), "EVTX"),
+            FileFormat::Plist => convert_string_error(parse_plist_metadata(reader), "Plist"),
+            FileFormat::PCAP | FileFormat::PCAPNG => {
+                convert_string_error(parse_pcap_metadata(reader), "PCAP")
+            }
+            FileFormat::GIF => convert_string_error(parse_gif_metadata(reader), "GIF"),
+            FileFormat::BMP => convert_string_error(parse_bmp_metadata(reader), "BMP"),
+            FileFormat::WebP => convert_string_error(parse_webp_metadata(reader), "WebP"),
+            FileFormat::X509 => convert_string_error(parse_x509_metadata(reader), "X.509"),
+            FileFormat::ICC => parse_icc_file(reader),
+            FileFormat::XMP => parse_xmp_file(reader),
+            FileFormat::XML => parse_xml_file(reader),
+            FileFormat::EPS => convert_string_error(parse_eps_metadata(reader), "EPS"),
+            FileFormat::VRD => parse_vrd_file(reader),
+            FileFormat::DR4 => parse_dr4_file(reader),
+            FileFormat::FPF => parse_fpf_metadata(reader),
+            FileFormat::MIE => convert_string_error(parse_mie_metadata(reader), "MIE"),
+            FileFormat::MOI => convert_string_error(parse_moi_metadata(reader), "MOI"),
+            FileFormat::ITC => convert_string_error(parse_itc_metadata(reader), "ITC"),
+            FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
+            FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
+            FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
+            FileFormat::XISF => convert_string_error(parse_xisf_metadata(reader), "XISF"),
+            FileFormat::WTV => convert_string_error(parse_wtv_metadata(reader), "WTV"),
+            FileFormat::RealMedia => {
+                convert_string_error(parse_realmedia_metadata(reader), "RealMedia")
+            }
+            FileFormat::R3D => convert_string_error(parse_r3d_metadata(reader), "R3D"),
+            FileFormat::PSP => convert_string_error(parse_psp_metadata(reader), "PSP"),
+            FileFormat::PMP => convert_string_error(parse_pmp_metadata(reader), "PMP"),
+            FileFormat::DV => convert_string_error(parse_dv_metadata(reader), "DV"),
+            FileFormat::CZI => convert_string_error(parse_czi_metadata(reader), "CZI"),
+            FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
+            FileFormat::PICT => convert_string_error(parse_pict_metadata(reader), "PICT"),
+            FileFormat::PPM => convert_string_error(parse_ppm_metadata(reader), "PPM"),
+            FileFormat::Torrent => convert_string_error(parse_torrent_metadata(reader), "Torrent"),
+            FileFormat::PalmDB => convert_string_error(parse_palm_metadata(reader), "Palm"),
+            FileFormat::PFB => convert_string_error(parse_pfb_metadata(reader), "PFB"),
+            FileFormat::INDD => convert_string_error(parse_indesign_metadata(reader), "InDesign"),
+            FileFormat::MacOSSidecar => convert_string_error(parse_macos_metadata(reader), "MacOS"),
+            FileFormat::BigTIFF => parse_bigtiff_metadata(reader),
+            _ => Err(ExifToolError::unsupported_format(format!(
+                "Format {:?} not yet supported in this iteration",
+                format
+            ))),
+        }?;
+
+        // DoProcessTIFF (ExifTool.pm), CanonRaw.pm and Photoshop.pm call
+        // IdentifyTrailer/ProcessTrailers after a successful carrier parse; no
+        // other non-JPEG reader does. Without a JPEG TrailerStart, ProcessVivo
+        // returns 0 there, so only Samsung (and the trailers sized on the way to
+        // it) can be reached. Read the whole carrier only after a bounded EOF check
+        // finds such a candidate; unknown/identity-only fallbacks never reach this
+        // successful dispatch path, and JPEG walks its trailers in
+        // parse_jpeg_metadata.
+        if exiftool_processes_trailers(format, reader) && has_recognized_trailer_candidate(reader) {
+            if let Ok(length) = usize::try_from(reader.size())
+                && let Ok(file) = reader.read(0, length)
+            {
+                metadata.merge_winners_keeping_group1(
+                    &crate::parsers::samsung_trailer::parse_trailer_chain(file, None),
+                );
             }
         }
-        FileFormat::HDR => convert_string_error(parse_radiance_metadata(reader), "HDR"),
-        FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
-        FileFormat::XCF => convert_string_error(parse_xcf_metadata(reader), "XCF"),
-        FileFormat::MIFF => convert_string_error(parse_miff_metadata(reader), "MIFF"),
-        FileFormat::SVG => convert_string_error(parse_svg_metadata(reader), "SVG"),
-        FileFormat::ICO => convert_string_error(parse_ico_metadata(reader), "ICO"),
-        FileFormat::PSD => convert_string_error(parse_psd_metadata(reader), "PSD"),
-        FileFormat::WPG => convert_string_error(parse_wpg_metadata(reader), "WPG"),
-        FileFormat::DJVU => convert_string_error(parse_djvu_metadata(reader), "DjVu"),
-        // Specialized formats
-        FileFormat::ELF => convert_string_error(parse_elf_metadata(reader), "ELF"),
-        FileFormat::MachO => convert_string_error(parse_macho_metadata(reader), "Mach-O"),
-        FileFormat::DWG => convert_string_error(parse_dwg_metadata(reader), "DWG"),
-        FileFormat::DXF => convert_string_error(parse_dxf_metadata(reader), "DXF"),
-        FileFormat::STL => convert_string_error(parse_stl_metadata(reader), "STL"),
-        FileFormat::OBJ => convert_string_error(parse_obj_metadata(reader), "OBJ"),
-        FileFormat::GLTF => convert_string_error(parse_gltf_metadata(reader), "glTF"),
-        FileFormat::FIT => convert_string_error(parse_fit_metadata(reader), "FIT"),
-        FileFormat::FITS => convert_string_error(parse_fits_metadata(reader), "FITS"),
-        FileFormat::DICOM => parse_dicom_metadata(reader),
-        FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
-        FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
-        FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
-        FileFormat::CSV => convert_string_error(parse_csv_metadata(reader), "CSV"),
-        FileFormat::HTML => convert_string_error(parse_html_metadata(reader), "HTML"),
-        FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
-        FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
-        FileFormat::SQLite => convert_string_error(parse_sqlite_metadata(reader), "SQLite"),
-        FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
-        FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),
-        FileFormat::TNEF => convert_string_error(parse_tnef_metadata(reader), "TNEF"),
-        FileFormat::OLE => convert_string_error(parse_ole_metadata(reader), "OLE"),
-        FileFormat::Prefetch => convert_string_error(parse_prefetch_metadata(reader), "Prefetch"),
-        FileFormat::Registry => convert_string_error(parse_registry_metadata(reader), "Registry"),
-        FileFormat::EVTX => convert_string_error(parse_evtx_metadata(reader), "EVTX"),
-        FileFormat::Plist => convert_string_error(parse_plist_metadata(reader), "Plist"),
-        FileFormat::PCAP | FileFormat::PCAPNG => {
-            convert_string_error(parse_pcap_metadata(reader), "PCAP")
-        }
-        FileFormat::GIF => convert_string_error(parse_gif_metadata(reader), "GIF"),
-        FileFormat::BMP => convert_string_error(parse_bmp_metadata(reader), "BMP"),
-        FileFormat::WebP => convert_string_error(parse_webp_metadata(reader), "WebP"),
-        FileFormat::X509 => convert_string_error(parse_x509_metadata(reader), "X.509"),
-        FileFormat::ICC => parse_icc_file(reader),
-        FileFormat::XMP => parse_xmp_file(reader),
-        FileFormat::XML => parse_xml_file(reader),
-        FileFormat::EPS => convert_string_error(parse_eps_metadata(reader), "EPS"),
-        FileFormat::VRD => parse_vrd_file(reader),
-        FileFormat::DR4 => parse_dr4_file(reader),
-        FileFormat::FPF => parse_fpf_metadata(reader),
-        FileFormat::MIE => convert_string_error(parse_mie_metadata(reader), "MIE"),
-        FileFormat::MOI => convert_string_error(parse_moi_metadata(reader), "MOI"),
-        FileFormat::ITC => convert_string_error(parse_itc_metadata(reader), "ITC"),
-        FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
-        FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
-        FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
-        FileFormat::XISF => convert_string_error(parse_xisf_metadata(reader), "XISF"),
-        FileFormat::WTV => convert_string_error(parse_wtv_metadata(reader), "WTV"),
-        FileFormat::RealMedia => {
-            convert_string_error(parse_realmedia_metadata(reader), "RealMedia")
-        }
-        FileFormat::R3D => convert_string_error(parse_r3d_metadata(reader), "R3D"),
-        FileFormat::PSP => convert_string_error(parse_psp_metadata(reader), "PSP"),
-        FileFormat::PMP => convert_string_error(parse_pmp_metadata(reader), "PMP"),
-        FileFormat::DV => convert_string_error(parse_dv_metadata(reader), "DV"),
-        FileFormat::CZI => convert_string_error(parse_czi_metadata(reader), "CZI"),
-        FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
-        FileFormat::PICT => convert_string_error(parse_pict_metadata(reader), "PICT"),
-        FileFormat::PPM => convert_string_error(parse_ppm_metadata(reader), "PPM"),
-        FileFormat::Torrent => convert_string_error(parse_torrent_metadata(reader), "Torrent"),
-        FileFormat::PalmDB => convert_string_error(parse_palm_metadata(reader), "Palm"),
-        FileFormat::PFB => convert_string_error(parse_pfb_metadata(reader), "PFB"),
-        FileFormat::INDD => convert_string_error(parse_indesign_metadata(reader), "InDesign"),
-        FileFormat::MacOSSidecar => convert_string_error(parse_macos_metadata(reader), "MacOS"),
-        FileFormat::BigTIFF => parse_bigtiff_metadata(reader),
-        _ => Err(ExifToolError::unsupported_format(format!(
-            "Format {:?} not yet supported in this iteration",
-            format
-        ))),
-    }?;
-
-    // DoProcessTIFF (ExifTool.pm), CanonRaw.pm and Photoshop.pm call
-    // IdentifyTrailer/ProcessTrailers after a successful carrier parse; no
-    // other non-JPEG reader does. Without a JPEG TrailerStart, ProcessVivo
-    // returns 0 there, so only Samsung (and the trailers sized on the way to
-    // it) can be reached. Read the whole carrier only after a bounded EOF check
-    // finds such a candidate; unknown/identity-only fallbacks never reach this
-    // successful dispatch path, and JPEG walks its trailers in
-    // parse_jpeg_metadata.
-    if exiftool_processes_trailers(format, reader) && has_recognized_trailer_candidate(reader) {
-        if let Ok(length) = usize::try_from(reader.size())
-            && let Ok(file) = reader.read(0, length)
-        {
-            metadata.merge_winners_keeping_group1(
-                &crate::parsers::samsung_trailer::parse_trailer_chain(file, None),
-            );
-        }
-    }
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// Non-JPEG carriers whose pinned ExifTool reader walks trailers: the

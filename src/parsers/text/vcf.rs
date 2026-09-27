@@ -185,223 +185,233 @@ impl VCFParser {
     /// * `Ok(MetadataMap)` - Extracted vCard metadata
     /// * `Err(ExifToolError)` - Parse error or invalid UTF-8
     pub fn parse_vcard_content(reader: &dyn FileReader) -> Result<MetadataMap> {
-        let size = reader.size() as usize;
-        // Read first 8KB to avoid loading huge files entirely into memory
-        let content = reader.read(0, size.min(8192))?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let size = reader.size() as usize;
+            // Read first 8KB to avoid loading huge files entirely into memory
+            let content = reader.read(0, size.min(8192))?;
 
-        let text = std::str::from_utf8(content)
-            .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?;
+            let text = std::str::from_utf8(content)
+                .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))?;
 
-        let mut metadata = MetadataMap::new();
-        let mut has_photo = false;
-        let mut has_organization = false;
-        let mut has_email = false;
-        let mut has_phone = false;
-        let mut has_address = false;
-        let mut has_url = false;
-        let mut vcard_count = 0;
+            let mut metadata = MetadataMap::new();
+            let mut has_photo = false;
+            let mut has_organization = false;
+            let mut has_email = false;
+            let mut has_phone = false;
+            let mut has_address = false;
+            let mut has_url = false;
+            let mut vcard_count = 0;
 
-        // Count vCARDs and collect feature flags
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed == "BEGIN:VCARD" {
-                vcard_count += 1;
-            }
-        }
-
-        // A VCF file can hold multiple `BEGIN:VCARD`...`END:VCARD` blocks
-        // (this corpus sample has 2), and `VCard.pm`'s `ProcessVCard` reads
-        // every one after the first as a new "document"
-        // (`$$et{DOC_NUM} = ++$$et{DOC_COUNT}` right after the first
-        // `END:VCARD`, VCard.pm:334ish). That matters for which value wins
-        // the *default* (non-`-a`) view when two vCards define the same
-        // property: `TagSink::record`'s Instance rule (see its own doc
-        // comment) means an occurrence recorded under a non-default Instance
-        // can never displace a winner recorded under a *different* instance,
-        // so the first vCard's value stays the default winner even though a
-        // later vCard's occurrence of the same tag is recorded after it --
-        // this file's `FormattedName` default view is "Phil Harvey" (vCard
-        // 1), never "VCard Test" (vCard 2), which plain last-write-wins would
-        // get backwards. `doc_instance` mirrors that: `Instance(0)` (the
-        // default) for the first vCard's properties, `Instance(1)` for the
-        // second's, and so on.
-        let mut doc_instance = Instance::default();
-        let mut seen_begin = false;
-
-        // Parse vCard line by line
-        for line in text.lines() {
-            if line.trim() == "BEGIN:VCARD" {
-                if seen_begin {
-                    doc_instance = Instance(doc_instance.0 + 1);
+            // Count vCARDs and collect feature flags
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed == "BEGIN:VCARD" {
+                    vcard_count += 1;
                 }
-                seen_begin = true;
             }
-            if let Some((raw_key, raw_value)) = split_property_line(line) {
-                // Strip any ";PARAM=..." group parameters from the key so
-                // "TEL;TYPE=CELL" still matches on "TEL". We don't yet fold
-                // the TYPE into the tag name the way ExifTool does (e.g.
-                // "TelephoneCell") -- only the base tag is emitted.
-                let key_base = raw_key.split(';').next().unwrap_or(raw_key).trim();
-                let key = key_base.to_ascii_uppercase();
-                let value = raw_value.trim();
 
-                match key.as_str() {
-                    "VERSION" => {
-                        metadata.insert(
-                            "VCardVersion".to_string(),
-                            TagValue::String(value.to_string()),
-                        );
-                        // Add VCF:Version for Worker 28 compatibility
-                        metadata.insert(
-                            "VCF:Version".to_string(),
-                            TagValue::new_string(value.to_string()),
-                        );
+            // A VCF file can hold multiple `BEGIN:VCARD`...`END:VCARD` blocks
+            // (this corpus sample has 2), and `VCard.pm`'s `ProcessVCard` reads
+            // every one after the first as a new "document"
+            // (`$$et{DOC_NUM} = ++$$et{DOC_COUNT}` right after the first
+            // `END:VCARD`, VCard.pm:334ish). That matters for which value wins
+            // the *default* (non-`-a`) view when two vCards define the same
+            // property: `TagSink::record`'s Instance rule (see its own doc
+            // comment) means an occurrence recorded under a non-default Instance
+            // can never displace a winner recorded under a *different* instance,
+            // so the first vCard's value stays the default winner even though a
+            // later vCard's occurrence of the same tag is recorded after it --
+            // this file's `FormattedName` default view is "Phil Harvey" (vCard
+            // 1), never "VCard Test" (vCard 2), which plain last-write-wins would
+            // get backwards. `doc_instance` mirrors that: `Instance(0)` (the
+            // default) for the first vCard's properties, `Instance(1)` for the
+            // second's, and so on.
+            let mut doc_instance = Instance::default();
+            let mut seen_begin = false;
+
+            // Parse vCard line by line
+            for line in text.lines() {
+                if line.trim() == "BEGIN:VCARD" {
+                    if seen_begin {
+                        doc_instance = Instance(doc_instance.0 + 1);
                     }
-                    "BDAY" => {
-                        metadata.insert(
-                            "Birthday".to_string(),
-                            TagValue::String(convert_vcard_time(value)),
-                        );
-                    }
-                    "TZ" => {
-                        metadata
-                            .insert("TimeZone".to_string(), TagValue::String(value.to_string()));
-                    }
-                    "GEO" => {
-                        // VCard 4.0 prefixes with "geo:"; ValueConv strips it.
-                        let stripped = value.strip_prefix("geo:").unwrap_or(value);
-                        metadata.insert(
-                            "Geolocation".to_string(),
-                            TagValue::String(stripped.to_string()),
-                        );
-                    }
-                    "PHOTO" => {
-                        has_photo = true;
-                    }
-                    "ORG" => {
-                        has_organization = true;
-                        metadata.insert(
-                            "Organization".to_string(),
-                            TagValue::String(value.to_string()),
-                        );
-                    }
-                    "ADR" => {
-                        has_address = true;
-                        metadata.insert("Address".to_string(), TagValue::String(value.to_string()));
-                    }
-                    "URL" => {
-                        has_url = true;
-                        metadata.insert("URL".to_string(), TagValue::String(value.to_string()));
-                    }
-                    "EMAIL" => {
-                        has_email = true;
-                        metadata.insert("Email".to_string(), TagValue::String(value.to_string()));
-                    }
-                    "TEL" => {
-                        has_phone = true;
-                        metadata
-                            .insert("Telephone".to_string(), TagValue::String(value.to_string()));
-                    }
-                    _ => {
-                        if let Some(name) = main_table_name(&key) {
-                            // `VCard::Main`'s `GROUPS => { 2 => 'Document' }`
-                            // leaves family-0/1 at the table default, `VCard`
-                            // -- a bare (unprefixed) key instead gets family-1
-                            // `""` from `TagOccurrence::from_insert_shim`,
-                            // which prints as `-G1`'s empty `[]` bracket:
-                            // invisible to `duplicate_loss_scan.py`'s `-a -G1
-                            // -s` parser (its `LINE_RE` requires one-or-more
-                            // chars inside the brackets). `insert_occurrence`
-                            // with the file's own `doc_instance` reproduces
-                            // both ExifTool's default-view winner (the first
-                            // vCard, per this function's own `doc_instance`
-                            // doc comment) and full `-a` retention of every
-                            // vCard's occurrence -- unlike the plain
-                            // `insert()` this replaced, which retains
-                            // occurrences within *this* function's own
-                            // `metadata` sink but then lost them anyway the
-                            // moment `FormatParser::parse` merged this
-                            // `MetadataMap` into the file's real one via
-                            // `IntoIterator`, which only carries the winner
-                            // projection across (see that impl's own doc
-                            // comment) -- fixed below by switching that merge
-                            // to `MetadataMap::merge`, which replays every
-                            // occurrence instead.
-                            // `LANGUAGE=xx` names a *different* tag
-                            // (`Note-fr`, not a second `Note`) -- see
-                            // `language_param`'s own doc comment.
-                            let name = match language_param(raw_key) {
-                                Some(lang) => format!("{name}-{lang}"),
-                                None => name.to_string(),
-                            };
-                            // NOTE: the raw value is inserted as-is, not run
-                            // through `DecodeVCardText`'s backslash-unescape
-                            // (`VCard.pm:227-249`) -- ExifTool's own TEXT
-                            // output (unlike `-b`) additionally replaces any
-                            // embedded control character the unescape can
-                            // produce (a decoded `\n`, in particular) with
-                            // `.` before printing (`exiftool`'s own POD,
-                            // "-b" section: "control characters ... are not
-                            // replaced by '.' as they are in the default
-                            // output" -- implying they *are* replaced
-                            // outside `-b`). That substitution lives in the
-                            // shared CLI text-output formatter this parser
-                            // has no access to, and unescaping without it
-                            // would plant a real newline into a `TagValue`
-                            // that JSON/CSV output would then show verbatim
-                            // -- a new, wrong mismatch in those modes to fix
-                            // a `-s`-only one. Left as the pre-existing raw
-                            // value pending that shared formatter change.
-                            metadata.insert_occurrence(
-                                format!("VCard:{name}"),
+                    seen_begin = true;
+                }
+                if let Some((raw_key, raw_value)) = split_property_line(line) {
+                    // Strip any ";PARAM=..." group parameters from the key so
+                    // "TEL;TYPE=CELL" still matches on "TEL". We don't yet fold
+                    // the TYPE into the tag name the way ExifTool does (e.g.
+                    // "TelephoneCell") -- only the base tag is emitted.
+                    let key_base = raw_key.split(';').next().unwrap_or(raw_key).trim();
+                    let key = key_base.to_ascii_uppercase();
+                    let value = raw_value.trim();
+
+                    match key.as_str() {
+                        "VERSION" => {
+                            metadata.insert(
+                                "VCardVersion".to_string(),
                                 TagValue::String(value.to_string()),
-                                SHIM_DEFAULT_PRIORITY,
-                                "VCard",
-                                doc_instance,
                             );
+                            // Add VCF:Version for Worker 28 compatibility
+                            metadata.insert(
+                                "VCF:Version".to_string(),
+                                TagValue::new_string(value.to_string()),
+                            );
+                        }
+                        "BDAY" => {
+                            metadata.insert(
+                                "Birthday".to_string(),
+                                TagValue::String(convert_vcard_time(value)),
+                            );
+                        }
+                        "TZ" => {
+                            metadata.insert(
+                                "TimeZone".to_string(),
+                                TagValue::String(value.to_string()),
+                            );
+                        }
+                        "GEO" => {
+                            // VCard 4.0 prefixes with "geo:"; ValueConv strips it.
+                            let stripped = value.strip_prefix("geo:").unwrap_or(value);
+                            metadata.insert(
+                                "Geolocation".to_string(),
+                                TagValue::String(stripped.to_string()),
+                            );
+                        }
+                        "PHOTO" => {
+                            has_photo = true;
+                        }
+                        "ORG" => {
+                            has_organization = true;
+                            metadata.insert(
+                                "Organization".to_string(),
+                                TagValue::String(value.to_string()),
+                            );
+                        }
+                        "ADR" => {
+                            has_address = true;
+                            metadata
+                                .insert("Address".to_string(), TagValue::String(value.to_string()));
+                        }
+                        "URL" => {
+                            has_url = true;
+                            metadata.insert("URL".to_string(), TagValue::String(value.to_string()));
+                        }
+                        "EMAIL" => {
+                            has_email = true;
+                            metadata
+                                .insert("Email".to_string(), TagValue::String(value.to_string()));
+                        }
+                        "TEL" => {
+                            has_phone = true;
+                            metadata.insert(
+                                "Telephone".to_string(),
+                                TagValue::String(value.to_string()),
+                            );
+                        }
+                        _ => {
+                            if let Some(name) = main_table_name(&key) {
+                                // `VCard::Main`'s `GROUPS => { 2 => 'Document' }`
+                                // leaves family-0/1 at the table default, `VCard`
+                                // -- a bare (unprefixed) key instead gets family-1
+                                // `""` from `TagOccurrence::from_insert_shim`,
+                                // which prints as `-G1`'s empty `[]` bracket:
+                                // invisible to `duplicate_loss_scan.py`'s `-a -G1
+                                // -s` parser (its `LINE_RE` requires one-or-more
+                                // chars inside the brackets). `insert_occurrence`
+                                // with the file's own `doc_instance` reproduces
+                                // both ExifTool's default-view winner (the first
+                                // vCard, per this function's own `doc_instance`
+                                // doc comment) and full `-a` retention of every
+                                // vCard's occurrence -- unlike the plain
+                                // `insert()` this replaced, which retains
+                                // occurrences within *this* function's own
+                                // `metadata` sink but then lost them anyway the
+                                // moment `FormatParser::parse` merged this
+                                // `MetadataMap` into the file's real one via
+                                // `IntoIterator`, which only carries the winner
+                                // projection across (see that impl's own doc
+                                // comment) -- fixed below by switching that merge
+                                // to `MetadataMap::merge`, which replays every
+                                // occurrence instead.
+                                // `LANGUAGE=xx` names a *different* tag
+                                // (`Note-fr`, not a second `Note`) -- see
+                                // `language_param`'s own doc comment.
+                                let name = match language_param(raw_key) {
+                                    Some(lang) => format!("{name}-{lang}"),
+                                    None => name.to_string(),
+                                };
+                                // NOTE: the raw value is inserted as-is, not run
+                                // through `DecodeVCardText`'s backslash-unescape
+                                // (`VCard.pm:227-249`) -- ExifTool's own TEXT
+                                // output (unlike `-b`) additionally replaces any
+                                // embedded control character the unescape can
+                                // produce (a decoded `\n`, in particular) with
+                                // `.` before printing (`exiftool`'s own POD,
+                                // "-b" section: "control characters ... are not
+                                // replaced by '.' as they are in the default
+                                // output" -- implying they *are* replaced
+                                // outside `-b`). That substitution lives in the
+                                // shared CLI text-output formatter this parser
+                                // has no access to, and unescaping without it
+                                // would plant a real newline into a `TagValue`
+                                // that JSON/CSV output would then show verbatim
+                                // -- a new, wrong mismatch in those modes to fix
+                                // a `-s`-only one. Left as the pre-existing raw
+                                // value pending that shared formatter change.
+                                metadata.insert_occurrence(
+                                    format!("VCard:{name}"),
+                                    TagValue::String(value.to_string()),
+                                    SHIM_DEFAULT_PRIORITY,
+                                    "VCard",
+                                    doc_instance,
+                                );
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Add Worker 28 tags for vCard properties
-        metadata.insert(
-            "VCF:Count".to_string(),
-            TagValue::new_integer(vcard_count as i64),
-        );
+            // Add Worker 28 tags for vCard properties
+            metadata.insert(
+                "VCF:Count".to_string(),
+                TagValue::new_integer(vcard_count as i64),
+            );
 
-        metadata.insert(
-            "VCF:HasPhoto".to_string(),
-            TagValue::new_string(if has_photo { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasPhoto".to_string(),
+                TagValue::new_string(if has_photo { "true" } else { "false" }),
+            );
 
-        metadata.insert(
-            "VCF:HasOrganization".to_string(),
-            TagValue::new_string(if has_organization { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasOrganization".to_string(),
+                TagValue::new_string(if has_organization { "true" } else { "false" }),
+            );
 
-        metadata.insert(
-            "VCF:HasEmail".to_string(),
-            TagValue::new_string(if has_email { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasEmail".to_string(),
+                TagValue::new_string(if has_email { "true" } else { "false" }),
+            );
 
-        metadata.insert(
-            "VCF:HasPhone".to_string(),
-            TagValue::new_string(if has_phone { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasPhone".to_string(),
+                TagValue::new_string(if has_phone { "true" } else { "false" }),
+            );
 
-        metadata.insert(
-            "VCF:HasAddress".to_string(),
-            TagValue::new_string(if has_address { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasAddress".to_string(),
+                TagValue::new_string(if has_address { "true" } else { "false" }),
+            );
 
-        metadata.insert(
-            "VCF:HasURL".to_string(),
-            TagValue::new_string(if has_url { "true" } else { "false" }),
-        );
+            metadata.insert(
+                "VCF:HasURL".to_string(),
+                TagValue::new_string(if has_url { "true" } else { "false" }),
+            );
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 }
 
@@ -417,30 +427,34 @@ impl FormatParser for VCFParser {
     /// * `Ok(MetadataMap)` - Successfully extracted metadata including FileType, FileSize, and vCard fields
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid VCF signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid VCF signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String("vCard".to_string()),
-        );
+            let mut metadata = MetadataMap::new();
+            metadata.insert(
+                "FileType".to_string(),
+                TagValue::String("vCard".to_string()),
+            );
 
-        // Parse vCard content and merge with basic metadata. `merge` (not a
-        // per-key `for (key, value) in vcard_metadata { insert(...) }` loop)
-        // matters here: `MetadataMap`'s `IntoIterator` deliberately only
-        // yields the winner projection (see its own doc comment), so a
-        // flatten-loop merge would discard every occurrence
-        // `parse_vcard_content`'s `insert_occurrence` calls just retained --
-        // e.g. `VCard:FormattedName`'s second-vCard occurrence -- the moment
-        // it crossed into this function's own map. `merge` replays every
-        // occurrence instead, the same fix `MetadataMap::merge`'s own doc
-        // comment describes for the general case.
-        let vcard_metadata = Self::parse_vcard_content(reader)?;
-        metadata.merge(vcard_metadata);
+            // Parse vCard content and merge with basic metadata. `merge` (not a
+            // per-key `for (key, value) in vcard_metadata { insert(...) }` loop)
+            // matters here: `MetadataMap`'s `IntoIterator` deliberately only
+            // yields the winner projection (see its own doc comment), so a
+            // flatten-loop merge would discard every occurrence
+            // `parse_vcard_content`'s `insert_occurrence` calls just retained --
+            // e.g. `VCard:FormattedName`'s second-vCard occurrence -- the moment
+            // it crossed into this function's own map. `merge` replays every
+            // occurrence instead, the same fix `MetadataMap::merge`'s own doc
+            // comment describes for the general case.
+            let vcard_metadata = Self::parse_vcard_content(reader)?;
+            metadata.merge(vcard_metadata);
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Indicates whether this parser supports the given file format
@@ -471,8 +485,12 @@ impl FormatParser for VCFParser {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_vcf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = VCFParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = VCFParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

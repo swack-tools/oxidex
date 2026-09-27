@@ -38,10 +38,14 @@ const _: () = assert!(
 /// A metadata map keyed `APP8:<Name>`; empty when the payload is shorter
 /// than ExifTool's 32-byte gate.
 pub fn parse_infiray_isothermal(data: &[u8]) -> MetadataMap {
-    if data.len() < INFIRAY_ISOTHERMAL_MIN_LENGTH {
-        return MetadataMap::new();
-    }
-    read_record("APP8", data, ISOTHERMAL)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        if data.len() < INFIRAY_ISOTHERMAL_MIN_LENGTH {
+            return MetadataMap::new();
+        }
+        read_record("APP8", data, ISOTHERMAL)
+    })
 }
 
 #[cfg(test)]

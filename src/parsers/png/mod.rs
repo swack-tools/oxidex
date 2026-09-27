@@ -96,8 +96,12 @@ use text_names::{TextRow, TextTagNamer};
 /// # }
 /// ```
 pub fn parse_png_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut diagnostics = Vec::new();
-    parse_png_metadata_with_diagnostics(reader, &mut diagnostics)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut diagnostics = Vec::new();
+        parse_png_metadata_with_diagnostics(reader, &mut diagnostics)
+    })
 }
 
 /// Same as [`parse_png_metadata`], but pushes recoverable problems (a
@@ -110,352 +114,371 @@ pub fn parse_png_metadata_with_diagnostics(
     reader: &dyn FileReader,
     diagnostics: &mut DiagnosticSink,
 ) -> Result<MetadataMap> {
-    let file_size = reader.size();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file_size = reader.size();
 
-    // Verify PNG signature
-    if file_size < PNG_SIGNATURE.len() as u64 {
-        return Err(ExifToolError::parse_error("File too small to be a PNG"));
-    }
-
-    let signature_data = reader.read(0, PNG_SIGNATURE.len())?;
-    parse_png_signature(signature_data)
-        .map_err(|_| ExifToolError::parse_error("Invalid PNG signature"))?;
-
-    // Initialize metadata map with estimated capacity
-    let mut metadata = MetadataMap::with_capacity(32);
-
-    // Text-chunk naming is order-dependent within one file (text_names).
-    let mut text_namer = TextTagNamer::new();
-
-    // Start parsing chunks after signature
-    let mut offset = PNG_SIGNATURE.len() as u64;
-
-    // Parse chunks until we reach the end or find IEND
-    while offset < file_size {
-        // Parse chunk at current offset
-        let (next_offset, chunk) = parse_chunk(reader, offset)?;
-
-        // Check for IEND chunk (marks end of PNG)
-        if &chunk.chunk_type == b"IEND" {
-            break;
+        // Verify PNG signature
+        if file_size < PNG_SIGNATURE.len() as u64 {
+            return Err(ExifToolError::parse_error("File too small to be a PNG"));
         }
 
-        // Process metadata chunks
-        match &chunk.chunk_type {
-            b"IHDR" => {
-                // Parse IHDR chunk (image header)
-                if let Ok((width, height, bit_depth, color_type, compression, filter, interlace)) =
-                    parse_ihdr_chunk(&chunk.data)
-                {
-                    // Width tag - support both naming conventions
-                    metadata.insert("PNG:Width".to_string(), TagValue::new_integer(width as i64));
-                    metadata.insert(
-                        "PNG:ImageWidth".to_string(),
-                        TagValue::new_integer(width as i64),
-                    );
+        let signature_data = reader.read(0, PNG_SIGNATURE.len())?;
+        parse_png_signature(signature_data)
+            .map_err(|_| ExifToolError::parse_error("Invalid PNG signature"))?;
 
-                    // Height tag - support both naming conventions
-                    metadata.insert(
-                        "PNG:Height".to_string(),
-                        TagValue::new_integer(height as i64),
-                    );
-                    metadata.insert(
-                        "PNG:ImageHeight".to_string(),
-                        TagValue::new_integer(height as i64),
-                    );
+        // Initialize metadata map with estimated capacity
+        let mut metadata = MetadataMap::with_capacity(32);
 
-                    metadata.insert(
-                        "PNG:BitDepth".to_string(),
-                        TagValue::new_integer(bit_depth as i64),
-                    );
+        // Text-chunk naming is order-dependent within one file (text_names).
+        let mut text_namer = TextTagNamer::new();
 
-                    // `%PNG::ImageHeader` (PNG.pm:392-421) gives these four ordinary
-                    // hash PrintConvs. A hash miss in ExifTool is not a dropped tag
-                    // and not a bare "Unknown": ExifTool.pm:3633 substitutes
-                    // `"Unknown ($val)"`, keeping the raw number visible. The
-                    // `if compression == 0` / `if filter == 0` gates below removed
-                    // PNG:Compression and PNG:Filter outright for any other method
-                    // byte, and ColorType/Interlace lost the number.
-                    let color_type_str = match color_type {
-                        0 => "Grayscale".to_string(),
-                        2 => "RGB".to_string(),
-                        3 => "Palette".to_string(),
-                        4 => "Grayscale with Alpha".to_string(),
-                        6 => "RGB with Alpha".to_string(),
-                        other => format!("Unknown ({})", other),
-                    };
-                    metadata.insert(
-                        "PNG:ColorType".to_string(),
-                        TagValue::new_string(color_type_str),
-                    );
+        // Start parsing chunks after signature
+        let mut offset = PNG_SIGNATURE.len() as u64;
 
-                    // Compression method: `PrintConv => { 0 => 'Deflate/Inflate' }`
-                    let compression_str = if compression == 0 {
-                        "Deflate/Inflate".to_string()
-                    } else {
-                        format!("Unknown ({})", compression)
-                    };
-                    metadata.insert(
-                        "PNG:Compression".to_string(),
-                        TagValue::new_string(compression_str),
-                    );
+        // Parse chunks until we reach the end or find IEND
+        while offset < file_size {
+            // Parse chunk at current offset
+            let (next_offset, chunk) = parse_chunk(reader, offset)?;
 
-                    // Filter method: `PrintConv => { 0 => 'Adaptive' }`
-                    let filter_str = if filter == 0 {
-                        "Adaptive".to_string()
-                    } else {
-                        format!("Unknown ({})", filter)
-                    };
-                    metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
-
-                    // Interlace method
-                    let interlace_str = match interlace {
-                        0 => "Noninterlaced".to_string(),
-                        1 => "Adam7 Interlace".to_string(),
-                        other => format!("Unknown ({})", other),
-                    };
-                    metadata.insert(
-                        "PNG:Interlace".to_string(),
-                        TagValue::new_string(interlace_str),
-                    );
-
-                    // HasTransparency tag - true for color types with alpha channel (4, 6)
-                    // Color type 3 (Palette) may have transparency via tRNS chunk,
-                    // but IHDR alone doesn't tell us, so only mark 4 and 6 as definitely transparent
-                    let has_transparency = matches!(color_type, 4 | 6);
-                    metadata.insert(
-                        "PNG:HasTransparency".to_string(),
-                        TagValue::new_string(if has_transparency { "Yes" } else { "No" }),
-                    );
-                }
+            // Check for IEND chunk (marks end of PNG)
+            if &chunk.chunk_type == b"IEND" {
+                break;
             }
 
-            b"cHRM" => {
-                // Parse cHRM chunk (chromaticity)
-                if let Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)) =
-                    parse_chrm_chunk(&chunk.data)
-                {
-                    metadata.insert("PNG:WhitePointX".to_string(), TagValue::new_float(white_x));
-                    metadata.insert("PNG:WhitePointY".to_string(), TagValue::new_float(white_y));
-                    metadata.insert("PNG:RedX".to_string(), TagValue::new_float(red_x));
-                    metadata.insert("PNG:RedY".to_string(), TagValue::new_float(red_y));
-                    metadata.insert("PNG:GreenX".to_string(), TagValue::new_float(green_x));
-                    metadata.insert("PNG:GreenY".to_string(), TagValue::new_float(green_y));
-                    metadata.insert("PNG:BlueX".to_string(), TagValue::new_float(blue_x));
-                    metadata.insert("PNG:BlueY".to_string(), TagValue::new_float(blue_y));
-                }
-            }
+            // Process metadata chunks
+            match &chunk.chunk_type {
+                b"IHDR" => {
+                    // Parse IHDR chunk (image header)
+                    if let Ok((
+                        width,
+                        height,
+                        bit_depth,
+                        color_type,
+                        compression,
+                        filter,
+                        interlace,
+                    )) = parse_ihdr_chunk(&chunk.data)
+                    {
+                        // Width tag - support both naming conventions
+                        metadata
+                            .insert("PNG:Width".to_string(), TagValue::new_integer(width as i64));
+                        metadata.insert(
+                            "PNG:ImageWidth".to_string(),
+                            TagValue::new_integer(width as i64),
+                        );
 
-            b"gAMA" => {
-                // Parse gAMA chunk (gamma)
-                if let Ok(gamma) = parse_gama_chunk(&chunk.data) {
-                    metadata.insert("PNG:Gamma".to_string(), TagValue::new_float(gamma));
-                }
-            }
+                        // Height tag - support both naming conventions
+                        metadata.insert(
+                            "PNG:Height".to_string(),
+                            TagValue::new_integer(height as i64),
+                        );
+                        metadata.insert(
+                            "PNG:ImageHeight".to_string(),
+                            TagValue::new_integer(height as i64),
+                        );
 
-            b"pHYs" => {
-                // Parse pHYs chunk (physical pixel dimensions)
-                if let Ok((pixels_x, pixels_y, unit)) = parse_phys_chunk(&chunk.data) {
-                    metadata.insert(
-                        "PNG-pHYs:PixelsPerUnitX".to_string(),
-                        TagValue::new_integer(pixels_x as i64),
-                    );
-                    metadata.insert(
-                        "PNG-pHYs:PixelsPerUnitY".to_string(),
-                        TagValue::new_integer(pixels_y as i64),
-                    );
+                        metadata.insert(
+                            "PNG:BitDepth".to_string(),
+                            TagValue::new_integer(bit_depth as i64),
+                        );
 
-                    let unit_str = match unit {
-                        0 => "Unknown",
-                        1 => "Meters",
-                        _ => "Unknown",
-                    };
-                    metadata.insert(
-                        "PNG-pHYs:PixelUnits".to_string(),
-                        TagValue::new_string(unit_str),
-                    );
-                }
-            }
+                        // `%PNG::ImageHeader` (PNG.pm:392-421) gives these four ordinary
+                        // hash PrintConvs. A hash miss in ExifTool is not a dropped tag
+                        // and not a bare "Unknown": ExifTool.pm:3633 substitutes
+                        // `"Unknown ($val)"`, keeping the raw number visible. The
+                        // `if compression == 0` / `if filter == 0` gates below removed
+                        // PNG:Compression and PNG:Filter outright for any other method
+                        // byte, and ColorType/Interlace lost the number.
+                        let color_type_str = match color_type {
+                            0 => "Grayscale".to_string(),
+                            2 => "RGB".to_string(),
+                            3 => "Palette".to_string(),
+                            4 => "Grayscale with Alpha".to_string(),
+                            6 => "RGB with Alpha".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        metadata.insert(
+                            "PNG:ColorType".to_string(),
+                            TagValue::new_string(color_type_str),
+                        );
 
-            b"bKGD" => {
-                // Parse bKGD chunk (background color)
-                if let Ok(bg_value) = parse_bkgd_chunk(&chunk.data) {
-                    metadata.insert(
-                        "PNG:BackgroundColor".to_string(),
-                        TagValue::new_integer(bg_value as i64),
-                    );
-                }
-            }
+                        // Compression method: `PrintConv => { 0 => 'Deflate/Inflate' }`
+                        let compression_str = if compression == 0 {
+                            "Deflate/Inflate".to_string()
+                        } else {
+                            format!("Unknown ({})", compression)
+                        };
+                        metadata.insert(
+                            "PNG:Compression".to_string(),
+                            TagValue::new_string(compression_str),
+                        );
 
-            b"tIME" => {
-                // Parse tIME chunk (modification time)
-                if let Ok(datetime) = parse_time_chunk(&chunk.data) {
-                    metadata.insert("PNG:ModifyDate".to_string(), TagValue::new_string(datetime));
-                }
-            }
+                        // Filter method: `PrintConv => { 0 => 'Adaptive' }`
+                        let filter_str = if filter == 0 {
+                            "Adaptive".to_string()
+                        } else {
+                            format!("Unknown ({})", filter)
+                        };
+                        metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
 
-            b"PLTE" => {
-                // Parse PLTE chunk (palette)
-                // Perl ExifTool shows "(Binary data N bytes, use -b option to extract)"
-                metadata.insert(
-                    "PNG:Palette".to_string(),
-                    TagValue::new_string(format!(
-                        "(Binary data {} bytes, use -b option to extract)",
-                        chunk.data.len()
-                    )),
-                );
-            }
+                        // Interlace method
+                        let interlace_str = match interlace {
+                            0 => "Noninterlaced".to_string(),
+                            1 => "Adam7 Interlace".to_string(),
+                            other => format!("Unknown ({})", other),
+                        };
+                        metadata.insert(
+                            "PNG:Interlace".to_string(),
+                            TagValue::new_string(interlace_str),
+                        );
 
-            b"tEXt" | b"zTXt" | b"iTXt" => {
-                // `%PNG::Main` sends all three through `%PNG::TextualData`
-                // (PNG.pm:197-203, :258-261, :294-300); `FoundPNG` names the
-                // tag from the keyword (see `text_names`). A chunk ExifTool's
-                // handler rejects before naming yields no record.
-                if let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data) {
-                    match text_namer.row(&record) {
-                        TextRow::Tag { name, value, .. } => {
-                            metadata.insert(format!("PNG:{name}"), value);
-                        }
-                        TextRow::Xmp(packet) => {
-                            match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
-                                &mut metadata,
-                                &packet,
-                                false,
-                            ) {
-                                Ok(_) => {}
-                                // ExifTool reports an unparseable packet as a
-                                // warning and emits no PNG row for it.
-                                Err(e) => {
-                                    diagnostics.push(Diagnostic::warning(format!(
-                                        "Failed to parse XMP in PNG text chunk: {e}"
-                                    )));
-                                }
-                            }
-                        }
-                        TextRow::Omit => {}
+                        // HasTransparency tag - true for color types with alpha channel (4, 6)
+                        // Color type 3 (Palette) may have transparency via tRNS chunk,
+                        // but IHDR alone doesn't tell us, so only mark 4 and 6 as definitely transparent
+                        let has_transparency = matches!(color_type, 4 | 6);
+                        metadata.insert(
+                            "PNG:HasTransparency".to_string(),
+                            TagValue::new_string(if has_transparency { "Yes" } else { "No" }),
+                        );
                     }
                 }
-            }
 
-            b"sBIT" => {
-                // Parse sBIT chunk (significant bits)
-                if let Ok(bits) = parse_sbit_chunk(&chunk.data) {
-                    let bits_str = bits
-                        .iter()
-                        .map(|b| b.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    metadata.insert(
-                        "PNG:SignificantBits".to_string(),
-                        TagValue::new_string(bits_str),
-                    );
+                b"cHRM" => {
+                    // Parse cHRM chunk (chromaticity)
+                    if let Ok((white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y)) =
+                        parse_chrm_chunk(&chunk.data)
+                    {
+                        metadata
+                            .insert("PNG:WhitePointX".to_string(), TagValue::new_float(white_x));
+                        metadata
+                            .insert("PNG:WhitePointY".to_string(), TagValue::new_float(white_y));
+                        metadata.insert("PNG:RedX".to_string(), TagValue::new_float(red_x));
+                        metadata.insert("PNG:RedY".to_string(), TagValue::new_float(red_y));
+                        metadata.insert("PNG:GreenX".to_string(), TagValue::new_float(green_x));
+                        metadata.insert("PNG:GreenY".to_string(), TagValue::new_float(green_y));
+                        metadata.insert("PNG:BlueX".to_string(), TagValue::new_float(blue_x));
+                        metadata.insert("PNG:BlueY".to_string(), TagValue::new_float(blue_y));
+                    }
                 }
-            }
 
-            b"hIST" => {
-                // Parse hIST chunk (histogram)
-                if let Ok(histogram) = parse_hist_chunk(&chunk.data) {
+                b"gAMA" => {
+                    // Parse gAMA chunk (gamma)
+                    if let Ok(gamma) = parse_gama_chunk(&chunk.data) {
+                        metadata.insert("PNG:Gamma".to_string(), TagValue::new_float(gamma));
+                    }
+                }
+
+                b"pHYs" => {
+                    // Parse pHYs chunk (physical pixel dimensions)
+                    if let Ok((pixels_x, pixels_y, unit)) = parse_phys_chunk(&chunk.data) {
+                        metadata.insert(
+                            "PNG-pHYs:PixelsPerUnitX".to_string(),
+                            TagValue::new_integer(pixels_x as i64),
+                        );
+                        metadata.insert(
+                            "PNG-pHYs:PixelsPerUnitY".to_string(),
+                            TagValue::new_integer(pixels_y as i64),
+                        );
+
+                        let unit_str = match unit {
+                            0 => "Unknown",
+                            1 => "Meters",
+                            _ => "Unknown",
+                        };
+                        metadata.insert(
+                            "PNG-pHYs:PixelUnits".to_string(),
+                            TagValue::new_string(unit_str),
+                        );
+                    }
+                }
+
+                b"bKGD" => {
+                    // Parse bKGD chunk (background color)
+                    if let Ok(bg_value) = parse_bkgd_chunk(&chunk.data) {
+                        metadata.insert(
+                            "PNG:BackgroundColor".to_string(),
+                            TagValue::new_integer(bg_value as i64),
+                        );
+                    }
+                }
+
+                b"tIME" => {
+                    // Parse tIME chunk (modification time)
+                    if let Ok(datetime) = parse_time_chunk(&chunk.data) {
+                        metadata
+                            .insert("PNG:ModifyDate".to_string(), TagValue::new_string(datetime));
+                    }
+                }
+
+                b"PLTE" => {
+                    // Parse PLTE chunk (palette)
+                    // Perl ExifTool shows "(Binary data N bytes, use -b option to extract)"
                     metadata.insert(
-                        "PNG:Histogram".to_string(),
+                        "PNG:Palette".to_string(),
                         TagValue::new_string(format!(
-                            "(Binary data {} entries, use -b option to extract)",
-                            histogram.len()
+                            "(Binary data {} bytes, use -b option to extract)",
+                            chunk.data.len()
                         )),
                     );
                 }
-            }
 
-            b"eXIf" => {
-                // PNG.pm 13.59:308-316 declares eXIf as a SubDirectory of
-                // Image::ExifTool::Exif::Main and ProcessPNG_eXIf
-                // (PNG.pm:1358-1394) hands the chunk to ProcessTIFF, so the
-                // IFD0/ExifIFD/GPS rows are exactly those of the same TIFF
-                // block inside a JPEG APP1 -- the shared decoder, not a PNG
-                // copy of it.
-                if !crate::parsers::image::embedded::parse_embedded_exif_at(
-                    &chunk.data,
-                    0,
-                    &mut metadata,
-                ) {
-                    diagnostics.push(Diagnostic::warning(
-                        "Failed to parse eXIf chunk: invalid TIFF header",
-                    ));
-                }
-            }
-
-            b"iCCP" => {
-                // Parse iCCP chunk (ICC profile)
-                // Structure: profile name (null-terminated) + compression method (1 byte) + compressed profile data
-                if let Some(null_pos) = chunk.data.iter().position(|&b| b == 0)
-                    && null_pos + 2 <= chunk.data.len()
-                {
-                    let _profile_name = String::from_utf8_lossy(&chunk.data[..null_pos]);
-                    let compression_method = chunk.data[null_pos + 1];
-
-                    if compression_method == 0 {
-                        // Deflate/Inflate compression
-                        let compressed_data = &chunk.data[null_pos + 2..];
-
-                        // Decompress ICC profile data
-                        use flate2::read::ZlibDecoder;
-                        use std::io::Read;
-
-                        let mut decoder = ZlibDecoder::new(compressed_data);
-                        let mut icc_data = Vec::new();
-
-                        if decoder.read_to_end(&mut icc_data).is_ok() {
-                            // Parse ICC profile and insert under
-                            // `ICC_Profile:`, grouped by table provenance
-                            // (ICC-header/ICC-cicp/ICC-view/ICC-meas --
-                            // Step 22). Before this step PNG inserted under
-                            // an internal `Profile:` prefix that only JPEG's
-                            // own `normalize_metadata_map` post-pass ever
-                            // rewrote to `ICC_Profile:` -- PNG never called
-                            // it, so its ICC tags leaked out under `Profile:`
-                            // forever. Going straight to `ICC_Profile:` here
-                            // (via the same `insert_icc_tags` every other
-                            // ICC-bearing format now uses) closes that leak
-                            // at the source instead of relying on a
-                            // JPEG-specific rename this format never reached.
-                            match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
-                                Ok(icc_tags) => {
-                                    crate::parsers::icc::insert_icc_tags(&mut metadata, icc_tags);
-                                }
-                                Err(e) => {
-                                    diagnostics.push(Diagnostic::warning(format!(
-                                        "Failed to parse ICC profile in PNG: {e}"
-                                    )));
+                b"tEXt" | b"zTXt" | b"iTXt" => {
+                    // `%PNG::Main` sends all three through `%PNG::TextualData`
+                    // (PNG.pm:197-203, :258-261, :294-300); `FoundPNG` names the
+                    // tag from the keyword (see `text_names`). A chunk ExifTool's
+                    // handler rejects before naming yields no record.
+                    if let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data) {
+                        match text_namer.row(&record) {
+                            TextRow::Tag { name, value, .. } => {
+                                metadata.insert(format!("PNG:{name}"), value);
+                            }
+                            TextRow::Xmp(packet) => {
+                                match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+                                    &mut metadata,
+                                    &packet,
+                                    false,
+                                ) {
+                                    Ok(_) => {}
+                                    // ExifTool reports an unparseable packet as a
+                                    // warning and emits no PNG row for it.
+                                    Err(e) => {
+                                        diagnostics.push(Diagnostic::warning(format!(
+                                            "Failed to parse XMP in PNG text chunk: {e}"
+                                        )));
+                                    }
                                 }
                             }
-                        } else {
-                            diagnostics
-                                .push(Diagnostic::warning("Failed to decompress iCCP chunk data"));
+                            TextRow::Omit => {}
                         }
-                    } else {
-                        diagnostics.push(Diagnostic::warning(format!(
-                            "Unknown iCCP compression method: {compression_method}"
-                        )));
                     }
+                }
+
+                b"sBIT" => {
+                    // Parse sBIT chunk (significant bits)
+                    if let Ok(bits) = parse_sbit_chunk(&chunk.data) {
+                        let bits_str = bits
+                            .iter()
+                            .map(|b| b.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        metadata.insert(
+                            "PNG:SignificantBits".to_string(),
+                            TagValue::new_string(bits_str),
+                        );
+                    }
+                }
+
+                b"hIST" => {
+                    // Parse hIST chunk (histogram)
+                    if let Ok(histogram) = parse_hist_chunk(&chunk.data) {
+                        metadata.insert(
+                            "PNG:Histogram".to_string(),
+                            TagValue::new_string(format!(
+                                "(Binary data {} entries, use -b option to extract)",
+                                histogram.len()
+                            )),
+                        );
+                    }
+                }
+
+                b"eXIf" => {
+                    // PNG.pm 13.59:308-316 declares eXIf as a SubDirectory of
+                    // Image::ExifTool::Exif::Main and ProcessPNG_eXIf
+                    // (PNG.pm:1358-1394) hands the chunk to ProcessTIFF, so the
+                    // IFD0/ExifIFD/GPS rows are exactly those of the same TIFF
+                    // block inside a JPEG APP1 -- the shared decoder, not a PNG
+                    // copy of it.
+                    if !crate::parsers::image::embedded::parse_embedded_exif_at(
+                        &chunk.data,
+                        0,
+                        &mut metadata,
+                    ) {
+                        diagnostics.push(Diagnostic::warning(
+                            "Failed to parse eXIf chunk: invalid TIFF header",
+                        ));
+                    }
+                }
+
+                b"iCCP" => {
+                    // Parse iCCP chunk (ICC profile)
+                    // Structure: profile name (null-terminated) + compression method (1 byte) + compressed profile data
+                    if let Some(null_pos) = chunk.data.iter().position(|&b| b == 0)
+                        && null_pos + 2 <= chunk.data.len()
+                    {
+                        let _profile_name = String::from_utf8_lossy(&chunk.data[..null_pos]);
+                        let compression_method = chunk.data[null_pos + 1];
+
+                        if compression_method == 0 {
+                            // Deflate/Inflate compression
+                            let compressed_data = &chunk.data[null_pos + 2..];
+
+                            // Decompress ICC profile data
+                            use flate2::read::ZlibDecoder;
+                            use std::io::Read;
+
+                            let mut decoder = ZlibDecoder::new(compressed_data);
+                            let mut icc_data = Vec::new();
+
+                            if decoder.read_to_end(&mut icc_data).is_ok() {
+                                // Parse ICC profile and insert under
+                                // `ICC_Profile:`, grouped by table provenance
+                                // (ICC-header/ICC-cicp/ICC-view/ICC-meas --
+                                // Step 22). Before this step PNG inserted under
+                                // an internal `Profile:` prefix that only JPEG's
+                                // own `normalize_metadata_map` post-pass ever
+                                // rewrote to `ICC_Profile:` -- PNG never called
+                                // it, so its ICC tags leaked out under `Profile:`
+                                // forever. Going straight to `ICC_Profile:` here
+                                // (via the same `insert_icc_tags` every other
+                                // ICC-bearing format now uses) closes that leak
+                                // at the source instead of relying on a
+                                // JPEG-specific rename this format never reached.
+                                match crate::parsers::icc::parse_icc_profile_data(&icc_data) {
+                                    Ok(icc_tags) => {
+                                        crate::parsers::icc::insert_icc_tags(
+                                            &mut metadata,
+                                            icc_tags,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        diagnostics.push(Diagnostic::warning(format!(
+                                            "Failed to parse ICC profile in PNG: {e}"
+                                        )));
+                                    }
+                                }
+                            } else {
+                                diagnostics.push(Diagnostic::warning(
+                                    "Failed to decompress iCCP chunk data",
+                                ));
+                            }
+                        } else {
+                            diagnostics.push(Diagnostic::warning(format!(
+                                "Unknown iCCP compression method: {compression_method}"
+                            )));
+                        }
+                    }
+                }
+
+                _ => {
+                    // Skip other chunk types (IDAT, etc.)
                 }
             }
 
-            _ => {
-                // Skip other chunk types (IDAT, etc.)
+            // Safety check to prevent infinite loops
+            if next_offset <= offset {
+                return Err(ExifToolError::parse_error(
+                    "Invalid chunk offset (no progress)",
+                ));
             }
+
+            // Move to next chunk
+            offset = next_offset;
         }
 
-        // Safety check to prevent infinite loops
-        if next_offset <= offset {
-            return Err(ExifToolError::parse_error(
-                "Invalid chunk offset (no progress)",
-            ));
-        }
-
-        // Move to next chunk
-        offset = next_offset;
-    }
-
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

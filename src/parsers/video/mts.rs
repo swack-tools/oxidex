@@ -82,13 +82,17 @@ pub struct MtsParser;
 
 impl FormatParser for MtsParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let layout = PacketLayout::detect(reader)?;
-        let mut scan = StreamScan::default();
-        scan.run(reader, &layout)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let layout = PacketLayout::detect(reader)?;
+            let mut scan = StreamScan::default();
+            scan.run(reader, &layout)?;
 
-        let mut metadata = MetadataMap::with_capacity(8);
-        scan.emit(&mut metadata);
-        Ok(metadata)
+            let mut metadata = MetadataMap::with_capacity(8);
+            scan.emit(&mut metadata);
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -110,8 +114,12 @@ impl FormatParser for MtsParser {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_mts_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MtsParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MtsParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Whether this file is an MPEG-2 transport stream, for the file-type

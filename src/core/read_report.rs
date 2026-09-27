@@ -24,6 +24,7 @@ use crate::exiftool_tables::RefusalCounts;
 /// hundreds of tags, and a `Parsed` read of a mostly-empty file can produce
 /// almost none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ParseStatus {
     /// The format has a parser and it ran to completion with nothing
     /// pushed to the diagnostic sink.
@@ -76,6 +77,7 @@ impl std::fmt::Display for ParseStatus {
 /// [`Diagnostic::refusals`], which builds one from a
 /// [`RefusalCounts`][crate::exiftool_tables::RefusalCounts].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DiagnosticKind {
     /// Recoverable: some tags may be missing or a sub-block was skipped,
     /// but the read continued.

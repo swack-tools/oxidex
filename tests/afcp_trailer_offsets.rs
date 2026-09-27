@@ -318,7 +318,6 @@ fn afcp_offsets_follow_writes_to_a_synthetic_jpeg() {
         "synthetic.jpg",
         &[
             (&[LONG_ARTIST], Length::Grows),
-            (&["-all="], Length::Shrinks),
             (&["-IFD0:Make="], Length::Shrinks),
             (&["-EXIF:All="], Length::Any),
             (&["-IFD0:Make=Oxy"], Length::Same),
@@ -327,8 +326,8 @@ fn afcp_offsets_follow_writes_to_a_synthetic_jpeg() {
 }
 
 /// At e4edc55c pinned ExifTool reads these outputs with "Adjusted AFCP
-/// offsets by" 246 (`LONG_ARTIST`), -850 (`-all=`) and -32
-/// (`-IFD0:Software=`).
+/// offsets by" 246 (`LONG_ARTIST`) and -32 (`-IFD0:Software=`). `-all=`
+/// deletes the trailer (below).
 #[test]
 fn afcp_offsets_follow_writes_to_pinned_exiftool_jpg() {
     let Some(path) = fixtures::pinned_t_images_fixture_path("ExifTool.jpg") else {
@@ -340,12 +339,58 @@ fn afcp_offsets_follow_writes_to_pinned_exiftool_jpg() {
         "ExifTool.jpg",
         &[
             (&[LONG_ARTIST], Length::Grows),
-            (&["-all="], Length::Shrinks),
             (&["-IFD0:Software="], Length::Shrinks),
             (&["-EXIF:All="], Length::Any),
             (&["-IFD0:Make=FUJIFILX"], Length::Same),
         ],
     );
+}
+
+/// `-all=` deletes the AFCP trailer with everything after EOI, as pinned
+/// ExifTool 13.59's does (the `Trailer` group): no AFCP is left to re-base,
+/// and the oracle reads no AFCP tag back from either output. oxidex's
+/// EXIF-only clear used to carry it (#957, the request-order matrix).
+#[test]
+fn all_deletes_the_afcp_trailer_as_exiftool_does() {
+    let mut sources = vec![("synthetic.jpg".to_string(), synthetic_jpeg())];
+    for name in ["ExifTool.jpg", "AFCP.jpg"] {
+        if let Some(path) = fixtures::pinned_t_images_fixture_path(name) {
+            sources.push((name.to_string(), std::fs::read(&path).unwrap()));
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for (label, source) in sources {
+        assert!(
+            !afcp_trailers(&source).is_empty(),
+            "{label}: no AFCP trailer"
+        );
+        let (after, ok, stderr) = oxidex_write(&source, &["-all="], dir.path(), &label);
+        assert!(ok, "{label}: {stderr}");
+        assert!(
+            afcp_trailers(&after).is_empty(),
+            "{label}: AFCP trailer kept"
+        );
+        if let Some(oracle) = exiftool_oracle::graded() {
+            let theirs = dir.path().join(format!("theirs-{label}"));
+            std::fs::write(&theirs, &source).unwrap();
+            assert!(
+                oracle
+                    .command()
+                    .arg("-all=")
+                    .arg(&theirs)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(
+                afcp_trailers(&std::fs::read(&theirs).unwrap()).is_empty(),
+                "{label}"
+            );
+            let (_, ours) = oracle_view(&dir.path().join(&label)).unwrap();
+            let (_, reference) = oracle_view(&theirs).unwrap();
+            assert_eq!(ours, reference, "{label}: AFCP/IPTC read-back");
+        }
+    }
 }
 
 /// `t/images/AFCP.jpg` has no EXIF, so every EXIF write creates the block:

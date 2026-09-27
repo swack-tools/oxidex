@@ -765,50 +765,54 @@ fn main_value(conv: MainConv, payload: &[u8]) -> Option<Value> {
 }
 
 pub fn parse_tnef_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let data = reader
-        .read(0, reader.size() as usize)
-        .map_err(|err| err.to_string())?;
-    if data.len() < 0x15 || !data.starts_with(TNEF_KEY) {
-        return Err("invalid TNEF header".to_owned());
-    }
-
-    let mut metadata = MetadataMap::new();
-    // `$$et{Charset}`, set by `CodePage`'s RawConv as the attributes are
-    // walked, so it only affects strings decoded after it.
-    let mut code_page: Option<u32> = None;
-    // TNEF.pm:401-402: the walk starts after the 4-byte key and the 2-byte
-    // legacy key. Each attribute is level(1), tag(4), length(4), payload,
-    // checksum(2).
-    let mut pos = 6usize;
-    while let (Some(tag), Some(size)) = (le_u32(data, pos + 1), le_u32(data, pos + 5)) {
-        let payload_start = pos + 9;
-        let Some(end) = payload_start.checked_add(size as usize) else {
-            break;
-        };
-        let Some(payload) = data.get(payload_start..end) else {
-            break;
-        };
-
-        match tag {
-            MESSAGE_PROPS => process_props(payload, MSG_PROPS, code_page, &mut metadata),
-            ATTACH_INFO => process_props(payload, ATTACH_PROPS, code_page, &mut metadata),
-            _ => {}
-        }
-        if let Some((_, name, conv)) = MAIN_TAGS.iter().find(|(id, _, _)| *id == tag) {
-            if *conv == MainConv::CodePage {
-                code_page = le_u32(payload, 0);
-            }
-            if let Some(value) = main_value(*conv, payload) {
-                metadata.insert(format!("File:{name}"), TagValue::new_string(value.render()));
-            }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let data = reader
+            .read(0, reader.size() as usize)
+            .map_err(|err| err.to_string())?;
+        if data.len() < 0x15 || !data.starts_with(TNEF_KEY) {
+            return Err("invalid TNEF header".to_owned());
         }
 
-        let Some(next) = end.checked_add(2) else {
-            break;
-        };
-        pos = next;
-    }
-    Ok(metadata)
+        let mut metadata = MetadataMap::new();
+        // `$$et{Charset}`, set by `CodePage`'s RawConv as the attributes are
+        // walked, so it only affects strings decoded after it.
+        let mut code_page: Option<u32> = None;
+        // TNEF.pm:401-402: the walk starts after the 4-byte key and the 2-byte
+        // legacy key. Each attribute is level(1), tag(4), length(4), payload,
+        // checksum(2).
+        let mut pos = 6usize;
+        while let (Some(tag), Some(size)) = (le_u32(data, pos + 1), le_u32(data, pos + 5)) {
+            let payload_start = pos + 9;
+            let Some(end) = payload_start.checked_add(size as usize) else {
+                break;
+            };
+            let Some(payload) = data.get(payload_start..end) else {
+                break;
+            };
+
+            match tag {
+                MESSAGE_PROPS => process_props(payload, MSG_PROPS, code_page, &mut metadata),
+                ATTACH_INFO => process_props(payload, ATTACH_PROPS, code_page, &mut metadata),
+                _ => {}
+            }
+            if let Some((_, name, conv)) = MAIN_TAGS.iter().find(|(id, _, _)| *id == tag) {
+                if *conv == MainConv::CodePage {
+                    code_page = le_u32(payload, 0);
+                }
+                if let Some(value) = main_value(*conv, payload) {
+                    metadata.insert(format!("File:{name}"), TagValue::new_string(value.render()));
+                }
+            }
+
+            let Some(next) = end.checked_add(2) else {
+                break;
+            };
+            pos = next;
+        }
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

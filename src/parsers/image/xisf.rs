@@ -162,87 +162,91 @@ fn convert_xmp_date(value: &str) -> String {
 
 /// Extract XISF metadata (`Image::ExifTool::XISF::ProcessXISF`).
 pub fn parse_xisf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < FILE_HEADER_LEN as u64 {
-        return Err("XISF file is too short for the 16-byte header".to_string());
-    }
-    let head = reader
-        .read(0, FILE_HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !head.starts_with(SIGNATURE) {
-        return Err("invalid XISF signature".to_string());
-    }
-    // XISF.pm:126-128: `SetByteOrder('II')` then `Get32u(\$buff, 8)`.
-    let header_len = u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as usize;
-    let header = reader
-        .read(FILE_HEADER_LEN as u64, header_len)
-        .map_err(|error| error.to_string())?;
-    if header.len() != header_len {
-        // XISF.pm:129 warns and returns with only the file type set.
-        return Err("error reading XISF header".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    // XISF.pm:130, `$et->FoundTag(XML => $buff)` -- the whole header block,
-    // reported by ordinary output as a byte count.
-    metadata.insert(
-        "XML:XML",
-        TagValue::new_string(format!(
-            "(Binary data {header_len} bytes, use -b option to extract)"
-        )),
-    );
-
-    let options = XmlWalkOptions {
-        // `%Image::ExifTool::XISF::Main`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`
-        // (XISF.pm:22).
-        group0: "XML",
-        ignore_prop: IGNORE_PROP,
-        attr_proc: Some(handle_xisf_attrs),
-        ..XmlWalkOptions::default()
-    };
-    let properties = extract_xml_properties_with(header, &options).unwrap_or_default();
-
-    let mut geometry: Option<String> = None;
-    for property in properties {
-        if OMITTED_PATHS.contains(&property.name.as_str()) {
-            continue;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < FILE_HEADER_LEN as u64 {
+            return Err("XISF file is too short for the 16-byte header".to_string());
         }
-        if property.name == "ImageGeometry" && geometry.is_none() {
-            geometry = Some(property.value.clone());
+        let head = reader
+            .read(0, FILE_HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !head.starts_with(SIGNATURE) {
+            return Err("invalid XISF signature".to_string());
         }
-        let name = RENAMES
-            .iter()
-            .find(|(path, _)| *path == property.name)
-            .map_or(property.name.as_str(), |(_, renamed)| *renamed);
-        let value = if XMP_DATE_TAGS.contains(&property.name.as_str()) {
-            convert_xmp_date(&property.raw)
-        } else if BINARY_TAGS.contains(&name) {
-            format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                property.raw.len()
-            )
-        } else {
-            property.value.clone()
-        };
-        metadata.insert_occurrence(
-            format!("{}:{name}", property.group1),
-            TagValue::new_string(value),
-            0,
-            &property.group1,
-            Instance::default(),
+        // XISF.pm:126-128: `SetByteOrder('II')` then `Get32u(\$buff, 8)`.
+        let header_len = u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as usize;
+        let header = reader
+            .read(FILE_HEADER_LEN as u64, header_len)
+            .map_err(|error| error.to_string())?;
+        if header.len() != header_len {
+            // XISF.pm:129 warns and returns with only the file type set.
+            return Err("error reading XISF header".to_string());
+        }
+
+        let mut metadata = MetadataMap::new();
+        // XISF.pm:130, `$et->FoundTag(XML => $buff)` -- the whole header block,
+        // reported by ordinary output as a byte count.
+        metadata.insert(
+            "XML:XML",
+            TagValue::new_string(format!(
+                "(Binary data {header_len} bytes, use -b option to extract)"
+            )),
         );
-    }
 
-    // XISF.pm:137-143: `my ($w, $h, $n) = split /:/, $geo;` -- these three are
-    // `FoundTag`'d with no table, so they land in the default `File` group.
-    if let Some(geometry) = geometry {
-        let mut parts = geometry.split(':');
-        for name in ["ImageWidth", "ImageHeight", "NumPlanes"] {
-            let Some(part) = parts.next() else { break };
-            metadata.insert(format!("File:{name}"), TagValue::new_string(part));
+        let options = XmlWalkOptions {
+            // `%Image::ExifTool::XISF::Main`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`
+            // (XISF.pm:22).
+            group0: "XML",
+            ignore_prop: IGNORE_PROP,
+            attr_proc: Some(handle_xisf_attrs),
+            ..XmlWalkOptions::default()
+        };
+        let properties = extract_xml_properties_with(header, &options).unwrap_or_default();
+
+        let mut geometry: Option<String> = None;
+        for property in properties {
+            if OMITTED_PATHS.contains(&property.name.as_str()) {
+                continue;
+            }
+            if property.name == "ImageGeometry" && geometry.is_none() {
+                geometry = Some(property.value.clone());
+            }
+            let name = RENAMES
+                .iter()
+                .find(|(path, _)| *path == property.name)
+                .map_or(property.name.as_str(), |(_, renamed)| *renamed);
+            let value = if XMP_DATE_TAGS.contains(&property.name.as_str()) {
+                convert_xmp_date(&property.raw)
+            } else if BINARY_TAGS.contains(&name) {
+                format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    property.raw.len()
+                )
+            } else {
+                property.value.clone()
+            };
+            metadata.insert_occurrence(
+                format!("{}:{name}", property.group1),
+                TagValue::new_string(value),
+                0,
+                &property.group1,
+                Instance::default(),
+            );
         }
-    }
 
-    Ok(metadata)
+        // XISF.pm:137-143: `my ($w, $h, $n) = split /:/, $geo;` -- these three are
+        // `FoundTag`'d with no table, so they land in the default `File` group.
+        if let Some(geometry) = geometry {
+            let mut parts = geometry.split(':');
+            for name in ["ImageWidth", "ImageHeight", "NumPlanes"] {
+                let Some(part) = parts.next() else { break };
+                metadata.insert(format!("File:{name}"), TagValue::new_string(part));
+            }
+        }
+
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

@@ -204,10 +204,10 @@ fn xp_value_with_a_lone_surrogate_writes_exiftools_ucs2_bytes() {
     }
 }
 
-/// All five XP tags take the same encoding under `IFD0:` and `EXIF:`. The
-/// bare name is refused: oxidex's writer does not reach the file for an
-/// ungrouped XP name (`-XPTitle=Hi` reports an update and writes nothing),
-/// so accepting bytes for one would report a write that never happens.
+/// All five XP tags take the same encoding bare, under `IFD0:` and under
+/// `EXIF:`: pinned ExifTool 13.59 writes each spelling to the IFD0 entry.
+/// (The bare name used to be refused because oxidex's writer silently
+/// dropped an ungrouped XP name; `writers::write_request` now resolves it.)
 #[test]
 fn every_xp_tag_and_group_spelling_takes_the_encoding() {
     for (id, name) in [
@@ -217,7 +217,7 @@ fn every_xp_tag_and_group_spelling_takes_the_encoding() {
         (0x9c9e, "XPKeywords"),
         (0x9c9f, "XPSubject"),
     ] {
-        for group in ["IFD0:", "EXIF:"] {
+        for group in ["", "IFD0:", "EXIF:"] {
             let dir = tempfile::tempdir().unwrap();
             let file = write(dir.path(), b"a.jpg", &hex(BASE_JPEG_HEX));
             let mut arg = format!("-{group}{name}=").into_bytes();
@@ -234,16 +234,6 @@ fn every_xp_tag_and_group_spelling_takes_the_encoding() {
                 "-{group}{name}="
             );
         }
-        let dir = tempfile::tempdir().unwrap();
-        let file = write(dir.path(), b"a.jpg", &hex(BASE_JPEG_HEX));
-        let before = std::fs::read(&file).unwrap();
-        let mut arg = format!("-{name}=").into_bytes();
-        arg.extend_from_slice(b"A\xed\xa0\x80B");
-        let out = run(&[os(&arg), file.clone().into()]);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "-{name}: {stderr}");
-        assert!(stderr.contains(&format!("-IFD0:{name}=")), "{stderr}");
-        assert_eq!(std::fs::read(&file).unwrap(), before, "-{name}=");
     }
 }
 
@@ -568,6 +558,36 @@ fn oracle_writes_the_same_xp_bytes_for_non_utf8_values() {
             ifd0_entry(&ours, XP_TITLE),
             ifd0_entry(&reference, XP_TITLE),
             "{label}"
+        );
+    }
+}
+
+/// #957 review: XP byte values recognize names and accepted groups case-insensitively.
+#[test]
+fn lowercase_xp_names_write_the_same_non_utf8_bytes_as_the_oracle() {
+    let oracle = exiftool_oracle::graded().expect("graded pinned oracle");
+    for name in ["xptitle", "ifd0:xptitle", "exif:xptitle", "eXiF:XpTiTlE"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut arg = format!("-{name}=").into_bytes();
+        arg.extend_from_slice(&hex("41eda08042"));
+        let reference = write(dir.path(), b"ref.jpg", &hex(BASE_JPEG_HEX));
+        let expected = oracle
+            .command()
+            .args([
+                os(b"-overwrite_original"),
+                os(&arg),
+                reference.clone().into(),
+            ])
+            .output()
+            .unwrap();
+        assert!(expected.status.success(), "{name}: {expected:?}");
+        let ours = write(dir.path(), b"ours.jpg", &hex(BASE_JPEG_HEX));
+        let actual = run(&[os(&arg), ours.clone().into()]);
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(
+            ifd0_entry(&ours, XP_TITLE),
+            ifd0_entry(&reference, XP_TITLE),
+            "{name}"
         );
     }
 }

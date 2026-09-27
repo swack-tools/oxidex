@@ -645,36 +645,40 @@ impl PSDParser {
 
 impl FormatParser for PSDParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid PSD signature"));
-        }
-
-        let mut metadata = MetadataMap::new();
-
-        // Parse header
-        Self::parse_header(reader, &mut metadata)?;
-
-        // Parse image resources (EXIF, XMP, etc.)
-        let layers_offset = Self::parse_image_resources(reader, &mut metadata)?;
-
-        // Layer count and the image data compression mode live after the
-        // resources; ExifTool reads both in ProcessPSD (Photoshop.pm:1206-1223).
-        if let Some(offset) = layers_offset {
-            let is_psb = Self::read_version(reader)? == 2;
-            Self::parse_layers_and_image_data(reader, offset, is_psb, &mut metadata)?;
-        }
-
-        // ProcessPSD finishes by handing the tail of the file to the trailer
-        // scanners (Photoshop.pm:1226-1227).
-        if let Ok(file) = reader.read(0, reader.size() as usize) {
-            for (key, value) in
-                crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
-            {
-                metadata.insert(key.clone(), value.clone());
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid PSD signature"));
             }
-        }
 
-        Ok(metadata)
+            let mut metadata = MetadataMap::new();
+
+            // Parse header
+            Self::parse_header(reader, &mut metadata)?;
+
+            // Parse image resources (EXIF, XMP, etc.)
+            let layers_offset = Self::parse_image_resources(reader, &mut metadata)?;
+
+            // Layer count and the image data compression mode live after the
+            // resources; ExifTool reads both in ProcessPSD (Photoshop.pm:1206-1223).
+            if let Some(offset) = layers_offset {
+                let is_psb = Self::read_version(reader)? == 2;
+                Self::parse_layers_and_image_data(reader, offset, is_psb, &mut metadata)?;
+            }
+
+            // ProcessPSD finishes by handing the tail of the file to the trailer
+            // scanners (Photoshop.pm:1226-1227).
+            if let Ok(file) = reader.read(0, reader.size() as usize) {
+                for (key, value) in
+                    crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
+                {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -684,8 +688,12 @@ impl FormatParser for PSDParser {
 
 /// Parses metadata from PSD files.
 pub fn parse_psd_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = PSDParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PSDParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Reads an ExifTool `var_ustr32` value: a 4-byte big-endian character count

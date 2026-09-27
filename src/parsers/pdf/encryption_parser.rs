@@ -77,85 +77,89 @@ use std::str;
 /// - **PDF:Encryption**: Algorithm description (e.g., "Standard V4.4 128-bit AES")
 /// - **PDF:UserAccess**: Comma-separated list of permissions
 pub fn parse_encryption_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let file_size = reader.size();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file_size = reader.size();
 
-    // Read the last 1024 bytes to find trailer
-    let tail_size = std::cmp::min(1024, file_size as usize);
-    let tail_offset = file_size.saturating_sub(tail_size as u64);
-    let tail_data = reader.read(tail_offset, tail_size)?;
+        // Read the last 1024 bytes to find trailer
+        let tail_size = std::cmp::min(1024, file_size as usize);
+        let tail_offset = file_size.saturating_sub(tail_size as u64);
+        let tail_data = reader.read(tail_offset, tail_size)?;
 
-    // Check if /Encrypt exists in trailer
-    let has_encrypt = tail_data.windows(8).any(|window| window == b"/Encrypt");
+        // Check if /Encrypt exists in trailer
+        let has_encrypt = tail_data.windows(8).any(|window| window == b"/Encrypt");
 
-    let mut metadata = MetadataMap::new();
+        let mut metadata = MetadataMap::new();
 
-    if !has_encrypt {
-        // Not encrypted - return "No"
-        metadata.insert(
-            "PDF:Encrypted".to_string(),
-            TagValue::new_string("No".to_string()),
-        );
-        return Ok(metadata);
-    }
-
-    // PDF is encrypted
-    metadata.insert(
-        "PDF:Encrypted".to_string(),
-        TagValue::new_string("Yes".to_string()),
-    );
-
-    // Find startxref and get xref offset
-    let xref_offset = find_xref_offset(tail_data)?;
-
-    // Read xref table and trailer region
-    let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
-    let xref_data = reader.read(xref_offset, xref_size)?;
-
-    // Parse xref table to build object offset map
-    let xref_map = parse_xref_table(xref_data)?;
-
-    // Find /Encrypt reference in trailer
-    let encrypt_ref = match find_encrypt_reference(xref_data) {
-        Ok(obj_ref) => obj_ref,
-        Err(_) => {
-            // Has /Encrypt marker but can't parse - return minimal metadata
+        if !has_encrypt {
+            // Not encrypted - return "No"
+            metadata.insert(
+                "PDF:Encrypted".to_string(),
+                TagValue::new_string("No".to_string()),
+            );
             return Ok(metadata);
         }
-    };
 
-    // Get offset from xref table
-    let encrypt_offset = match xref_map.get(&encrypt_ref.object_num) {
-        Some(&offset) => offset,
-        None => return Ok(metadata), // Can't find object, return what we have
-    };
-
-    // Read Encrypt object
-    let encrypt_size = std::cmp::min(4096, file_size.saturating_sub(encrypt_offset) as usize);
-    let encrypt_data = reader.read(encrypt_offset, encrypt_size)?;
-
-    // Parse Encrypt dictionary
-    let encrypt_dict = match parse_encrypt_object(encrypt_data) {
-        Ok(dict) => dict,
-        Err(_) => return Ok(metadata), // Can't parse, return what we have
-    };
-
-    // Extract encryption details
-    if let Some(encryption_string) = format_encryption_string(&encrypt_dict, encrypt_data) {
+        // PDF is encrypted
         metadata.insert(
-            "PDF:Encryption".to_string(),
-            TagValue::new_string(encryption_string),
+            "PDF:Encrypted".to_string(),
+            TagValue::new_string("Yes".to_string()),
         );
-    }
 
-    // Extract and decode permissions
-    if let Some(permissions) = decode_permissions_from_dict(&encrypt_dict) {
-        metadata.insert(
-            "PDF:UserAccess".to_string(),
-            TagValue::new_string(permissions),
-        );
-    }
+        // Find startxref and get xref offset
+        let xref_offset = find_xref_offset(tail_data)?;
 
-    Ok(metadata)
+        // Read xref table and trailer region
+        let xref_size = std::cmp::min(8192, file_size.saturating_sub(xref_offset) as usize);
+        let xref_data = reader.read(xref_offset, xref_size)?;
+
+        // Parse xref table to build object offset map
+        let xref_map = parse_xref_table(xref_data)?;
+
+        // Find /Encrypt reference in trailer
+        let encrypt_ref = match find_encrypt_reference(xref_data) {
+            Ok(obj_ref) => obj_ref,
+            Err(_) => {
+                // Has /Encrypt marker but can't parse - return minimal metadata
+                return Ok(metadata);
+            }
+        };
+
+        // Get offset from xref table
+        let encrypt_offset = match xref_map.get(&encrypt_ref.object_num) {
+            Some(&offset) => offset,
+            None => return Ok(metadata), // Can't find object, return what we have
+        };
+
+        // Read Encrypt object
+        let encrypt_size = std::cmp::min(4096, file_size.saturating_sub(encrypt_offset) as usize);
+        let encrypt_data = reader.read(encrypt_offset, encrypt_size)?;
+
+        // Parse Encrypt dictionary
+        let encrypt_dict = match parse_encrypt_object(encrypt_data) {
+            Ok(dict) => dict,
+            Err(_) => return Ok(metadata), // Can't parse, return what we have
+        };
+
+        // Extract encryption details
+        if let Some(encryption_string) = format_encryption_string(&encrypt_dict, encrypt_data) {
+            metadata.insert(
+                "PDF:Encryption".to_string(),
+                TagValue::new_string(encryption_string),
+            );
+        }
+
+        // Extract and decode permissions
+        if let Some(permissions) = decode_permissions_from_dict(&encrypt_dict) {
+            metadata.insert(
+                "PDF:UserAccess".to_string(),
+                TagValue::new_string(permissions),
+            );
+        }
+
+        Ok(metadata)
+    })
 }
 
 //

@@ -52,7 +52,11 @@ const MAX_TAG: u16 = 0x04;
 /// trailer's IPTC record carries; empty when the file carries no FotoStation
 /// trailer.
 pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
-    parse_fotostation_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        parse_fotostation_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+    })
 }
 
 /// Where the outermost FotoStation record this module reads ends, if the file
@@ -72,30 +76,34 @@ pub fn parse_fotostation_trailer_grouped(
     file: &[u8],
     iptc_groups: &mut NonStandardIptcGroups,
 ) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let Some(mut end) = find_outermost_footer_end(file) else {
-        return metadata;
-    };
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let Some(mut end) = find_outermost_footer_end(file) else {
+            return metadata;
+        };
 
-    // Walk the chain backwards; each record's start is the next footer's end.
-    while let Some((tag, start)) = read_footer(file, end) {
-        let record = &file[start..end - FOOTER_LENGTH];
-        match tag {
-            TAG_SOFT_EDIT => parse_soft_edit(record, &mut metadata),
-            // FotoStation.jpg keeps its whole IPTC block here rather than in an
-            // APP13 resource, so without this the file reports no IPTC at all.
-            TAG_IPTC => {
-                let group1 = iptc_groups.next_group();
-                for (name, value) in extract_iptc_from_block(record) {
-                    metadata.insert_with_group1(name, TagValue::new_string(value), &group1);
+        // Walk the chain backwards; each record's start is the next footer's end.
+        while let Some((tag, start)) = read_footer(file, end) {
+            let record = &file[start..end - FOOTER_LENGTH];
+            match tag {
+                TAG_SOFT_EDIT => parse_soft_edit(record, &mut metadata),
+                // FotoStation.jpg keeps its whole IPTC block here rather than in an
+                // APP13 resource, so without this the file reports no IPTC at all.
+                TAG_IPTC => {
+                    let group1 = iptc_groups.next_group();
+                    for (name, value) in extract_iptc_from_block(record) {
+                        metadata.insert_with_group1(name, TagValue::new_string(value), &group1);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
+            end = start;
         }
-        end = start;
-    }
 
-    metadata
+        metadata
+    })
 }
 
 /// Finds the end offset of the last (outermost) valid record footer.

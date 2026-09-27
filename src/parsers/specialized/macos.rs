@@ -63,50 +63,54 @@ fn u32_be(data: &[u8], offset: usize) -> Option<u32> {
 
 /// Extract MacOS `._` sidecar metadata.
 pub fn parse_macos_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let header = reader
-        .read(0, HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !header.starts_with(MAGIC_PREFIX) || &header[6..24] != MAGIC_SUFFIX {
-        return Err("not a MacOS ._ sidecar file".to_string());
-    }
-    let mut metadata = MetadataMap::new();
-    // MacOS.pm:710: an unsupported version is a warning and stops extraction,
-    // but the file is still accepted.
-    if header[5] != SUPPORTED_VERSION {
-        return Ok(metadata);
-    }
-
-    // MacOS.pm:711-715, `SetByteOrder('MM')` then `Get16u(\$hdr, 0x18)`.
-    let entries = u32::from(u16::from_be_bytes([header[0x18], header[0x19]]));
-    let Ok(table) = reader.read(HEADER_LEN as u64, entries as usize * 12) else {
-        // MacOS.pm:715, `$et->Warn('Truncated header'), return 1`.
-        return Ok(metadata);
-    };
-
-    for index in 0..entries as usize {
-        let pos = index * 12;
-        let (Some(tag), Some(offset), Some(len)) = (
-            u32_be(&table, pos),
-            u32_be(&table, pos + 4),
-            u32_be(&table, pos + 8),
-        ) else {
-            break;
-        };
-        if len > MAX_RECORD {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let header = reader
+            .read(0, HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !header.starts_with(MAGIC_PREFIX) || &header[6..24] != MAGIC_SUFFIX {
+            return Err("not a MacOS ._ sidecar file".to_string());
         }
-        let Ok(record) = reader.read(u64::from(offset), len as usize) else {
-            // MacOS.pm:722, `$et->Warn('Truncated record'), last`.
-            break;
-        };
-        // MacOS.pm:39-49: only these two IDs have a table entry, and
-        // `HandleTag` on an unlisted ID does nothing. Entry 2 (RSRC) is
-        // deliberately not implemented -- see the module docs.
-        if tag == ENTRY_ATTR {
-            process_attr(record, offset, &mut metadata);
+        let mut metadata = MetadataMap::new();
+        // MacOS.pm:710: an unsupported version is a warning and stops extraction,
+        // but the file is still accepted.
+        if header[5] != SUPPORTED_VERSION {
+            return Ok(metadata);
         }
-    }
-    Ok(metadata)
+
+        // MacOS.pm:711-715, `SetByteOrder('MM')` then `Get16u(\$hdr, 0x18)`.
+        let entries = u32::from(u16::from_be_bytes([header[0x18], header[0x19]]));
+        let Ok(table) = reader.read(HEADER_LEN as u64, entries as usize * 12) else {
+            // MacOS.pm:715, `$et->Warn('Truncated header'), return 1`.
+            return Ok(metadata);
+        };
+
+        for index in 0..entries as usize {
+            let pos = index * 12;
+            let (Some(tag), Some(offset), Some(len)) = (
+                u32_be(&table, pos),
+                u32_be(&table, pos + 4),
+                u32_be(&table, pos + 8),
+            ) else {
+                break;
+            };
+            if len > MAX_RECORD {
+                break;
+            }
+            let Ok(record) = reader.read(u64::from(offset), len as usize) else {
+                // MacOS.pm:722, `$et->Warn('Truncated record'), last`.
+                break;
+            };
+            // MacOS.pm:39-49: only these two IDs have a table entry, and
+            // `HandleTag` on an unlisted ID does nothing. Entry 2 (RSRC) is
+            // deliberately not implemented -- see the module docs.
+            if tag == ENTRY_ATTR {
+                process_attr(record, offset, &mut metadata);
+            }
+        }
+        Ok(metadata)
+    })
 }
 
 /// `ProcessATTR` (MacOS.pm:655-693).

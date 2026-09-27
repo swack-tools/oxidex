@@ -679,47 +679,51 @@ fn record(props: &[Prop], value: &str, found: &mut Vec<XmlProperty>, options: &X
 /// `add_identity_tags` for every file whether its parser succeeded or not.
 /// Setting them here too would report each of the three twice.
 pub fn parse_xml_file(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-    let size = reader.size() as usize;
-    let data = reader.read(0, size)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
+        let size = reader.size() as usize;
+        let data = reader.read(0, size)?;
 
-    // A malformed tail is not a reason to discard the tags already read: this
-    // is a best-effort reader over documents with no schema at all.
-    let properties = extract_xml_properties(data).unwrap_or_default();
-    for property in properties {
-        // One occurrence per element, not a joined list: a repeated element is
-        // not an `rdf:Bag`, so ExifTool mints no `List` flag and `-a` prints
-        // every `<trkpt>`. See this module's header.
-        //
-        // Priority 0, not the default 1, because that is what `FoundXMP` mints
-        // an unknown tag with (XMP.pm:3595):
-        //
-        //     $tagInfo = { Name => $name, IsDefault => 1, Priority => 0 };
-        //
-        // and priority is what decides which of nine `<trkpt>` values wins the
-        // bare key. `ExifTool.pm:9541-9551` promotes an *existing* 0-priority
-        // incumbent to 1, so a later 0-priority arrival never displaces it and
-        // the FIRST track point wins -- which is what the oracle's `-j` prints
-        // (`KmlDocumentPlacemarkTrackWhen` is the first `<when>`, not the
-        // last). At the default priority 1 the ties resolve to the newest and
-        // every repeated key reported the last occurrence instead.
-        // `TagSink::record` already implements both halves of that rule; this
-        // only has to declare the priority honestly.
-        //
-        // The key's group is family 0 (`XMP`), with the namespace group
-        // (`XMP-gx`) carried as `group1`: that is `insert_occurrence`'s
-        // convention, and keying on `XMP-gx` instead made `-G0` print
-        // `[XMP-gx]` and `-XMP:all` miss every namespaced property.
-        metadata.insert_occurrence(
-            format!("XMP:{}", property.name),
-            TagValue::new_string(property.value),
-            0,
-            &property.group1,
-            Instance::default(),
-        );
-    }
+        // A malformed tail is not a reason to discard the tags already read: this
+        // is a best-effort reader over documents with no schema at all.
+        let properties = extract_xml_properties(data).unwrap_or_default();
+        for property in properties {
+            // One occurrence per element, not a joined list: a repeated element is
+            // not an `rdf:Bag`, so ExifTool mints no `List` flag and `-a` prints
+            // every `<trkpt>`. See this module's header.
+            //
+            // Priority 0, not the default 1, because that is what `FoundXMP` mints
+            // an unknown tag with (XMP.pm:3595):
+            //
+            //     $tagInfo = { Name => $name, IsDefault => 1, Priority => 0 };
+            //
+            // and priority is what decides which of nine `<trkpt>` values wins the
+            // bare key. `ExifTool.pm:9541-9551` promotes an *existing* 0-priority
+            // incumbent to 1, so a later 0-priority arrival never displaces it and
+            // the FIRST track point wins -- which is what the oracle's `-j` prints
+            // (`KmlDocumentPlacemarkTrackWhen` is the first `<when>`, not the
+            // last). At the default priority 1 the ties resolve to the newest and
+            // every repeated key reported the last occurrence instead.
+            // `TagSink::record` already implements both halves of that rule; this
+            // only has to declare the priority honestly.
+            //
+            // The key's group is family 0 (`XMP`), with the namespace group
+            // (`XMP-gx`) carried as `group1`: that is `insert_occurrence`'s
+            // convention, and keying on `XMP-gx` instead made `-G0` print
+            // `[XMP-gx]` and `-XMP:all` miss every namespaced property.
+            metadata.insert_occurrence(
+                format!("XMP:{}", property.name),
+                TagValue::new_string(property.value),
+                0,
+                &property.group1,
+                Instance::default(),
+            );
+        }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

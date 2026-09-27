@@ -73,84 +73,88 @@ use std::str;
 /// - `PDF:FontCount`: Total number of unique fonts
 /// - `PDF:FontTypes`: Array of font types (Type1, TrueType, etc.)
 pub fn parse_font_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF context (xref table and trailer)
-    let context = load_pdf_context(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF context (xref table and trailer)
+        let context = load_pdf_context(reader)?;
 
-    // Navigate to first page object
-    let first_page_offset = find_first_page_offset(reader, &context)?;
+        // Navigate to first page object
+        let first_page_offset = find_first_page_offset(reader, &context)?;
 
-    // Read page object data
-    let page_data = reader.read(
-        first_page_offset,
-        std::cmp::min(
-            8192,
-            reader.size().saturating_sub(first_page_offset) as usize,
-        ),
-    )?;
-
-    // Find Font references in the page's /Resources dictionary
-    let font_refs = extract_font_references(page_data)?;
-
-    if font_refs.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No fonts found in page resources",
-        ));
-    }
-
-    // Extract metadata from each font
-    let mut font_names = HashSet::new();
-    let mut font_types = HashSet::new();
-
-    for font_ref in &font_refs {
-        // Get font offset from xref table
-        let font_offset = match context.xref_map.get(&font_ref.object_num) {
-            Some(&offset) => offset,
-            None => continue, // Skip if not in xref table
-        };
-
-        // Read font object data
-        let font_data = reader.read(
-            font_offset,
-            std::cmp::min(4096, reader.size().saturating_sub(font_offset) as usize),
+        // Read page object data
+        let page_data = reader.read(
+            first_page_offset,
+            std::cmp::min(
+                8192,
+                reader.size().saturating_sub(first_page_offset) as usize,
+            ),
         )?;
 
-        // Extract font metadata
-        if let Some(base_font) = find_dict_name(font_data, "BaseFont") {
-            font_names.insert(base_font);
+        // Find Font references in the page's /Resources dictionary
+        let font_refs = extract_font_references(page_data)?;
+
+        if font_refs.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "No fonts found in page resources",
+            ));
         }
 
-        if let Some(subtype) = find_dict_name(font_data, "Subtype") {
-            font_types.insert(subtype);
+        // Extract metadata from each font
+        let mut font_names = HashSet::new();
+        let mut font_types = HashSet::new();
+
+        for font_ref in &font_refs {
+            // Get font offset from xref table
+            let font_offset = match context.xref_map.get(&font_ref.object_num) {
+                Some(&offset) => offset,
+                None => continue, // Skip if not in xref table
+            };
+
+            // Read font object data
+            let font_data = reader.read(
+                font_offset,
+                std::cmp::min(4096, reader.size().saturating_sub(font_offset) as usize),
+            )?;
+
+            // Extract font metadata
+            if let Some(base_font) = find_dict_name(font_data, "BaseFont") {
+                font_names.insert(base_font);
+            }
+
+            if let Some(subtype) = find_dict_name(font_data, "Subtype") {
+                font_types.insert(subtype);
+            }
         }
-    }
 
-    // Build metadata map
-    let mut metadata = MetadataMap::with_capacity(3);
+        // Build metadata map
+        let mut metadata = MetadataMap::with_capacity(3);
 
-    metadata.insert(
-        "PDF:FontCount".to_string(),
-        TagValue::new_integer(font_names.len() as i64),
-    );
-
-    if !font_names.is_empty() {
-        let mut names: Vec<_> = font_names.into_iter().collect();
-        names.sort();
         metadata.insert(
-            "PDF:FontNames".to_string(),
-            TagValue::new_array(names.into_iter().map(TagValue::new_string).collect()),
+            "PDF:FontCount".to_string(),
+            TagValue::new_integer(font_names.len() as i64),
         );
-    }
 
-    if !font_types.is_empty() {
-        let mut types: Vec<_> = font_types.into_iter().collect();
-        types.sort();
-        metadata.insert(
-            "PDF:FontTypes".to_string(),
-            TagValue::new_array(types.into_iter().map(TagValue::new_string).collect()),
-        );
-    }
+        if !font_names.is_empty() {
+            let mut names: Vec<_> = font_names.into_iter().collect();
+            names.sort();
+            metadata.insert(
+                "PDF:FontNames".to_string(),
+                TagValue::new_array(names.into_iter().map(TagValue::new_string).collect()),
+            );
+        }
 
-    Ok(metadata)
+        if !font_types.is_empty() {
+            let mut types: Vec<_> = font_types.into_iter().collect();
+            types.sort();
+            metadata.insert(
+                "PDF:FontTypes".to_string(),
+                TagValue::new_array(types.into_iter().map(TagValue::new_string).collect()),
+            );
+        }
+
+        Ok(metadata)
+    })
 }
 
 //

@@ -4,9 +4,18 @@
 //! end of the edited region onwards verbatim, so a trailer after the EOI
 //! moves by exactly `output.len() - original.len()`. Trailers whose
 //! structure is sized or relative to the end of the file survive that move;
-//! a trailer holding *absolute* file offsets does not.
+//! a trailer holding *absolute* file offsets does not, and neither does an
+//! EXIF offset that locates data after the image.
 //!
-//! # AFCP (the only such trailer re-based here)
+//! Every such offset is a [`TailPointer`], re-pointed by one mechanism,
+//! [`repoint_tail`]: to the same bytes, moved by the length delta and
+//! checked to be there ([`TailTarget::Moved`]), or where ExifTool puts a
+//! JPEG preview it cannot load ([`TailTarget::AfterEoi`]). Two producers
+//! feed it: AFCP below, and a Leica IFD2 PreviewImage after the image
+//! (`ifd_chain::preview_tail_pointer`, `Writer.pl` 13.59:6177-6245). A maker
+//! note's trailer preview would be a third.
+//!
+//! # AFCP
 //!
 //! AFCP ("AXS File Concatenation Protocol") is laid out as ExifTool 13.59
 //! reads and writes it (`Image::ExifTool::AFCP::ProcessAFCP`, AFCP.pm
@@ -49,8 +58,9 @@
 //! footer; Vivo and Google are located by scanning. They are all
 //! position-independent. The exceptions ExifTool re-bases on write and this
 //! module does not (yet) are the Samsung `QDIO` block's absolute audio
-//! offsets (Samsung.pm 13.59:1754-1765,1862-1874) and the Leica trailer
-//! referenced from maker notes (Writer.pl 13.59:6147-6173).
+//! offsets (Samsung.pm 13.59:1754-1765,1862-1874), the Leica trailer
+//! referenced from maker notes (Writer.pl 13.59:6147-6173), and maker-note
+//! previews in the trailer.
 
 use crate::error::{ExifToolError, Result};
 
@@ -243,21 +253,91 @@ fn locate_trailers(
     Ok(trailers)
 }
 
-/// Re-base the absolute offsets of every AFCP trailer that a JPEG writer
-/// copied verbatim into `output`.
+/// An offset field of the rewritten file that locates data after the edited
+/// region: data the write copied verbatim from the original's tail, which
+/// moved by the length change. The one mechanism for every such pointer --
+/// an AFCP trailer's absolute offsets, a Leica IFD2 PreviewImage after the
+/// image ([`super::ifd_chain::preview_tail_pointer`]), and whatever else
+/// addresses the tail (a maker note's trailer preview) -- so each is
+/// re-pointed by the same arithmetic and checked by the same post-condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TailPointer {
+    /// Absolute position of the field in the output.
+    pub(crate) field_at: usize,
+    /// A 32-bit field; else 16-bit.
+    pub(crate) wide: bool,
+    pub(crate) big_endian: bool,
+    /// The absolute output position the value counts from: 0 for an
+    /// absolute offset, the TIFF header for an EXIF one.
+    pub(crate) base: usize,
+    pub(crate) target: TailTarget,
+}
+
+/// Where a [`TailPointer`] must point after the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TailTarget {
+    /// At the `len` bytes that sat at absolute position `from` of the
+    /// original, in its verbatim tail: now `from + delta`, and the bytes
+    /// there are checked to be the same.
+    Moved { from: usize, len: usize },
+    /// Where pinned ExifTool 13.59 points a JPEG preview it cannot load
+    /// (`LOAD_PREVIEW`): just after the image's EOI in the output, plus the
+    /// junk before a JPEG header ([`exiftool_preview_position`]).
+    AfterEoi,
+}
+
+/// The absolute position ExifTool gives a JPEG preview it did not load
+/// (`Writer.pl` 13.59:6078-6099, 6177-6209): just after the first EOI at or
+/// after `scan_from` (the start of the entropy-coded data), plus the junk
+/// before the first JPEG header -- `\xff\xd8\xff.` or `.\xd8\xff\xdb`,
+/// then two bytes -- in what ExifTool has buffered after that EOI: the rest
+/// of the 65536-byte chunk the EOI was read in (chunks start at
+/// `scan_from`), topped up to 1024 bytes. `None` when there is no EOI.
+/// (Sony's 65536-byte scan and 32-byte header adjustment are not modelled;
+/// callers refuse a Sony block.)
+pub(crate) fn exiftool_preview_position(file: &[u8], scan_from: usize) -> Option<usize> {
+    const CHUNK: usize = 65536;
+    const SCAN_LEN: usize = 1024;
+    let eoi = scan_from
+        + file
+            .get(scan_from..)?
+            .windows(2)
+            .position(|pair| pair == [0xFF, 0xD9])?;
+    let end = eoi + 2;
+    // `$buff` is the rest of the chunk the EOI's second byte was read in
+    // (a chunk ending in 0xFF is joined to a 0xD9 opening the next) ...
+    let chunk_end = scan_from + ((eoi + 1 - scan_from) / CHUNK + 1) * CHUNK;
+    let rest_end = chunk_end.min(file.len());
+    // ... topped up to `$scanLen` bytes when shorter.
+    let buffered_end = if rest_end - end < SCAN_LEN {
+        (end + SCAN_LEN).min(file.len())
+    } else {
+        rest_end
+    };
+    // `/(\xff\xd8\xff.|.\xd8\xff\xdb)(..)/sg`; `$junkLen = pos($buff) - 6`
+    // is where the match starts.
+    let junk = file[end..buffered_end]
+        .windows(6)
+        .position(|w| w[..3] == [0xFF, 0xD8, 0xFF] || w[1..4] == [0xD8, 0xFF, 0xDB])
+        .unwrap_or(0);
+    Some(end + junk)
+}
+
+/// Point every [`TailPointer`] of `output` where its target now is.
 ///
-/// `original[moved_from..]` must be the verbatim tail of `output` (the bytes
-/// after the edited region); `scan_from` is where the entropy-coded data
-/// starts (the end of the first SOS header, or the EOI marker itself when the
-/// file has no scan), from which the EOI is found. A write that does not
-/// change the file's length leaves every trailer valid and is returned as is.
-pub(crate) fn rebase_trailer_offsets(
+/// `original[moved_from..]` must be the verbatim tail of `output`; every
+/// position at or after `moved_from` in `original` sits at `position +
+/// delta` in `output`. A pointer whose target lies before `moved_from`, whose
+/// value would not fit its field, or whose moved bytes are not found at the
+/// new position refuses the write.
+pub(crate) fn repoint_tail(
     original: &[u8],
     moved_from: usize,
     scan_from: usize,
     mut output: Vec<u8>,
+    pointers: &[TailPointer],
 ) -> Result<Vec<u8>> {
-    if output.len() == original.len() {
+    if pointers.is_empty() {
         return Ok(output);
     }
     let tail = original
@@ -268,33 +348,134 @@ pub(crate) fn rebase_trailer_offsets(
             "the bytes after the edited region were not copied verbatim",
         ));
     }
-    let trailers = locate_trailers(original, moved_from, scan_from)?;
-    if trailers.is_empty() {
-        return Ok(output);
-    }
-    // Every position at or after `moved_from` in `original` sits at
-    // `position + delta` in `output`.
     let delta = output.len() as i128 - original.len() as i128;
-    let shift = |position: u32| -> Result<u32> {
-        u32::try_from(i128::from(position) + delta)
-            .map_err(|_| refuse(format!("offset {position} does not fit after the shift")))
+    let to_output = |position: usize| {
+        usize::try_from(position as i128 + delta)
+            .map_err(|_| refuse(format!("position {position} moved before the file's start")))
     };
-    let to_output = |position: usize| (position as i128 + delta) as usize;
-    let mut patches = Vec::new();
-    for trailer in &trailers {
-        patches.push((
-            to_output(trailer.eof_record + 4),
-            shift(trailer.start as u32)?,
-            trailer.big_endian,
-        ));
-        for &(field, offset) in &trailer.entry_offsets {
-            patches.push((to_output(field), shift(offset)?, trailer.big_endian));
+    let mut patches = Vec::with_capacity(pointers.len());
+    for pointer in pointers {
+        let absolute = match pointer.target {
+            TailTarget::Moved { from, len } => {
+                if from < moved_from {
+                    return Err(refuse(format!(
+                        "the data at {from} lies in the part of the file this write rewrote"
+                    )));
+                }
+                let to = to_output(from)?;
+                if output.get(to..to.saturating_add(len)) != original.get(from..from + len) {
+                    return Err(refuse(format!(
+                        "the {len} bytes at {from} are not at {to} after the write"
+                    )));
+                }
+                to
+            }
+            TailTarget::AfterEoi => {
+                if scan_from < moved_from {
+                    return Err(refuse(
+                        "the image data lies in the part of the file this write rewrote",
+                    ));
+                }
+                exiftool_preview_position(&output, to_output(scan_from)?)
+                    .ok_or_else(|| refuse("the image has no EOI"))?
+            }
+        };
+        let value = absolute
+            .checked_sub(pointer.base)
+            .filter(|v| {
+                if pointer.wide {
+                    u32::try_from(*v).is_ok()
+                } else {
+                    u16::try_from(*v).is_ok()
+                }
+            })
+            .ok_or_else(|| {
+                refuse(format!(
+                    "position {absolute} does not fit a {}-bit offset from {}",
+                    if pointer.wide { 32 } else { 16 },
+                    pointer.base
+                ))
+            })?;
+        patches.push((pointer, value as u32));
+    }
+    for (pointer, value) in patches {
+        if pointer.wide {
+            write_u32(&mut output, pointer.field_at, value, pointer.big_endian);
+        } else {
+            let raw = if pointer.big_endian {
+                (value as u16).to_be_bytes()
+            } else {
+                (value as u16).to_le_bytes()
+            };
+            output[pointer.field_at..pointer.field_at + 2].copy_from_slice(&raw);
         }
     }
-    for (at, value, big_endian) in patches {
-        write_u32(&mut output, at, value, big_endian);
-    }
     Ok(output)
+}
+
+/// Re-base every offset a JPEG writer's verbatim copy of the tail moved:
+/// the absolute offsets of every AFCP trailer, and a Leica IFD2
+/// PreviewImage pointer ([`super::ifd_chain::preview_tail_pointer`]), all
+/// through [`repoint_tail`].
+///
+/// `original[moved_from..]` must be the verbatim tail of `output` (the bytes
+/// after the edited region); `scan_from` is where the entropy-coded data
+/// starts (the end of the first SOS header, or the EOI marker itself when the
+/// file has no scan), from which the EOI is found. A write that does not
+/// change the file's length leaves every AFCP trailer valid; the IFD2
+/// preview is re-pointed on every write, as ExifTool re-points it.
+pub(crate) fn rebase_trailer_offsets(
+    original: &[u8],
+    moved_from: usize,
+    scan_from: usize,
+    output: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let mut pointers: Vec<TailPointer> =
+        crate::writers::ifd_chain::preview_tail_pointer(original, &output)?
+            .into_iter()
+            .collect();
+    if output.len() != original.len() {
+        pointers.extend(afcp_pointers(original, moved_from, scan_from, &output)?);
+    }
+    repoint_tail(original, moved_from, scan_from, output, &pointers)
+}
+
+/// The [`TailPointer`]s of every AFCP trailer the write moved: each
+/// trailer's start pointer (absolute, at its header) and entry offsets
+/// (absolute, at their data).
+fn afcp_pointers(
+    original: &[u8],
+    moved_from: usize,
+    scan_from: usize,
+    output: &[u8],
+) -> Result<Vec<TailPointer>> {
+    let tail = original
+        .get(moved_from..)
+        .ok_or_else(|| refuse("edited region ends past the file"))?;
+    if !output.ends_with(tail) {
+        return Err(refuse(
+            "the bytes after the edited region were not copied verbatim",
+        ));
+    }
+    let trailers = locate_trailers(original, moved_from, scan_from)?;
+    let delta = output.len() as i128 - original.len() as i128;
+    let to_output = |position: usize| (position as i128 + delta) as usize;
+    let mut pointers = Vec::new();
+    for trailer in &trailers {
+        let pointer = |field: usize, from: usize, len: usize| TailPointer {
+            field_at: to_output(field),
+            wide: true,
+            big_endian: trailer.big_endian,
+            base: 0,
+            target: TailTarget::Moved { from, len },
+        };
+        pointers.push(pointer(trailer.eof_record + 4, trailer.start, 12));
+        for &(field, offset) in &trailer.entry_offsets {
+            let size = read_u32(original, field - 4, trailer.big_endian).unwrap_or(0) as usize;
+            pointers.push(pointer(field, offset as usize, size));
+        }
+    }
+    Ok(pointers)
 }
 
 #[cfg(test)]

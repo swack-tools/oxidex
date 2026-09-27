@@ -15,26 +15,30 @@ const HEADER: &[u8] = b"DJI-DBG\0";
 /// [`process_dji_info`]): printable values are text with trailing NULs
 /// removed, anything else stays binary.
 pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let Some(records) = data.strip_prefix(HEADER) else {
-        return metadata;
-    };
-
-    for (name, value) in process_dji_info(records) {
-        let value = match value {
-            DjiInfoValue::Text(text) => TagValue::String(text),
-            DjiInfoValue::Binary(bytes) => TagValue::Binary(bytes),
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let Some(records) = data.strip_prefix(HEADER) else {
+            return metadata;
         };
-        metadata.insert_occurrence(
-            format!("APP7:{name}"),
-            value,
-            shim_group_priority("APP7"),
-            "DJI",
-            Instance::default(),
-        );
-    }
 
-    metadata
+        for (name, value) in process_dji_info(records) {
+            let value = match value {
+                DjiInfoValue::Text(text) => TagValue::String(text),
+                DjiInfoValue::Binary(bytes) => TagValue::Binary(bytes),
+            };
+            metadata.insert_occurrence(
+                format!("APP7:{name}"),
+                value,
+                shim_group_priority("APP7"),
+                "DJI",
+                Instance::default(),
+            );
+        }
+
+        metadata
+    })
 }
 
 #[cfg(test)]

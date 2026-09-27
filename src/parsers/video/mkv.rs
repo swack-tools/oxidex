@@ -155,42 +155,46 @@ pub struct MkvParser;
 
 impl FormatParser for MkvParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify EBML signature
-        if reader.size() < 4 {
-            return Err(ExifToolError::parse_error("File too small to be MKV"));
-        }
-
-        let header = reader.read(0, 4)?;
-        if header != EBML_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid MKV signature: expected {:?}, found {:?}",
-                EBML_SIGNATURE, header
-            )));
-        }
-
-        let mut metadata = MetadataMap::with_capacity(32);
-        let mut offset = 0u64;
-
-        // Parse EBML header
-        offset = parse_ebml_header(reader, offset, &mut metadata)?;
-
-        // Parse Segment (main container)
-        while offset < reader.size() {
-            match parse_element_header(reader, offset) {
-                Ok((element_id, element_size, header_size)) => {
-                    if element_id == SEGMENT {
-                        let segment_offset = offset + header_size;
-                        let segment_end = segment_offset + element_size;
-                        parse_segment(reader, segment_offset, segment_end, &mut metadata)?;
-                        break;
-                    }
-                    offset += header_size + element_size;
-                }
-                Err(_) => break,
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify EBML signature
+            if reader.size() < 4 {
+                return Err(ExifToolError::parse_error("File too small to be MKV"));
             }
-        }
 
-        Ok(metadata)
+            let header = reader.read(0, 4)?;
+            if header != EBML_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid MKV signature: expected {:?}, found {:?}",
+                    EBML_SIGNATURE, header
+                )));
+            }
+
+            let mut metadata = MetadataMap::with_capacity(32);
+            let mut offset = 0u64;
+
+            // Parse EBML header
+            offset = parse_ebml_header(reader, offset, &mut metadata)?;
+
+            // Parse Segment (main container)
+            while offset < reader.size() {
+                match parse_element_header(reader, offset) {
+                    Ok((element_id, element_size, header_size)) => {
+                        if element_id == SEGMENT {
+                            let segment_offset = offset + header_size;
+                            let segment_end = segment_offset + element_size;
+                            parse_segment(reader, segment_offset, segment_end, &mut metadata)?;
+                            break;
+                        }
+                        offset += header_size + element_size;
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -1531,8 +1535,12 @@ fn format_unix_timestamp_utc(timestamp: i64) -> String {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_mkv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = MkvParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = MkvParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

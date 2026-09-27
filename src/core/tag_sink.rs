@@ -38,7 +38,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TagSink {
     /// Every occurrence ever recorded, in file order. Index `i` was recorded
     /// at `order == i` (as a `u32`).
@@ -52,9 +52,30 @@ pub struct TagSink {
     /// and [`TagSink::occurrences`] for why removal marks rather than
     /// physically deletes.
     tombstoned: Vec<bool>,
+    /// Provenance flags, parallel to `occurrences`: `assigned[i]` is true
+    /// when occurrence `i` is a caller's assignment (a public mutation of
+    /// the map: `MetadataMap::insert` / `get_mut`), false when a reader
+    /// produced it. A property of each occurrence -- it travels with the
+    /// occurrence through clones and copies and goes with it on `clear`,
+    /// unlike a positional boundary that copies, clears and in-place
+    /// mutations could desynchronise.
+    assigned: Vec<bool>,
     /// Winner projection: lookup key -> index into `occurrences` of the
     /// occurrence that currently wins that key.
     winners: HashMap<String, usize>,
+}
+
+/// Two sinks are equal when they hold the same occurrences under the same
+/// keys with the same winners. Provenance (`assigned`) is who put a row
+/// there, not what the row is: a map a parser produced and the same map
+/// built by hand compare equal, as they did before provenance was kept.
+impl PartialEq for TagSink {
+    fn eq(&self, other: &Self) -> bool {
+        self.occurrences == other.occurrences
+            && self.recorded_keys == other.recorded_keys
+            && self.tombstoned == other.tombstoned
+            && self.winners == other.winners
+    }
 }
 
 impl TagSink {
@@ -63,6 +84,7 @@ impl TagSink {
             occurrences: Vec::new(),
             recorded_keys: Vec::new(),
             tombstoned: Vec::new(),
+            assigned: Vec::new(),
             winners: HashMap::new(),
         }
     }
@@ -72,6 +94,7 @@ impl TagSink {
             occurrences: Vec::with_capacity(capacity),
             recorded_keys: Vec::with_capacity(capacity),
             tombstoned: Vec::with_capacity(capacity),
+            assigned: Vec::with_capacity(capacity),
             winners: HashMap::with_capacity(capacity),
         }
     }
@@ -135,6 +158,7 @@ impl TagSink {
         self.occurrences.push(occurrence);
         self.recorded_keys.push(key.clone());
         self.tombstoned.push(false);
+        self.assigned.push(false);
         match self.winners.entry(key) {
             Entry::Occupied(mut e) => {
                 let existing_idx = *e.get();
@@ -318,7 +342,44 @@ impl TagSink {
         self.occurrences.clear();
         self.recorded_keys.clear();
         self.tombstoned.clear();
+        self.assigned.clear();
         self.winners.clear();
+    }
+
+    /// Marks occurrence `idx` as a caller's assignment (see `assigned`).
+    pub(crate) fn mark_assigned(&mut self, idx: usize) {
+        if let Some(flag) = self.assigned.get_mut(idx) {
+            *flag = true;
+        }
+    }
+
+    /// Sets occurrence `idx`'s provenance (see `assigned`).
+    pub(crate) fn set_assigned(&mut self, idx: usize, assigned: bool) {
+        if let Some(flag) = self.assigned.get_mut(idx) {
+            *flag = assigned;
+        }
+    }
+
+    /// Marks every occurrence recorded so far as read from the file.
+    pub(crate) fn mark_all_read(&mut self) {
+        self.assigned.iter_mut().for_each(|flag| *flag = false);
+    }
+
+    /// Whether the winning occurrence for `key` is a caller's assignment.
+    pub(crate) fn winner_is_assigned(&self, key: &str) -> bool {
+        self.winners
+            .get(key)
+            .is_some_and(|&idx| self.assigned.get(idx).copied().unwrap_or(false))
+    }
+
+    /// Whether occurrence `idx` is a caller's assignment.
+    pub(crate) fn is_assigned_at(&self, idx: usize) -> bool {
+        self.assigned.get(idx).copied().unwrap_or(false)
+    }
+
+    /// The index of the winning occurrence for `key`.
+    pub(crate) fn winner_index(&self, key: &str) -> Option<usize> {
+        self.winners.get(key).copied()
     }
 
     /// Every key's current winner value, in file order.
@@ -456,18 +517,46 @@ impl TagSink {
     /// active winner or loser. Tombstones are filtered in lockstep with both
     /// parallel vectors.
     pub(crate) fn into_keyed_occurrences(self) -> Vec<(String, TagOccurrence)> {
+        self.into_keyed_occurrences_with_provenance()
+            .into_iter()
+            .map(|(key, occurrence, _)| (key, occurrence))
+            .collect()
+    }
+
+    /// [`Self::into_keyed_occurrences`] with each occurrence's provenance
+    /// (see `assigned`), for a copy that must carry it.
+    pub(crate) fn into_keyed_occurrences_with_provenance(
+        self,
+    ) -> Vec<(String, TagOccurrence, bool)> {
         let TagSink {
             occurrences,
             recorded_keys,
             tombstoned,
+            assigned,
             ..
         } = self;
         recorded_keys
             .into_iter()
             .zip(occurrences)
             .zip(tombstoned)
-            .filter_map(|((key, occurrence), retired)| (!retired).then_some((key, occurrence)))
+            .zip(assigned)
+            .filter_map(|(((key, occurrence), retired), assigned)| {
+                (!retired).then_some((key, occurrence, assigned))
+            })
             .collect()
+    }
+
+    /// Every active occurrence with its literal key and provenance (see
+    /// `assigned`), in file order.
+    pub(crate) fn keyed_occurrences_with_provenance(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, bool)> {
+        self.recorded_keys
+            .iter()
+            .zip(&self.occurrences)
+            .enumerate()
+            .filter(|(idx, _)| self.is_active(*idx))
+            .map(|(idx, (key, occurrence))| (key.as_str(), occurrence, self.is_assigned_at(idx)))
     }
 
     /// Re-records `occurrence` into this sink under its own

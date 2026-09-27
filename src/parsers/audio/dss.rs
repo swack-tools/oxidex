@@ -18,94 +18,99 @@ const DSS_EXIFTOOL_READ_LEN: u64 = 898;
 /// Extract the Olympus DSS fields using ExifTool's declared `Olympus::DSS`
 /// binary layout (`Olympus.pm`, `%Image::ExifTool::Olympus::DSS`).
 pub fn parse_dss_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < DSS_PROCESS_PROBE_LEN {
-        return Err("DSS file is too short for the Olympus DSS header".to_string());
-    }
-
-    let read_len = reader.size().min(DSS_EXIFTOOL_READ_LEN) as usize;
-    let data = reader
-        .read(0, read_len)
-        .map_err(|error| error.to_string())?;
-    if !data.starts_with(DSS_SIGNATURE) && !data.starts_with(DS2_SIGNATURE) {
-        return Err("invalid DSS signature".to_string());
-    }
-
-    // Olympus.pm's `StartTime`/`EndTime` carry a `ValueConv` this schema does
-    // not reproduce (12-digit `YYMMDDhhmmss` -> `20YY:MM:DD hh:mm:ss`), so
-    // `Field::omitted.value_conv` is set; `format_dss_datetime` below is the
-    // hand-verified equivalent, and these citations are RawAccess's required
-    // acknowledgment.
-    const START_TIME_CITATION: PerlCitation = PerlCitation {
-        module: "Olympus",
-        table: "DSS",
-        tag: "StartTime",
-        lines: "ValueConv, Olympus.pm",
-    };
-    const END_TIME_CITATION: PerlCitation = PerlCitation {
-        module: "Olympus",
-        table: "DSS",
-        tag: "EndTime",
-        lines: "ValueConv, Olympus.pm",
-    };
-    // Olympus.pm's `Duration` ValueConv turns a 6-digit `hhmmss` string into
-    // seconds (`($1 * 60 + $2) * 60 + $3`, undef when the pattern misses) and
-    // its PrintConv renders that through `Image::ExifTool::ConvertDuration`;
-    // `format_dss_duration` below reproduces both, byte-for-byte against the
-    // pinned 13.59 (`Olympus.pm` DSS table; `ExifTool.pm` `sub
-    // ConvertDuration`).
-    const DURATION_CITATION: PerlCitation = PerlCitation {
-        module: "Olympus",
-        table: "DSS",
-        tag: "Duration",
-        lines: "ValueConv + ConvertDuration, Olympus.pm / ExifTool.pm",
-    };
-
-    let table = find_table("Olympus", "DSS").ok_or("missing Olympus::DSS table")?;
-    let decode = decode_binary_table(table, &data, ByteOrder::Little);
-
-    let mut metadata = MetadataMap::new();
-    for decoded in decode.fields() {
-        match decoded.field.name {
-            // Model (and Comment when present) have no omitted semantics:
-            // the generated table's own emit path is the whole conversion.
-            "Model" | "Comment" => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(format!("Olympus:{}", decoded.field.name), value);
-                }
-            }
-            name @ ("StartTime" | "EndTime") => {
-                let citation = if name == "StartTime" {
-                    &START_TIME_CITATION
-                } else {
-                    &END_TIME_CITATION
-                };
-                let value = RawAccess::new(decoded, Acknowledged::VALUE_CONV, citation).and_then(
-                    |access| match access.raw() {
-                        DecodedValue::String(value) => Some(value.clone()),
-                        _ => None,
-                    },
-                );
-                if let Some(value) = value {
-                    metadata.insert(
-                        format!("Olympus:{name}"),
-                        TagValue::new_string(format_dss_datetime(&value)),
-                    );
-                }
-            }
-            "Duration" => {
-                let value = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DURATION_CITATION)
-                    .and_then(|access| match access.raw() {
-                        DecodedValue::String(value) => format_dss_duration(value),
-                        _ => None,
-                    });
-                if let Some(value) = value {
-                    metadata.insert("Olympus:Duration".to_string(), TagValue::new_string(value));
-                }
-            }
-            _ => {}
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < DSS_PROCESS_PROBE_LEN {
+            return Err("DSS file is too short for the Olympus DSS header".to_string());
         }
-    }
-    Ok(metadata)
+
+        let read_len = reader.size().min(DSS_EXIFTOOL_READ_LEN) as usize;
+        let data = reader
+            .read(0, read_len)
+            .map_err(|error| error.to_string())?;
+        if !data.starts_with(DSS_SIGNATURE) && !data.starts_with(DS2_SIGNATURE) {
+            return Err("invalid DSS signature".to_string());
+        }
+
+        // Olympus.pm's `StartTime`/`EndTime` carry a `ValueConv` this schema does
+        // not reproduce (12-digit `YYMMDDhhmmss` -> `20YY:MM:DD hh:mm:ss`), so
+        // `Field::omitted.value_conv` is set; `format_dss_datetime` below is the
+        // hand-verified equivalent, and these citations are RawAccess's required
+        // acknowledgment.
+        const START_TIME_CITATION: PerlCitation = PerlCitation {
+            module: "Olympus",
+            table: "DSS",
+            tag: "StartTime",
+            lines: "ValueConv, Olympus.pm",
+        };
+        const END_TIME_CITATION: PerlCitation = PerlCitation {
+            module: "Olympus",
+            table: "DSS",
+            tag: "EndTime",
+            lines: "ValueConv, Olympus.pm",
+        };
+        // Olympus.pm's `Duration` ValueConv turns a 6-digit `hhmmss` string into
+        // seconds (`($1 * 60 + $2) * 60 + $3`, undef when the pattern misses) and
+        // its PrintConv renders that through `Image::ExifTool::ConvertDuration`;
+        // `format_dss_duration` below reproduces both, byte-for-byte against the
+        // pinned 13.59 (`Olympus.pm` DSS table; `ExifTool.pm` `sub
+        // ConvertDuration`).
+        const DURATION_CITATION: PerlCitation = PerlCitation {
+            module: "Olympus",
+            table: "DSS",
+            tag: "Duration",
+            lines: "ValueConv + ConvertDuration, Olympus.pm / ExifTool.pm",
+        };
+
+        let table = find_table("Olympus", "DSS").ok_or("missing Olympus::DSS table")?;
+        let decode = decode_binary_table(table, &data, ByteOrder::Little);
+
+        let mut metadata = MetadataMap::new();
+        for decoded in decode.fields() {
+            match decoded.field.name {
+                // Model (and Comment when present) have no omitted semantics:
+                // the generated table's own emit path is the whole conversion.
+                "Model" | "Comment" => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(format!("Olympus:{}", decoded.field.name), value);
+                    }
+                }
+                name @ ("StartTime" | "EndTime") => {
+                    let citation = if name == "StartTime" {
+                        &START_TIME_CITATION
+                    } else {
+                        &END_TIME_CITATION
+                    };
+                    let value = RawAccess::new(decoded, Acknowledged::VALUE_CONV, citation)
+                        .and_then(|access| match access.raw() {
+                            DecodedValue::String(value) => Some(value.clone()),
+                            _ => None,
+                        });
+                    if let Some(value) = value {
+                        metadata.insert(
+                            format!("Olympus:{name}"),
+                            TagValue::new_string(format_dss_datetime(&value)),
+                        );
+                    }
+                }
+                "Duration" => {
+                    let value =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &DURATION_CITATION)
+                            .and_then(|access| match access.raw() {
+                                DecodedValue::String(value) => format_dss_duration(value),
+                                _ => None,
+                            });
+                    if let Some(value) = value {
+                        metadata
+                            .insert("Olympus:Duration".to_string(), TagValue::new_string(value));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(metadata)
+    })
 }
 
 /// Mirrors `Olympus.pm`'s `ValueConv`: transform a 12-digit `YYMMDDhhmmss`

@@ -128,6 +128,14 @@ pub struct CliArgs {
     /// A path, so kept as the bytes it was given: it need not be UTF-8.
     pub tags_from_file: Option<OsString>,
 
+    /// Where the (last) `-TagsFromFile` stood among the write requests: the
+    /// number of `args` entries given before it (`None` without one). `args`
+    /// keeps the tag arguments in command-line order but not the option
+    /// itself, and ExifTool applies a copy at its place in that order -- a
+    /// later `-all=` clears what it copied, an earlier one clears the file
+    /// before it (13.59: `-TagsFromFile SRC -all= DST` leaves no EXIF).
+    pub tags_from_file_position: Option<usize>,
+
     /// Date format string for DateTime tags in filename patterns (using chrono format).
     /// Example: -d %Y%m%d_%H%M%S
     /// Common specifiers: %Y (year), %m (month), %d (day), %H (hour), %M (minute), %S (second)
@@ -169,6 +177,20 @@ pub struct CliArgs {
     /// `args`, whose accessors classify by spelling (a leading `-` means an
     /// option or tag) and by position (the last argument is the file).
     pub literal_paths: Vec<OsString>,
+}
+
+/// Whether `arg` is ExifTool's `-TagsFromFile` option (`-TagsFromFile SRC`,
+/// `-TagsFromFile=SRC`, either with `--`), in any of the spellings
+/// `normalize_exiftool_option` and `non_utf8_arg` hand to lexopt.
+fn is_tags_from_file_option(arg: &[u8]) -> bool {
+    let Some(rest) = arg
+        .strip_prefix(b"--")
+        .or_else(|| arg.strip_prefix(b"-"))
+        .and_then(|name| name.strip_prefix(b"TagsFromFile"))
+    else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with(b"=")
 }
 
 fn normalize_exiftool_option(arg: String) -> String {
@@ -360,6 +382,34 @@ fn is_lexopt_short_arg(arg: &str) -> bool {
     true
 }
 
+/// oxidex's own long options (the `Long(..)` arms of [`CliArgs::parse_from`]).
+const LONG_OPTIONS: &[&str] = &[
+    "help",
+    "version",
+    "json",
+    "csv",
+    "preserve-file-times",
+    "backup",
+    "readonly",
+    "strict",
+    "extended-output",
+    "exiftool-compat",
+    "no-print-conv",
+    "TagsFromFile",
+    "detector",
+];
+
+/// Whether `arg` is ExifTool's `--TAG` / `--GROUP:TAG` exclusion: two dashes
+/// and a name that is none of oxidex's long options (with or without an
+/// `=VALUE`).
+fn is_tag_exclusion_arg(arg: &str) -> bool {
+    let Some(body) = arg.strip_prefix("--") else {
+        return false;
+    };
+    let name = body.split_once('=').map_or(body, |(name, _)| name);
+    !name.is_empty() && !body.contains('=') && !LONG_OPTIONS.contains(&name)
+}
+
 fn lexopt_arg_requires_next_value(arg: &str) -> bool {
     if arg == "--TagsFromFile" {
         return true;
@@ -429,6 +479,7 @@ impl CliArgs {
         // ExifTool's default, and now OxiDex's. See the field's own docs.
         let mut exiftool_compat = true;
         let mut tags_from_file = None;
+        let mut tags_from_file_position = None;
         let mut date_format = None;
         let mut dry_run = false;
         let mut strict = false;
@@ -462,6 +513,11 @@ impl CliArgs {
             if raw_arg == "--" {
                 options_ended = true;
                 continue;
+            }
+            // `-TagsFromFile` goes to lexopt below, away from the tag
+            // arguments; its place among them is recorded here.
+            if is_tags_from_file_option(os_bytes(&raw_arg)) {
+                tags_from_file_position = Some(tag_modifications.len());
             }
 
             // An argument that is not valid UTF-8 can only be a path or the
@@ -508,6 +564,16 @@ impl CliArgs {
                 if let Some(families) = parse_group_display_families(&arg) {
                     group_display = Some(families);
                 }
+                continue;
+            }
+
+            // `--TAG` (ExifTool's exclusion of a copied or listed tag) is no
+            // option of oxidex's: kept out of lexopt with the tag arguments.
+            // Handed to lexopt it was an unknown option, which ends lexopt's
+            // parsing, so a later `--readonly` or `--backup` was taken as one
+            // more exclusion and silently ignored (PR #957 review, Codex).
+            if is_tag_exclusion_arg(&arg) {
+                tag_modifications.push(arg.into());
                 continue;
             }
 
@@ -715,6 +781,7 @@ impl CliArgs {
             readonly,
             exiftool_compat,
             tags_from_file,
+            tags_from_file_position,
             date_format,
             dry_run,
             strict,
@@ -793,6 +860,54 @@ impl CliArgs {
             }
         }
         modifications
+    }
+
+    /// The plain `-TAG=VALUE` requests: [`Self::tag_modifications`] minus
+    /// the arguments another mode owns -- `-all=` (clear) and every date
+    /// shift (`-DateTimeOriginal+=1`, an absolute `-ModifyDate=...`), which
+    /// `tag_modifications` also reports, spelled `DateTimeOriginal+` or
+    /// `all`. Classifying each argument exactly once is what lets a command
+    /// combining modes apply all of them instead of dispatching on the first
+    /// and dropping the rest.
+    pub fn plain_tag_modifications(&self) -> Vec<(String, OsString)> {
+        self.plain_tag_modifications_with_positions()
+            .into_iter()
+            .map(|(_, tag, value)| (tag, value))
+            .collect()
+    }
+
+    /// [`Self::plain_tag_modifications`], each with its position among the
+    /// option arguments -- the order ExifTool applies them in, which
+    /// [`Self::clear_all_position`] and [`Self::tags_from_file_position`]
+    /// are measured in too.
+    pub fn plain_tag_modifications_with_positions(&self) -> Vec<(usize, String, OsString)> {
+        self.option_args()
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| match arg.to_str() {
+                Some(text) => {
+                    !Self::is_clear_all_arg(text) && Self::parse_date_shift(text).is_none()
+                }
+                None => true,
+            })
+            .filter_map(|(at, arg)| {
+                Self::parse_modification(arg).map(|(tag, value)| (at, tag, value))
+            })
+            .collect()
+    }
+
+    /// The position of the last `-all=` among the option arguments (see
+    /// [`Self::plain_tag_modifications_with_positions`]), `None` without one.
+    /// ExifTool's `-all=` removes every value assigned before it
+    /// (`Writer.pl` `RemoveNewValuesForGroup`) and none assigned after it.
+    pub fn clear_all_position(&self) -> Option<usize> {
+        self.option_args()
+            .iter()
+            .rposition(|arg| arg.to_str().is_some_and(Self::is_clear_all_arg))
+    }
+
+    fn is_clear_all_arg(arg: &str) -> bool {
+        arg.eq_ignore_ascii_case("-all=") || arg.eq_ignore_ascii_case("--all=")
     }
 
     /// Parses a single modification argument in the form -TAG=VALUE. A
@@ -884,8 +999,9 @@ impl CliArgs {
         for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
-                // Extract tag name (remove leading '-')
-                let tag_name = arg.trim_start_matches('-').to_string();
+                // Remove exactly one leading '-': `--TAG` is ExifTool's
+                // exclusion, which must not be mistaken for `-TAG`.
+                let tag_name = arg[1..].to_string();
                 tag_names.push(tag_name);
             }
         }
@@ -1067,45 +1183,15 @@ impl CliArgs {
             return Some((tag, "-=".to_string(), value));
         }
 
-        // Check for = operator (but not if it's part of += or -=)
-        // Also need to distinguish from regular tag modifications
-        if let Some(pos) = arg.find('=').and_then(tag_end) {
-            let tag = arg[1..pos].to_string();
-            let value = arg[pos + 1..].to_string();
-
-            // CreateDate and DateTimeOriginal are normal writable EXIF tags. Routing an absolute
-            // assignment through the date-shift path makes it impossible to
-            // create tags 0x9004/0x9003 when absent, because that path only
-            // patches existing date entries. Keep it in the ordinary write
-            // path, which can add a new ExifIFD entry like ExifTool does.
-            if matches!(
-                tag
-                .rsplit_once(':')
-                .map_or(tag.as_str(), |(_, name)| name),
-                name if name.eq_ignore_ascii_case("CreateDate")
-                    || name.eq_ignore_ascii_case("DateTimeOriginal")
-            ) {
-                return None;
-            }
-
-            // Check if this looks like a date shift operation
-            // Date shifts should have either:
-            // - "AllDates" as the tag pattern (case-insensitive)
-            // - A tag containing a date-related keyword (DateTime, Date, CreateDate, etc.)
-            // - A value in date format (contains colons and spaces like "Y:M:D H:M:S" or "YYYY:MM:DD HH:MM:SS")
-
-            let tag_lower = tag.to_lowercase();
-            let is_date_tag =
-                tag_lower == "alldates" || tag_lower.contains("date") || tag_lower.contains("time");
-
-            let is_date_value = value.contains(':') && value.contains(' ');
-
-            // Only treat as date shift if both tag and value look date-related
-            if is_date_tag && is_date_value {
-                return Some((tag, "=".to_string(), value));
-            }
-        }
-
+        // An absolute `-TAG=VALUE` is never a shift, whatever the tag: it is
+        // an ordinary set (ExifTool's `SetNewValue`), which the write
+        // transaction orders with every other request -- a group deletion
+        // before or after it included -- and counts by the same-value-set
+        // rule. Routing `-ModifyDate=...` or `-AllDates=...` here ran it
+        // before every set and deletion whatever the argument order
+        // (13.59: `-EXIF:All= -ModifyDate=<d>` keeps the new date) and
+        // reported a same-value assignment `unchanged` (#957,
+        // PRRT_kwDOQNbr5M6mSLMA, PRRT_kwDOQNbr5M6mSLMB).
         None
     }
 }
@@ -1282,6 +1368,7 @@ mod tests {
             readonly: false,
             exiftool_compat: true,
             tags_from_file: None,
+            tags_from_file_position: None,
             date_format: None,
             dry_run: false,
             strict: false,
@@ -1367,7 +1454,6 @@ mod tests {
             (&[b"-=\xff", b"a.jpg"], "invalid tag name"),
             (&[b"-IFD0:Artist=A\xffB", b"a.jpg"], "not valid UTF-8"),
             (&[b"-IFD0:XPTitle=A\xffB", b"a.jpg"], "Malformed UTF-8"),
-            (&[b"-XPTitle=A\xed\xa0\x80B", b"a.jpg"], "-IFD0:XPTitle="),
             (&[b"-d", b"%Y\xff", b"a.jpg"], "-d must be valid UTF-8"),
             (
                 &[b"--detector", b"\xff", b"a.jpg"],
@@ -1584,13 +1670,11 @@ mod tests {
                 "0:1:0 0:0:0".to_string()
             ))
         );
+        // An absolute assignment is an ordinary set, never a shift (#957
+        // round 7): it is ordered with the other requests.
         assert_eq!(
             CliArgs::parse_date_shift("-EXIF:DateTime=2025:01:15 10:30:00"),
-            Some((
-                "EXIF:DateTime".to_string(),
-                "=".to_string(),
-                "2025:01:15 10:30:00".to_string()
-            ))
+            None
         );
     }
 
