@@ -541,6 +541,12 @@ pub(crate) fn copy_tags(
         };
         let dest_group = dest_group.filter(|group| !group.eq_ignore_ascii_case("all"));
         if !is_copyable(dest_name, CopyMode::Named) {
+            if retain(dest_spec) {
+                return Err(ExifToolError::tag_not_written(
+                    filter,
+                    "the named copy destination is undefined or not writable",
+                ));
+            }
             continue;
         }
         report.requested += 1;

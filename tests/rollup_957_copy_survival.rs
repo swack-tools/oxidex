@@ -16,13 +16,15 @@ fn a_named_copy_without_a_destination_is_refused_atomically() {
     let dest = dir.path().join("dest.jpg");
     fs::copy(JPEG, &dest).unwrap();
     let before = fs::read(&dest).unwrap();
-    let filters = ["Make>Foo:Artist".to_string()];
-    let result = copy_metadata_report(Path::new(JPEG), &dest, Some(&filters));
-    assert!(
-        matches!(result, Err(ExifToolError::TagsNotWritten { .. })),
-        "{result:?}"
-    );
-    assert_eq!(fs::read(&dest).unwrap(), before);
+    for selector in ["Make>Foo:Artist", "Make>NoSuchTag", "Make>FileType"] {
+        let filters = [selector.to_string()];
+        let result = copy_metadata_report(Path::new(JPEG), &dest, Some(&filters));
+        assert!(
+            matches!(result, Err(ExifToolError::TagsNotWritten { .. })),
+            "{selector}: {result:?}"
+        );
+        assert_eq!(fs::read(&dest).unwrap(), before);
+    }
 }
 
 #[test]

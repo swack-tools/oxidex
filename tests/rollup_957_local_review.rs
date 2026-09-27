@@ -132,6 +132,55 @@ fn later_group_deletion_cancels_unsupported_named_copies_before_validation() {
 }
 
 #[test]
+fn clear_all_cancels_only_copies_that_precede_it() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for (index, selectors) in [
+        vec!["-TagsFromFile", "SOURCE", "-Make>XMP-dc:Title", "-all="],
+        vec!["-TagsFromFile", "SOURCE", "-Make>NoSuchTag", "-all="],
+        vec!["-all=", "-TagsFromFile", "SOURCE", "-IFD0:Make"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.jpg");
+        let ours = dir.path().join("ours.jpg");
+        let native = dir.path().join("native.jpg");
+        fs::copy(JPEG, &source).unwrap();
+        fs::copy(JPEG, &ours).unwrap();
+        seed(&oracle, &source, &["-IFD0:Make=source maker"]);
+        fs::copy(&ours, &native).unwrap();
+        let selectors: Vec<_> = selectors
+            .into_iter()
+            .map(|s| {
+                if s == "SOURCE" {
+                    source.to_str().unwrap()
+                } else {
+                    s
+                }
+            })
+            .collect();
+        let expected = oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(&selectors)
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(expected.status.success(), "{expected:?}");
+        let result = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(&selectors)
+            .arg(&ours)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "case {index}: {result:?}");
+        assert_eq!(tags(&oracle, &ours), tags(&oracle, &native), "case {index}");
+    }
+}
+
+#[test]
 fn copy_selector_order_and_exclusions_match_the_pinned_oracle() {
     let Some(oracle) = exiftool_oracle::graded() else {
         return;

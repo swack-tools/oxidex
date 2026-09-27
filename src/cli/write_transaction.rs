@@ -344,7 +344,8 @@ pub fn write_plan_file(
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 copy = Some(
                     copy_metadata_report_retaining(src, scratch, filters, |key| {
-                        !after_copy.iter().any(|(tag, _)| supersedes_copy(tag, key))
+                        !plan.copy_before_clear
+                            && !after_copy.iter().any(|(tag, _)| supersedes_copy(tag, key))
                     })
                     .map_err(|e| {
                         format!(
