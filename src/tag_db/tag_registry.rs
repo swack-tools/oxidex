@@ -657,7 +657,9 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             "EXIF:FlashpixVersion".to_string(),
             FormatFamily::EXIF,
             false,
-            ValueType::String,
+            // Exif.pm 0xa000: `Writable => 'undef'`, like ExifVersion; the
+            // CLI's PrintConvInv yields its four ASCII bytes.
+            ValueType::Binary,
             "FlashPix version number".to_string(),
             vec!["0100".to_string()],
         ),
@@ -1455,10 +1457,13 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
         ),
     );
 
+    // Exif.pm: 0x828e is CFAPattern2 (TIFF/EP) and 0xa302 CFAPattern
+    // (EXIF); the two ids were swapped here, so `-EXIF:CFAPattern=` wrote
+    // 0x828e.
     registry.insert(
         "EXIF:CFAPattern",
         TagDescriptor::new(
-            TagId::new_numeric(0x828e),
+            TagId::new_numeric(0xa302),
             "EXIF:CFAPattern".to_string(),
             FormatFamily::EXIF,
             true,
@@ -1874,7 +1879,7 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     registry.insert(
         "EXIF:CFAPattern2",
         TagDescriptor::new(
-            TagId::new_numeric(0xa302),
+            TagId::new_numeric(0x828e),
             "EXIF:CFAPattern2".to_string(),
             FormatFamily::EXIF,
             true,

@@ -36,25 +36,34 @@ fn text(value: &str) -> TagValue {
 /// A PDF read holds `CreateDate`/`CreationDate` and `ModifyDate`/`ModDate`
 /// for two Info fields; a copy-all wrote two fields and reported four. The
 /// PDF's writable Info fields are eight (Title, Author, Subject, Keywords,
-/// Creator, Producer and the two dates); `requested` stays the raw count of
-/// source rows the copy considered.
+/// Creator, Producer and the two dates), each written once. Since #957
+/// round 8 a copy is by name, as 13.59's: `requested` counts the names set
+/// (the aliases are not ExifTool names), and the XMP 13.59 also writes
+/// (XMP-dc Title, XMP-xmp CreateDate, ...) is named, not written.
 #[test]
 fn a_copy_all_counts_each_written_field_once() {
     let dir = TempDir::new().unwrap();
     let dst = copy_into(&dir, PDF, "dst.pdf");
     let report = copy_metadata_report(Path::new(PDF), &dst, None).unwrap();
     assert_eq!(report.copied, 8, "{report:?}");
+    assert!(report.requested >= report.copied, "{report:?}");
     assert!(
-        report.requested >= report.copied + 2 + report.uncopied_tags.len(),
+        report
+            .uncopied_tags
+            .iter()
+            .all(|tag| tag.tag.starts_with("XMP-")),
         "{report:?}"
     );
 
-    // A JPEG has no aliased rows: each copied row is one destination.
+    // A JPEG onto itself: every field copied once, the rest named.
     let dst = copy_into(&dir, JPEG, "dst.jpg");
     let report = copy_metadata_report(Path::new(JPEG), &dst, None).unwrap();
-    assert_eq!(
-        report.copied + report.uncopied_tags.len(),
-        report.requested,
+    assert!(report.copied > 0, "{report:?}");
+    assert!(
+        report.uncopied_groups.iter().all(|group| report
+            .uncopied_tags
+            .iter()
+            .any(|tag| tag.tag.starts_with(&format!("{group}:")))),
         "{report:?}"
     );
 }

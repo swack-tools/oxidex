@@ -33,6 +33,7 @@ pub mod tag_normalization;
 pub mod tag_occurrence;
 pub mod tag_sink;
 pub mod tag_value;
+pub(crate) mod tags_from_file;
 pub mod tiff_helpers;
 pub mod validation;
 pub mod value_formatter;

@@ -277,6 +277,15 @@ python3 "$HERE/tag_exists_codegen.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --output "$(artifact_path tag-exists)"
 
 echo "=========================================================="
+echo ">> TIER 2h: SetNewValue's copy destinations per writable name"
+echo "=========================================================="
+# `-TagsFromFile` copies by name to the preferred group and every group the
+# destination already carries the name in (src/writers/copy_targets.rs). The
+# generator runs the pinned interpreter's own SetNewValue per name.
+python3 "$HERE/copy_targets_codegen.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --output "$(artifact_path copy-targets)"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"

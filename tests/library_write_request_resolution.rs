@@ -384,15 +384,17 @@ fn copy_metadata_all_reports_what_it_cannot_copy() {
     let dest_dir = TempDir::new().unwrap();
     let dest = copy_into(&dest_dir, JPEG);
     let report = oxidex::core::operations::copy_metadata_report(&source, &dest, None).unwrap();
+    // By name, as 13.59 copies (#957 round 8): XMP-dc Title, Creator and
+    // Rights, and XMP-xmp Rating, named by their family-1 groups.
     assert!(
         report
             .uncopied_tags
             .iter()
-            .any(|tag| tag.tag == "XMP:Title"),
+            .any(|tag| tag.tag == "XMP-dc:Title"),
         "{:?}",
         report.uncopied_tags
     );
-    assert_eq!(report.uncopied_groups, ["XMP"]);
+    assert_eq!(report.uncopied_groups, ["XMP-dc", "XMP-xmp"]);
 }
 
 /// `shift_metadata_dates` on a PNG shifts through the map and

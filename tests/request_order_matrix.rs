@@ -1216,7 +1216,227 @@ fn date_and_copy_cases() -> Vec<(String, PathBuf, Vec<String>)> {
             }
         }
     }
+    // The copy's destination mapping (#957 round 8): 13.59 copies each tag by
+    // name (Writer.pl `SetNewValuesFromFile` -> `SetNewValue`), to the
+    // preferred group and to every other group already carrying the name --
+    // a JPEG's File:ImageWidth into XMP-tiff, a PDF's Info into XMP-dc/-pdf/
+    // -xmp, EXIF into a PNG's text chunks, a camera file's maker notes and
+    // its maker-note values into ExifIFD -- over JPEG, PNG, PDF and TIFF
+    // destinations.
+    let mut mapping_pairs: Vec<(String, PathBuf)> = vec![
+        (
+            JPEG_NO_GPS.into(),
+            PathBuf::from("tests/fixtures/jpeg/sample_with_exif.jpg"),
+        ),
+        (JPEG_NO_GPS.into(), PathBuf::from(PNG)),
+        (PDF.into(), PathBuf::from(PDF)),
+        (JPEG_EXIF_XMP.into(), PathBuf::from(TIFF)),
+        (JPEG_NO_GPS.into(), PathBuf::from(TIFF)),
+        (JPEG_NO_GPS.into(), PathBuf::from(PDF)),
+        (JPEG_EXIF_XMP.into(), PathBuf::from(PNG)),
+        (PNG.into(), PathBuf::from(JPEG_NO_GPS)),
+    ];
+    if let Some(canon) = &canon {
+        mapping_pairs.push((
+            canon.to_string_lossy().into_owned(),
+            PathBuf::from(JPEG_NO_GPS),
+        ));
+        mapping_pairs.push((canon.to_string_lossy().into_owned(), PathBuf::from(PNG)));
+    }
+    let mapping_selectors: Vec<Vec<&str>> = vec![
+        vec!["-all"],
+        vec!["-Make"],
+        vec!["-Artist"],
+        vec!["-Title"],
+        vec!["-*Model"],
+        vec!["-all", "--Make"],
+        vec!["-EXIF:all"],
+    ];
+    for (source, destination) in &mapping_pairs {
+        let name = destination
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for selector in &mapping_selectors {
+            let mut copy = owned(&["-TagsFromFile", source]);
+            copy.extend(owned(selector));
+            cases.push((format!("mapping {name}"), destination.clone(), copy));
+        }
+    }
     cases
+}
+
+/// A `-TagsFromFile SRC SELECTOR...` command with nothing else: (source,
+/// the filters `copy_metadata_report` takes -- each selector with the one
+/// `-` the CLI strips).
+fn pure_copy(args: &[String]) -> Option<(PathBuf, Vec<String>)> {
+    let [flag, source, selectors @ ..] = args else {
+        return None;
+    };
+    if !flag.eq_ignore_ascii_case("-TagsFromFile")
+        || selectors
+            .iter()
+            .any(|arg| arg.contains('=') || !arg.starts_with('-'))
+    {
+        return None;
+    }
+    let filters = selectors.iter().map(|arg| arg[1..].to_string()).collect();
+    Some((PathBuf::from(source), filters))
+}
+
+/// Every tag name (lower-case) the oracle reads from `path`, file-level
+/// groups included.
+fn oracle_names(oracle: &Oracle, path: &Path) -> BTreeSet<String> {
+    let o = oracle
+        .command()
+        .args(["-a", "-G1", "-s"])
+        .arg(path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .map(|line| row_tag(line).1.to_ascii_lowercase())
+        .collect()
+}
+
+/// `(family-1 group, tag name)` of an `-a -G1 -s` row.
+fn row_tag(row: &str) -> (String, String) {
+    let (group, rest) = row
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .unwrap_or(("", row));
+    let name = rest.trim_start().split(' ').next().unwrap_or_default();
+    (group.to_string(), name.to_string())
+}
+
+/// Grades a library copy (`copy_metadata_report`) against 13.59's copy of
+/// the same file: every row 13.59 wrote is in oxidex's output unchanged or
+/// named -- by family-1 group and tag -- in `CopyReport::uncopied_tags`, with
+/// its group in `uncopied_groups`; oxidex writes no row 13.59 did not; and
+/// every tag oxidex names as uncopied is one 13.59 did write.
+fn grade_library_copy(
+    report: &Result<oxidex::core::operations::CopyReport, oxidex::error::ExifToolError>,
+    source_names: &BTreeSet<String>,
+    before: &BTreeSet<String>,
+    ours: &BTreeSet<String>,
+    theirs: &BTreeSet<String>,
+    their_outcome: &Outcome,
+    untouched: bool,
+) -> (Verdict, String) {
+    let report = match (report, their_outcome) {
+        (Err(err), Outcome::Refused(_)) if untouched => {
+            return (Verdict::Match, format!("both refused: {err}"));
+        }
+        (Err(err), _) => {
+            let typed = matches!(
+                err,
+                oxidex::error::ExifToolError::TagsNotWritten { .. }
+                    | oxidex::error::ExifToolError::UnsupportedFormat { .. }
+            );
+            return if typed && untouched && err.to_string().contains('\'') {
+                (Verdict::NamedRefusal, format!("library refused: {err}"))
+            } else {
+                (Verdict::Mismatch, format!("library error: {err}"))
+            };
+        }
+        (Ok(report), _) => report,
+    };
+    let uncopied: BTreeSet<(String, String)> = report
+        .uncopied_tags
+        .iter()
+        .filter_map(|tag| tag.tag.split_once(':'))
+        .map(|(group, name)| (group.to_ascii_lowercase(), name.to_ascii_lowercase()))
+        .collect();
+    // A tag named "where its own conversion accepts the value": oxidex does
+    // not model the conversions of the groups it cannot write, so 13.59 may
+    // reject the value (a label its PrintConv lacks) and write nothing.
+    let conditional: BTreeSet<(String, String)> = report
+        .uncopied_tags
+        .iter()
+        .filter(|tag| {
+            tag.reason
+                .contains("where its own conversion accepts the value")
+        })
+        .filter_map(|tag| tag.tag.split_once(':'))
+        .map(|(group, name)| (group.to_ascii_lowercase(), name.to_ascii_lowercase()))
+        .collect();
+    let xmp_named = report
+        .uncopied_groups
+        .iter()
+        .any(|group| group.to_ascii_lowercase().starts_with("xmp-"));
+    let named = |row: &String| {
+        let (group, name) = row_tag(row);
+        // ExifTool adds its XMPToolkit to any XMP it writes.
+        if xmp_named && group == "XMP-x" && name == "XMPToolkit" {
+            return true;
+        }
+        let key = (group.to_ascii_lowercase(), name.to_ascii_lowercase());
+        uncopied.contains(&key)
+            && report
+                .uncopied_groups
+                .iter()
+                .any(|listed| listed.eq_ignore_ascii_case(&group))
+    };
+    let their_tags: BTreeSet<(String, String)> = theirs
+        .iter()
+        .map(|row| {
+            let (group, name) = row_tag(row);
+            (group.to_ascii_lowercase(), name.to_ascii_lowercase())
+        })
+        .collect();
+    // A claim about a file-level group cannot be checked against the rows
+    // (which leave those groups out); one about a tag 13.59 does not read
+    // from the source at all comes from a row only oxidex's reader reports
+    // (graded by the read conformance instrument, not here).
+    let false_claims: Vec<_> = uncopied
+        .difference(&their_tags)
+        .filter(|(group, name)| {
+            !matches!(group.as_str(), "file" | "system" | "composite" | "exiftool")
+                && source_names.contains(name)
+                && !conditional.contains(&(group.clone(), name.clone()))
+        })
+        .collect();
+    if !false_claims.is_empty() {
+        return (
+            Verdict::Mismatch,
+            format!("names as uncopied what 13.59 does not write: {false_claims:?}"),
+        );
+    }
+    let written: Vec<&String> = theirs.difference(before).collect();
+    let unexplained_theirs: Vec<&&String> = written
+        .iter()
+        .filter(|row| !ours.contains(**row) && !named(row))
+        .collect();
+    let unexplained_ours: Vec<&String> = ours
+        .difference(theirs)
+        .filter(|row| {
+            // A row oxidex left as it was, because the tag 13.59 rewrote is
+            // named as uncopied.
+            !(before.contains(*row) && named(row))
+        })
+        .collect();
+    if !unexplained_theirs.is_empty() || !unexplained_ours.is_empty() {
+        return (
+            Verdict::Mismatch,
+            format!(
+                "library copy: 13.59 only {unexplained_theirs:?}; oxidex only \
+                 {unexplained_ours:?}; uncopied {:?}",
+                report.uncopied_groups
+            ),
+        );
+    }
+    if ours == theirs {
+        (Verdict::Match, String::new())
+    } else {
+        (
+            Verdict::NamedRefusal,
+            format!(
+                "a library copy names what it cannot write: {:?}",
+                report.uncopied_groups
+            ),
+        )
+    }
 }
 
 /// Date operations (absolute sets, `+=`/`-=` shifts, `AllDates`, same-value
@@ -1238,7 +1458,21 @@ fn dates_and_copies_match_pinned_exiftool() {
     };
     let cases = date_and_copy_cases();
     let root = tempfile::tempdir().unwrap();
-    type Run = (Outcome, PathBuf, Outcome, PathBuf, Vec<u8>, String);
+    type Library = (
+        PathBuf,
+        oxidex::error::Result<oxidex::core::operations::CopyReport>,
+        bool,
+    );
+    type Run = (
+        Outcome,
+        PathBuf,
+        Outcome,
+        PathBuf,
+        Vec<u8>,
+        String,
+        String,
+        Option<Library>,
+    );
     let runs: Vec<Mutex<Option<Run>>> = cases.iter().map(|_| Mutex::new(None)).collect();
     let next = AtomicUsize::new(0);
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(6));
@@ -1264,11 +1498,25 @@ fn dates_and_copies_match_pinned_exiftool() {
                         .arg(&theirs)
                         .output()
                         .unwrap();
+                    let their_stderr = String::from_utf8_lossy(&o.stderr).into_owned();
                     let their_outcome = cli_outcome(
                         o.status.code(),
                         &String::from_utf8_lossy(&o.stdout),
-                        &String::from_utf8_lossy(&o.stderr),
+                        &their_stderr,
                     );
+                    // The library copy, beside the CLI's, for a command that
+                    // is a copy alone.
+                    let library = pure_copy(args).map(|(source, filters)| {
+                        let path = dir.join(format!("library.{ext}"));
+                        fs::copy(fixture, &path).unwrap();
+                        let report = oxidex::core::operations::copy_metadata_report(
+                            &source,
+                            &path,
+                            Some(&filters),
+                        );
+                        let untouched = fs::read(&path).unwrap() == fs::read(fixture).unwrap();
+                        (path, report, untouched)
+                    });
                     let before = fs::read(&ours).unwrap();
                     let o = Command::new(env!("CARGO_BIN_EXE_oxidex"))
                         .args(args)
@@ -1281,8 +1529,16 @@ fn dates_and_copies_match_pinned_exiftool() {
                         &String::from_utf8_lossy(&o.stdout),
                         &stderr,
                     );
-                    *runs[index].lock().unwrap() =
-                        Some((their_outcome, theirs, our_outcome, ours, before, stderr));
+                    *runs[index].lock().unwrap() = Some((
+                        their_outcome,
+                        theirs,
+                        our_outcome,
+                        ours,
+                        before,
+                        stderr,
+                        their_stderr,
+                        library,
+                    ));
                 }
             });
         }
@@ -1291,15 +1547,70 @@ fn dates_and_copies_match_pinned_exiftool() {
         .into_iter()
         .map(|slot| slot.into_inner().unwrap().unwrap())
         .collect();
-    let files: Vec<PathBuf> = runs
+    let mut files: Vec<PathBuf> = runs
         .iter()
-        .flat_map(|run| [run.1.clone(), run.3.clone()])
+        .flat_map(|run| {
+            [run.1.clone(), run.3.clone()]
+                .into_iter()
+                .chain(run.7.as_ref().map(|library| library.0.clone()))
+        })
         .collect();
+    let fixtures_read: BTreeSet<PathBuf> = cases.iter().map(|case| case.1.clone()).collect();
+    files.extend(fixtures_read);
     let rows = oracle_rows(oracle, &files);
     let mut verdicts: Vec<(String, Verdict, String)> = Vec::new();
-    for ((kind, _, args), (theirs_outcome, theirs, ours_outcome, ours, before, stderr)) in
-        cases.iter().zip(&runs)
+    let mut source_names: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for (
+        (kind, fixture, args),
+        (theirs_outcome, theirs, ours_outcome, ours, before, stderr, their_stderr, library),
+    ) in cases.iter().zip(&runs)
     {
+        if let Some((path, report, untouched)) = library {
+            let source = pure_copy(args).unwrap().0;
+            let source_names = source_names
+                .entry(source.clone())
+                .or_insert_with(|| oracle_names(oracle, &source));
+            let (verdict, detail) = grade_library_copy(
+                report,
+                source_names,
+                &rows[fixture],
+                &rows[path],
+                &rows[theirs],
+                theirs_outcome,
+                *untouched,
+            );
+            let (verdict, detail) = match report {
+                Ok(report)
+                    if their_stderr.contains("No writable tags set from")
+                        != (report.requested == 0) =>
+                {
+                    (
+                        Verdict::Mismatch,
+                        format!(
+                            "library requested {} where 13.59 says {:?}",
+                            report.requested,
+                            their_stderr.trim()
+                        ),
+                    )
+                }
+                Ok(report) if report.copied > 0 && *theirs_outcome == Outcome::Unchanged => (
+                    Verdict::Mismatch,
+                    format!("library copied {} where 13.59 is unchanged", report.copied),
+                ),
+                Ok(report)
+                    if report.copied == 0
+                        && report.uncopied_tags.is_empty()
+                        && *theirs_outcome == Outcome::Updated =>
+                {
+                    (
+                        Verdict::Mismatch,
+                        "library copied nothing and names nothing where 13.59 updated".to_string(),
+                    )
+                }
+                _ => (verdict, detail),
+            };
+            verdicts.push((format!("library {kind} {args:?}"), verdict, detail));
+        }
         let label = format!("{kind} {args:?}");
         let untouched = fs::read(ours).unwrap() == *before;
         let (verdict, detail) = match (ours_outcome, theirs_outcome) {
@@ -1351,7 +1662,8 @@ fn dates_and_copies_match_pinned_exiftool() {
                 let (ours_rows, their_rows) = (&rows[ours], &rows[theirs]);
                 let skipped_all = skipped_groups(stderr);
                 let only_skipped = |ours: &BTreeSet<String>, theirs: &BTreeSet<String>| {
-                    ours.difference(theirs).next().is_none()
+                    ours.difference(theirs)
+                        .all(|row| rows[fixture].contains(row) && row_in_groups(row, &skipped_all))
                         && !skipped_all.is_empty()
                         && theirs
                             .difference(ours)
@@ -1389,17 +1701,12 @@ fn dates_and_copies_match_pinned_exiftool() {
                         .filter_map(|(_, rest)| rest.split_once(" group(s)"))
                         .flat_map(|(groups, _)| groups.split(", "))
                         .collect();
-                    let in_skipped = |row: &&String| {
-                        let group = row
-                            .strip_prefix('[')
-                            .and_then(|rest| rest.split_once(']'))
-                            .map_or("", |(group, _)| group);
-                        let family = group.split('-').next().unwrap_or(group);
-                        skipped
-                            .iter()
-                            .any(|skipped| family.eq_ignore_ascii_case(skipped))
-                    };
-                    if only_ours.is_empty()
+                    let skipped: Vec<String> = skipped.iter().map(|s| s.to_string()).collect();
+                    let in_skipped = |row: &&String| row_in_groups(row, &skipped);
+                    // A row oxidex left as it was because its group is named
+                    // as skipped (13.59 rewrote it by name).
+                    let kept = |row: &&String| rows[fixture].contains(*row) && in_skipped(row);
+                    if only_ours.iter().all(kept)
                         && !skipped.is_empty()
                         && only_theirs.iter().all(in_skipped)
                     {
@@ -1499,8 +1806,17 @@ fn row_in_groups(row: &str, groups: &[String]) -> bool {
         .strip_prefix('[')
         .and_then(|rest| rest.split_once(']'))
         .map_or("", |(group, _)| group);
+    // ExifTool adds its XMPToolkit to any XMP it writes.
+    if group == "XMP-x"
+        && row_tag(row).1 == "XMPToolkit"
+        && groups
+            .iter()
+            .any(|skipped| skipped.to_ascii_lowercase().starts_with("xmp"))
+    {
+        return true;
+    }
     let family = group.split('-').next().unwrap_or(group);
     groups
         .iter()
-        .any(|skipped| family.eq_ignore_ascii_case(skipped))
+        .any(|skipped| family.eq_ignore_ascii_case(skipped) || group.eq_ignore_ascii_case(skipped))
 }

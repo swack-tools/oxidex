@@ -1037,6 +1037,73 @@ fn time_chunk_data(tag_name: &str, value: &TagValue) -> Result<Vec<u8>> {
     Ok(data)
 }
 
+/// The PNG tags ExifTool keeps in a chunk of their own rather than in a text
+/// keyword, and deletes by name: the main-table chunks PNG.pm (13.59) marks
+/// `Writable` -- `tIME` (ModifyDate), `gAMA` (Gamma), `sRGB`
+/// (SRGBRendering). `-PNG:<Name>=` sets the chunk's new value to nothing
+/// (`$$outBuff = ''`, PNG.pm:1080-1082) and the chunk is dropped. Pinned
+/// 13.59 on a PNG carrying all three: `-PNG:ModifyDate=`, `-PNG:Gamma=` and
+/// `-PNG:SRGBRendering=` each print `1 image files updated` and leave every
+/// other chunk in place. `pHYs` is not here: its tags "may only be deleted as
+/// a group" (`-PNG-pHYs:PixelsPerUnitX=` is 13.59's `unchanged`), nor is
+/// `iCCP` (the `ICC_Profile` block), nor a chunk ExifTool does not write
+/// (`bKGD`, `cHRM`: `Sorry, PNG:BackgroundColor doesn't exist or isn't
+/// writable`).
+const CHUNK_TAGS: &[(&str, [u8; 4])] = &[
+    ("PNG:ModifyDate", *b"tIME"),
+    ("PNG:Gamma", *b"gAMA"),
+    ("PNG:SRGBRendering", *b"sRGB"),
+];
+
+/// The chunk a [`CHUNK_TAGS`] key names (group and tag case-insensitive, as
+/// ExifTool's names are), or `None` for any other key.
+pub(crate) fn chunk_tag_chunk(key: &str) -> Option<[u8; 4]> {
+    CHUNK_TAGS
+        .iter()
+        .find(|(tag, _)| tag.eq_ignore_ascii_case(key))
+        .map(|(_, kind)| *kind)
+}
+
+/// Whether the PNG in `reader` carries a `kind` chunk before IEND.
+pub(crate) fn png_has_chunk(reader: &dyn FileReader, kind: [u8; 4]) -> Result<bool> {
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(reader, offset)?;
+        if chunk.chunk_type == kind {
+            return Ok(true);
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(false)
+}
+
+/// The [`CHUNK_TAGS`] chunks this write deletes: a tag named for deletion
+/// (`removed`: `-PNG:ModifyDate=`, `remove_tag`), or one the reader surfaced
+/// that the caller took out of the map (`write_metadata` with the row
+/// dropped) -- and in either case not set again in `metadata`. A key still
+/// in the map with its baseline value is unchanged, and its chunk is carried
+/// byte for byte; only a removal drops it (#957, PRRT_kwDOQNbr5M6mTtBM: the
+/// `tIME` chunk used to be carried for both, so the read-back found
+/// `PNG:ModifyDate` still present and the deletion could never succeed).
+fn dropped_chunk_tags(
+    metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
+) -> Vec<[u8; 4]> {
+    CHUNK_TAGS
+        .iter()
+        .filter(|(key, _)| {
+            !metadata.contains_key(key)
+                && (baseline.contains_key(key)
+                    || removed.iter().any(|name| name.eq_ignore_ascii_case(key)))
+        })
+        .map(|(_, kind)| *kind)
+        .collect()
+}
+
 /// Chunks ExifTool's `-all=` deletes from a PNG (PNG.pm 13.59): every
 /// textual chunk (TextualData), the EXIF (`eXIf`, `zxIf`) and XMP (`tXMP`)
 /// blocks, the ICC profile (`iCCP`), `pHYs` (PNG-pHYs), C2PA (`caBX`,
@@ -1271,6 +1338,10 @@ pub(crate) fn write_png_metadata_with_removals(
             new_chunks.push(chunk);
         }
     }
+    let dropped = dropped_chunk_tags(modified_metadata, baseline, removed);
+    let drops_a_chunk = chunks
+        .iter()
+        .any(|chunk| dropped.contains(&chunk.chunk_type));
     let has_time_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"tIME");
     if let Some(data) = &time_chunk
         && !has_time_chunk
@@ -1297,6 +1368,7 @@ pub(crate) fn write_png_metadata_with_removals(
     // writing to another path still gets the (identical) file.
     if matches!(exif_fate, ExifFate::Carry)
         && time_chunk.is_none()
+        && !drops_a_chunk
         && new_chunks.is_empty()
         && text_fates
             .values()
@@ -1321,6 +1393,10 @@ pub(crate) fn write_png_metadata_with_removals(
             continue;
         };
         let chunk = &chunks[index];
+        // A chunk-backed tag named for deletion: its chunk goes.
+        if dropped.contains(&chunk.chunk_type) {
+            continue;
+        }
         match &chunk.chunk_type {
             b"tEXt" | b"iTXt" | b"zTXt" => match text_fates.remove(&index) {
                 Some(TextFate::Rebuild(chunk_type, data)) => {
