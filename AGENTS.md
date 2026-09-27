@@ -690,9 +690,9 @@ in the pinned tree) or its actual output. A finding that says only "ExifTool pro
 **Do not report.**
 - Formatting, lint, naming or style. `cargo fmt` and clippy with
   `-D warnings` run in CI.
-- A refusal where ExifTool writes, when the refusal is explicit, typed and
-  documented as a follow-up. Failing closed is acceptable here; failing
-  silently is not.
+- A refusal where ExifTool writes, when the refusal is explicit, names the
+  tag (typed where the codebase has the type, as above) and is documented as a
+  follow-up. Failing closed is acceptable here; failing silently is not.
 - A preference between two behaviours that both match the oracle.
 
 ## Architecture
