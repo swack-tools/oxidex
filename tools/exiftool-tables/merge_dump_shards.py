@@ -27,6 +27,7 @@ shard files beside OUT, merges, and removes them.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import resource
 import subprocess
@@ -68,7 +69,7 @@ class _Reader:
                 raise ShardError(f"{self.path}: bytes after end record")
             self.pending = None
             return
-        if len(parts) != 3 or parts[0] not in (b"S", b"L", b"U"):
+        if len(parts) != 3 or parts[0] not in (b"S", b"L", b"U", b"D"):
             raise ShardError(f"{self.path}: malformed record header {line[:80]!r}")
         seq, size = int(parts[1]), int(parts[2])
         body = self.fh.read(size)
@@ -147,10 +148,20 @@ def merge(out: BinaryIO, shard_paths: list[Path]) -> None:
                 if any(b != bodies[0] for b in bodies[1:]):
                     raise ShardError(f"skeleton record {seq} differs between shards")
                 out.write(bodies[0])
-            elif kinds == {b"L"}:
-                if len(present) != 1:
-                    raise ShardError(f"leaf record {seq} supplied by {len(present)} shards")
-                out.write(present[0].take())
+            elif kinds <= {b"L", b"D"}:
+                leaves = [r for r in present if r.pending[0] == b"L"]
+                if len(leaves) != 1:
+                    raise ShardError(f"leaf record {seq} supplied by {len(leaves)} shards")
+                digests = [r for r in present if r.pending[0] == b"D"]
+                # A balanced leaf is a global fact: every other shard must
+                # vouch for the owner's bytes.  An owned leaf has no digests.
+                if digests and len(present) != count:
+                    raise ShardError(f"leaf record {seq} digest missing from a shard")
+                body = leaves[0].take()
+                want = hashlib.sha256(body).hexdigest().encode()
+                if any(r.take() != want for r in digests):
+                    raise ShardError(f"leaf record {seq} differs between shards")
+                out.write(body)
             else:
                 raise ShardError(f"record {seq} has mixed kinds")
             seq += 1

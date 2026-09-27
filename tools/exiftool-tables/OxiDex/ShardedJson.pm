@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use JSON::PP ();
 use Scalar::Util qw(refaddr);
+use Digest::SHA qw(sha256_hex);
 
 # Encode one shard of a dump_tables.pl document as mergeable framed records.
 #
@@ -27,6 +28,8 @@ use Scalar::Util qw(refaddr);
 #     H <shard> <count>\n                           once, first
 #     S <seq> <bytes>\n<bytes>                      skeleton text (all shards)
 #     L <seq> <bytes>\n<bytes>                      leaf text (owning shard)
+#     D <seq> <bytes>\n<bytes>                      sha256 hex of a balanced
+#                                                   leaf's text (every other shard)
 #     U <seq> <bytes>\n<bytes>                      union-map part (all shards):
 #         "<level>\n" then per entry "<keylen> <textlen> <valuelen>\n"
 #         followed by the UTF-8 key, its JSON text, and its value text
@@ -35,7 +38,10 @@ use Scalar::Util qw(refaddr);
 # merge_dump_shards.py interleaves records by <seq>, requires every S record
 # to be byte-identical across all shards (that is the global-facts agreement
 # check), every L record to come from exactly one shard, and unions every U
-# record.  A subtree is split when it contains an owned or union node, or
+# record.  A balanced leaf is a global fact every shard computed, so every
+# non-owning shard sends a D digest of it and the merge requires all of them
+# to match the owner's text; only owned leaves, which other shards never
+# computed faithfully, go unchecked.  A subtree is split when it contains an owned or union node, or
 # when its node count exceeds total/(16 * shards); every other leaf goes to
 # the shard with the least node count so far.  Owned and union contents count
 # as zero, so costs, splits and the partition are identical in every shard
@@ -122,12 +128,16 @@ sub _flush_skeleton {
     $state->{skeleton} = '';
 }
 
-# A leaf slot: the owner writes it, every other shard only advances <seq>.
+# A leaf slot: the owner writes it.  For a balanced leaf ($checked) every
+# other shard writes a digest of the same text; for an owned leaf it only
+# advances <seq>, since its copy is a placeholder.
 sub _leaf {
-    my ($state, $owner, $value, $level) = @_;
+    my ($state, $owner, $value, $level, $checked) = @_;
     _flush_skeleton($state);
     if ($owner == $state->{index}) {
         _frame($state, 'L', _leaf_text($state->{encoder}, $value, $level));
+    } elsif ($checked) {
+        _frame($state, 'D', sha256_hex(_leaf_text($state->{encoder}, $value, $level)));
     } else {
         ++$state->{seq};
     }
@@ -154,7 +164,7 @@ sub _emit {
         my $best = 0;
         for my $s (1 .. $#$load) { $best = $s if $load->[$s] < $load->[$best] }
         $load->[$best] += $cost;
-        _leaf($state, $best, $value, $level);
+        _leaf($state, $best, $value, $level, 1);
         return;
     }
     my $inner = $INDENT x ($level + 1);

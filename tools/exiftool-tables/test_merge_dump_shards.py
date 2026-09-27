@@ -92,6 +92,21 @@ class MergeProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(mds.ShardError, "differs"):
             self.merge(a, clash)
 
+    def test_checks_balanced_leaves_against_every_shard(self):
+        import hashlib
+        d = lambda b: hashlib.sha256(b).hexdigest().encode()
+        a = frames(0, 2, [("S", 0, b"{"), ("L", 1, b"1"), ("S", 2, b"}")], 3)
+        b = frames(1, 2, [("S", 0, b"{"), ("D", 1, d(b"1")), ("S", 2, b"}")], 3)
+        self.assertEqual(self.merge(a, b), b"{1}")
+        # The review case: shards saw different global values (1 vs 2).
+        other = frames(1, 2, [("S", 0, b"{"), ("D", 1, d(b"2")), ("S", 2, b"}")], 3)
+        with self.assertRaisesRegex(mds.ShardError, "differs"):
+            self.merge(a, other)
+        three = [frames(0, 3, [("L", 0, b"1")], 1), frames(1, 3, [("D", 0, d(b"1"))], 1),
+                 frames(2, 3, [], 1)]
+        with self.assertRaisesRegex(mds.ShardError, "digest missing"):
+            self.merge(*three)
+
     def test_refuses_truncated_shard(self):
         a = frames(0, 1, [("S", 0, b"{}")], 1)
         with self.assertRaisesRegex(mds.ShardError, "truncated"):
