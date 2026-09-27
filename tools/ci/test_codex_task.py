@@ -47,7 +47,8 @@ if os.environ.get('MUTATE'):
 sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
 ''')
         codex.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'], ARGS_LOG=str(self.args_log))
+        self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
+                        ARGS_LOG=str(self.args_log), OXIDEX_OPS_DIR=str(self.root))
         for control in ('ZERO_USAGE', 'FAKE_EXIT', 'MUTATE', 'SLEEP_PID_PATH', 'FAKE_RESULT'):
             self.env.pop(control, None)
 
@@ -110,6 +111,36 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         result = self.run_task('review', '--base', self.base, '--dry-run')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('durable', result.stderr)
+        self.assertFalse(self.args_log.exists())
+
+    def test_output_override_stays_under_operations_root(self):
+        self.env['OXIDEX_OPS_DIR'] = str(self.root / 'ops')
+        result = self.run_task('review', '--base', self.base,
+                               '--output-dir', str(self.root / 'outside'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('OXIDEX_OPS_DIR', result.stderr)
+        self.assertFalse(self.args_log.exists())
+
+    def test_write_roles_require_a_clean_linked_staging_worktree(self):
+        brief = self.root / 'brief.txt'
+        brief.write_text('Implement the scoped repair.')
+        for role in ('implementation', 'parser'):
+            with self.subTest(role=role):
+                result = self.run_task(role, '--brief', str(brief), '--dry-run')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('worktree', result.stderr)
+        worker = self.root / 'worker'
+        self.git('worktree', 'add', '-qb', 'staging/worker', str(worker))
+        allowed = self.run_task('parser', '--cwd', str(worker), '--brief', str(brief), '--dry-run')
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        subprocess.run(['git', '-C', str(worker), 'branch', '-m', 'refactor/tag-machinery'], check=True)
+        protected = self.run_task('parser', '--cwd', str(worker), '--brief', str(brief), '--dry-run')
+        self.assertNotEqual(protected.returncode, 0)
+        subprocess.run(['git', '-C', str(worker), 'branch', '-m', 'staging/worker'], check=True)
+        (worker / 'file.md').write_text('uncommitted work')
+        dirty = self.run_task('parser', '--cwd', str(worker), '--brief', str(brief), '--dry-run')
+        self.assertNotEqual(dirty.returncode, 0)
+        self.assertIn('clean', dirty.stderr)
         self.assertFalse(self.args_log.exists())
 
     def test_zero_reported_usage_is_unknown(self):

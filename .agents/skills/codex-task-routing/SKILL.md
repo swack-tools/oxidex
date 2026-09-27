@@ -59,8 +59,10 @@ python3 tools/codex_task.py inventory --brief <task-file> --dry-run
 `--dry-run` prints the command without making a model call. Runs default to a
 30-minute limit and write a receipt, result, events, and errors below
 `$OXIDEX_OPS_DIR/evidence/codex` (default `~/oxidex-ops`). `--output-dir` must be
-absolute, new, outside the checkout, and on durable storage. Temporary paths
-and paths through symlinks are rejected.
+absolute, new, outside the checkout, and beneath `OXIDEX_OPS_DIR` on durable
+storage. Temporary paths and paths through symlinks are rejected. Write roles
+require a clean linked worktree on a `staging/` branch. The caller must confirm
+that no other worker owns that checkout.
 
 The helper invokes `codex exec review` for review roles with a read-only
 sandbox, explicit `model` and `review_model`, and an immutable base SHA. It

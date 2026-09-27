@@ -105,6 +105,14 @@ def main():
     state = snapshot(root)
     if review and state['dirty']:
         parser.error('commit the candidate locally first: review requires a clean checkout')
+    if args.role in {'implementation', 'parser'}:
+        git_dir = git(root, 'rev-parse', '--path-format=absolute', '--git-dir')
+        common_dir = git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+        branch = git(root, 'branch', '--show-current')
+        if git_dir == common_dir or not branch.startswith('staging/'):
+            parser.error('write tasks require a dedicated linked worktree on a staging/ branch')
+        if state['dirty']:
+            parser.error('write tasks require a clean worktree; preserve existing changes first')
     base = git(root, 'rev-parse', '--verify', args.base + '^{commit}') if review else None
     if review and subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor',
                                   base, state['head']], capture_output=True).returncode:
@@ -114,9 +122,12 @@ def main():
     model, effort = args.model or model, args.effort or effort
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     try:
+        operations = ops_root()
         candidate = args.output_dir or (
-            ops_root() / 'evidence/codex' / f'{stamp}-{args.role}-{uuid.uuid4().hex[:8]}')
+            operations / 'evidence/codex' / f'{stamp}-{args.role}-{uuid.uuid4().hex[:8]}')
         output = durable_root(candidate.expanduser(), 'review evidence directory')
+        if not output.is_relative_to(operations) or output == operations:
+            parser.error('evidence must remain beneath OXIDEX_OPS_DIR')
     except ValueError as error:
         parser.error(str(error))
     if output.is_relative_to(root):
