@@ -378,6 +378,13 @@ default is already the pattern in `tools/fleet/rollout/` (`install_hook.sh`,
 `seed_desired.py`, `rulesets.py` all require an explicit `--execute` and refuse
 when a precondition is missing); match it rather than inventing a new shape.
 
+**Publish only as the maintainer.** Read the
+[identity procedure](docs/AGENT_WORKFLOWS.md#maintainer-identity) before remote
+publication. Resolve `swackhamer`'s token and fail closed if missing; authenticate
+SSH pushes with the maintainer's explicit key. Verify author, committer, emails
+and signing principal over every outgoing branch's new commits. Never rely on
+an ambient GitHub account or SSH key, including for `gh stack` pushes.
+
 **Config that a container owns must not be edited under it.** Stop the
 container, edit, restart, then confirm the change actually persisted — a running
 container may rewrite or simply outlive the edit, and the edit that vanished on
@@ -394,6 +401,16 @@ a corrupted instrument), isolate every worker in its own explicit worktree, and
 report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
+
+**Preserve work before cleanup.** Read the
+[cleanup runbook](docs/AGENT_WORKFLOWS.md#cleanup-and-preservation) before
+removing targets, worktrees, scratch clones, bundles or branches. Keep targets
+while a live agent, open PR or recheckable measurement uses them. Only remove
+exact paths you own after all tracked, untracked and ignored evidence is
+preserved and local commits and annotated tags are proven remote or archived.
+Use Codex's managed worktree archive tool when available. The stash is shared:
+never apply, pop or drop an unnamed or position-only stash. Prefer a WIP commit
+or evidence patch, and record an exact stash object ID if one is necessary.
 
 ## How work lands
 
@@ -435,44 +452,38 @@ report it superseded and stop rather than landing an empty change.
 
 ## Stacking dependent PRs
 
-Stack instead of queueing when review loops pile up or too many PRs are open
-at once, and in particular when a branch depends on a PR that has not landed.
-Open the dependent PR now, with the parent's `staging/...` branch as its base,
-rather than parking finished work until the parent merges. CI and the PR
-reviewer then see only the child's own diff and start immediately; a queued
-branch instead waits out every one of the parent's review rounds and then
-takes one large conflict at the end.
+Keep one active candidate per dependency cluster. Preserve descendant patches
+locally while the parent changes; after it lands, reconstruct the next unit from
+fresh `origin/refactor/tag-machinery`. Use a stack when a real dependency benefits
+from simultaneous review and its parent snapshot can stay fixed. Keep independent
+changes separate. Combine changes only when they share an implementation boundary
+and must be verified together.
 
-- **Keep children current.** Each time the parent's head moves, merge it into
-  every child with a signed merge (`git merge -S --no-ff origin/<parent>`), not
-  a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
-  favour of the parent's structure.
-- **Land only on the integration branch.** Never merge a child into its parent
-  branch. After the parent squash-merges into `refactor/tag-machinery`:
-  1. retarget the child first (`gh pr edit <n> --base refactor/tag-machinery`);
-  2. then merge the new tip into it and push.
+Read [the stack runbook](docs/AGENT_WORKFLOWS.md#stacking-dependent-prs) before
+changing a stack. Published branches use signed merges, never force-pushes.
+Never merge a child into its parent branch. After the parent lands, retarget the
+child to `refactor/tag-machinery` first, then merge the new tip and push to start
+CI against that base. If the push happened before retargeting, obtain a fresh
+pull-request CI run for the actual base before merging.
 
-  The order matters. Retargeting is a PR `edited` event, which CI's
-  `pull_request` trigger does not subscribe to, so only the push that follows
-  starts a CI run against the new base. If the tip merge was already pushed
-  before retargeting, re-run CI explicitly. Then squash-merge under the rules
-  in "How work lands", which apply unchanged to every PR in the stack.
-- **Keep unapproved work out of any automatic integration queue.** The
-  multi-host fleet is stopped. Its train, however, treats every unclaimed,
-  non-withdrawn `staging/*` ref as a landing candidate
-  (`tools/fleet/workqueue.py`), and it squash-commits and pushes those refs
-  straight onto the integration tip (`tools/fleet/train.py`). It does this
-  whatever the ref's PR base, review state or CI status. If the fleet ever
-  runs again, it would therefore bypass the landing rules above for every PR,
-  not only for stacked children. Before restarting it, give the train an
-  explicit readiness filter (CI green, approved, no unresolved threads,
-  parent landed). Until then, withdraw every not-yet-approved branch from the
-  queue.
-- **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
-  review round, one defect blocking all of it, and no way to verify each
-  change's central claim on its own.
-- **Record the stack.** List the parent/child chain in `HANDOFF.md` and in each
-  child's PR body, so a successor knows the retarget order.
+Use [Codex task routing](.agents/skills/codex-task-routing/SKILL.md) for local
+review before every push. Each layer still requires fresh final-head CI, no
+unresolved review threads, and independent verification of its central claim.
+Keep findings through PR replacements and record the dependency chain and exact
+heads in `HANDOFF.md`. Closing an old PR does not resolve its findings.
+
+The fleet train is stopped. Before restarting it, add a readiness filter for
+CI, approval, resolved threads and landed parents; until then withdraw unapproved
+refs. Its current queue accepts unclaimed, non-withdrawn `staging/*` refs without
+checking PR state. Do not use it to bypass the landing requirements.
+
+## Review guidelines
+
+Read [the review contract](docs/AGENT_WORKFLOWS.md#review-guidelines). Review the
+current candidate and its interactions; validate findings with concrete inputs
+and pinned-oracle evidence. Wrong values, partial writes, lost data, unsafe
+resource use, and fail-open safety checks take priority over style. Local review
+helps anticipate GitHub findings; it cannot establish that no bugs remain.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
