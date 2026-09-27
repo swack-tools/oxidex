@@ -327,15 +327,19 @@ pub fn write_plan_file(
             let (before_copy, after_copy) = plan
                 .sets
                 .split_at(plan.sets_before_copy.min(plan.sets.len()));
-            // A later replacement cancels an earlier pending set even when
-            // TagsFromFile appears between them. Do not execute a dead set.
+            // A later replacement cancels an earlier pending set or single-tag
+            // deletion even when TagsFromFile appears between them. Group-wide
+            // deletions still apply, and a later deletion does not cancel an
+            // earlier deletion: both must retain their refusal checks.
             let before_copy: Vec<_> = before_copy
                 .iter()
                 .filter(|(tag, value)| {
-                    value.is_empty()
-                        || !after_copy
-                            .iter()
-                            .any(|(later, _)| supersedes_copy(later, tag))
+                    (value.is_empty()
+                        && crate::writers::write_request::group_deletion(tag).is_some())
+                        || !after_copy.iter().any(|(later, later_value)| {
+                            (!value.is_empty() || !later_value.is_empty())
+                                && supersedes_copy(later, tag)
+                        })
                 })
                 .cloned()
                 .collect();
