@@ -403,13 +403,17 @@ created, by exact path, never by glob across other agents' directories.
 A scratch clone or bundle is not build output: it can hold the only copy of
 a commit graph. Delete one only after proving, against the live remote, that
 every commit it carries is reachable from `origin`:
-- **Clone.** In the clone, run `git fetch --prune origin` so its `origin/*` refs
-  match the live remote; a stale tracking ref hides commits that are gone.
-  Then `git rev-list --all --not --remotes=origin` must print nothing.
-- **Bundle.** Its objects can't be inspected from another repository, so import
-  them first. In a scratch bare repository, run
+- **Clone.** Pruning can delete the clone's only reference to a commit, so
+  capture every ref first:
+  `git for-each-ref --format='%(objectname)' > <evidence>/clone-refs.txt`.
+  Then run `git fetch --prune origin`, so `origin/*` matches the live remote.
+  Then `git rev-list --all --reflog $(cat <evidence>/clone-refs.txt) --not --remotes=origin`
+  must print nothing.
+- **Bundle.** Its objects can't be inspected from another repository, so
+  import them first. In a scratch bare repository, run
   `git fetch <origin-url> '+refs/heads/*:refs/remotes/origin/*'`, then
-  `git fetch <bundle> '+refs/*:refs/bundle/*'`. Then
+  `git fetch <bundle> '+refs/*:refs/bundle/*' '+HEAD:refs/bundle/HEAD'`
+  (a bundle may advertise only `HEAD`). Both fetches must succeed. Then
   `git rev-list --glob=refs/bundle --not --remotes=origin` must print nothing.
   Delete the scratch repository afterwards.
 
@@ -578,7 +582,10 @@ So stacked branches are kept current by rebasing, not by merge commits.
   How it lands depends on the kind of stack:
   - **GitHub stack.** Merge from the bottom with `gh stack merge <pr> --squash`.
     It lands that PR and every unmerged PR below it, in order, so run it only
-    once every layer up to `<pr>` has cleared the rules above.
+    once every layer up to `<pr>` has cleared the rules above. A bare number is
+    read as a stack number first when one exists, so never pass `--yes`.
+    Check the stack and the PR list it prints before confirming. If they
+    aren't what you meant, stop and merge from the PR's own page instead.
   - **Merge-based stack** (not linked on GitHub). Squash-merge each PR on its
     own, bottom first, with `gh pr merge <n> --squash
     --match-head-commit <sha>`. Then retarget and update the next child as
