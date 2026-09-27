@@ -970,52 +970,75 @@ pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return Ok(None);
     }
-    let truncated = || ExifToolError::parse_error("Truncated JPEG segment before the image data");
+    let malformed = || ExifToolError::parse_error("Malformed or truncated JPEG marker/scan layout");
     let mut output = bytes[..2].to_vec();
     let mut at = 2;
+    let mut in_scan = false;
     loop {
-        // Fill bytes (0xFF padding) may precede a marker.
-        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
+        if in_scan {
+            // Only entropy bytes use stuffing. Length-delimited payloads are
+            // skipped below, so their marker-like bytes cannot end the image.
+            let scan_start = at;
+            loop {
+                at += memchr::memchr(0xFF, bytes.get(at..).ok_or_else(malformed)?)
+                    .ok_or_else(malformed)?;
+                let marker_start = at;
+                while bytes.get(at) == Some(&0xFF) {
+                    at += 1;
+                }
+                let marker = *bytes.get(at).ok_or_else(malformed)?;
+                match marker {
+                    0x00 if at == marker_start + 1 => at += 1,
+                    0x01 | 0xD0..=0xD7 => at += 1,
+                    _ => {
+                        output.extend_from_slice(&bytes[scan_start..marker_start]);
+                        at = marker_start;
+                        break;
+                    }
+                }
+            }
+        }
+        let segment_start = at;
+        if bytes.get(at) != Some(&0xFF) {
+            return Err(malformed());
+        }
+        // Preserve fill bytes belonging to retained markers, including EOI.
+        while bytes.get(at) == Some(&0xFF) {
             at += 1;
         }
-        let (Some(&0xFF), Some(&marker)) = (bytes.get(at), bytes.get(at + 1)) else {
-            return Err(truncated());
-        };
-        // Standalone markers carry no length.
-        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            output.extend_from_slice(&bytes[at..at + 2]);
-            at += 2;
+        let marker = *bytes.get(at).ok_or_else(malformed)?;
+        at += 1;
+        if marker == 0xD9 {
+            output.extend_from_slice(&bytes[segment_start..at]);
+            return Ok(Some(output)); // Drop only the actual post-EOI trailer.
+        }
+        if marker == 0x01 {
+            output.extend_from_slice(&bytes[segment_start..at]);
             continue;
         }
-        if marker == 0xD9 {
-            // EOI before any scan: keep it, drop what follows.
-            output.extend_from_slice(&bytes[at..at + 2]);
-            return Ok(Some(output));
-        }
-        if marker == 0xDA {
-            // The scans run to the first EOI (entropy-coded data never holds
-            // an unescaped 0xFF 0xD9); what follows it is the trailer.
-            let end = bytes[at..]
-                .windows(2)
-                .position(|pair| pair == [0xFF, 0xD9])
-                .map_or(bytes.len(), |offset| at + offset + 2);
-            output.extend_from_slice(&bytes[at..end]);
-            return Ok(Some(output));
+        // Stuffing/restarts belong to entropy data, and a second SOI is not
+        // a segment in this image. Do not turn malformed input into success.
+        if marker < 0xC0 || (0xD0..=0xD8).contains(&marker) {
+            return Err(malformed());
         }
         let length = bytes
-            .get(at + 2..at + 4)
+            .get(at..at + 2)
             .map(|pair| usize::from(u16::from_be_bytes([pair[0], pair[1]])))
-            .ok_or_else(truncated)?;
-        let end = at + 2 + length;
-        let payload = bytes.get(at + 4..end).ok_or_else(truncated)?;
+            .filter(|length| *length >= 2)
+            .ok_or_else(malformed)?;
+        let end = at.checked_add(length).ok_or_else(malformed)?;
+        let payload = bytes.get(at + 2..end).ok_or_else(malformed)?;
         let metadata = match marker {
             0xE0..=0xED | 0xEF | 0xFE => true,
             0xEE => !payload.starts_with(b"Adobe"),
             _ => false,
         };
         if !metadata {
-            output.extend_from_slice(&bytes[at..end]);
+            output.extend_from_slice(&bytes[segment_start..end]);
         }
+        // DNL can occur within a scan; its length-delimited payload ends,
+        // then entropy resumes. Every SOS starts a fresh scan after its header.
+        in_scan = marker == 0xDA || (in_scan && marker == 0xDC);
         at = end;
     }
 }
