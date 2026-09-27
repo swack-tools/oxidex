@@ -1111,12 +1111,12 @@ fn dropped_chunk_tags(
 /// (`tIME`, `gAMA`, `sRGB`). Pinned 13.59 on a PNG carrying gAMA, sRGB,
 /// cICP, sBIT, oFFs and vpAg keeps exactly cICP, sBIT, oFFs and vpAg.
 const CLEARED_CHUNKS: &[&[u8; 4]] = &[
-    b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tXMP", b"iCCP", b"pHYs", b"tIME", b"gAMA", b"sRGB",
-    b"caBX", b"seAl", b"meTa",
+    b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"zxIf", b"tXMP", b"iCCP", b"pHYs", b"tIME", b"gAMA",
+    b"sRGB", b"caBX", b"seAl", b"meTa",
 ];
 
-/// ExifTool's `-all=` on a PNG (`clear_all_metadata`): the
-/// [`CLEARED_CHUNKS`] go, and everything after IEND (the `Trailer` group);
+/// `clear_all_metadata` on a PNG removes the exact, case-sensitive types
+/// in [`CLEARED_CHUNKS`] and everything after IEND (the `Trailer` group);
 /// every other chunk is kept byte for byte. `None` for bytes that are not a
 /// PNG. The clear this replaces removed the text and eXIf chunks only, and
 /// left pHYs, tIME, iCCP and an XMP iTXt behind a reported update.
@@ -1158,7 +1158,7 @@ pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
                 String::from_utf8_lossy(&kind)
             )));
         }
-        let cleared = CLEARED_CHUNKS.contains(&&kind) || kind.eq_ignore_ascii_case(b"zxIf");
+        let cleared = CLEARED_CHUNKS.contains(&&kind);
         if !cleared {
             output.extend_from_slice(&bytes[at..end]);
         }

@@ -104,7 +104,13 @@ impl CopySelectors {
                 Some((group, name)) => (Some(group), name),
                 None => (None, source_spec),
             };
-            let group = group.filter(|group| !group.eq_ignore_ascii_case("all") && *group != "*");
+            // Keep a wildcard source group for named/wildcard tags: its
+            // destination must retain the matched physical family-1 group.
+            // Preserve the existing whole-all selector special cases.
+            let group = group.filter(|group| {
+                !group.eq_ignore_ascii_case("all")
+                    && !(*group == "*" && (name.eq_ignore_ascii_case("all") || name == "*"))
+            });
             if !name_ok(name) || group.is_some_and(|group| !group_ok(group)) {
                 return Err(refuse(
                     filter,
@@ -222,19 +228,34 @@ impl CopySelectors {
 /// ExifTool's wildcard match of a tag or group name (`*` any run, `?` one
 /// character), without regard to case.
 fn glob_matches(pattern: &str, text: &str) -> bool {
-    let (pattern, text): (Vec<char>, Vec<char>) = (
-        pattern.to_ascii_lowercase().chars().collect(),
-        text.to_ascii_lowercase().chars().collect(),
-    );
-    fn at(pattern: &[char], text: &[char]) -> bool {
-        match pattern.split_first() {
-            None => text.is_empty(),
-            Some(('*', rest)) => (0..=text.len()).any(|skip| at(rest, &text[skip..])),
-            Some(('?', rest)) => !text.is_empty() && at(rest, &text[1..]),
-            Some((c, rest)) => text.first() == Some(c) && at(rest, &text[1..]),
+    let text: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
+    // matched[j] says the consumed pattern matches text[..j]. A star
+    // either consumes no character (the previous row) or extends the
+    // current row's match by one character. O(pattern * text) time,
+    // O(text) heap space and constant stack space; no suffix backtracking.
+    let mut matched = vec![false; text.len() + 1];
+    matched[0] = true;
+    let mut previous_star = false;
+    for c in pattern.chars().map(|c| c.to_ascii_lowercase()) {
+        // Adjacent stars are equivalent to one star. Long caller-supplied
+        // runs take only a single DP row plus the pattern scan.
+        if c == '*' && previous_star {
+            continue;
+        }
+        previous_star = c == '*';
+        let mut diagonal = matched[0];
+        matched[0] &= c == '*';
+        for (i, character) in text.iter().enumerate() {
+            let old = matched[i + 1];
+            matched[i + 1] = if c == '*' {
+                old || matched[i]
+            } else {
+                diagonal && (c == '?' || c == *character)
+            };
+            diagonal = old;
         }
     }
-    at(&pattern, &text)
+    matched[text.len()]
 }
 
 /// Whether a copy selector's group names a source row's: its family-0 key
@@ -810,4 +831,116 @@ pub(crate) fn copy_tags(
     }
     report.uncopied_groups.sort();
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selectors(filters: &[&str]) -> CopySelectors {
+        CopySelectors::parse(&filters.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn selector_special_cases_and_order_are_preserved() {
+        for filter in ["all", "ALL", "all:all", "*:all", "*:*", "all:*", "*"] {
+            let parsed = selectors(&[filter]);
+            assert_eq!(
+                parsed.selections("IFD0", "IFD0", "Make"),
+                vec![(1, None)],
+                "{filter}"
+            );
+            assert!(parsed.named.is_empty(), "{filter}");
+        }
+        assert_eq!(
+            selectors(&[]).selections("IFD0", "IFD0", "Make"),
+            vec![(0, None)]
+        );
+        let before = selectors(&["all", "-*:Make"]);
+        assert!(before.selections("IFD0", "IFD0", "Make").is_empty());
+        let after = selectors(&["-*:Make", "*:Make"]);
+        assert_eq!(
+            after.selections("IFD0", "IFD0", "Make"),
+            vec![(2, Some("IFD0".into()))]
+        );
+        assert_eq!(after.selections("IFD0", "IFD0", "Model"), vec![(0, None)]);
+        for filter in ["Make>IFD0:Artist", "IFD0:Artist<Make"] {
+            let parsed = selectors(&[filter]);
+            assert_eq!(parsed.named[0].3, "Make");
+            assert_eq!(parsed.named[0].4, "IFD0:Artist");
+        }
+        for filter in [
+            "*:Make>Artist",
+            "M*>Artist",
+            "-Make>Artist",
+            "Bad:Group:Make",
+            "Make#",
+        ] {
+            assert!(CopySelectors::parse(&[filter.into()]).is_err(), "{filter}");
+        }
+    }
+
+    #[test]
+    fn wildcard_groups_retain_family1_and_family_selections_still_span_directories() {
+        let parsed = selectors(&["*:Make"]);
+        assert!(parsed.named.is_empty());
+        assert_eq!(
+            parsed.selections("XMP", "XMP-tiff", "Make"),
+            vec![(1, Some("XMP-tiff".into()))]
+        );
+        assert_eq!(
+            parsed.selections("IFD1", "IFD1", "Make"),
+            vec![(1, Some("IFD1".into()))]
+        );
+        let exif = selectors(&["EXIF:all"]);
+        for group in [
+            "IFD0",
+            "IFD1",
+            "ExifIFD",
+            "GPS",
+            "InteropIFD",
+            "SubIFD",
+            "SubIFD123",
+        ] {
+            assert_eq!(
+                exif.selections(group, group, "Make"),
+                vec![(1, Some("EXIF".into()))]
+            );
+        }
+        for group in ["XMP", "SubIFDx", "MakerNotes"] {
+            assert!(exif.selections(group, group, "Make").is_empty());
+        }
+        assert_eq!(
+            selectors(&["XMP:all"]).selections("XMP-dc", "XMP-dc", "Title"),
+            vec![(1, Some("XMP".into()))]
+        );
+    }
+
+    #[test]
+    fn glob_character_and_case_semantics() {
+        for (pattern, text, expected) in [
+            ("", "", true),
+            ("", "a", false),
+            ("*", "", true),
+            ("?", "", false),
+            ("?", "é", true),
+            ("É", "é", false),
+            ("m?K*", "Make", true),
+            ("*a*b", "AAab", true),
+            ("*a*b", "AAaba", false),
+            ("a**?*", "ab", true),
+            ("a?", "abc", false),
+            ("*?*?*", "a", false),
+            ("*?*?*", "ab", true),
+            ("a*b*c", "abc", true),
+            ("a*b*c", "axybzzc", true),
+            ("a*b*c", "axybzz", false),
+        ] {
+            assert_eq!(
+                glob_matches(pattern, text),
+                expected,
+                "{pattern:?} / {text:?}"
+            );
+        }
+    }
 }
