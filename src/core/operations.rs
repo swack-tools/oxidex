@@ -1809,7 +1809,9 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
 fn app13_precedes_xmp(segments: &[crate::parsers::jpeg::segment_parser::Segment]) -> bool {
     let app13 = segments
         .iter()
-        .find(|segment| crate::parsers::jpeg::iptc_parser::app13_segment_carries_iptc_resource(segment))
+        .find(|segment| {
+            crate::parsers::jpeg::iptc_parser::app13_segment_carries_iptc_resource(segment)
+        })
         .map(|segment| segment.offset);
     let xmp = segments
         .iter()
