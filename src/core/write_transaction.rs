@@ -355,30 +355,58 @@ struct Pending<'a> {
     at: usize,
 }
 
-/// What the group deletions of `changes` remove from the file at `path`,
-/// for judging the bare names the same request sets
-/// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)):
-/// only a deletion [`plan_group_deletion`] plans for real counts -- one it
-/// proves a no-op (a note ExifTool files under EXIF) removes nothing --
-/// and only where the format's writer really makes it
-/// ([`group_removal_takes_effect`]): a TIFF-structured file drops `IFD0:All`,
-/// and a raw type's ExifIFD/MakerNotes removals, as the no-ops pinned 13.59
-/// makes them, so its maker note survives to be edited.
-/// Pinned 13.59 applies them in either argument order.
-pub(crate) fn request_deletions(
-    path: &Path,
-    changes: &[TagChange],
-) -> crate::writers::exif_surgical::RequestDeletions {
-    use crate::writers::exif_surgical::RequestDeletions;
-    changes
-        .iter()
-        .filter(|change| change.value().is_none())
-        .filter_map(|change| {
-            let group = group_deletion(change.tag())?;
-            let key = plan_group_deletion(path, change.tag(), group).ok()??;
-            group_removal_takes_effect(path, &key).then(|| RequestDeletions::of(change.tag()))
-        })
-        .fold(RequestDeletions::default(), RequestDeletions::union)
+/// The group deletions of one request, each planned once: its position in
+/// the request, the `<group>:All` key [`plan_group_deletion`] planned for it
+/// (`MakerNotes:*` is `MakerNotes:All`), and whether the format's writer
+/// really makes it ([`group_removal_takes_effect`]).
+#[derive(Debug, Default)]
+pub(crate) struct GroupDeletions(Vec<(usize, String, bool)>);
+
+impl GroupDeletions {
+    /// Plans the group deletions among `deletions` -- each a request's
+    /// position and tag -- against the file at `path`. Only a deletion
+    /// [`plan_group_deletion`] plans for real counts; one it proves a
+    /// no-op (a note ExifTool files under EXIF) removes nothing.
+    pub(crate) fn plan<'a>(
+        path: &Path,
+        deletions: impl IntoIterator<Item = (usize, &'a str)>,
+    ) -> Self {
+        Self(
+            deletions
+                .into_iter()
+                .filter_map(|(at, tag)| {
+                    let group = group_deletion(tag)?;
+                    let key = plan_group_deletion(path, tag, group).ok()??;
+                    let effective = group_removal_takes_effect(path, &key);
+                    Some((at, key, effective))
+                })
+                .collect(),
+        )
+    }
+
+    /// What they leave of the file for the bare name set at position `at`
+    /// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)),
+    /// as pinned 13.59 applies a command line in order:
+    ///
+    /// - a deletion *before* the set deletes the group, and the set then
+    ///   writes every copy that remains -- so it counts only where the
+    ///   format's writer really makes it: a TIFF-structured file drops
+    ///   `IFD0:All`, and a raw type's ExifIFD/MakerNotes removals, as 13.59's
+    ///   no-ops, and its maker note survives to be edited
+    ///   (`-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef writes
+    ///   `[Nikon]` and `[ExifIFD] WhiteBalance`);
+    /// - a deletion *after* the set cancels the set's new values in the
+    ///   groups it names, whether or not the deletion itself takes effect
+    ///   (`-WhiteBalance#=1 -MakerNotes:All=` on Nikon.nef writes `[ExifIFD]`
+    ///   alone and keeps the note; on Canon.jpg it also deletes the note).
+    pub(crate) fn for_set_at(&self, at: usize) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(position, _, effective)| *position > at || *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
 }
 
 /// Resolves every request against the file at `path`, in request order, and
@@ -404,8 +432,15 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
     // What the request's group deletions remove, for the bare names it
-    // also sets (`request_deletions`).
-    let deletions = request_deletions(path, changes);
+    // also sets (`GroupDeletions::for_set_at`).
+    let deletions = GroupDeletions::plan(
+        path,
+        changes
+            .iter()
+            .enumerate()
+            .filter(|(_, change)| change.value().is_none())
+            .map(|(at, change)| (at, change.tag())),
+    );
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -470,7 +505,8 @@ fn plan_changes<'a>(path: &Path, changes: &'a [TagChange]) -> Result<Plan<'a>> {
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_in_request(path, change.tag(), &baseline, deletions) {
+        match resolve_write_key_in_request(path, change.tag(), &baseline, deletions.for_set_at(at))
+        {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
@@ -1004,6 +1040,26 @@ pub(crate) fn transact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A group deletion before a set counts only where it takes effect; one
+    /// after it cancels the set's copies in its groups either way (#960
+    /// review 4113017923; pinned 13.59 on t/images/Nikon.nef:
+    /// `-MakerNotes:All= -WhiteBalance#=1` writes `[Nikon]` too,
+    /// `-WhiteBalance#=1 -MakerNotes:All=` writes `[ExifIFD]` alone).
+    #[test]
+    fn group_deletions_follow_argument_order() {
+        let raw = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), false)]);
+        assert!(raw.for_set_at(0).makernotes);
+        assert!(!raw.for_set_at(2).makernotes);
+        let jpeg = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), true)]);
+        assert!(jpeg.for_set_at(0).makernotes && jpeg.for_set_at(2).makernotes);
+        assert!(jpeg.for_set_at(2).ciff);
+        let carrier = GroupDeletions(vec![(0, "IFD0:All".to_string(), false)]);
+        assert_eq!(
+            carrier.for_set_at(1),
+            crate::writers::exif_surgical::RequestDeletions::default()
+        );
+    }
 
     fn map(rows: &[(&str, TagValue)]) -> MetadataMap {
         let mut map = MetadataMap::new();

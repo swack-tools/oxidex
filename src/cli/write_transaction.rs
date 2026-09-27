@@ -25,15 +25,16 @@ use crate::cli::args::CliArgs;
 use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{
-    CopyReport, clear_all_metadata, copy_metadata_report, resolve_write_tag_in_request,
+    CopyReport, clear_all_metadata, copy_metadata_report, read_metadata,
+    resolve_write_tag_in_request,
 };
 use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
-    ScratchStep, TagChange, apply_tag_changes_counted, request_deletions, transact_with,
+    GroupDeletions, ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
-    canonical_request_tag, sorry_not_writable, undefined_tag_warning,
+    canonical_request_tag, group_deletion, sorry_not_writable, undefined_tag_warning,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -448,14 +449,19 @@ fn apply_sets(
     // The request's group deletions, so a bare name is typed by the address
     // the transaction writes it at in their presence
     // (`-MakerNotes:All= -ColorSpace#=2`: ExifIFD:ColorSpace, an integer).
-    let deletions: Vec<TagChange> = sets
-        .iter()
-        .filter(|(_, value)| value.is_empty())
-        .map(|(tag, _)| TagChange::delete(tag.strip_suffix('#').unwrap_or(tag).to_string()))
-        .collect();
-    let deletions = request_deletions(scratch, &deletions);
+    let deletions = GroupDeletions::plan(
+        scratch,
+        sets.iter()
+            .enumerate()
+            .filter(|(_, (_, value))| value.is_empty())
+            .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+    );
+    // Read once for every bare name the loop types (`Some(None)` when the
+    // file cannot be read: the name is typed as spelled, and the
+    // transaction reports the read failure).
+    let mut baseline = None;
     let mut changes = Vec::with_capacity(sets.len());
-    for (set_tag, value) in sets {
+    for (at, (set_tag, value)) in sets.iter().enumerate() {
         let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {
             Some(base) => (base, true),
             None => (set_tag.as_str(), global_raw_values),
@@ -472,15 +478,35 @@ fn apply_sets(
         // does not resolve is left to the transaction, which refuses it
         // with the resolver's reason -- not a value error for an address
         // that was never going to be written.
-        let resolved = (!write_tag.contains(':') && declared_alias(write_tag).is_none())
-            .then(|| resolve_write_tag_in_request(scratch, write_tag, deletions));
+        let resolved = if !write_tag.contains(':') && declared_alias(write_tag).is_none() {
+            baseline
+                .get_or_insert_with(|| read_metadata(scratch).ok())
+                .as_ref()
+                .map(|metadata| {
+                    resolve_write_tag_in_request(
+                        scratch,
+                        write_tag,
+                        metadata,
+                        deletions.for_set_at(at),
+                    )
+                })
+        } else {
+            None
+        };
         let typed_as = match &resolved {
             Some(Ok(key)) => key.as_str(),
             _ => write_tag,
         };
+        // A later group deletion may cancel this set (13.59: `-ColorSpace#=junk
+        // -EXIF:All=` warns and deletes EXIF), which only the transaction's
+        // planner decides: a value its address cannot type then goes on as
+        // the string it was, for the planner to cancel or the writer to refuse.
+        let cancellable = sets[at + 1..].iter().any(|(tag, later)| {
+            later.is_empty() && group_deletion(tag.strip_suffix('#').unwrap_or(tag)).is_some()
+        });
         let tag_value = match parse_cli_tag_value_os_with_mode(typed_as, value, raw_mode) {
             Ok(tag_value) => tag_value,
-            Err(_) if matches!(resolved, Some(Err(_))) => {
+            Err(_) if matches!(resolved, Some(Err(_))) || (resolved.is_some() && cancellable) => {
                 TagValue::String(value.to_string_lossy().into_owned())
             }
             Err(e) => return Err(describe_value_parse_failure(write_tag, &e, sets.len())),

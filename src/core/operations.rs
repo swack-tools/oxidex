@@ -1706,11 +1706,12 @@ pub(crate) fn resolve_write_key_for(
 /// [`resolve_write_key_for`] for one request of a transaction whose other
 /// requests delete what `deletions` says (planned `-MakerNotes:All=`,
 /// `-ExifIFD:All=` or `-EXIF:All=` deletions,
-/// `core::write_transaction::request_deletions`). Pinned 13.59 then edits no
-/// deleted copy of a bare name, whichever order the arguments came in
-/// (`-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
-/// -MakerNotes:All=` on t/images/Canon.jpg both leave `[ExifIFD]
-/// WhiteBalance` 1 and no maker note).
+/// `core::write_transaction::GroupDeletions::for_set_at`). Pinned 13.59
+/// then edits no deleted copy of a bare name: on t/images/Canon.jpg
+/// `-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` both leave `[ExifIFD] WhiteBalance` 1 and no maker
+/// note (which deletions count for which set is `for_set_at`'s: on a raw
+/// file only the second order leaves the note unedited).
 pub(crate) fn resolve_write_key_in_request(
     path: &Path,
     tag_name: &str,
@@ -2020,15 +2021,16 @@ pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
 }
 
 /// [`resolve_write_tag`] for one set of a request whose other requests
-/// delete what `deletions` says (`core::write_transaction::
-/// request_deletions`): the address the transaction writes it at.
+/// delete what `deletions` says (`core::write_transaction::GroupDeletions::
+/// for_set_at`), against the file's `metadata` (read once for the whole
+/// request): the address the transaction writes it at.
 pub(crate) fn resolve_write_tag_in_request(
     path: &Path,
     tag_name: &str,
+    metadata: &MetadataMap,
     deletions: RequestDeletions,
 ) -> Result<String> {
-    let metadata = read_metadata(path)?;
-    let (key, addressed) = resolve_write_key_in_request(path, tag_name, &metadata, deletions)?;
+    let (key, addressed) = resolve_write_key_in_request(path, tag_name, metadata, deletions)?;
     addressed?;
     Ok(key)
 }
@@ -2134,7 +2136,7 @@ pub(crate) fn plan_group_deletion(
 /// for the file at `path` really removes its group when written, as the
 /// format's writer resolves it -- for judging what a request's other
 /// requests may still find there (`core::write_transaction::
-/// request_deletions`). A TIFF-structured file's removals go through
+/// GroupDeletions`). A TIFF-structured file's removals go through
 /// [`resolve_tiff_group_removals`](crate::writers::exif_surgical::resolve_tiff_group_removals),
 /// which drops `IFD0:All` on every TIFF and the ExifIFD/MakerNotes
 /// removals on a raw type (pinned 13.59: "Can't delete ... from NEF", file

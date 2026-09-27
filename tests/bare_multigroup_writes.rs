@@ -59,11 +59,6 @@ enum Expect {
     /// oxidex's writer declines the whole request (an explicit error, not a
     /// resolver refusal), file untouched; the oracle changed the file.
     Declined,
-    /// oxidex refuses by name, file untouched, where the oracle changes
-    /// nothing: a later group deletion cancels the earlier set in 13.59 and
-    /// the deletion itself is a no-op there. A known gap (a refusal, never
-    /// a write the oracle does not make).
-    RefusedWhereUnchanged,
 }
 
 /// (name, printed value, raw value) -- each name is also defined by a maker
@@ -214,20 +209,6 @@ fn run_args(
                     "{case}: expected oxidex to decline with the file untouched beside the \
                      oracle's write; oxidex exit {:?}, changed {ox_changed}, said \
                      {ox_stderr:?}; the oracle changed {et_changed}, wrote {et_rows:?}",
-                    ox.status.code()
-                ));
-            }
-        }
-        Expect::RefusedWhereUnchanged => {
-            if ox.status.success()
-                || ox_changed
-                || !ox_stderr.contains("Cannot write tag")
-                || et_changed
-            {
-                return Err(format!(
-                    "{case}: expected a named refusal beside the oracle's unchanged file; \
-                     oxidex exit {:?}, changed {ox_changed}, said {ox_stderr:?}; the \
-                     oracle changed {et_changed}, wrote {et_rows:?}",
                     ox.status.code()
                 ));
             }
@@ -849,8 +830,13 @@ fn samsung_soundshot_trailer() -> Vec<u8> {
 ///   and on every TIFF `IFD0:All`, are pinned 13.59's no-ops, so the maker
 ///   note survives and 13.59 edits it too (t/images/Nikon.nef and
 ///   CanonRaw.cr2: `[Nikon]` / `[Canon] WhiteBalance` 1 beside `[ExifIFD]`);
-///   oxidex wrote EXIF only (and, with the deletion after the set, where
-///   13.59 changes nothing or only EXIF, it now refuses);
+///   oxidex wrote EXIF only. A deletion *after* the set instead cancels
+///   the set's copies in its groups, taking effect or not (13.59:
+///   `-WhiteBalance#=1 -MakerNotes:All=` writes `[ExifIFD]` alone; with
+///   `-ExifIFD:All=` the file is unchanged);
+/// - `-MakerNotes:*=` is `-MakerNotes:All=`; a value its address cannot
+///   type is left for a later deletion to cancel (`-ColorSpace#=junk
+///   -EXIF:All=` on GPS.jpg deletes EXIF);
 /// - a Samsung SEFT trailer's `Samsung` rows do not identify the EXIF
 ///   note (4113017918): Nikon.jpg with a trailer appended, where 13.59
 ///   also edits `[Nikon] WhiteBalance`; oxidex wrote EXIF only;
@@ -869,6 +855,7 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
     let cr2 = read(fixtures::required_t_images_fixture_path("CanonRaw.cr2"));
     let nikon = read(fixtures::required_t_images_fixture_path("Nikon.jpg"));
     let canon = read(fixtures::required_t_images_fixture_path("Canon.jpg"));
+    let gps = read(fixtures::required_t_images_fixture_path("GPS.jpg"));
     let Some(lsi) = fixtures::pinned_combined_fixture_path("Nikon/NikonLS-50.jpg").map(read) else {
         return;
     };
@@ -892,22 +879,17 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
                 Expect::Refused,
             ));
             // After the set, 13.59's deletion cancels the set's new values
-            // in the groups it names: `MakerNotes:All` the maker-note copy
-            // (so only `[ExifIFD] WhiteBalance` is written, and the note
-            // stays), the others every copy (file unchanged). oxidex, which
-            // does not model the cancellation, refuses both.
-            let after = if deletion == "-MakerNotes:All=" {
-                Expect::Refused
-            } else {
-                Expect::RefusedWhereUnchanged
-            };
+            // in the groups it names whether or not it takes effect:
+            // `MakerNotes:All` the maker-note copy (only `[ExifIFD]
+            // WhiteBalance` is written, the note stays), the others every
+            // copy (file unchanged).
             cases.push((
                 file,
                 bytes,
                 ext,
                 "WhiteBalance",
                 s(&["-WhiteBalance#=1", deletion]),
-                after,
+                Expect::Match,
             ));
         }
     }
@@ -936,6 +918,33 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
             s(&["-EXIF:All=", "-WhiteBalance#=1"]),
             Expect::Declined,
         ),
+        // `MakerNotes:*` is `MakerNotes:All`.
+        (
+            "Nikon.jpg",
+            &nikon[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-MakerNotes:*=", "-WhiteBalance#=1"]),
+            Expect::Match,
+        ),
+        (
+            "Nikon.jpg",
+            &nikon[..],
+            "jpg",
+            "WhiteBalance",
+            s(&["-WhiteBalance#=1", "-MakerNotes:*="]),
+            Expect::Match,
+        ),
+        // A value its address cannot type, cancelled by a later deletion:
+        // 13.59 warns and deletes EXIF.
+        (
+            "GPS.jpg",
+            &gps[..],
+            "jpg",
+            "ColorSpace",
+            s(&["-ColorSpace#=junk", "-EXIF:All="]),
+            Expect::Match,
+        ),
     ]);
     let failures: Vec<String> = cases
         .iter()
@@ -943,7 +952,7 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
             run_args(oracle, bytes, ext, file, name, args, *expect).err()
         })
         .collect();
-    assert_eq!(cases.len(), 19);
+    assert_eq!(cases.len(), 22);
     assert!(
         failures.is_empty(),
         "{} of {} cases departed from the pinned outcome:\n{}",

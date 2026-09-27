@@ -2399,11 +2399,12 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
 pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 
 /// What the rest of a request deletes before a bare name is judged, as
-/// `core::write_transaction::request_deletions` plans it: pinned 13.59
-/// applies a group deletion and a bare set of one command line together,
-/// in either argument order (`-MakerNotes:All= -WhiteBalance#=1` and
-/// `-WhiteBalance#=1 -MakerNotes:All=` on t/images/Canon.jpg both leave
-/// `[ExifIFD] WhiteBalance` 1 and no maker note).
+/// `core::write_transaction::GroupDeletions::for_set_at` decides it for
+/// the name's position: pinned 13.59 applies a group deletion and a bare
+/// set of one command line in order (`-MakerNotes:All= -WhiteBalance#=1`
+/// and `-WhiteBalance#=1 -MakerNotes:All=` on t/images/Canon.jpg both leave
+/// `[ExifIFD] WhiteBalance` 1 and no maker note; on a raw file, where the
+/// deletion is a no-op, only the second leaves the note unedited).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RequestDeletions {
     /// Every EXIF maker note goes (`MakerNotes:All`, `ExifIFD:All`,
