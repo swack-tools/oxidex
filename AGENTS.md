@@ -401,8 +401,11 @@ live agent or an open PR still builds there. Delete only directories you
 created, by exact path, never by glob across other agents' directories.
 
 A scratch clone or bundle is not build output: it can hold the only copy of
-a commit graph. Delete one only after proving, against the live remote, that
-every commit it carries is reachable from `origin`:
+a commit graph. Treat a scratch clone like a worktree: its uncommitted,
+untracked and ignored files must be empty or preserved first (the same
+`git status --porcelain --ignored` check as for a worktree, below). Then
+delete it only after proving, against the live remote, that every commit it
+carries is reachable from `origin`:
 - **Clone.** Pruning can delete the clone's only reference to a commit, so
   capture every ref first:
   `git for-each-ref --format='%(objectname)' > <evidence>/clone-refs.txt`.
@@ -599,9 +602,11 @@ So stacked branches are kept current by rebasing, not by merge commits.
   nobody has gated. So after lower layers land:
   1. `git fetch origin`, so the local `origin/refactor/tag-machinery` is the
      post-merge trunk.
-  2. Work bottom to top, one layer at a time. For each remaining layer:
-     rebase it onto the layer below as it now is on `origin` (fetch again
-     first when another worktree owns that layer), re-run its gates, and push
+  2. Work bottom to top, one layer at a time. Rebase the lowest remaining
+     layer onto `origin/refactor/tag-machinery`, since its old parent has
+     landed and may be deleted. Rebase each layer above it onto the layer
+     below as it now is on `origin` (fetch again first when another worktree
+     owns that layer). For each layer, re-run its gates, and push
      it with `--force-with-lease=<branch>:<sha>`. Only then move to the child.
      `gh stack rebase` does the same in one pass for a single-worktree stack;
      still gate every layer before `gh stack push`.
