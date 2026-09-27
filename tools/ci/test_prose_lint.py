@@ -320,6 +320,45 @@ class ProseHookTests(unittest.TestCase):
         self.assertEqual(self.shell('PostToolUse', 'B').returncode, 2)
         self.assertEqual(len(self.log.read_text().splitlines()), 2)
 
+    def test_lint_limit_counts_only_eligible_files(self):
+        for excluded in ['generated', 'oversized']:
+            with self.subTest(excluded=excluded):
+                self.log.unlink(missing_ok=True)
+                self.shell('PreToolUse', excluded)
+                body = ('<!-- Auto-generated. -->\nbad prose\n' if excluded == 'generated'
+                        else 'x' * (prose_lint.MAX_LINT_BYTES + 1))
+                for index in range(prose_lint.MAX_LINT_FILES):
+                    (self.repo/f'a-{index:03}.md').write_text(body)
+                doc = self.repo/'z.md'
+                doc.write_text(f'changed prose after {excluded} files')
+                self.assertEqual(self.shell('PostToolUse', excluded).returncode, 2)
+                calls = self.log.read_text().splitlines()
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(json.loads(calls[0])[-1], str(doc))
+
+    def test_overlap_does_not_keep_expired_baselines_alive(self):
+        self.shell('PreToolUse', 'active')
+        directory = self.repo/'.git/prose-lint-snapshots'
+        active = next(directory.glob('*.json'))
+        template = json.loads(active.read_text())
+        template['created'] = time.time() - prose_lint.SNAPSHOT_TTL - 1
+        expired = []
+        for index in range(prose_lint.MAX_PENDING_SNAPSHOTS - 1):
+            path = directory/f'{index:064x}.json'
+            self.assertFalse(path.exists())
+            path.write_text(json.dumps(template))
+            os.utime(path, (template['created'], template['created']))
+            expired.append(path)
+        unknown = directory/'user-note.json'
+        unknown.write_text('preserve this unrelated file')
+        (self.repo/'doc with spaces.md').write_text('changed while calls overlap')
+        self.assertEqual(self.shell('PostToolUse', 'active').returncode, 2)
+        self.assertFalse(any(path.exists() for path in expired))
+        self.assertEqual(unknown.read_text(), 'preserve this unrelated file')
+        for call in ['next-a', 'next-b']:
+            self.assertEqual(self.shell('PreToolUse', call).returncode, 0)
+        self.assertEqual(len(list(directory.glob('[0-9a-f]' * 64 + '.json'))), 2)
+
     def test_generated_header_boundaries_through_shipped_adapter(self):
         cases = [
             ('suffix.rs', '/* ordinary comment */ const HEADER: &str = "DO NOT EDIT";\n', False),

@@ -218,6 +218,12 @@ def shell_paths_locked(payload, root, cwd, state_dir, state, event):
         if (not isinstance(pending, dict) or pending.get('root') != str(root)
                 or not isinstance(pending.get('files'), dict)):
             continue
+        created = pending.get('created')
+        if not isinstance(created, (float, int)):
+            continue
+        if not 0 <= time.time() - created <= SNAPSHOT_TTL:
+            other.unlink(missing_ok=True)
+            continue
         if not changed:
             continue
         pending['files'].update(changed)
@@ -305,7 +311,7 @@ def main():
             paths = selected_paths(payload, root, cwd)
         # Keep feedback bounded and exclude generated headers on changed paths.
         selected = []
-        for path in paths[:MAX_LINT_FILES]:
+        for path in paths:
             if path.stat().st_size > MAX_LINT_BYTES:
                 continue
             with path.open('rb') as source:
@@ -313,6 +319,8 @@ def main():
             if generated_header(header, path.suffix):
                 continue
             selected.append(path)
+            if len(selected) >= MAX_LINT_FILES:
+                break
         paths = selected
         groups = {}
         for path in paths:
