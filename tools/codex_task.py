@@ -134,11 +134,16 @@ def main():
         parser.error('evidence must be outside the reviewed checkout')
     if output.exists():
         parser.error('output directory already exists; keep prior evidence intact')
-    command = ['codex', 'exec', '--ignore-user-config', '--ephemeral', '--model', model,
+    write_role = args.role in {'implementation', 'parser'}
+    # Authorized local write workers need the external ops/target directories
+    # and sccache socket. Read roles remain sandboxed and never prompt.
+    execution = ['--yolo'] if write_role else ['--ask-for-approval', 'never']
+    command = ['codex', *execution, 'exec', '--ignore-user-config', '--ephemeral', '--model', model,
                '-c', f'model_reasoning_effort={json.dumps(effort)}',
                '-c', 'features.plugins=false', '-c', 'features.hooks=false',
-               '--sandbox', 'read-only' if review or args.role == 'inventory' else 'workspace-write',
                '--json', '--output-last-message', str(output / 'result.md')]
+    if not write_role:
+        command += ['--sandbox', 'read-only']
     if review:
         command += ['-c', f'review_model={json.dumps(model)}']
         if brief:

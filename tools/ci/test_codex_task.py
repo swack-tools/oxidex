@@ -68,6 +68,8 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertIn('review_model="gpt-6-sol"', args)
         self.assertIn('model_reasoning_effort="medium"', args)
         self.assertEqual(args[args.index('--sandbox')+1], 'read-only')
+        self.assertEqual(args[args.index('--ask-for-approval')+1], 'never')
+        self.assertNotIn('--yolo', args)
         self.assertEqual(args[args.index('--base')+1], self.base)
         receipt = json.loads((out/'receipt.json').read_text())
         self.assertEqual(receipt['status'], 'completed')
@@ -81,6 +83,20 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads(result.stdout)
         self.assertEqual((config['model'], config['effort']), ('gpt-6-luna', 'low'))
+        args = config['command']
+        self.assertEqual(args[args.index('--sandbox')+1], 'read-only')
+        self.assertEqual(args[args.index('--ask-for-approval')+1], 'never')
+        self.assertNotIn('--yolo', args)
+        self.assertFalse(self.args_log.exists())
+
+    def test_acceptance_is_read_only_and_never_requests_approval(self):
+        result = self.run_task('acceptance', '--base', self.base, '--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(result.stdout)['command']
+        self.assertEqual(args[args.index('--sandbox')+1], 'read-only')
+        self.assertEqual(args[args.index('--ask-for-approval')+1], 'never')
+        self.assertNotIn('--yolo', args)
+        self.assertIn('review_model="gpt-6-astra"', args)
         self.assertFalse(self.args_log.exists())
 
     def test_model_override_requires_reason(self):
@@ -142,6 +158,29 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertNotEqual(dirty.returncode, 0)
         self.assertIn('clean', dirty.stderr)
         self.assertFalse(self.args_log.exists())
+
+    def test_write_workers_use_yolo_without_a_conflicting_sandbox(self):
+        worker = self.root / 'worker'
+        self.git('worktree', 'add', '-qb', 'staging/worker', str(worker))
+        brief = self.root / 'brief.txt'
+        brief.write_text('Implement the authorized scoped repair locally.')
+        for role, effort in (('implementation', 'medium'), ('parser', 'high')):
+            with self.subTest(role=role):
+                out = self.root / ('write-' + role)
+                result = self.run_task(role, '--cwd', str(worker), '--brief', str(brief),
+                                       '--output-dir', str(out))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = json.loads(self.args_log.read_text())
+                self.assertEqual(args[:3], ['--yolo', 'exec', '--ignore-user-config'])
+                self.assertNotIn('--sandbox', args)
+                self.assertNotIn('--ask-for-approval', args)
+                self.assertIn('model_reasoning_effort="' + effort + '"', args)
+                self.assertEqual(args[-1], '-')
+                self.assertTrue((out / 'result.md').is_file())
+                self.assertFalse(out.is_relative_to(worker))
+                receipt = json.loads((out / 'receipt.json').read_text())
+                self.assertEqual(receipt['command'], ['codex', *args])
+                self.assertEqual(receipt['status'], 'completed')
 
     def test_zero_reported_usage_is_unknown(self):
         self.env['ZERO_USAGE'] = '1'
