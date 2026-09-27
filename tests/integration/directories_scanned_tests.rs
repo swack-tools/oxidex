@@ -800,3 +800,69 @@ fn recursive_walk_prunes_a_hidden_subdirectory_with_a_non_utf8_name() {
         "the hidden non-UTF-8 directory's file must not have been read"
     );
 }
+
+// --- codex re-review: count only a directory that was actually opened -----
+
+/// A directory that cannot be opened at all (`chmod 000`) must not be
+/// counted: pinned 13.59's `ScanDir` returns before `++$countDir` on an
+/// `opendir` failure, so this run's `$countDir` stays `0` and no
+/// `directories scanned` / `image files read` summary is printed at all --
+/// only its `Error opening directory ...` warning. oxidex used to count the
+/// directory anyway (both before *and* immediately after the root-symlink
+/// fix above, which introduced the same premature-counting pattern in a
+/// second place), printing `1 directories scanned` / `0 image files read`.
+/// Found independently by two `codex review` passes against this PR.
+#[cfg(unix)]
+#[test]
+fn a_directory_that_cannot_be_opened_is_not_counted_in_the_summary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    let mut locked_paths = Vec::new();
+    for root in [their_root.path(), our_root.path()] {
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        locked_paths.push(locked);
+    }
+    // Root ignores directory permissions; skip rather than assert on an
+    // unobservable property (matches `tests/library_write_codex_threads.rs`).
+    let locked_out = std::fs::read_dir(&locked_paths[1]).is_err();
+    if !locked_out {
+        for locked in &locked_paths {
+            let _ = std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755));
+        }
+        eprintln!("skipping: this directory is readable despite 0o000 (running as root?)");
+        return;
+    }
+
+    for recursive_flag in [None, Some("-r")] {
+        let mut their_args: Vec<&str> = vec![locked_paths[0].to_str().unwrap()];
+        let mut our_args: Vec<&str> = vec![locked_paths[1].to_str().unwrap()];
+        if let Some(flag) = recursive_flag {
+            their_args.insert(0, flag);
+            our_args.insert(0, flag);
+        }
+        let theirs = run_oracle(oracle, &their_args);
+        let ours = run_oxidex(&our_args);
+
+        assert!(
+            summary_lines(&stdout(&theirs)).is_empty(),
+            "oracle unexpectedly printed a summary for an unopenable directory: {}",
+            stdout(&theirs)
+        );
+        assert!(
+            summary_lines(&stdout(&ours)).is_empty(),
+            "oxidex must print no directories-scanned/image-files summary for a directory \
+             it could not open ({:?}): {}",
+            recursive_flag,
+            stdout(&ours)
+        );
+    }
+
+    for locked in &locked_paths {
+        let _ = std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755));
+    }
+}

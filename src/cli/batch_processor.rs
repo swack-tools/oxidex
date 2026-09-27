@@ -298,24 +298,25 @@ pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>
 /// through [`batch_process`] into the stats the caller prints, and neither is
 /// `directories_scanned`.
 ///
-/// A lone file argument scans zero directories. A directory argument always
-/// scans at least the directory itself -- even when it is empty or holds
-/// only unrecognized extensions -- exactly as ExifTool's `ScanDir`
-/// unconditionally increments `$countDir` once per call (`exiftool:4421`,
-/// 13.59). Without `-r`, that is the only directory counted: subdirectories
+/// A lone file argument scans zero directories. A directory argument that
+/// can be opened scans at least the directory itself -- even when it is
+/// empty or holds only unrecognized extensions -- exactly as ExifTool's
+/// `ScanDir` increments `$countDir` once per call that reaches the end of
+/// the function (`exiftool:4421`, 13.59), including an empty one. One that
+/// cannot be opened (permission denied, or a symlink to nowhere) scans zero
+/// directories instead, matching `ScanDir`'s own `opendir`-or-`Warn`-and-
+/// `return` guard (`exiftool:4340-4342`), which returns before that
+/// increment. Without `-r`, only the root is ever eligible: subdirectories
 /// are neither descended into nor counted (`exiftool:4358`, `next unless
-/// $recurse`). With `-r`, every subdirectory walked into adds one more,
+/// $recurse`). With `-r`, every subdirectory the walk opens adds one more,
 /// however deep and whether or not it is empty.
 fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, usize)> {
     let mut files = Vec::new();
     let mut unidentified = 0usize;
-    // Non-recursive: only the directory itself is ever "scanned" -- fixed at
-    // 1 the moment `path` is confirmed to be a directory below, since a
-    // `max_depth(1)` walk never descends into a subdirectory to justify
-    // counting it. Recursive: start at 0 and count every directory entry the
-    // unbounded walk actually yields (the root included, ordinarily -- see
-    // the root-symlink carve-out below) plus the root itself when it is a
-    // symlink, matching one `ScanDir` call apiece.
+    // Every directory this walk actually opens counts once -- see the loop
+    // below for what "actually opens" means and why a directory is never
+    // pre-counted just because `path.is_dir()`/`WalkDir` classified it as
+    // one.
     let mut directories_scanned = 0usize;
 
     if path.is_file() {
@@ -338,42 +339,68 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
             // symlink, and `path.is_dir()` above already relied on the same
             // following to route us into this branch. But the root
             // `DirEntry` the walk yields still reports itself with
-            // `symlink_metadata`'s type (a symlink, never a directory) so
-            // that `follow_links(false)`'s contract holds for it too -- so
-            // the ordinary `entry.file_type().is_dir()` branch in the loop
-            // below never fires for the root, and its own `ScanDir` call
-            // went uncounted entirely (`directories_scanned` stayed 0 for a
-            // symlink whose target held no subdirectories -- no line at
-            // all -- instead of pinned 13.59's `1 directories scanned`;
-            // PRRT_kwDOQNbr5M6mTzLO). Count the root here instead, by its
-            // own (unresolved) `symlink_metadata`, whenever it is a
-            // symlink; an ordinary directory root is left at 0 here and
-            // counted the normal way, by the loop, when the walk yields it.
-            // Nested symlinks are still never followed -- `follow_links`
-            // stays `false` for everything past the root, avoiding symlink
-            // loops -- so only the explicitly named root is affected.
-            if fs::symlink_metadata(path).is_ok_and(|md| md.file_type().is_symlink()) {
-                directories_scanned = 1;
-            }
+            // `symlink_metadata`'s type (a symlink, never a directory), so
+            // it needs its own carve-out in the loop below to be counted at
+            // all (PRRT_kwDOQNbr5M6mTzLO). Nested symlinks are still never
+            // followed -- `follow_links` stays `false` for everything past
+            // the root, avoiding symlink loops -- so only the explicitly
+            // named root is affected.
             WalkDir::new(path).follow_links(false) // Avoid symlink loops
         } else {
-            directories_scanned = 1;
             WalkDir::new(path).max_depth(1).follow_links(false)
         };
 
         // `filter_entry` prunes a directory entry it rejects along with
         // everything under it, before the walk ever descends into it -- see
         // `keep_recursive_entry`'s doc comment for what it keeps and why.
-        for entry in walker.into_iter().filter_entry(keep_recursive_entry) {
+        //
+        // `.peekable()` lets a directory entry check the *next* item before
+        // deciding whether it counts: pinned 13.59's `ScanDir` only reaches
+        // `++$countDir` (`exiftool:4421`) after `opendir` succeeds
+        // (`exiftool:4340-4342`), and returns immediately -- printing
+        // `Error opening directory ...` and nothing else, no summary line at
+        // all if it was the only directory -- when it does not. `WalkDir`
+        // reports an unreadable directory the same way: the directory's own
+        // `Ok` entry (from a plain `lstat`, which does not require opening
+        // it) is followed immediately by an `Err` naming that exact path,
+        // with nothing else in between (depth-first: a just-pushed
+        // directory's own contents, even an open failure recorded for
+        // later, are always visited before any sibling). So a directory is
+        // counted only when the very next item is not that same-path `Err`;
+        // an empty-but-readable directory's next item is unrelated (a
+        // sibling, an ancestor's sibling, or the walk ending) and still
+        // counts. Both `keep_recursive_entry_tests` and the oracle-gated
+        // `directories_scanned_tests` pin this against a `chmod 000`
+        // directory -- oxidex used to print `1 directories scanned` /
+        // `0 image files read` for one, where pinned 13.59 prints neither.
+        let mut walker = walker
+            .into_iter()
+            .filter_entry(keep_recursive_entry)
+            .peekable();
+        while let Some(entry) = walker.next() {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_dir() {
-                        // A directory entry: at max_depth(1) this is only
-                        // ever the root itself (already counted above) or a
-                        // child that is never walked into, so only the
-                        // recursive walk -- where every entry it yields was
-                        // actually descended into -- adds to the count here.
-                        if recursive {
+                    // An ordinary directory (`is_dir()`), or the walk's own
+                    // root when it is itself a symlink (`path.is_dir()`
+                    // above already confirmed it resolves to one; its
+                    // `DirEntry` reports `symlink_metadata`'s type instead,
+                    // per `follow_links(false)`, and only ever at depth 0
+                    // since nested symlinks are not followed at all).
+                    let is_root_symlink = entry.depth() == 0 && entry.file_type().is_symlink();
+                    if entry.file_type().is_dir() || is_root_symlink {
+                        // Non-recursive: only the root (depth 0) is ever
+                        // "scanned" -- a `max_depth(1)` walk still yields a
+                        // child directory as an entry (so it can be
+                        // skipped, not read into), but pinned 13.59 never
+                        // counts it (`exiftool:4358`, `next unless
+                        // $recurse`). Recursive: every directory the walk
+                        // opens counts, root included.
+                        let in_scope = recursive || entry.depth() == 0;
+                        let open_failed = matches!(
+                            walker.peek(),
+                            Some(Err(e)) if e.path() == Some(entry.path())
+                        );
+                        if in_scope && !open_failed {
                             directories_scanned += 1;
                         }
                         continue;
@@ -395,6 +422,74 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     }
 
     Ok((files, unidentified, directories_scanned))
+}
+
+#[cfg(test)]
+mod collect_files_open_failure_tests {
+    use super::*;
+
+    /// A directory `collect_files` cannot open (permission denied) must not
+    /// be counted -- pinned 13.59's `ScanDir` returns before `++$countDir`
+    /// on an `opendir` failure (`exiftool:4340-4342, 4421`) and prints
+    /// `Error opening directory ...` with no `directories scanned` /
+    /// `image files read` summary at all. oxidex used to count it anyway
+    /// (`directories_scanned` pre-set to `1` before the walk ever tried to
+    /// open it), printing `1 directories scanned` / `0 image files read`
+    /// where pinned 13.59 prints neither line (both codex reviews on PR
+    /// #965's follow-up round, independently).
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_opened_is_not_counted() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root ignores directory permissions entirely, so the property this
+        // test checks would be unobservable -- confirm the lockout actually
+        // holds before asserting on it, matching this suite's existing
+        // root-detection pattern (`tests/library_write_codex_threads.rs`).
+        let locked_out = std::fs::read_dir(&locked).is_err();
+        if !locked_out {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping: this directory is readable despite 0o000 (running as root?)");
+            return;
+        }
+
+        for recursive in [false, true] {
+            let result = collect_files(&locked, recursive);
+            let (files, _unidentified, directories_scanned) = result.unwrap();
+            assert!(files.is_empty(), "recursive={recursive}");
+            assert_eq!(
+                directories_scanned, 0,
+                "an unopenable directory must not be counted (recursive={recursive})"
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The counterpart to the test above: a directory that opens
+    /// successfully but is simply empty must still be counted (pinned
+    /// 13.59's `ScanDir` increments `$countDir` unconditionally once
+    /// `opendir` succeeds, empty or not) -- this pins that the open-failure
+    /// carve-out above did not also swallow the ordinary, successful case.
+    #[test]
+    fn an_empty_but_openable_directory_is_still_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+
+        for recursive in [false, true] {
+            let (files, _unidentified, directories_scanned) =
+                collect_files(&empty, recursive).unwrap();
+            assert!(files.is_empty(), "recursive={recursive}");
+            assert_eq!(
+                directories_scanned, 1,
+                "an empty but openable directory must still be counted (recursive={recursive})"
+            );
+        }
+    }
 }
 
 /// Whether a recursive walk should keep (not prune) `entry`.
