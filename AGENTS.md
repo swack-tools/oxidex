@@ -394,12 +394,14 @@ it. Reject any manifest still carrying a placeholder: a template applied
 verbatim fails in whichever direction is hardest to see.
 
 **Long runs must survive being interrupted.** Corpus sweeps, fleet checks and
-CI/PR polling: persist state to a file as you go, cap parallelism (this laptop
-has 10 cores; more than about two concurrent heavy waves degrades the timing-
-sensitive measurements everything else depends on, and a starved measurement is
-a corrupted instrument), isolate every worker in its own explicit worktree, and
-report a blocked item as blocked instead of retrying it forever. A 45-minute
-poll loop that could never exit, and a watcher that died with its ssh
+CI/PR polling: persist state to a file as you go, choose configurable worker
+counts and build jobs from available cores and memory, isolate every worker in its own explicit
+worktree and target directory, and reserve corpus timing runs exclusively from
+competing builds. Workers and builds run directly on this laptop without SSH,
+fleet or hub. Use native desktop agents first (up to three workers), then CLI
+workers for additional independent work under the routing skill. Report a
+blocked item as blocked instead of retrying it forever, and keep resumable
+evidence. A 45-minute poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
 **Preserve work before cleanup.** Read the

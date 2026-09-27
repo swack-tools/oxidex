@@ -3,6 +3,26 @@
 Read the applicable procedure before remote publication, cleanup, or stack operations.
 The mandatory summary lives in [AGENTS.md](../AGENTS.md).
 
+## Local execution and concurrency
+
+Use native desktop agents first, up to three workers, and CLI workers for
+additional independent work. Select explicit models and efforts with
+[Codex task routing](../.agents/skills/codex-task-routing/SKILL.md). Each writer
+owns a separate worktree, branch and target directory. Keep one active published
+candidate per dependency cluster.
+
+Run workers and builds directly on this laptop without SSH, fleet or hub.
+User-authorized CLI implementation and parser tasks use `codex --yolo exec`
+through the project launcher, without a contradictory sandbox option. This
+allows access to external operations evidence, targets and sccache without
+approval prompts. Review and inventory use read-only sandboxes with explicit
+approval policy `never`. No route changes global configuration or uses fast mode.
+
+Choose configurable worker counts and `CARGO_BUILD_JOBS` from available cores
+and memory; high local CPU concurrency is permitted. Give each worktree its own
+`CARGO_TARGET_DIR`, reduce concurrency under memory pressure, and reserve corpus
+timing measurements exclusively from competing builds.
+
 ## Maintainer identity
 
 **Agent publication commands use the maintainer's account.**
