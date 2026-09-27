@@ -184,7 +184,8 @@ def main():
         receipt['after'] = snapshot(root)
         if review and receipt['after'] != state:
             receipt['status'], code = 'stale', 2
-        if code == 0 and not (output/'result.md').is_file():
+        result = output / 'result.md'
+        if code == 0 and (not result.is_file() or not result.read_text(errors='replace').strip()):
             receipt['status'], code = 'missing_result', 2
     except (OSError, subprocess.SubprocessError) as error:
         code = 1

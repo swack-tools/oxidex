@@ -40,7 +40,7 @@ if os.environ.get('SLEEP_PID_PATH'):
     pathlib.Path(os.environ['SLEEP_PID_PATH']).write_text(str(os.getpid()))
     time.sleep(30)
 args = sys.argv
-pathlib.Path(args[args.index('--output-last-message')+1]).write_text('Review findings require inspection.')
+pathlib.Path(args[args.index('--output-last-message')+1]).write_text(os.environ.get('FAKE_RESULT', 'Review findings require inspection.'))
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':0 if os.environ.get('ZERO_USAGE') else 10,'output_tokens':0 if os.environ.get('ZERO_USAGE') else 2}}))
 if os.environ.get('MUTATE'):
     pathlib.Path('file.md').write_text('changed during review')
@@ -48,6 +48,8 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
 ''')
         codex.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'], ARGS_LOG=str(self.args_log))
+        for control in ('ZERO_USAGE', 'FAKE_EXIT', 'MUTATE', 'SLEEP_PID_PATH', 'FAKE_RESULT'):
+            self.env.pop(control, None)
 
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.repo), *args], text=True)
@@ -126,6 +128,17 @@ sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
         receipt = json.loads((out/'receipt.json').read_text())
         self.assertEqual(receipt['status'], 'failed')
         self.assertEqual(receipt['approval'], 'not_assessed')
+
+    def test_empty_result_is_missing_evidence(self):
+        for index, result_text in enumerate(('', ' \n\t')):
+            with self.subTest(result=result_text):
+                self.env['FAKE_RESULT'] = result_text
+                out = self.root / f'empty-{index}'
+                result = self.run_task('review', '--base', self.base, '--output-dir', str(out))
+                self.assertNotEqual(result.returncode, 0)
+                receipt = json.loads((out / 'receipt.json').read_text())
+                self.assertEqual(receipt['status'], 'missing_result')
+                self.assertEqual(receipt['approval'], 'not_assessed')
 
     def test_mutation_during_review_invalidates_receipt(self):
         self.env['MUTATE'] = '1'
