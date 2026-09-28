@@ -3,7 +3,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,7 +13,7 @@ from unittest.mock import patch
 from tools import prose_lint
 
 ROOT = Path(__file__).resolve().parents[2]
-HOOK = ROOT / 'tools/prose_lint.py'
+HOOK = ROOT / '.claude/hooks/prose-lint.sh'
 
 
 class ProseHookTests(unittest.TestCase):
@@ -40,8 +39,26 @@ class ProseHookTests(unittest.TestCase):
     def invoke(self, tool, inputs, **extra):
         payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse', tool_name=tool, tool_input=inputs)
         payload.update(extra)
-        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), env=self.env,
+        return subprocess.run(['bash', str(HOOK)], input=json.dumps(payload), env=self.env,
                               text=True, capture_output=True, cwd=self.repo)
+
+    def test_claude_missing_vale_warns_before_loading_python_helper(self):
+        # This models a fresh Claude environment with no optional dependencies.
+        (self.bin / 'vale').unlink()
+        (self.bin / 'bash').symlink_to(shutil.which('bash'))
+        self.env['PATH'] = str(self.bin)
+        result = self.invoke('Edit', {'file_path': str(self.repo/'doc with spaces.md')})
+        self.assertEqual(result.returncode, 0, result)
+        self.assertIn('install vale', result.stderr.lower())
+        self.assertFalse(self.log.exists())
+
+    def test_claude_missing_python_warns_and_skips(self):
+        (self.bin / 'bash').symlink_to(shutil.which('bash'))
+        self.env['PATH'] = str(self.bin)
+        result = self.invoke('Write', {'file_path': str(self.repo/'doc with spaces.md')})
+        self.assertEqual(result.returncode, 0, result)
+        self.assertIn('install python3', result.stderr.lower())
+        self.assertFalse(self.log.exists())
 
     def test_registration_dispatches_codex_patch_payload(self):
         payload = {'command': '*** Begin Patch\n*** Update File: doc with spaces.md\n*** End Patch'}
@@ -300,7 +317,7 @@ class ProseHookTests(unittest.TestCase):
             payload = dict(cwd=str(self.repo), hook_event_name='PostToolUse',
                            tool_name='Bash', tool_input={'command': 'command'},
                            session_id='session', tool_use_id=call)
-            process = subprocess.Popen([sys.executable, str(HOOK)], stdin=subprocess.PIPE,
+            process = subprocess.Popen(['bash', str(HOOK)], stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        text=True, env=self.env, cwd=self.repo)
             process.stdin.write(json.dumps(payload))
@@ -405,66 +422,6 @@ class ProseHookTests(unittest.TestCase):
         result = self.invoke('apply_patch', {'command': '*** Begin Patch\n*** Delete File: gone.md\n*** End Patch'}, turn_id='codex-turn')
         self.assertEqual(result.returncode, 0, result)
         self.assertFalse(self.log.exists())
-
-
-class ClaudeProseHookTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name).resolve()
-        self.hook = self.root / '.claude/hooks/prose-lint.sh'
-        self.hook.parent.mkdir(parents=True)
-        shutil.copyfile(ROOT / '.claude/hooks/prose-lint.sh', self.hook)
-        (self.root / '.vale/styles/Google').mkdir(parents=True)
-        (self.root / '.vale.ini').write_text('StylesPath = .vale/styles\n')
-        self.doc = self.root / 'doc with spaces.md'
-        self.doc.write_text('bad prose')
-        self.bin = self.root / 'bin'
-        self.bin.mkdir()
-        # Deliberately omit Python and the shared Codex helper.
-        for name in ('bash', 'dirname', 'jq'):
-            (self.bin / name).symlink_to(shutil.which(name))
-        self.vale = self.bin / 'vale'
-        self.vale.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$VALE_TEST_LOG"\n'
-                            'echo "doc:1:1:error:Google.WordList:bad prose"\n'
-                            'exit "${VALE_TEST_EXIT:-1}"\n')
-        self.vale.chmod(0o755)
-        self.log = self.root / 'calls'
-        self.env = dict(os.environ, PATH=str(self.bin), CLAUDE_PROJECT_DIR=str(self.root),
-                        VALE_TEST_LOG=str(self.log))
-
-    def invoke(self, path=None):
-        payload = {'tool_name': 'Edit', 'tool_input': {'file_path': str(path or self.doc)}}
-        return subprocess.run(['/bin/bash', str(self.hook)], input=json.dumps(payload),
-                              text=True, capture_output=True, env=self.env, cwd='/')
-
-    def test_direct_vale_feedback_with_project_config(self):
-        result = self.invoke()
-        self.assertEqual(result.returncode, 2, result)
-        self.assertIn('Google.WordList', result.stderr)
-        args = self.log.read_text().splitlines()
-        self.assertIn(str(self.root / '.vale.ini'), args)
-        self.assertEqual(args[-2:], ['--', str(self.doc)])
-
-    def test_missing_vale_warns_and_skips(self):
-        self.vale.unlink()
-        result = self.invoke()
-        self.assertEqual(result.returncode, 0, result)
-        self.assertIn('install vale', result.stderr.lower())
-        self.assertFalse(self.log.exists())
-
-    def test_clean_prose_succeeds(self):
-        self.env['VALE_TEST_EXIT'] = '0'
-        result = self.invoke()
-        self.assertEqual(result.returncode, 0, result)
-        self.assertEqual(result.stderr, '')
-
-    def test_unsupported_missing_and_option_paths_skip(self):
-        for path in (self.root / 'image.png', self.root / 'gone.md', '--config=evil.md'):
-            with self.subTest(path=path):
-                result = self.invoke(path)
-                self.assertEqual(result.returncode, 0, result)
-                self.assertFalse(self.log.exists())
 
 
 if __name__ == '__main__':
