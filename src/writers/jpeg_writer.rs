@@ -86,7 +86,7 @@ const RST7_MARKER: u16 = 0xFFD7;
 ///
 /// - All non-EXIF segments are preserved in their original positions
 /// - If EXIF segment exists, it's replaced with the new one
-/// - If EXIF segment doesn't exist, new one is inserted after APP0 (or after SOI)
+/// - If EXIF doesn't exist, a new segment follows leading APP0 markers (or SOI)
 /// - Multiple APP1 segments (EXIF + XMP) are handled correctly
 ///
 /// # Parameters
@@ -854,7 +854,7 @@ fn transform_exif<T>(
 /// - For each segment:
 ///   - If it's the EXIF segment, writes new version
 ///   - Otherwise, copies original
-/// - If no EXIF segment existed, inserts new one after APP0 or SOI
+/// - If no EXIF segment existed, inserts after leading APP0 markers or SOI
 /// - Copies EOI marker
 ///
 /// # Parameters
@@ -880,15 +880,18 @@ fn reconstruct_jpeg(
             + raw_tail.len(),
     );
 
-    // Determine insertion position if EXIF doesn't exist
+    // Match WriteExif's creation boundary: skip only an APP0 at the start of
+    // the header. A later CIFF APP0 must not move EXIF behind earlier DQT/SOF
+    // segments, where ExifTool can no longer read its Model before CIFF.
     let insert_position = if exif_position.is_none() {
-        // Find APP0 position (insert after it)
-        // If no APP0, insert after SOI (position 1)
+        let policy = &crate::writers::generated_raw_jfif::RAW_JFIF;
         segments
             .iter()
-            .position(|seg| seg.marker == 0xFFE0)
-            .map(|pos| pos + 1)
-            .unwrap_or(1) // After SOI
+            .enumerate()
+            .skip(1) // SOI
+            .find(|(_, seg)| !policy.creation_skip_markers.contains(&(seg.marker as u8)))
+            .map(|(index, _)| index)
+            .unwrap_or(1)
     } else {
         0 // Not used if exif_position is Some
     };

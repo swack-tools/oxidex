@@ -1,0 +1,8 @@
+late-ciff-app0.jpg is the 437-byte carrier from the independent PR #980
+diagnosis (evidence ID 980-root-ciff-3b28b7c0/root-hidden-ciff.jpg). SHA-256:
+bb3c79ebf6f3db32cecd3cc1a58521f4686d9b4b9f843dd4141cac3d102d63fe
+
+It has EXIF APP1 first, then DQT/SOF/DHT, then a CIFF HEAPJPGM APP0.
+Pinned ExifTool 13.59 with Perl 5.38.2 reads the raw
+CIFF:SetButtonWhenShooting value 0 and IFD0:Model Canon EOS 10D.
+The regression test derives a no-EXIF carrier by removing its first APP1.
