@@ -12716,6 +12716,75 @@ mod rational_array_tests {
         );
     }
 
+    #[test]
+    fn keyed_firmware_route_accepts_root_record_with_deep_valid_ciff_chain() {
+        // One root firmware record reaches the public keyed route. The hand
+        // reader stops after depth 16; the keyed reader still sees every
+        // structurally valid directory. Build the chain in linear space so
+        // the test itself does not copy every nested prefix repeatedly.
+        const DEPTH: usize = 2_048;
+        let firmware = b"Firmware Version 1.1.1\0";
+        let root_offset = firmware.len();
+        let child_offset = root_offset + 2 + 2 * 10 + 4;
+        let child_size = 10 + DEPTH * 20;
+        const HEAP_START: usize = 26;
+        let mut file = Vec::with_capacity(HEAP_START + child_offset + child_size + 4);
+        file.extend_from_slice(b"II");
+        file.extend_from_slice(&(HEAP_START as u32).to_le_bytes());
+        file.extend_from_slice(b"HEAPCCDR");
+        // The public signature detector requires the native 0x1a heap start.
+        // These 12 header bytes match the pinned CanonRaw.crw carrier.
+        file.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        file.extend_from_slice(firmware);
+        file.extend_from_slice(&2u16.to_le_bytes());
+        file.extend_from_slice(&0x080bu16.to_le_bytes());
+        file.extend_from_slice(&(firmware.len() as u32).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0x2804u16.to_le_bytes());
+        file.extend_from_slice(&(child_size as u32).to_le_bytes());
+        file.extend_from_slice(&(child_offset as u32).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        for level in 0..DEPTH {
+            file.extend_from_slice(&1u16.to_le_bytes());
+            file.extend_from_slice(&0x2804u16.to_le_bytes());
+            file.extend_from_slice(&((10 + (DEPTH - level - 1) * 20) as u32).to_le_bytes());
+            file.extend_from_slice(&16u32.to_le_bytes());
+            file.extend_from_slice(&0u32.to_le_bytes());
+        }
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..DEPTH {
+            file.extend_from_slice(&0u32.to_le_bytes());
+        }
+        file.extend_from_slice(&(root_offset as u32).to_le_bytes());
+        assert_eq!(file.len(), HEAP_START + child_offset + child_size + 4);
+
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("valid CRW");
+        let key = "CanonRaw:CanonFirmwareVersion";
+        assert_eq!(metadata.get_string(key), Some("Firmware Version 1.1.1"));
+        let occurrences: Vec<_> = metadata
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0].1.origin.module, Some("CanonRaw"));
+        assert_eq!(occurrences[0].1.origin.table, Some("Main"));
+
+        let directory = tempfile::tempdir().expect("temporary CRW directory");
+        let path = directory.path().join("deep.crw");
+        std::fs::write(&path, &file).expect("write valid CRW carrier");
+        let public = crate::core::operations::read_metadata(&path).expect("public CRW read");
+        let public_rows: Vec<_> = public
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(public_rows.len(), 1);
+        assert_eq!(public_rows[0].1.origin.module, Some("CanonRaw"));
+        assert_eq!(public_rows[0].1.origin.table, Some("Main"));
+        assert_eq!(public.get_string(key), metadata.get_string(key));
+    }
+
     /// A `0x28`-typed subdirectory is entered.
     ///
     /// `ProcessCanonRaw` recurses on `($tagType==0x28 or $tagType==0x30) and
