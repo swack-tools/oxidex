@@ -472,6 +472,67 @@ fn absent_bare_exif_deletion_stays_unchanged_across_two_app1_blocks() {
 }
 
 #[test]
+fn two_unknown_makernotes_are_an_unchanged_group_deletion() {
+    // The committed LSI/Nikon fixture supplies both physical APP1 segments.
+    // Repeat its first (LSI1) segment so this case needs no external fixture.
+    let source = std::fs::read(fixture("multi-app1-lsi1-nikon.jpg")).unwrap();
+    let mut segments = Vec::new();
+    let mut at = 2;
+    while at + 4 <= source.len() && source[at] == 0xff {
+        if matches!(source[at + 1], 0xd9 | 0xda) {
+            break;
+        }
+        let length = u16::from_be_bytes([source[at + 2], source[at + 3]]) as usize;
+        let end = at + 2 + length;
+        if source[at + 1] == 0xe1 && source[at + 4..end].starts_with(b"Exif\0\0") {
+            segments.push((at, end));
+        }
+        at = end;
+    }
+    assert_eq!(segments.len(), 2);
+    let (first, first_end) = segments[0];
+    let (second, second_end) = segments[1];
+    let original = [
+        &source[..second],
+        &source[first..first_end],
+        &source[second_end..],
+    ]
+    .concat();
+    assert_eq!(exif_app1_payloads(&original).len(), 2);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("two-lsi1.jpg");
+    std::fs::write(&path, &original).unwrap();
+    remove_tag(&path, "MakerNotes:All").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-MakerNotes:All=")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 image files unchanged"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    let handle = exiftool_create();
+    let c_path = CString::new(path.to_str().unwrap()).unwrap();
+    let c_key = CString::new("MakerNotes:All").unwrap();
+    assert_eq!(exiftool_read_file(handle, c_path.as_ptr()), EXIFTOOL_OK);
+    assert_eq!(exiftool_remove_tag(handle, c_key.as_ptr()), EXIFTOOL_OK);
+    let code = exiftool_write_file(handle, c_path.as_ptr());
+    let message = unsafe { CStr::from_ptr(exiftool_get_last_error()) }
+        .to_string_lossy()
+        .into_owned();
+    exiftool_destroy(handle);
+    assert_eq!(code, EXIFTOOL_OK, "{message}");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn absent_grouped_deletion_uses_canonical_address_and_keeps_request_spelling() {
     let dir = tempfile::tempdir().unwrap();
     let path = copy(dir.path(), CANON);
