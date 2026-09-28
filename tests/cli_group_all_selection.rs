@@ -46,6 +46,43 @@ fn repo(args: &[&str]) -> String {
     stdout(args, Path::new(REPO_FIXTURE))
 }
 
+#[test]
+fn qvci_app1_rows_keep_their_makernote_selection_family() {
+    let source = std::fs::read(REPO_FIXTURE).expect("repository JPEG");
+    assert_eq!(&source[..2], &[0xff, 0xd8]);
+    let mut qvci = vec![0u8; 133];
+    qvci[..5].copy_from_slice(b"QVCI\0");
+    qvci[98..105].copy_from_slice(b"KX-778\0");
+    qvci[114..123].copy_from_slice(b"98082901\0");
+    qvci[124..133].copy_from_slice(b"98000829\0");
+    let mut jpeg = source[..2].to_vec();
+    jpeg.extend_from_slice(&[0xff, 0xe1]);
+    jpeg.extend_from_slice(&u16::try_from(qvci.len() + 2).unwrap().to_be_bytes());
+    jpeg.extend_from_slice(&qvci);
+    jpeg.extend_from_slice(&source[2..]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("qvci.jpg");
+    std::fs::write(&path, jpeg).unwrap();
+
+    for args in [
+        &["-j", "-G0:1", "-MakerNotes:all"][..],
+        &["-j", "-G0:1", "-Casio:all"][..],
+    ] {
+        let output: serde_json::Value = serde_json::from_str(&stdout(args, &path)).unwrap();
+        let row = &output[0];
+        assert_eq!(row["MakerNotes:Casio:ModelType"], "KX-778", "{args:?}");
+        assert_eq!(
+            row["MakerNotes:Casio:ManufactureIndex"], 98082901,
+            "{args:?}"
+        );
+        assert_eq!(
+            row["MakerNotes:Casio:ManufactureCode"], 98000829,
+            "{args:?}"
+        );
+        assert!(row.get("Casio:ModelType").is_none(), "{args:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Repository fixture, oracle output recorded verbatim.
 // ---------------------------------------------------------------------------
