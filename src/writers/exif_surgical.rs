@@ -2605,12 +2605,17 @@ fn has_unwalked_note_directory(ifd: IfdKind, tag_id: u16) -> bool {
         || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
 }
 
-/// A SubIFDs edge may point at reduced-image directories with no maker note.
-/// Prove that case by walking every child; any malformed entry, cycle, nested
-/// directory kind we do not model, or note-bearing entry keeps the census
-/// uncertain. This is only an absence proof, never a serializer plan: the
-/// offset still requires the separate relocation guard before a rewrite.
-fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> bool {
+/// A SubIFDs edge may point at reduced-image directories. Walk every child
+/// to prove either maker-note absence (`target=None`) or absence of a named
+/// Exif::Main id. Malformed entries, cycles and unmodelled child directories
+/// make either proof fail. This is not a serializer plan: relocation remains
+/// guarded separately before a rewrite.
+fn subifds_proven_absent(
+    tiff: &[u8],
+    order: ByteOrder,
+    edge: &RawEntry,
+    target: Option<u16>,
+) -> bool {
     fn offsets(
         field_type: u16,
         count: usize,
@@ -2639,6 +2644,7 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
         tiff: &[u8],
         order: ByteOrder,
         at: usize,
+        target: Option<u16>,
         visited: &mut std::collections::BTreeSet<usize>,
     ) -> Option<()> {
         if visited.len() >= 64 || !visited.insert(at) {
@@ -2663,8 +2669,8 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
                 let start = read_u32(&raw[8..12], order) as usize;
                 tiff.get(start..start.checked_add(size)?)?
             };
-            if tag == MAKERNOTE
-                || tag == DNG_PRIVATE_DATA
+            if target.map_or(tag == MAKERNOTE || tag == DNG_PRIVATE_DATA, |id| tag == id)
+                || (target.is_some() && tag == DNG_PRIVATE_DATA)
                 || matches!(tag, EXIF_IFD_POINTER | INTEROP_POINTER)
                 || (has_unwalked_note_directory(IfdKind::Ifd0, tag) && tag != 0x014a)
             {
@@ -2672,13 +2678,13 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
             }
             if tag == 0x014a {
                 for child in offsets(field_type, count, value, order)? {
-                    walk(tiff, order, child, visited)?;
+                    walk(tiff, order, child, target, visited)?;
                 }
             }
         }
         let next = read_u32(&tiff[table_end..next_end], order) as usize;
         if next != 0 {
-            walk(tiff, order, next, visited)?;
+            walk(tiff, order, next, target, visited)?;
         }
         Some(())
     }
@@ -2691,7 +2697,11 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
     let mut visited = std::collections::BTreeSet::new();
     children
         .into_iter()
-        .all(|child| walk(tiff, order, child, &mut visited).is_some())
+        .all(|child| walk(tiff, order, child, target, &mut visited).is_some())
+}
+
+fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> bool {
+    subifds_proven_absent(tiff, order, edge, None)
 }
 
 /// Check the five directories `scan_entries_with_magics` intends to walk.
@@ -2854,6 +2864,29 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                 .unwrap_or_default()
         };
         let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
+        let ifd0_unsigned = |tag_id: u16| {
+            scan.entries
+                .iter()
+                .find(|entry| {
+                    entry.ifd == IfdKind::Ifd0
+                        && entry.tag_id == tag_id
+                        && entry.count == 1
+                        && matches!(entry.field_type, 1 | 3 | 4 | 9)
+                })
+                .map(|entry| {
+                    inline_unsigned(entry.field_type, entry.count, &entry.value, scan.byte_order)
+                })
+        };
+        // Exif::Main selects SR2Private before the Adobe payload variants
+        // when Sony's SubIFD header has set TIFF_TYPE to ARW/SR2. Here c634
+        // is an IFD pointer, so its four value bytes are not the payload.
+        let sony_sr2_private = make.starts_with("SONY")
+            && ifd0_unsigned(0x00fe) == Some(1)
+            && ifd0_unsigned(0x0103) == Some(6)
+            && scan
+                .entries
+                .iter()
+                .any(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == 0x014a);
         for entry in &scan.entries {
             if is_makernote_entry(entry.ifd, entry.tag_id) {
                 census.notes += 1;
@@ -2871,6 +2904,10 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     }
                 }
             } else if is_dng_private_data_entry(entry.ifd, entry.tag_id) {
+                if sony_sr2_private {
+                    census.mark_uncertain_at(entry.ifd);
+                    continue;
+                }
                 let Some(notes) = dng_private_makernote_count(&entry.value) else {
                     // A decoded prefix cannot identify a truncated successor.
                     census.mark_uncertain_at(entry.ifd);
@@ -3994,7 +4031,7 @@ pub(crate) fn rewrite_tiff_exif_creating(
         refuse_uncertain_note_group_clear(tiff, removed)?;
     }
     if let Some(tiff) = tiff
-        && is_no_op(&scan, original_map, desired, removed)
+        && is_no_op(tiff, &scan, original_map, desired, removed)
     {
         return Ok(tiff.to_vec());
     }
@@ -4084,9 +4121,57 @@ fn removals_name_nothing(
     })
 }
 
+/// A family-0 EXIF removal can name a tag in an Exif::Main directory
+/// that the ordinary writer does not scan. The reader's missing row and the
+/// modeled IFDs alone cannot prove that removal is empty.
+fn exif_family_removals_proven_absent(tiff: &[u8], scan: &ExifScan, removed: &[String]) -> bool {
+    for key in removed.iter().filter(|key| is_planned_key(key)) {
+        let Some(name) = key.strip_prefix("EXIF:") else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("All") {
+            continue;
+        }
+        let target = get_tag_descriptor(key).and_then(descriptor_tag_id);
+        if let Some(chain) = &scan.ifd1_next {
+            if chain.refusal.is_some()
+                || chain.dirs.iter().any(|dir| {
+                    dir.records
+                        .iter()
+                        .any(|record| Some(record.tag_id) == target)
+                })
+            {
+                return false;
+            }
+        }
+        if !census_walk_is_complete(tiff, scan.byte_order) {
+            return false;
+        }
+        for edge in scan
+            .entries
+            .iter()
+            .filter(|entry| entry.ifd != IfdKind::Gps)
+        {
+            if edge.tag_id == 0x014a {
+                if !target.is_some_and(|tag_id| {
+                    subifds_proven_absent(tiff, scan.byte_order, edge, Some(tag_id))
+                }) {
+                    return false;
+                }
+            } else if has_unwalked_note_directory(edge.ifd, edge.tag_id)
+                || edge.tag_id == DNG_PRIVATE_DATA
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Whether a write changes nothing in the block (see
 /// [`exif_request_is_no_op`]): the payload is then returned unchanged.
 fn is_no_op(
+    tiff: &[u8],
     scan: &ExifScan,
     original_map: &MetadataMap,
     desired: &MetadataMap,
@@ -4094,6 +4179,7 @@ fn is_no_op(
 ) -> bool {
     rows_unchanged(original_map, desired)
         && removals_name_nothing(scan, original_map, removed, true)
+        && exif_family_removals_proven_absent(tiff, scan, removed)
         && !drops_empty_carrier(scan, removed)
 }
 
@@ -4117,8 +4203,8 @@ fn drops_empty_carrier(scan: &ExifScan, removed: &[String]) -> bool {
 /// `blocks` (JPEG APP1s, PNG eXIf chunks, decoded raw EXIF profiles, a
 /// TIFF-structured file): every planned row of `desired` is its `baseline`
 /// value, no planned row is gone, and no named removal names an entry of a
-/// block -- a block no scanner reading `magics` can parse holds nothing a
-/// removal could name (the reader surfaced nothing from it either).
+/// block. An unreadable block or unwalked Exif::Main directory cannot prove
+/// an `EXIF:<name>` removal empty from the reader's missing row alone.
 ///
 /// Decided once, up front, before any refusal guard (the raw-profile and
 /// multiple-eXIf guards, the unmodelled-pointer guard, the raw-carried
@@ -4172,8 +4258,11 @@ pub(crate) fn exif_request_is_no_op(
     blocks
         .iter()
         .all(|block| match scan_entries_with_magics(block, magics) {
-            Ok(scan) => removals_name_nothing(&scan, baseline, removed, false),
-            Err(_) => true,
+            Ok(scan) => {
+                removals_name_nothing(&scan, baseline, removed, false)
+                    && exif_family_removals_proven_absent(block, &scan, removed)
+            }
+            Err(_) => !removed.iter().any(|key| key.starts_with("EXIF:")),
         })
         && group_blocks
             .iter()
@@ -4343,7 +4432,7 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     }
     let scan = scan_exif_entries(tiff)?;
     refuse_uncertain_note_group_clear(tiff, removed)?;
-    if is_no_op(&scan, original_map, desired, removed) {
+    if is_no_op(tiff, &scan, original_map, desired, removed) {
         return Ok(tiff.to_vec());
     }
     let plan = plan_exif_write_inner(
@@ -5734,6 +5823,94 @@ mod tests {
                 "field type {field_type}, count {count}"
             );
         }
+    }
+
+    #[test]
+    fn exif_family_removal_checks_unwalked_subifd_tags() {
+        let mut tiff = vec![0; 128];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        tiff[8..10].copy_from_slice(&1u16.to_le_bytes());
+        tiff[10..22].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 64, 0, 0, 0]);
+        tiff[64..66].copy_from_slice(&1u16.to_le_bytes());
+        tiff[66..78].copy_from_slice(&[0x19, 0xc6, 3, 0, 2, 0, 0, 0, 2, 0, 2, 0]);
+        let empty = MetadataMap::new();
+        assert!(!exif_request_is_no_op(
+            &[&tiff],
+            &[&tiff],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["EXIF:BlackLevelRepeatDim".into()],
+        ));
+        assert!(
+            rewrite_tiff_exif_with_removals(
+                Some(&tiff),
+                &empty,
+                &empty,
+                &["EXIF:BlackLevelRepeatDim".into()],
+                FreshOrder::SetPreferred,
+            )
+            .is_err()
+        );
+        assert!(exif_request_is_no_op(
+            &[&tiff],
+            &[&tiff],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["EXIF:CalibrationIlluminant1".into()],
+        ));
+        // Truncation can never be taken as proof that a child lacks the tag.
+        tiff[10..22].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 250, 0, 0, 0]);
+        assert!(!exif_request_is_no_op(
+            &[&tiff],
+            &[&tiff],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["EXIF:BlackLevelRepeatDim".into()],
+        ));
+    }
+
+    #[test]
+    fn sony_sr2_private_pointer_is_not_dng_payload() {
+        let mut tiff = vec![0; 320];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        let row = |tag: u16, field_type: u16, count: u32, value: u32| {
+            let mut bytes = [0; 12];
+            bytes[..2].copy_from_slice(&tag.to_le_bytes());
+            bytes[2..4].copy_from_slice(&field_type.to_le_bytes());
+            bytes[4..8].copy_from_slice(&count.to_le_bytes());
+            bytes[8..12].copy_from_slice(&value.to_le_bytes());
+            bytes
+        };
+        tiff[8..10].copy_from_slice(&5u16.to_le_bytes());
+        for (index, entry) in [
+            row(0x010f, 2, 5, 256), // SONY make selects ARW with the following fields.
+            row(0x00fe, 4, 1, 1),
+            row(0x0103, 3, 1, 6),
+            row(0x014a, 4, 1, 224),
+            row(0x8769, 4, 1, 128),
+        ]
+        .iter()
+        .enumerate()
+        {
+            tiff[10 + index * 12..22 + index * 12].copy_from_slice(entry);
+        }
+        tiff[128..130].copy_from_slice(&1u16.to_le_bytes());
+        tiff[130..142].copy_from_slice(&row(DNG_PRIVATE_DATA, 4, 1, 160));
+        tiff[256..261].copy_from_slice(b"SONY\0");
+        let census = makernote_census(&[&tiff], EXIF_BLOCK_MAGICS);
+        assert!(census.uncertain_outside_ifd1);
+        assert_eq!(census.notes, 0);
+        // The same numeric field without Sony ARW context is not an SR2 pointer.
+        tiff[10..22].copy_from_slice(&row(0x010f, 2, 5, 256));
+        tiff[256..261].copy_from_slice(b"NIKON");
+        let census = makernote_census(&[&tiff], EXIF_BLOCK_MAGICS);
+        assert!(!census.uncertain_outside_ifd1);
     }
 
     #[test]
