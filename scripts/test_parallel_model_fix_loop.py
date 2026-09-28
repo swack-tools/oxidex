@@ -3141,6 +3141,19 @@ class AutoPublishRoundTests(unittest.TestCase):
             return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
         return run_gh
 
+    def test_default_sweep_receives_the_publish_identity_runner(self):
+        pinned = self._run_gh("[]")
+        captured = []
+        with patch.object(parallel_model_fix_loop, "default_sweep_fn",
+                          side_effect=lambda **kw: captured.append(kw) or {"status": "no_news"}):
+            result = auto_publish_round(
+                repo_root=self.tmp / "repo", cache_dir="/unused", home=self.tmp / "home",
+                ensure_worktree_fn=self._ensure_worktree_fn, run_gh=pinned,
+                log_fn=lambda *a: None,
+            )
+        self.assertEqual(result["status"], "no_news")
+        self.assertIs(captured[0]["run_gh"], pinned)
+
     def _publish(self, sweep_result, run_gh, **overrides):
         kwargs = dict(
             repo_root=self.tmp / "repo", cache_dir="/unused", home=self.tmp / "home",
@@ -3537,9 +3550,9 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
         )
 
         self.assertEqual(result["status"], "published_awaiting_review")
-        # The early idempotency pass committed formatting; the later
-        # pass recorded in the result is already clean.
-        self.assertFalse(result["sweep"]["fmt"]["committed"])
+        # The final formatting pass commits only after lint can bisect the
+        # original squad lines.
+        self.assertTrue(result["sweep"]["fmt"]["committed"])
 
         # What origin ACTUALLY received on the head branch -- the fix
         # still has to reach the PR's branch, fmt commit included, even

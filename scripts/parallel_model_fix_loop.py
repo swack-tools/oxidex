@@ -2311,7 +2311,7 @@ def ensure_sweep_worktree(repo_root, path, run_git=default_run_git, origin_ref=O
     return path, f"created sweep worktree at {path}"
 
 
-def default_sweep_fn(**kwargs):
+def default_sweep_fn(*, run_gh=default_run_gh, **kwargs):
     """overlord_sweep.run_sweep with its two real side-effect runners
     (the per-format comparison and the recheck's checkout) filled in --
     the same pair overlord_sweep.main() wires up for the human-driven
@@ -2333,7 +2333,7 @@ def default_sweep_fn(**kwargs):
     def open_sweep_prs_fn():
         # Publication must stop if the list cannot be checked. Adoption's
         # best-effort query remains unchanged for its separate use.
-        return list_open_sweep_prs(kwargs.get("repo_root"), strict=True)
+        return list_open_sweep_prs(kwargs.get("repo_root"), run_gh=run_gh, strict=True)
 
     return overlord_sweep.run_sweep(
         comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout,
@@ -2834,6 +2834,7 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
     """
     home = Path(home) if home else OXIDEX_HOME
     sweep_worktree_dir = Path(sweep_worktree_dir) if sweep_worktree_dir else DEFAULT_SWEEP_WORKTREE_DIR
+    using_default_sweep = sweep_fn is None
     sweep_fn = sweep_fn or default_sweep_fn
     ensure_worktree_fn = ensure_worktree_fn or ensure_sweep_worktree
 
@@ -2887,6 +2888,8 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
         sweep_kwargs["create_pr_fn"] = create_pr_fn
     if config_path:
         sweep_kwargs["config_path"] = config_path
+    if using_default_sweep:
+        sweep_kwargs["run_gh"] = run_gh
     result = sweep_fn(**sweep_kwargs)
     common = {"sweep": result, "adopted": adopted, "adopted_sync": adopted_sync}
     status = result.get("status")

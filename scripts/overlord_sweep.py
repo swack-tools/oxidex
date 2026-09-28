@@ -1368,6 +1368,55 @@ def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
     return {"ok": True, "committed": True, "message": f"committed cargo fmt over {len(files)} file(s)"}
 
 
+def formatted_comparison_tree(repo_root, run_git, fmt_fn=None):
+    """Build the would-publish tree without putting a formatting commit ahead of lint bisection.
+
+    The sweep branch is private and clean here. Stage only rustfmt's tracked
+    Rust edits, write their tree, then restore the index and worktree to HEAD.
+    Git comparisons can use that tree object directly; lint bisection can
+    still revert squad contributions against their original lines.
+    """
+    for args in (["diff", "--quiet", "HEAD"], ["diff", "--cached", "--quiet", "HEAD"]):
+        rc, _out, err = run_git(args, repo_root)
+        if rc != 0:
+            return {"ok": False, "message": f"sweep branch is not clean before format: {err.strip()}"}
+
+    changed = []
+    result = {"ok": False, "message": "format comparison did not complete"}
+    try:
+        try:
+            ok, output = (fmt_fn or real_cargo_fmt)(repo_root)
+        except OSError as exc:
+            ok, output = False, str(exc)
+        rc, paths, err = run_git(["diff", "--name-only", "-z"], repo_root)
+        if rc != 0:
+            result = {"ok": False, "message": f"could not inspect formatted paths: {err.strip()}"}
+        else:
+            changed = [path for path in paths.split("\0") if path]
+            if not ok:
+                result = {"ok": False, "message": f"cargo fmt failed: {output}"}
+            elif any(not path.endswith(".rs") for path in changed):
+                result = {"ok": False, "message": "formatter changed a non-Rust file"}
+            else:
+                stage_rc, stage_err = 0, ""
+                if changed:
+                    stage_rc, _out, stage_err = run_git(["add", "-u", "--", *changed], repo_root)
+                if stage_rc != 0:
+                    result = {"ok": False, "message": f"could not stage formatted paths: {stage_err.strip()}"}
+                else:
+                    rc, tree, err = run_git(["write-tree"], repo_root)
+                    result = ({"ok": True, "tree": tree.strip(), "message": "formatted comparison tree"}
+                              if rc == 0 and tree.strip() else
+                              {"ok": False, "message": f"could not write formatted tree: {err.strip()}"})
+    finally:
+        if changed:
+            reset_rc, _out, reset_err = run_git(["reset", "--quiet", "HEAD", "--", *changed], repo_root)
+            restore_rc, _out, restore_err = run_git(["restore", "--worktree", "--", *changed], repo_root)
+            if reset_rc != 0 or restore_rc != 0:
+                result = {"ok": False, "message": f"could not restore pre-format tree: {reset_err} {restore_err}"}
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Step 8: PR creation (injectable -- never shells out in a way that
 # fails hermetic tests)
@@ -1633,12 +1682,18 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         }
 
     # Compare the content that would be published. A prior sweep PR has
-    # already been formatted, so comparing raw worker output can miss it.
-    early_fmt = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
-    if not early_fmt["ok"] and open_sweep_prs_fn is not None:
-        persist_cursor(durable_squads)
-        return {"status": "format_failed", "branch": branch, "fmt": early_fmt,
-                "failed_squads": failed_squads, "preflight": health}
+    # already been formatted, so raw worker output can miss it. Keep the
+    # formatted tree temporary: a format commit here can conflict with the
+    # squad reverts used by lint bisection below.
+    if open_sweep_prs_fn is not None:
+        early_fmt = formatted_comparison_tree(repo_root, run_git, fmt_fn=fmt_fn)
+        if not early_fmt["ok"]:
+            persist_cursor(durable_squads)
+            return {"status": "format_failed", "branch": branch, "fmt": early_fmt,
+                    "failed_squads": failed_squads, "preflight": health}
+        comparison_tree = early_fmt["tree"]
+    else:
+        comparison_tree = "HEAD"
 
     # The repo's DURABLE idempotency rule: compare the TREE, not the SHA.
     # A cherry-pick or a squash gives identical content a fresh sha (fresh
@@ -1659,7 +1714,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     # suite, the push and the PR. `--quiet` implies
     # --exit-code, so rc 0 means "no differences"; two dots, not three, so
     # a merge that neutralised main's own content is caught too.
-    rc, _out, _err = run_git(["diff", "--quiet", f"{origin_ref}..HEAD"], repo_root)
+    rc, _out, _err = run_git(["diff", "--quiet", origin_ref, comparison_tree], repo_root)
     if rc == 0:
         log_fn(f"{branch} is tree-identical to {origin_ref} -- every stamped contribution is already "
                "on main; skipping the workspace suite, the fmt commit, the push and the PR")
@@ -1680,7 +1735,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         # Main may have advanced since an older PR was cut. Only the paths
         # changed by this round distinguish its fix from that open PR.
         changed_rc, changed_out, changed_err = run_git(
-            ["diff", "--name-only", "-z", f"{origin_ref}..HEAD"], repo_root)
+            ["diff", "--name-only", "-z", origin_ref, comparison_tree], repo_root)
         try:
             if changed_rc != 0:
                 raise RuntimeError(f"could not list changed paths: {changed_err.strip()}")
@@ -1703,16 +1758,18 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
                         raise RuntimeError(f"could not fetch open PR {head}: {fetch_err.strip()}")
                     candidate_ref = f"refs/remotes/{remote}/{head}"
                 cmp_rc, _out, cmp_err = run_git(
-                    ["diff", "--quiet", f"{candidate_ref}..HEAD", "--", *changed_paths], repo_root)
+                    ["diff", "--quiet", candidate_ref, comparison_tree, "--", *changed_paths], repo_root)
                 if cmp_rc > 1:
                     raise RuntimeError(f"could not compare open PR {head}: {cmp_err.strip()}")
                 if cmp_rc == 0:
                     pr_ref = pr.get("url") or pr.get("number") or head
                     log_fn(f"{branch} duplicates already-open {pr_ref} ({head}) on this round's "
                            "changed paths -- skipping publication")
-                    durable_squads.update(merge_infos.keys())
-                    persist_cursor(durable_squads)
+                    # An open PR can close unmerged. Keep both the stamp
+                    # cursor and branch discovery retryable until content
+                    # actually lands; a duplicate is not a failed attempt.
                     clear_parks(merge_infos.keys())
+                    persist_cursor(durable_squads)
                     return {"status": "duplicate_of_open_pr", "branch": branch,
                             "duplicate_of": pr_ref, "merged_squads": sorted(merge_infos),
                             "failed_squads": failed_squads, "bisection": bisection_result,
@@ -1754,15 +1811,11 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
     title = build_sweep_pr_title(branch, all_shas, merge_infos)
 
-    # Retain the late pass for a transient early failure and for callers
-    # that do not use the open-PR gate; it is normally already clean.
-    # all_shas / the evidence table / the judgment queue above are the
-    # TAG-FIX commits, and the fmt commit is not one of them: it carries
-    # no trailers, closes no gap, and must not show up as a row in the
-    # PR's evidence table or as an entry in the judgment queue. The
-    # contribution SHAs come from merge_infos boundaries captured before
-    # either format pass, so the early commit cannot enter those rows.
-    fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+    # Lint bisection needs the original squad lines available for a clean
+    # revert. Commit formatting only after lint has passed or isolated an
+    # offender. Contribution SHAs above come from merge_infos, so the final
+    # formatting commit never enters the PR's tag-fix evidence table.
+    fmt_result = {"ok": True, "committed": False, "message": "deferred until lint passes"}
 
     # The lint gate CI will apply, applied BEFORE the push rather than after.
     #
@@ -1826,6 +1879,21 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
             "bisection": bisection_result, "judgment_entries": judgment_entries,
             "preflight": health, "sweep_review_written": len(written), "fmt": fmt_result,
         }
+
+    fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+    if not fmt_result["ok"] and open_sweep_prs_fn is not None:
+        persist_cursor(durable_squads)
+        return {"status": "format_failed", "branch": branch, "fmt": fmt_result,
+                "failed_squads": failed_squads, "preflight": health}
+    # Check the final committed tree with the same lint gate the PR will
+    # face. A formatter-induced failure stops publication without trying
+    # to revert squads through the new formatting commit.
+    lint_ok, lint_output = lint_fn(repo_root)
+    if not lint_ok:
+        persist_cursor(durable_squads)
+        return {"status": "lint_failed", "branch": branch, "message": lint_output[-2000:],
+                "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+                "preflight": health, "fmt": fmt_result}
 
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
