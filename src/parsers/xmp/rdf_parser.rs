@@ -892,12 +892,15 @@ fn parse_xmp_packet(
         if !legacy.has(&legacy_tag) {
             legacy.push(&legacy_tag, &tag, &values.join(", "));
         }
+        // A prior pass can record only the first rdf:li as scalar text. The
+        // flattened walk knows the full nested collection, so retain its
+        // transport even when that text has already claimed the tag. Keep a
+        // list supplied by a more specific pass if one already exists.
+        if values.len() > 1 && !list_elements.iter().any(|(existing, _)| existing == &tag) {
+            list_elements.push((tag.clone(), values.clone()));
+        }
         if results.iter().any(|(t, _)| *t == tag) {
             continue;
-        }
-        if values.len() > 1 {
-            list_elements.retain(|(existing, _)| existing != &tag);
-            list_elements.push((tag.clone(), values.clone()));
         }
         results.push((tag, values.join(", ")));
     }
@@ -7181,6 +7184,38 @@ mod entry_tests {
         format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {namespaces}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
         )
+    }
+
+    #[test]
+    fn nested_look_curve_keeps_all_points_in_typed_occurrence() {
+        // ExifTool 13.59 reports this as a Seq, even though the ordinary RDF
+        // walk sees the first li as a scalar before the flattening pass runs.
+        let xml = packet(
+            "<c:Look><rdf:Description><c:Parameters><rdf:Description><c:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>22, 16</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></c:ToneCurvePV2012></rdf:Description></c:Parameters></rdf:Description></c:Look>",
+            r#"xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/""#,
+        );
+        let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+        let curve = entries
+            .iter()
+            .find(|entry| entry.tag == "XMP-crs:LookParametersToneCurvePV2012")
+            .unwrap_or_else(|| panic!("curve missing from {entries:?}"));
+        assert_eq!(curve.group1, "XMP-crs");
+        assert_eq!(
+            curve.value,
+            XmpValue::List(vec![
+                "0, 0".to_string(),
+                "22, 16".to_string(),
+                "255, 255".to_string(),
+            ])
+        );
+        assert_eq!(
+            curve.tag_value(true),
+            TagValue::new_array(vec![
+                TagValue::new_string("0, 0"),
+                TagValue::new_string("22, 16"),
+                TagValue::new_string("255, 255"),
+            ])
+        );
     }
 
     /// Same-named properties of two namespaces the reader always filed under
