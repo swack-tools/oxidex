@@ -385,6 +385,7 @@ pub(crate) fn process_exif_segments_with_options(
                     // JpgFromRawStart value ExifTool displays.
                     crate::core::tiff_helpers::parse_ifd2_preview_image(
                         &tiff_reader,
+                        tiff_data,
                         ifd_offset,
                         ifd0_entry_count,
                         byte_order,

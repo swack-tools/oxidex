@@ -553,6 +553,9 @@ const CASIO_TYPE2_QUALITY: u16 = 0x3002;
 const CASIO_TYPE2_BEST_SHOT_MODE: u16 = 0x3007;
 /// Casio.pm:1644-1661 (Type2::0x301b), an inline `int16u` ArtMode enum.
 const CASIO_TYPE2_ART_MODE: u16 = 0x301b;
+/// Casio.pm:442-456 (Type2::0x2012), an inline `int16u` WhiteBalance enum --
+/// a different map from Main::0x0019's.
+const CASIO_TYPE2_WHITE_BALANCE: u16 = 0x2012;
 
 fn record_casio_type2_u16(
     metadata: &mut MetadataMap,
@@ -562,6 +565,7 @@ fn record_casio_type2_u16(
     print: String,
 ) {
     let raw = TagValue::Integer(i64::from(raw));
+    let display = TagValue::new_string(print);
     metadata.record_occurrence(
         format!("Casio:{name}"),
         TagOccurrence {
@@ -572,9 +576,9 @@ fn record_casio_type2_u16(
             group2: Some(intern("Camera")),
             instance: Instance::default(),
             stored: Some(raw.clone()),
-            raw: raw.clone(),
+            raw: display.clone(),
             value: Some(raw),
-            print: Some(TagValue::new_string(print)),
+            print: Some(display),
             priority: 1,
             is_list: false,
             order: 0,
@@ -733,6 +737,34 @@ pub fn parse_casio_type2_extra_tags(
             "BestShotMode",
             value,
             print.to_string(),
+        );
+    }
+
+    // The table declares no priority, so this copy -- found at the MakerNote's
+    // 0x927C position, before ExifIFD 0xa403 (`Priority => 0`) -- keeps the
+    // bare `-WhiteBalance` (`Casio2.jpg`: `Unknown (13)`, not `Manual`).
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_WHITE_BALANCE)
+        && entry.field_type == 3
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        let print = match value {
+            0 => "Manual".to_string(),
+            1 => "Daylight".to_string(),
+            2 => "Cloudy".to_string(),
+            3 => "Shade".to_string(),
+            4 => "Flash?".to_string(),
+            6 => "Fluorescent".to_string(),
+            9 => "Tungsten?".to_string(),
+            10 => "Tungsten".to_string(),
+            12 => "Flash".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        record_casio_type2_u16(
+            metadata,
+            CASIO_TYPE2_WHITE_BALANCE,
+            "WhiteBalance",
+            value,
+            print,
         );
     }
 
@@ -1153,6 +1185,29 @@ mod casio_preview_image_tests {
         }
         note.extend_from_slice(&w32(0));
         note
+    }
+
+    #[test]
+    fn casio_type2_white_balance_projects_display_and_retains_numeric_channels() {
+        for (value, label) in [(0, "Manual"), (13, "Unknown (13)")] {
+            let note = type2_inline_u16_note(
+                &[(CASIO_TYPE2_WHITE_BALANCE, value)],
+                ByteOrder::LittleEndian,
+            );
+            let ctx = MakerNoteContext::detached(&note);
+            let mut metadata = MetadataMap::new();
+            parse_casio_type2_extra_tags(&ctx, ByteOrder::LittleEndian, &mut metadata);
+            assert_eq!(metadata.get_string("Casio:WhiteBalance"), Some(label));
+            let rows = metadata.occurrences_for("Casio:WhiteBalance");
+            assert_eq!(rows[0].stored, Some(TagValue::Integer(i64::from(value))));
+            assert_eq!(rows[0].value, Some(TagValue::Integer(i64::from(value))));
+            assert_eq!(rows[0].raw, TagValue::new_string(label));
+            let serialized = serde_json::to_value(&metadata).unwrap();
+            assert_eq!(
+                serialized["Casio:WhiteBalance"],
+                serde_json::json!({"type": "String", "value": label})
+            );
+        }
     }
 
     #[test]

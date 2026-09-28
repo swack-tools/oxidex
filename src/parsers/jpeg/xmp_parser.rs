@@ -291,6 +291,13 @@ pub fn extract_xmp_from_segments_with_value_forms(
     Ok((all_xmp_tags, all_value_forms))
 }
 
+/// Whether this APP1 segment carries an Extended XMP chunk, rather than a
+/// standard main packet. Container ordering must keep these separate so a
+/// chunk is not reassembled once for every main packet in the file.
+pub(crate) fn is_extended_xmp_segment(segment: &Segment) -> bool {
+    segment.is_app1() && segment.data.starts_with(XMP_EXTENSION_IDENTIFIER)
+}
+
 /// Checks if a segment is an XMP APP1 segment.
 ///
 /// This is a convenience function that checks both:

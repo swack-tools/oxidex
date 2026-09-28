@@ -93,9 +93,12 @@ fn expected(file: &str, name: &str, form: Form) -> Expect {
         // No maker note, no MIE: the bare name is EXIF alone, typed by its
         // EXIF address (`-ColorSpace#=2` was a string, refused, before).
         ("Writer.jpg", _) => Expect::Match,
+        // Nikon.jpg has a physically identified headerless Nikon note.
+        // MeteringMode's other maker-note address is outside Nikon's root;
+        // pinned 13.59 writes only ExifIFD for both forms.
+        ("Nikon.jpg", _) if name == "MeteringMode" => Expect::Match,
         // Canon.jpg: Canon's maker note may hold every other name;
-        // Nikon.jpg: a maker note oxidex's reader decodes no row of, which
-        // may hold any of them.
+        // other Nikon names may still have a Nikon address.
         _ => Expect::Refused,
     }
 }

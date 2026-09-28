@@ -1237,7 +1237,10 @@ pub(crate) fn ensure_makernote_entry_not_named(
         && MAKERNOTE_ROOTS
             .iter()
             .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
-    if named && makernote_block().notes > 0 {
+    let census = named.then(makernote_block);
+    if census.is_some_and(|census| {
+        census.notes > 0 || census.uncertain_outside_ifd1 || census.uncertain_ifd1
+    }) {
         return Err(refuse(
             tag,
             "it names a maker-note entry, which ExifTool deletes or replaces whole where \
@@ -1318,6 +1321,8 @@ fn makernote_may_hold_in_groups(
             census.surviving_exif_ifd_clear
         };
         surviving > 0
+            || census.uncertain_survivor_outside_ifd1
+            || (!deletions.ifd1 && census.uncertain_survivor_ifd1)
     } else {
         false
     };
@@ -1361,7 +1366,9 @@ fn makernote_may_hold_in_groups(
     } else {
         census.tag_bearing
     };
-    if decoded.is_empty() && tag_bearing == 0 {
+    let uncertain_note = !deletions.makernotes
+        && (census.uncertain_outside_ifd1 || (!deletions.ifd1 && census.uncertain_ifd1));
+    if decoded.is_empty() && tag_bearing == 0 && !uncertain_note {
         return None;
     }
     // Rows do not say which EXIF block they were decoded from, so more than
@@ -1375,13 +1382,28 @@ fn makernote_may_hold_in_groups(
     // APP7's (a group no root claims). A note ExifTool reads as one value,
     // or a JPEG preview, bears no tags and is not counted
     // (`exif_surgical::makernote_census`).
+    // An otherwise rowless note can still have a physically proven root.
+    // Pinned MakerNotes::Main selects a headerless Nikon note by its ordered
+    // conditions; that root has no Pentax Artist address. Keep other notes
+    // unknown until their actual root is established.
+    if !ciff && !uncertain_note && tag_bearing == 1 && decoded.is_empty() {
+        if let Some(root) = census
+            .identified_single_root
+            .and_then(|entry| MAKERNOTE_ROOTS.iter().find(|root| root.entry == entry))
+        {
+            if !groups.iter().any(|group| root.closure.contains(group)) {
+                return None;
+            }
+        }
+    }
     let exif_decoded = super::exif_surgical::exif_makernote_row_groups(baseline);
     let ciff_reaches = |group: &str| {
         ciff && MAKERNOTE_ROOTS
             .iter()
             .any(|root| root.entry == "CIFF" && root.closure.contains(&group))
     };
-    if tag_bearing > 1
+    if uncertain_note
+        || tag_bearing > 1
         || (tag_bearing == 1
             && !MAKERNOTE_ROOTS.iter().any(|root| {
                 root.entry != "CIFF"
@@ -1595,6 +1617,72 @@ mod tests {
             blocks: 1,
             ..MakerNoteCensus::default()
         }
+    }
+
+    #[test]
+    fn physical_uncertainty_survives_only_the_directories_left_by_clears() {
+        use super::super::exif_surgical::RequestDeletions;
+        let empty = MetadataMap::new();
+        let ifd2 = MakerNoteCensus {
+            uncertain_ifd1: true,
+            uncertain_survivor_ifd1: true,
+            ..no_note()
+        };
+        assert!(makernote_may_hold("WhiteBalance", &empty, &|| ifd2).is_some());
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("ExifIFD:All"),
+                ..ifd2
+            })
+            .is_some()
+        );
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("IFD1:All"),
+                ..ifd2
+            })
+            .is_none()
+        );
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("MakerNotes:All"),
+                ..ifd2
+            })
+            .is_none()
+        );
+
+        let subifd = MakerNoteCensus {
+            uncertain_outside_ifd1: true,
+            uncertain_survivor_outside_ifd1: true,
+            ..no_note()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("IFD1:All"),
+                ..subifd
+            })
+            .is_some()
+        );
+        let exif_child = MakerNoteCensus {
+            uncertain_outside_ifd1: true,
+            ..no_note()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("ExifIFD:All"),
+                ..exif_child
+            })
+            .is_none()
+        );
+        assert!(makernote_may_hold("WhiteBalance", &empty, &no_note).is_none());
+
+        // A whole-file sentinel retains uncertainty after subtracting any
+        // known IFD1 count; its MAX fields must never wrap into zero.
+        let unknown = MakerNoteCensus {
+            deletions: RequestDeletions::of("IFD1:All"),
+            ..MakerNoteCensus::UNKNOWN
+        };
+        assert!(makernote_may_hold("WhiteBalance", &empty, &|| unknown).is_some());
     }
 
     /// One EXIF block whose maker note bears tags.
