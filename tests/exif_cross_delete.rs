@@ -1316,3 +1316,134 @@ fn a_batch_write_to_a_read_only_file_preserves_shared_core_refusal() {
         assert_eq!(mode, 0o444, "{}", path.display());
     }
 }
+
+/// ExifTool queues all assignments for one WriteExif pass. A surviving set
+/// before TagsFromFile must protect its other-directory copy from both the
+/// copy's own write and later sets, even though the CLI executes three passes.
+#[test]
+fn precopy_directory_sets_survive_copy_and_later_siblings() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no graded ExifTool oracle");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let Some(source) = materialize(oracle, CANON, dir.path(), "copy-source") else {
+        eprintln!("skipping: pinned fixture Canon.jpg is absent");
+        return;
+    };
+    let absent_source = materialize(oracle, CANON, dir.path(), "absent-source").unwrap();
+    let removed = oracle
+        .command()
+        .args(["-q", "-q", "-overwrite_original", "-ExifIFD:CreateDate="])
+        .arg(&absent_source)
+        .status()
+        .unwrap();
+    assert!(removed.success());
+    let cases = [
+        (
+            "post-exif",
+            CANON,
+            &source,
+            vec![
+                "-IFD0:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                source.display().to_string(),
+                "-Make".to_string(),
+                "-ExifIFD:CreateDate=2021:02:03 04:05:06".to_string(),
+            ],
+        ),
+        (
+            "post-ifd0",
+            CANON,
+            &source,
+            vec![
+                "-ExifIFD:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                source.display().to_string(),
+                "-Make".to_string(),
+                "-IFD0:CreateDate=2021:02:03 04:05:06".to_string(),
+            ],
+        ),
+        (
+            "middle-copy",
+            CANON_BOTH,
+            &source,
+            vec![
+                "-IFD0:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                source.display().to_string(),
+                "-ExifIFD:CreateDate".to_string(),
+            ],
+        ),
+        (
+            "middle-absent",
+            CANON,
+            &absent_source,
+            vec![
+                "-IFD0:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                absent_source.display().to_string(),
+                "-CreateDate".to_string(),
+                "-ExifIFD:CreateDate=2021:02:03 04:05:06".to_string(),
+            ],
+        ),
+        (
+            "same-directory-replacement",
+            CANON,
+            &source,
+            vec![
+                "-IFD0:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                source.display().to_string(),
+                "-Make".to_string(),
+                "-IFD0:CreateDate=2022:03:04 05:06:07".to_string(),
+                "-ExifIFD:CreateDate=2021:02:03 04:05:06".to_string(),
+            ],
+        ),
+        (
+            "later-deletion",
+            CANON,
+            &source,
+            vec![
+                "-IFD0:CreateDate=2020:01:02 03:04:05".to_string(),
+                "-TagsFromFile".to_string(),
+                source.display().to_string(),
+                "-Make".to_string(),
+                "-ExifIFD:CreateDate=".to_string(),
+            ],
+        ),
+    ];
+    let names = vec!["CreateDate".to_string(), "Make".to_string()];
+    for (label, initial, _src, args) in cases {
+        let native = materialize(oracle, initial, dir.path(), &format!("{label}-native")).unwrap();
+        let ours = materialize(oracle, initial, dir.path(), &format!("{label}-ours")).unwrap();
+        let expected = oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(&args)
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(
+            expected.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        let actual = oxidex()
+            .arg("-overwrite_original")
+            .args(&args)
+            .arg(&ours)
+            .output()
+            .unwrap();
+        assert!(
+            actual.status.success(),
+            "{label}: {}",
+            String::from_utf8_lossy(&actual.stderr)
+        );
+        assert_eq!(
+            rows_named(&exif_rows(oracle, &ours), &names),
+            rows_named(&exif_rows(oracle, &native), &names),
+            "{label}: CLI result differs from pinned ExifTool 13.59"
+        );
+    }
+}

@@ -21,7 +21,7 @@
 use crate::cli::tag_resolution::{arbitrate, family0_label, family1_label, resolved_display_value};
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    CopyReport, is_surgical_tiff_target, read_metadata, write_metadata_counted,
+    CopyReport, is_surgical_tiff_target, read_metadata, write_metadata_counted_among,
 };
 use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
 use crate::core::{FileFormat, FileReader, TagValue};
@@ -464,6 +464,7 @@ pub(crate) fn copy_tags(
     selectors: &CopySelectors,
     retain: impl Fn(&str) -> bool,
     final_make_override: Option<Option<String>>,
+    siblings: &[String],
 ) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
@@ -791,7 +792,7 @@ pub(crate) fn copy_tags(
                 .iter()
                 .any(|(key, _, strict)| !strict && key.eq_ignore_ascii_case(tag))
         };
-        match write_metadata_counted(dest, &dest_metadata, &[]) {
+        match write_metadata_counted_among(dest, &dest_metadata, &[], siblings) {
             Ok((outcome, proven)) => {
                 report.outcome = outcome;
                 report.copied = proven;
