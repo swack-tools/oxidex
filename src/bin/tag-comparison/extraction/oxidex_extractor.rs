@@ -980,6 +980,46 @@ mod tests {
     }
 
     #[test]
+    fn formatted_array_boundaries_reach_comparison_verdict() {
+        use crate::comparison::engine::ComparisonEngine;
+
+        let compare = |items: &[&str], native_json: &str| {
+            let value = TagValue::Array(
+                items
+                    .iter()
+                    .map(|item| TagValue::String((*item).to_string()))
+                    .collect(),
+            );
+            let rendered = OxiDexExtractor::format_value(&value);
+            ComparisonEngine::compare(
+                vec![TagInfo::new("Subject".into(), "XMP".into(), rendered)],
+                vec![TagInfo::new(
+                    "Subject".into(),
+                    "XMP".into(),
+                    native_json.into(),
+                )],
+                "XMP",
+                1,
+                None,
+            )
+        };
+
+        for (items, native) in [
+            (vec!["a"], r#"["a",""]"#),
+            (vec![], r#"[""]"#),
+            (vec!["a b"], r#"["a","b"]"#),
+        ] {
+            let result = compare(&items, native);
+            assert_eq!(result.value_differences.len(), 1, "{items:?} vs {native}");
+        }
+
+        let native = r#"["a b","c,d","quote \" and slash \\"]"#;
+        let result = compare(&["a b", "c,d", "quote \" and slash \\"], native);
+        assert_eq!(result.matched_tags.len(), 1);
+        assert!(result.value_differences.is_empty());
+    }
+
+    #[test]
     fn nef_priority_subifd_wins_over_ifd0_thumbnail_fields() {
         let extractor = OxiDexExtractor::new(PathBuf::from("tests/fixtures"));
         let mut metadata = oxidex::core::MetadataMap::new();
