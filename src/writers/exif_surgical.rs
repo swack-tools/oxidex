@@ -237,9 +237,27 @@ pub(crate) fn group_has_content(
         GroupRemoval::Carrier => true,
         GroupRemoval::ExifIfd => any(&[IfdKind::ExifIfd, IfdKind::Interop]),
         GroupRemoval::Gps => any(&[IfdKind::Gps]),
-        GroupRemoval::Ifd1 => any(&[IfdKind::Ifd1]) || scan.thumbnail.is_some(),
+        // The next-IFD chain belongs to IFD1 even when that directory has
+        // no direct entries or thumbnail. Clearing IFD1 deletes the chain.
+        GroupRemoval::Ifd1 => {
+            any(&[IfdKind::Ifd1]) || scan.thumbnail.is_some() || scan.ifd1_next.is_some()
+        }
         GroupRemoval::Interop => any(&[IfdKind::Interop]),
-        GroupRemoval::MakerNotes => makernote_in_makernotes_group(scan, original_map),
+        GroupRemoval::MakerNotes => {
+            makernote_in_makernotes_group(scan, original_map)
+                || scan.entries.iter().any(|entry| {
+                    entry.ifd != IfdKind::Gps
+                        && ((entry.ifd != IfdKind::ExifIfd
+                            && is_makernote_entry(entry.ifd, entry.tag_id))
+                            || (is_dng_private_data_entry(entry.ifd, entry.tag_id)
+                                && dng_private_makernote_count(&entry.value) != Some(0))
+                            || has_unwalked_note_directory(entry.ifd, entry.tag_id))
+                })
+                || scan
+                    .ifd1_next
+                    .as_ref()
+                    .is_some_and(|chain| chain.refusal.is_some())
+        }
     }
 }
 
@@ -689,6 +707,12 @@ pub enum IfdKind {
 /// InteropIFD and IFD1 still use Exif::Main and can hold real notes.
 pub(crate) fn is_makernote_entry(ifd: IfdKind, tag_id: u16) -> bool {
     tag_id == MAKERNOTE && ifd != IfdKind::Gps
+}
+
+/// Exif::Main supplies the DNGPrivateData variants in the same directories
+/// as MakerNote. GPS uses GPS::Main, where 0xc634 is unrelated opaque data.
+fn is_dng_private_data_entry(ifd: IfdKind, tag_id: u16) -> bool {
+    tag_id == DNG_PRIVATE_DATA && ifd != IfdKind::Gps
 }
 
 impl IfdKind {
@@ -2492,7 +2516,7 @@ pub(crate) struct MakerNoteCensus {
     /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
     pub blocks: usize,
     /// Maker-note entries of those blocks: each scanned 0x927C under
-    /// Exif::Main, and each IFD0 `DNGPrivateData` with a recognized record.
+    /// Exif::Main, and each Exif::Main `DNGPrivateData` with a recognized record.
     /// GPS::Main's 0x927C is unrelated opaque data.
     pub notes: usize,
     /// The ones of [`notes`](Self::notes) that may hold tags ExifTool edits:
@@ -2501,15 +2525,23 @@ pub(crate) struct MakerNoteCensus {
     /// writes both), except a 0x927C read as one value or as a JPEG
     /// preview (`tiff_helpers::makernote_value_holds_no_tags`: a SilverFast
     /// `LSI1` note, a text note, a Samsung `STMN` binary, a Minolta3 note, a
-    /// JPEG). A block the scan cannot walk counts as one, as does any count
-    /// that cannot be made at all -- absence is what callers rely on.
+    /// JPEG). Unwalked directories are recorded separately below; a zero
+    /// count proves absence only when their uncertainty flags are clear.
     pub tag_bearing: usize,
     /// The direct IFD1 subset of `tag_bearing`, removed by `IFD1:All`.
     pub ifd1_tag_bearing: usize,
     /// Tag-bearing 0x927C entries outside ExifIFD and its Interop child,
-    /// plus IFD0 DNGPrivateData maker-note records. These survive
+    /// plus DNGPrivateData maker-note records outside ExifIFD. These survive
     /// `ExifIFD:All`, even if the reader emits no note row.
     pub surviving_exif_ifd_clear: usize,
+    /// A reachable directory that this scan could not prove note-free. The
+    /// IFD1 bit also covers its next-IFD chain, which `IFD1:All` removes.
+    pub uncertain_outside_ifd1: bool,
+    pub uncertain_ifd1: bool,
+    /// Which uncertainty can survive an `ExifIFD:All` clear. A child of
+    /// ExifIFD (including InteropIFD) cannot; IFD0 and IFD1 children can.
+    pub uncertain_survivor_outside_ifd1: bool,
+    pub uncertain_survivor_ifd1: bool,
     /// A physical JPEG APP0 CIFF container, including one whose fields the
     /// reader does not surface. Decoded rows cannot prove its absence.
     pub ciff: bool,
@@ -2525,6 +2557,10 @@ impl MakerNoteCensus {
         tag_bearing: usize::MAX,
         ifd1_tag_bearing: usize::MAX,
         surviving_exif_ifd_clear: usize::MAX,
+        uncertain_outside_ifd1: true,
+        uncertain_ifd1: true,
+        uncertain_survivor_outside_ifd1: true,
+        uncertain_survivor_ifd1: true,
         ciff: true,
         deletions: RequestDeletions {
             makernotes: false,
@@ -2533,6 +2569,139 @@ impl MakerNoteCensus {
             ifd1: false,
         },
     };
+
+    fn mark_uncertain_at(&mut self, ifd: IfdKind) {
+        if ifd == IfdKind::Ifd1 {
+            self.uncertain_ifd1 = true;
+            self.uncertain_survivor_ifd1 = true;
+        } else {
+            self.uncertain_outside_ifd1 = true;
+            if ifd == IfdKind::Ifd0 {
+                self.uncertain_survivor_outside_ifd1 = true;
+            }
+        }
+    }
+}
+
+/// The Exif::Main sub-directory pointers that the ordinary scan carries as
+/// entries rather than walking. Offset pairs locate data, not another IFD,
+/// so they do not by themselves make the note census incomplete.
+const UNWALKED_EXIF_DIRECTORIES: &[u16] = &[0x014a, 0x0190, 0x8290, 0x888a, 0xc51b, 0xc6f5, 0xfe00];
+
+/// An Exif::Main edge outside the scanner's supported placement can hide a
+/// MakerNote in a child directory. ExifOffset and InteropOffset are modelled
+/// only at IFD0 and ExifIFD respectively; ExifTool follows them in the other
+/// Exif::Main directories too. GPSInfo leads to GPS::Main, which has no
+/// MakerNote field, so it does not make this census uncertain.
+fn has_unwalked_note_directory(ifd: IfdKind, tag_id: u16) -> bool {
+    if ifd == IfdKind::Gps {
+        return false;
+    }
+    UNWALKED_EXIF_DIRECTORIES.contains(&tag_id)
+        || (tag_id == EXIF_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
+}
+
+/// Check the five directories `scan_entries_with_magics` intends to walk.
+/// That scanner skips corrupt entries to preserve reader behavior; the
+/// safety census cannot turn such a skip into a proof of absence.
+fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
+    #[derive(Default)]
+    struct Links {
+        exif: Option<usize>,
+        gps: Option<usize>,
+        interop: Option<usize>,
+        next: Option<usize>,
+    }
+    fn directory(tiff: &[u8], at: usize, order: ByteOrder, kind: IfdKind) -> Option<Links> {
+        let count_end = at.checked_add(2)?;
+        let count = read_u16(tiff.get(at..count_end)?, order) as usize;
+        let table_end = count_end.checked_add(count.checked_mul(12)?)?;
+        let next_end = table_end.checked_add(4)?;
+        tiff.get(at..next_end)?;
+        let mut links = Links::default();
+        for raw in tiff[count_end..table_end].chunks_exact(12) {
+            let tag = read_u16(&raw[..2], order);
+            let field_type = read_u16(&raw[2..4], order);
+            let count = read_u32(&raw[4..8], order) as usize;
+            if !(1..=12).contains(&field_type) {
+                return None;
+            }
+            // The ordinary scanner treats a structural pointer's value
+            // field as one offset. With multiple values that field may
+            // instead locate an array; neither scanner proves which child
+            // directories the native reader follows.
+            if count != 1
+                && matches!(
+                    (kind, tag),
+                    (IfdKind::Ifd0, EXIF_IFD_POINTER | GPS_IFD_POINTER)
+                        | (IfdKind::ExifIfd, INTEROP_POINTER)
+                )
+            {
+                return None;
+            }
+            let size = type_size(field_type).checked_mul(count)?;
+            if size > 4 {
+                let value_at = read_u32(&raw[8..12], order) as usize;
+                tiff.get(value_at..value_at.checked_add(size)?)?;
+            }
+            let pointer = inline_unsigned(field_type, count as u32, &raw[8..12], order);
+            match (kind, tag) {
+                (IfdKind::Ifd0, EXIF_IFD_POINTER) => {
+                    if links.exif.replace(pointer).is_some() {
+                        return None;
+                    }
+                }
+                (IfdKind::Ifd0, GPS_IFD_POINTER) => {
+                    if links.gps.replace(pointer).is_some() {
+                        return None;
+                    }
+                }
+                (IfdKind::ExifIfd, INTEROP_POINTER) => {
+                    if links.interop.replace(pointer).is_some() {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if matches!(kind, IfdKind::Ifd0 | IfdKind::Ifd1) {
+            let next = read_u32(&tiff[table_end..next_end], order) as usize;
+            links.next = (next != 0).then_some(next);
+        }
+        Some(links)
+    }
+    let Some(root) = tiff.get(4..8) else {
+        return false;
+    };
+    let ifd0_at = read_u32(root, order) as usize;
+    let Some(ifd0) = directory(tiff, ifd0_at, order, IfdKind::Ifd0) else {
+        return false;
+    };
+    if let Some(exif_at) = ifd0.exif {
+        let Some(exif) = directory(tiff, exif_at, order, IfdKind::ExifIfd) else {
+            return false;
+        };
+        if exif
+            .interop
+            .is_some_and(|at| directory(tiff, at, order, IfdKind::Interop).is_none())
+        {
+            return false;
+        }
+    }
+    if ifd0
+        .gps
+        .is_some_and(|at| directory(tiff, at, order, IfdKind::Gps).is_none())
+    {
+        return false;
+    }
+    if ifd0
+        .next
+        .is_some_and(|at| directory(tiff, at, order, IfdKind::Ifd1).is_none())
+    {
+        return false;
+    }
+    true
 }
 
 /// Counts the EXIF blocks `blocks` and their maker-note entries
@@ -2544,10 +2713,30 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
     };
     for block in blocks {
         let Ok(scan) = scan_entries_with_magics(block, magics) else {
-            census.notes += 1;
-            census.tag_bearing += 1;
+            census.uncertain_outside_ifd1 = true;
+            census.uncertain_survivor_outside_ifd1 = true;
             continue;
         };
+        // The normal writer scanner is deliberately tolerant of damaged
+        // offsets and stops at IFD1. Its entries cannot prove absence until
+        // every directory it was meant to visit was checked independently.
+        if !census_walk_is_complete(block, scan.byte_order) {
+            census.uncertain_outside_ifd1 = true;
+            census.uncertain_survivor_outside_ifd1 = true;
+        }
+        if scan
+            .ifd1_next
+            .as_ref()
+            .is_some_and(|chain| chain.refusal.is_some())
+        {
+            census.uncertain_ifd1 = true;
+            census.uncertain_survivor_ifd1 = true;
+        }
+        for entry in &scan.entries {
+            if has_unwalked_note_directory(entry.ifd, entry.tag_id) {
+                census.mark_uncertain_at(entry.ifd);
+            }
+        }
         let ifd0_text = |tag_id: u16| {
             scan.entries
                 .iter()
@@ -2576,18 +2765,55 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                         census.surviving_exif_ifd_clear += 1;
                     }
                 }
-            } else if entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA {
+            } else if is_dng_private_data_entry(entry.ifd, entry.tag_id) {
                 let Some(notes) = dng_private_makernote_count(&entry.value) else {
                     // A decoded prefix cannot identify a truncated successor.
-                    return MakerNoteCensus::UNKNOWN;
+                    census.mark_uncertain_at(entry.ifd);
+                    continue;
                 };
                 census.notes += notes;
                 census.tag_bearing += notes;
-                census.surviving_exif_ifd_clear += notes;
+                if entry.ifd == IfdKind::Ifd1 {
+                    census.ifd1_tag_bearing += notes;
+                }
+                if !matches!(entry.ifd, IfdKind::ExifIfd | IfdKind::Interop) {
+                    census.surviving_exif_ifd_clear += notes;
+                }
             }
         }
     }
     census
+}
+
+/// A partial group clear cannot succeed when an unvisited directory may
+/// contain a note belonging to that group. The scanner's plan only removes
+/// entries it visited, so it cannot turn this uncertainty into a safe edit.
+/// A carrier-wide clear is handled before this check and removes the whole
+/// EXIF block, including unvisited directories.
+fn refuse_uncertain_note_group_clear(tiff: &[u8], removed: &[String]) -> Result<()> {
+    let Some(key) = removed.iter().find(|key| {
+        matches!(
+            group_removal(key),
+            Some(GroupRemoval::MakerNotes | GroupRemoval::ExifIfd)
+        )
+    }) else {
+        return Ok(());
+    };
+    if removes_carrier(removed) {
+        return Ok(());
+    }
+    let census = makernote_census(&[tiff], EXIF_BLOCK_MAGICS);
+    if census.uncertain_outside_ifd1 || census.uncertain_ifd1 {
+        return Err(ExifToolError::tag_not_written(
+            key.to_string(),
+            format!(
+                "Cannot remove '{key}': this EXIF block has a directory the writer cannot fully walk; \
+                 a partial group clear could leave a maker note behind (use -EXIF:All= to remove \
+                 the whole EXIF block)"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Exif::Main 0xc634 routes these non-Adobe values directly to maker-note
@@ -3659,6 +3885,9 @@ pub(crate) fn rewrite_tiff_exif_creating(
         // creates one in ([`fresh_byte_order`]).
         None => (fresh_scan(fresh_byte_order(&[], fresh)?), &empty),
     };
+    if let Some(tiff) = tiff {
+        refuse_uncertain_note_group_clear(tiff, removed)?;
+    }
     if let Some(tiff) = tiff
         && is_no_op(&scan, original_map, desired, removed)
     {
@@ -3848,7 +4077,19 @@ pub(crate) fn exif_request_is_no_op(
                     removed
                         .iter()
                         .filter_map(|key| group_removal(key))
-                        .all(|group| !group_has_content(group, &scan, baseline))
+                        .all(|group| {
+                            if group_has_content(group, &scan, baseline) {
+                                return false;
+                            }
+                            if matches!(group, GroupRemoval::MakerNotes | GroupRemoval::ExifIfd) {
+                                let census = makernote_census(&[*block], magics);
+                                return !census.uncertain_outside_ifd1 && !census.uncertain_ifd1;
+                            }
+                            // A malformed directory cannot prove a requested
+                            // clear has nothing to remove.
+                            group != GroupRemoval::Ifd1
+                                || census_walk_is_complete(block, scan.byte_order)
+                        })
                         && !(embedded && drops_empty_carrier(&scan, removed))
                 }
                 // A carrier no scanner can read is still deleted wholesale by
@@ -3859,6 +4100,12 @@ pub(crate) fn exif_request_is_no_op(
                 // reaches the scanner and is refused, as at tip e4edc55c.
                 Err(_) => {
                     !removes_carrier(removed)
+                        && !removed
+                            .iter()
+                            .filter_map(|key| group_removal(key))
+                            .any(|group| {
+                                matches!(group, GroupRemoval::MakerNotes | GroupRemoval::Ifd1)
+                            })
                         && !(embedded
                             && scan_ignoring_magic(block)
                                 .is_some_and(|scan| drops_empty_carrier(&scan, removed)))
@@ -3990,6 +4237,7 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
         );
     }
     let scan = scan_exif_entries(tiff)?;
+    refuse_uncertain_note_group_clear(tiff, removed)?;
     if is_no_op(&scan, original_map, desired, removed) {
         return Ok(tiff.to_vec());
     }
@@ -5070,10 +5318,312 @@ mod tests {
             let mut truncated = foreign.clone();
             truncated.extend_from_slice(tail);
             let census = census_for(&truncated);
-            assert_eq!(census, MakerNoteCensus::UNKNOWN);
+            assert!(census.uncertain_outside_ifd1);
+            assert!(census.uncertain_survivor_outside_ifd1);
+            assert!(!census.ciff);
             let mut with_note = padded.clone();
             with_note.extend_from_slice(tail);
-            assert_eq!(census_for(&with_note), MakerNoteCensus::UNKNOWN);
+            let census = census_for(&with_note);
+            assert!(census.uncertain_outside_ifd1);
+        }
+    }
+
+    /// The payload prefix comes from the pinned Exif::Main 0xc634 variants;
+    /// the independent native probe uses an actual Pentax MakerNote payload.
+    fn private_data_in(ifd: IfdKind, tag: u16) -> Vec<u8> {
+        fn row(tag: u16, field_type: u16, count: u32, value: u32) -> [u8; 12] {
+            let mut out = [0; 12];
+            out[..2].copy_from_slice(&tag.to_le_bytes());
+            out[2..4].copy_from_slice(&field_type.to_le_bytes());
+            out[4..8].copy_from_slice(&count.to_le_bytes());
+            out[8..12].copy_from_slice(&value.to_le_bytes());
+            out
+        }
+        let mut tiff = vec![0; 320];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        let root_pointer = match ifd {
+            IfdKind::Ifd0 => None,
+            IfdKind::ExifIfd | IfdKind::Interop => Some(0x8769),
+            IfdKind::Gps => Some(0x8825),
+            IfdKind::Ifd1 => None,
+        };
+        let root_count = usize::from(root_pointer.is_some() || ifd == IfdKind::Ifd0);
+        tiff[8..10].copy_from_slice(&(root_count as u16).to_le_bytes());
+        if let Some(pointer) = root_pointer {
+            tiff[10..22].copy_from_slice(&row(pointer, 4, 1, 64));
+        } else if ifd == IfdKind::Ifd0 {
+            tiff[10..22].copy_from_slice(&row(tag, 7, 12, 256));
+        }
+        let root_next = 10 + root_count * 12;
+        if ifd == IfdKind::Ifd1 {
+            tiff[root_next..root_next + 4].copy_from_slice(&64u32.to_le_bytes());
+        }
+        if ifd == IfdKind::Interop {
+            tiff[64..66].copy_from_slice(&1u16.to_le_bytes());
+            tiff[66..78].copy_from_slice(&row(0xa005, 4, 1, 128));
+        }
+        let at = if ifd == IfdKind::Interop { 128 } else { 64 };
+        if ifd != IfdKind::Ifd0 {
+            tiff[at..at + 2].copy_from_slice(&1u16.to_le_bytes());
+            tiff[at + 2..at + 14].copy_from_slice(&row(tag, 7, 12, 256));
+        }
+        tiff[256..268].copy_from_slice(b"PENTAX \0II\0\0");
+        tiff
+    }
+
+    #[test]
+    fn private_notes_follow_exif_main_not_gps_and_clear_boundaries() {
+        for ifd in [
+            IfdKind::Ifd0,
+            IfdKind::ExifIfd,
+            IfdKind::Interop,
+            IfdKind::Ifd1,
+        ] {
+            let tiff = private_data_in(ifd, DNG_PRIVATE_DATA);
+            let census = makernote_census(&[&tiff], EXIF_BLOCK_MAGICS);
+            assert_eq!((census.notes, census.tag_bearing), (1, 1), "{ifd:?}");
+            assert_eq!(census.ifd1_tag_bearing, usize::from(ifd == IfdKind::Ifd1));
+            assert_eq!(
+                census.surviving_exif_ifd_clear,
+                usize::from(matches!(ifd, IfdKind::Ifd0 | IfdKind::Ifd1))
+            );
+            assert!(!census.uncertain_outside_ifd1 && !census.uncertain_ifd1);
+        }
+        let gps = private_data_in(IfdKind::Gps, DNG_PRIVATE_DATA);
+        let census = makernote_census(&[&gps], EXIF_BLOCK_MAGICS);
+        assert_eq!((census.notes, census.tag_bearing), (0, 0));
+        assert!(!census.uncertain_outside_ifd1);
+        let empty = MetadataMap::new();
+        assert!(exif_request_is_no_op(
+            &[&gps],
+            &[&gps],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["MakerNotes:All".into()],
+        ));
+    }
+
+    #[test]
+    fn unwalked_ifd2_and_subifd_never_prove_absence() {
+        let mut ifd2 = private_data_in(IfdKind::Ifd1, DNG_PRIVATE_DATA);
+        // Replace IFD1's private row with an empty IFD1 linked to IFD2.
+        ifd2[64..66].copy_from_slice(&0u16.to_le_bytes());
+        ifd2[66..70].copy_from_slice(&128u32.to_le_bytes());
+        ifd2[128..130].copy_from_slice(&1u16.to_le_bytes());
+        ifd2[130..142].copy_from_slice(&[0x7c, 0x92, 7, 0, 12, 0, 0, 0, 0, 1, 0, 0]);
+        let census = makernote_census(&[&ifd2], EXIF_BLOCK_MAGICS);
+        assert!(census.uncertain_ifd1 && census.uncertain_survivor_ifd1);
+        assert!(!census.uncertain_outside_ifd1);
+        let empty = MetadataMap::new();
+        for clear in ["IFD1:All", "MakerNotes:All"] {
+            assert!(!exif_request_is_no_op(
+                &[&ifd2],
+                &[&ifd2],
+                EXIF_BLOCK_MAGICS,
+                false,
+                &empty,
+                &empty,
+                &[clear.into()],
+            ));
+        }
+
+        let mut subifd = private_data_in(IfdKind::Ifd0, DNG_PRIVATE_DATA);
+        subifd[10..22].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 64, 0, 0, 0]);
+        let census = makernote_census(&[&subifd], EXIF_BLOCK_MAGICS);
+        assert!(census.uncertain_outside_ifd1 && census.uncertain_survivor_outside_ifd1);
+        assert_eq!(census.tag_bearing, 0);
+        assert!(!exif_request_is_no_op(
+            &[&subifd],
+            &[&subifd],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["MakerNotes:All".into()],
+        ));
+        assert!(exif_request_is_no_op(
+            &[&subifd],
+            &[&subifd],
+            EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &["EXIF:CalibrationIlluminant1".into()],
+        ));
+
+        // A complete, note-free IFD2 is still a proof of absence.
+        ifd2[128..130].copy_from_slice(&0u16.to_le_bytes());
+        ifd2[130..134].fill(0);
+        let census = makernote_census(&[&ifd2], EXIF_BLOCK_MAGICS);
+        assert!(!census.uncertain_outside_ifd1 && !census.uncertain_ifd1);
+        assert_eq!(census.tag_bearing, 0);
+    }
+
+    #[test]
+    fn recursive_exif_main_edges_outside_modelled_contexts_never_prove_absence() {
+        let empty = MetadataMap::new();
+        for (ifd, tag, at) in [
+            (IfdKind::Ifd1, EXIF_IFD_POINTER, 66),
+            (IfdKind::Ifd1, INTEROP_POINTER, 66),
+            (IfdKind::Ifd0, INTEROP_POINTER, 10),
+            (IfdKind::ExifIfd, EXIF_IFD_POINTER, 66),
+        ] {
+            let mut tiff = private_data_in(ifd, tag);
+            tiff[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+            tiff[at + 4..at + 8].copy_from_slice(&1u32.to_le_bytes());
+            tiff[at + 8..at + 12].copy_from_slice(&192u32.to_le_bytes());
+            // The child carries a real MakerNote entry; the ordinary writer
+            // scanner stops at the pointer in this context.
+            tiff[192..194].copy_from_slice(&1u16.to_le_bytes());
+            tiff[194..206].copy_from_slice(&[0x7c, 0x92, 7, 0, 12, 0, 0, 0, 0, 1, 0, 0]);
+            let census = makernote_census(&[&tiff], EXIF_BLOCK_MAGICS);
+            assert_eq!(census.tag_bearing, 0, "{ifd:?} 0x{tag:04x}");
+            if ifd == IfdKind::Ifd1 {
+                assert!(census.uncertain_ifd1, "{ifd:?} 0x{tag:04x}");
+            } else {
+                assert!(census.uncertain_outside_ifd1, "{ifd:?} 0x{tag:04x}");
+            }
+            assert!(!exif_request_is_no_op(
+                &[&tiff],
+                &[&tiff],
+                EXIF_BLOCK_MAGICS,
+                false,
+                &empty,
+                &empty,
+                &["MakerNotes:All".into()],
+            ));
+        }
+        assert!(!has_unwalked_note_directory(
+            IfdKind::Ifd0,
+            EXIF_IFD_POINTER
+        ));
+        assert!(!has_unwalked_note_directory(
+            IfdKind::ExifIfd,
+            INTEROP_POINTER
+        ));
+        assert!(!has_unwalked_note_directory(
+            IfdKind::ExifIfd,
+            GPS_IFD_POINTER
+        ));
+        assert!(!has_unwalked_note_directory(IfdKind::Gps, EXIF_IFD_POINTER));
+    }
+
+    #[test]
+    fn duplicate_structural_pointers_never_prove_note_absence() {
+        fn row(tag: u16, field_type: u16, count: u32, value: u32) -> [u8; 12] {
+            let mut out = [0; 12];
+            out[..2].copy_from_slice(&tag.to_le_bytes());
+            out[2..4].copy_from_slice(&field_type.to_le_bytes());
+            out[4..8].copy_from_slice(&count.to_le_bytes());
+            out[8..12].copy_from_slice(&value.to_le_bytes());
+            out
+        }
+        fn directory(tiff: &mut [u8], at: usize, entries: &[[u8; 12]]) {
+            tiff[at..at + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (index, entry) in entries.iter().enumerate() {
+                let start = at + 2 + index * 12;
+                tiff[start..start + 12].copy_from_slice(entry);
+            }
+        }
+        for (pointer_tag, nested) in [
+            (EXIF_IFD_POINTER, false),
+            (INTEROP_POINTER, true),
+            (GPS_IFD_POINTER, false),
+        ] {
+            for note_first in [true, false] {
+                let mut tiff = vec![0; 320];
+                tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+                let pointers = if note_first { [128, 160] } else { [160, 128] };
+                let duplicate = [
+                    row(pointer_tag, 4, 1, pointers[0]),
+                    row(pointer_tag, 4, 1, pointers[1]),
+                ];
+                if nested {
+                    directory(&mut tiff, 8, &[row(EXIF_IFD_POINTER, 4, 1, 64)]);
+                    directory(&mut tiff, 64, &duplicate);
+                } else {
+                    directory(&mut tiff, 8, &duplicate);
+                }
+                directory(&mut tiff, 128, &[row(MAKERNOTE, 7, 12, 256)]);
+                directory(&mut tiff, 160, &[]);
+                tiff[256..268].copy_from_slice(b"PENTAX \0II\0\0");
+                assert!(
+                    !census_walk_is_complete(&tiff, ByteOrder::LittleEndian),
+                    "0x{pointer_tag:04x}, note first: {note_first}"
+                );
+                if pointer_tag == EXIF_IFD_POINTER && note_first {
+                    // The ordinary scanner follows only the last pointer,
+                    // which is empty. A group clear must still reach planning.
+                    let census = makernote_census(&[&tiff], EXIF_BLOCK_MAGICS);
+                    assert_eq!(census.tag_bearing, 0);
+                    assert!(census.uncertain_outside_ifd1);
+                    let empty = MetadataMap::new();
+                    for clear in ["MakerNotes:All", "ExifIFD:All"] {
+                        let removed = [clear.into()];
+                        assert!(!exif_request_is_no_op(
+                            &[&tiff],
+                            &[&tiff],
+                            EXIF_BLOCK_MAGICS,
+                            false,
+                            &empty,
+                            &empty,
+                            &removed,
+                        ));
+                        let error = rewrite_tiff_exif_with_removals(
+                            Some(&tiff),
+                            &empty,
+                            &empty,
+                            &removed,
+                            FreshOrder::SetPreferred,
+                        )
+                        .unwrap_err();
+                        assert!(error.to_string().contains("partial group clear"), "{error}");
+                    }
+                    assert!(
+                        rewrite_tiff_exif_with_removals(
+                            Some(&tiff),
+                            &empty,
+                            &empty,
+                            &["EXIF:All".into()],
+                            FreshOrder::SetPreferred,
+                        )
+                        .unwrap()
+                        .is_empty()
+                    );
+                }
+            }
+        }
+
+        // The value field of a multi-value pointer locates an array. The
+        // array bytes can look like an empty IFD, but that is not proof that
+        // the native reader saw no other child. Keep the existing single
+        // BYTE/SHORT/LONG/SLONG forms that inline_unsigned can read.
+        for (field_type, count, pointer, complete) in [
+            (1, 1, 64, true),
+            (3, 1, 64, true),
+            (4, 1, 64, true),
+            (9, 1, 64, true),
+            (4, 0, 64, false),
+            (4, 2, 128, false),
+            (3, 3, 128, false),
+            (13, 1, 64, false),
+        ] {
+            let mut tiff = vec![0; 320];
+            tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+            directory(
+                &mut tiff,
+                8,
+                &[row(EXIF_IFD_POINTER, field_type, count, pointer)],
+            );
+            directory(&mut tiff, 64, &[]);
+            directory(&mut tiff, 128, &[]);
+            assert_eq!(
+                census_walk_is_complete(&tiff, ByteOrder::LittleEndian),
+                complete,
+                "field type {field_type}, count {count}"
+            );
         }
     }
 
