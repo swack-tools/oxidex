@@ -1177,16 +1177,21 @@ pub(crate) fn ensure_no_mie_copy(
                 // An empty directory the group names goes too.
                 Some(group) => {
                     // The surgical scan intentionally does not descend into
-                    // TIFF SubIFDs. Native ExifTool can apply a nested GPS or
+                    // TIFF SubIFDs or unmodelled children in the IFD2 chain.
+                    // Native ExifTool can apply a nested GPS or
                     // ExifIFD clear there, so their absence cannot be proven
                     // from the directories this scan did walk.
                     let unwalked_child = matches!(
                         group,
                         GroupRemoval::ExifIfd | GroupRemoval::Gps | GroupRemoval::Interop
-                    ) && scan
+                    ) && (scan
                         .entries
                         .iter()
-                        .any(|entry| has_unwalked_exif_directory(entry.ifd, entry.tag_id));
+                        .any(|entry| has_unwalked_exif_directory(entry.ifd, entry.tag_id))
+                        || scan
+                            .ifd1_next
+                            .as_ref()
+                            .is_some_and(|chain| chain.refusal.is_some()));
                     !unwalked_child
                         && !group_has_content(group, scan, &block.rows)
                         && !group_directory_walked(group, scan)

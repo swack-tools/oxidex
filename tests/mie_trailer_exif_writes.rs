@@ -848,19 +848,53 @@ fn nested_subifd_groups_in_mie_refuse_partial_clears() {
             false,
             EXIF_CLEAR,
         ),
+        (
+            "IFD2 GPS",
+            0,
+            0x8825,
+            entry(0, 1, 4, u32::from_le_bytes([2, 3, 0, 0])),
+            "Writer.jpg",
+            true,
+            GPS_CLEAR,
+        ),
+        (
+            "IFD2 ExifIFD",
+            0,
+            0x8769,
+            entry(0x9000, 7, 4, u32::from_le_bytes(*b"0231")),
+            "Canon.jpg",
+            false,
+            EXIF_CLEAR,
+        ),
     ] {
         let mut tiff = b"II*\0\x08\0\0\0".to_vec();
-        tiff.extend(2_u16.to_le_bytes());
-        tiff.extend(entry(0x010f, 2, 4, u32::from_le_bytes(*b"Foo\0")));
-        tiff.extend(entry(root_pointer, 4, 1, 38));
-        tiff.extend(0_u32.to_le_bytes());
-        tiff.extend(1_u16.to_le_bytes());
-        tiff.extend(entry(child_pointer, 4, 1, 56));
-        tiff.extend(0_u32.to_le_bytes());
-        tiff.extend(1_u16.to_le_bytes());
-        tiff.extend(leaf);
-        tiff.extend(0_u32.to_le_bytes());
-        assert_eq!(tiff.len(), 74);
+        if root_pointer == 0 {
+            // Empty IFD0 and IFD1 lead to IFD2, whose child is outside
+            // the surgical scanner's root directory set.
+            tiff.extend(0_u16.to_le_bytes());
+            tiff.extend(14_u32.to_le_bytes());
+            tiff.extend(0_u16.to_le_bytes());
+            tiff.extend(20_u32.to_le_bytes());
+            tiff.extend(1_u16.to_le_bytes());
+            tiff.extend(entry(child_pointer, 4, 1, 38));
+            tiff.extend(0_u32.to_le_bytes());
+            tiff.extend(1_u16.to_le_bytes());
+            tiff.extend(leaf);
+            tiff.extend(0_u32.to_le_bytes());
+            assert_eq!(tiff.len(), 56);
+        } else {
+            tiff.extend(2_u16.to_le_bytes());
+            tiff.extend(entry(0x010f, 2, 4, u32::from_le_bytes(*b"Foo\0")));
+            tiff.extend(entry(root_pointer, 4, 1, 38));
+            tiff.extend(0_u32.to_le_bytes());
+            tiff.extend(1_u16.to_le_bytes());
+            tiff.extend(entry(child_pointer, 4, 1, 56));
+            tiff.extend(0_u32.to_le_bytes());
+            tiff.extend(1_u16.to_le_bytes());
+            tiff.extend(leaf);
+            tiff.extend(0_u32.to_le_bytes());
+            assert_eq!(tiff.len(), 74);
+        }
         let main = dir.path().join(format!("main-{label}.jpg"));
         std::fs::copy(
             fixtures::required_t_images_fixture_path(main_fixture),
