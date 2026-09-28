@@ -8753,9 +8753,9 @@ mod makernote_preview_image_tests {
         assert_eq!(occurrence.group1.as_ref(), "PreviewIFD");
     }
 
-    /// A maker with no family-1 override keeps passing straight through.
+    /// A maker with no family-1 override uses its MakerNote table group.
     #[test]
-    fn a_derived_pentax_preview_image_takes_no_group() {
+    fn a_derived_pentax_preview_image_uses_pentax_group() {
         let tiff = block();
         let mut metadata = MetadataMap::new();
         let ctx = MakerNoteContext::in_tiff(&tiff, 100, 200, 12);
@@ -8769,7 +8769,7 @@ mod makernote_preview_image_tests {
         );
         let occurrences = metadata.occurrences_for("Pentax:PreviewImage");
         let occurrence = occurrences.first().expect("derived Pentax preview");
-        assert_eq!(occurrence.group1.as_ref(), "");
+        assert_eq!(occurrence.group1.as_ref(), "Pentax");
     }
 
     /// Exif.pm:6228 -- `return undef if not $len`.
