@@ -307,6 +307,60 @@ pub fn find_unemitted_table(module: &str, table: &str) -> Option<&'static Unemit
         .find(|t| t.module == module && t.table == table)
 }
 
+/// Source-side binary census for the selected, independently dumped release.
+/// These are `codegen.py` acceptance counts from the pinned Perl captures,
+/// not counts copied from `ALL_BINARY_TABLES`. The fractional count excludes
+/// accepted `_variants` alternatives because `all_fractional_census` walks
+/// primary `fields` only. See the historical census evidence receipt.
+#[cfg(test)]
+pub(crate) struct BinarySourceCensus {
+    pub hook_fields: usize,
+    pub subdir_primary: usize,
+    pub subdir_all: usize,
+    pub subdir_modeled: usize,
+    pub subdir_processproc_refused: usize,
+    pub print_conv_refused: usize,
+    pub print_conv_tables: usize,
+    pub fractional_primary: usize,
+}
+
+#[cfg(test)]
+pub(crate) fn selected_binary_source_census() -> BinarySourceCensus {
+    match EXIFTOOL_VERSION {
+        "11.78" => BinarySourceCensus {
+            hook_fields: 25,
+            subdir_primary: 52,
+            subdir_all: 55,
+            subdir_modeled: 52,
+            subdir_processproc_refused: 3,
+            print_conv_refused: 19,
+            print_conv_tables: 9,
+            fractional_primary: 984,
+        },
+        "12.64" => BinarySourceCensus {
+            hook_fields: 27,
+            subdir_primary: 58,
+            subdir_all: 63,
+            subdir_modeled: 59,
+            subdir_processproc_refused: 4,
+            print_conv_refused: 23,
+            print_conv_tables: 9,
+            fractional_primary: 993,
+        },
+        "13.59" => BinarySourceCensus {
+            hook_fields: 35,
+            subdir_primary: 63,
+            subdir_all: 68,
+            subdir_modeled: 64,
+            subdir_processproc_refused: 4,
+            print_conv_refused: 28,
+            print_conv_tables: 12,
+            fractional_primary: 1004,
+        },
+        source => panic!("no independently verified binary census for ExifTool {source}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,7 +626,7 @@ mod tests {
 
     /// The census sibling of `hook_and_subdirectory_census_matches_the_13_59_
     /// dump`, for the flag that closed Step 28's `conv_dropped` refusal
-    /// class. 23 fields across 11 tables carry an ExifTool `PrintConv` --
+    /// class. Selected-source fields carry an ExifTool `PrintConv` --
     /// always a Perl CODE or ARRAY ref -- that
     /// `tools/exiftool-tables/exprs.py`'s `CODE_REFS` registry does not
     /// recognise, and every one of them is now WITHHELD rather than reported
@@ -608,14 +662,15 @@ mod tests {
             refused += here;
             tables += usize::from(here > 0);
         }
-        // Slice I-4 (parenthesised Condition groups) let two more binary
-        // tables past Gate A -- Nikon::AFInfo2V0101 and ::AFInfo2V0400,
-        // refused -> eligible, nothing moved the other way -- so their fields
-        // are emitted now and their refused PrintConvs are counted here. The
-        // invariant above (refused => no conversion) is what this test is
-        // for; these two numbers only say how much honest absence there is.
-        assert_eq!(refused, 28, "fields whose PrintConv the generator refused");
-        assert_eq!(tables, 12, "tables carrying at least one such field");
+        let source = selected_binary_source_census();
+        assert_eq!(
+            refused, source.print_conv_refused,
+            "fields whose PrintConv the generator refused"
+        );
+        assert_eq!(
+            tables, source.print_conv_tables,
+            "tables carrying at least one such field"
+        );
     }
 
     /// The other half of the `conv_dropped` story: the conversions that were
@@ -785,7 +840,7 @@ mod tests {
     }
 
     /// Step 9's accounting identity: the count of fields the generator flags
-    /// `hook`/`subdirectory` must equal what a census of the ExifTool 13.59
+    /// `hook`/`subdirectory` must equal what the selected ExifTool source
     /// dump found (measured independently with `tools/exiftool-tables/
     /// codegen.py`'s own report, and cross-checked again by `verify.py`
     /// against the live Perl hashes). Pinning the numbers here means a future
@@ -801,20 +856,25 @@ mod tests {
                 subdirs += usize::from(f.omitted.subdirectory);
             }
         }
-        assert_eq!(hooks, 35, "Hook-carrying emitted fields");
-        assert_eq!(subdirs, 63, "SubDirectory-carrying emitted fields");
+        let source = selected_binary_source_census();
+        assert_eq!(hooks, source.hook_fields, "Hook-carrying emitted fields");
+        assert_eq!(
+            subdirs, source.subdir_primary,
+            "SubDirectory-carrying emitted primary fields"
+        );
     }
 
     /// Step 27's accounting identity, the sequel to the one above: every
-    /// `SubDirectory`-carrying field (63 in `fields:` + 5 inside `_variants`
-    /// groups = 68, matching `codegen.py`'s `omitted_subdirectory` REPORT
-    /// line) either gets a modeled [`subdir::SubdirEdge`] or is refused with
+    /// `SubDirectory`-carrying field (primary `fields` plus accepted
+    /// `_variants` alternatives, matching `codegen.py`'s
+    /// `omitted_subdirectory` REPORT line) either gets a modeled
+    /// [`subdir::SubdirEdge`] or is refused with
     /// a reason -- never silently neither. At 13.59 the only refusal reason
     /// live is a `ProcessProc` override (Panasonic `PANA`'s three
-    /// `Image::ExifTool::ProcessTIFF`-routed `ExifData` fields plus its
-    /// `ProcessLeicaLEIC`-routed `MakerNoteLeica5` field -- `PANA`'s fifth
-    /// ProcessProc-routed field, `JPEG-likeData`, never reaches this check at
-    /// all: its `Format => 'undef[$size-0x10]'` is a data-dependent width
+    /// `Image::ExifTool::ProcessTIFF`-routed `ExifData` fields, plus the
+    /// `ProcessLeicaLEIC`-routed `MakerNoteLeica5` field in 12.64/13.59 --
+    /// `PANA`'s further ProcessProc-routed `JPEG-likeData` never reaches this
+    /// check: its `Format => 'undef[$size-0x10]'` is a data-dependent width
     /// this generator already refuses on unrelated grounds
     /// (`tag_fmt_unsupported`), so it is not among the 68 flagged fields to
     /// begin with. `subdir.rs`'s module doc has the full citation). A future
@@ -854,14 +914,18 @@ mod tests {
                 }
             }
         }
+        let source = selected_binary_source_census();
         assert_eq!(
-            flagged, 68,
+            flagged, source.subdir_all,
             "SubDirectory-carrying fields (fields + variants)"
         );
-        assert_eq!(modeled, 64, "fields that got a modeled SubdirEdge");
         assert_eq!(
-            process_proc_refused, 4,
-            "fields refused for a custom ProcessProc (Panasonic PANA ExifData x3, MakerNoteLeica5 x1)"
+            modeled, source.subdir_modeled,
+            "fields that got a modeled SubdirEdge"
+        );
+        assert_eq!(
+            process_proc_refused, source.subdir_processproc_refused,
+            "fields refused for a custom ProcessProc"
         );
     }
 

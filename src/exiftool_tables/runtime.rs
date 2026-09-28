@@ -1860,17 +1860,18 @@ mod tests {
     /// Before Step 11 this was 993 decoded / 11 refused: 11 fractional
     /// entries declared no `Mask`, and the runtime withheld them entirely.
     /// ExifTool.pm:9957 says otherwise -- it reads the whole word at
-    /// `floor(index)` whether or not `Mask` is set -- so all 1004 fractional
-    /// entries across the generated tables are decodable now, and none are
-    /// refused. Pinning both halves makes a regeneration that changes the
-    /// balance visible instead of silent.
+    /// `floor(index)` whether or not `Mask` is set -- so every selected-source
+    /// fractional primary field is decodable now, and none is refused.
+    /// The source census excludes accepted `_variants` alternatives because
+    /// `all_fractional_census` traverses primary `fields` only. Pinning both
+    /// halves makes a regeneration that changes the balance visible.
     #[test]
     fn generated_fractional_entries_are_all_decodable() {
         let census = all_fractional_census();
         assert_eq!(
             census,
             FractionalCensus {
-                decoded: 1004,
+                decoded: super::super::selected_binary_source_census().fractional_primary,
                 refused: 0,
             },
             "fractional-entry split moved; if `just regen-tables` caused this, \
