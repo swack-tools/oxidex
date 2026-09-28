@@ -610,16 +610,22 @@ mod tests {
             );
         }
 
-        // The engine-owned set is exactly the spec's seventeen rows: sixteen
-        // plain tags plus 0x000c's D30 alternative.
+        // Native Canon::Main 0x0082 (RawDataLength) is absent in 11.78
+        // and 12.64 and present in 13.59. Keep the remaining exact ownership
+        // contract, including the separately checked 0x000c D30 alternative.
         let rows = MainEngineRows::empty(table);
         let owned: Vec<u16> = ids.iter().copied().filter(|&id| rows.owns(id)).collect();
+        let mut expected = vec![
+            0x0006, 0x0007, 0x0009, 0x000e, 0x0010, 0x0013, 0x0015, 0x001a, 0x001c, 0x0081, 0x0082,
+            0x0095, 0x0097, 0x00ae, 0x00b4, 0x4010,
+        ];
+        match super::super::selected_source_pin() {
+            "11.78" | "12.64" => expected.retain(|&id| id != 0x0082),
+            "13.59" => {}
+            other => panic!("unsupported native Canon::Main source: {other}"),
+        }
         assert_eq!(
-            owned,
-            [
-                0x0006, 0x0007, 0x0009, 0x000e, 0x0010, 0x0013, 0x0015, 0x001a, 0x001c, 0x0081,
-                0x0082, 0x0095, 0x0097, 0x00ae, 0x00b4, 0x4010
-            ],
+            owned, expected,
             "the ids the engine produces while the Canon::Main line is in force"
         );
     }

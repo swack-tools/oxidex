@@ -2754,10 +2754,14 @@ mod tests {
 
         process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
-        assert_eq!(
-            metadata.get_string("ExifIFD:LearningOptOutIn"),
-            Some("Unknown(65535)")
-        );
+        // Native Exif::Main first declares 0x9287 in the reviewed 13.59
+        // source. Earlier pins must not invent that name for these bytes.
+        let expected = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => None,
+            "13.59" => Some("Unknown(65535)"),
+            other => panic!("unsupported native LearningOptOutIn source: {other}"),
+        };
+        assert_eq!(metadata.get_string("ExifIFD:LearningOptOutIn"), expected);
     }
 
     #[test]
