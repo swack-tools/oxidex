@@ -1570,6 +1570,67 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         state["branch_parks"] = existing
         save_sweep_state(sweep_state_path, state)
 
+    def check_open_pr_duplicate(comparison_tree):
+        """Compare what would publish with each open PR merged onto this round's base.
+
+        Git's merge-tree creates an object without changing the checkout or index.
+        A conflict or lookup error leaves duplicate status unknown and must stop publication.
+        """
+        changed_rc, changed_out, changed_err = run_git(
+            ["diff", "--name-only", "-z", origin_ref, comparison_tree], repo_root)
+        if changed_rc != 0:
+            raise RuntimeError(f"could not list changed paths: {changed_err.strip()}")
+        changed_paths = [path for path in changed_out.split("\0") if path]
+        if not changed_paths:
+            raise RuntimeError("nonzero origin diff has no changed paths")
+        open_prs = open_sweep_prs_fn()
+        if not isinstance(open_prs, list):
+            raise RuntimeError("open sweep PR query did not return a list")
+        remote = origin_ref.split("/", 1)[0] if "/" in origin_ref else None
+        for pr in open_prs:
+            head = pr.get("headRefName") if isinstance(pr, dict) else None
+            if not head or head == branch:
+                continue
+            candidate_ref = head
+            if remote:
+                fetch_rc, _out, fetch_err = run_git(
+                    ["fetch", remote, f"{head}:refs/remotes/{remote}/{head}"], repo_root)
+                if fetch_rc != 0:
+                    raise RuntimeError(f"could not fetch open PR {head}: {fetch_err.strip()}")
+                candidate_ref = f"refs/remotes/{remote}/{head}"
+            candidate_tree, merge_note = merged_content_tree(
+                repo_root, candidate_ref, run_git, origin_ref=origin_ref)
+            if candidate_tree is None:
+                raise RuntimeError(f"could not merge open PR {head} onto {origin_ref}: {merge_note}")
+            cmp_rc, _out, cmp_err = run_git(
+                ["diff", "--quiet", candidate_tree, comparison_tree, "--", *changed_paths], repo_root)
+            if cmp_rc > 1:
+                raise RuntimeError(f"could not compare open PR {head}: {cmp_err.strip()}")
+            if cmp_rc == 0:
+                return pr.get("url") or pr.get("number") or head, head
+        return None
+
+    def open_pr_duplicate_result(comparison_tree):
+        try:
+            duplicate = check_open_pr_duplicate(comparison_tree)
+        except (OSError, ValueError, RuntimeError) as exc:
+            log_fn(f"cannot verify open sweep PRs for {branch}: {exc} -- refusing to publish")
+            clear_parks(branch_sourced.keys())
+            persist_cursor(durable_squads)
+            return {"status": "open_pr_lookup_failed", "branch": branch,
+                    "message": str(exc), "failed_squads": failed_squads, "preflight": health}
+        if duplicate is None:
+            return None
+        pr_ref, head = duplicate
+        log_fn(f"{branch} duplicates already-open {pr_ref} ({head}) on this round's "
+               "changed paths -- skipping publication")
+        clear_parks(merge_infos.keys())
+        persist_cursor(durable_squads)
+        return {"status": "duplicate_of_open_pr", "branch": branch,
+                "duplicate_of": pr_ref, "merged_squads": sorted(merge_infos),
+                "failed_squads": failed_squads, "bisection": bisection_result,
+                "preflight": health}
+
     branch = next_sweep_branch_name(repo_root, run_git, now_fn=now_fn)
     ok, message = cut_fresh_sweep_branch(repo_root, branch, run_git, origin_ref=origin_ref)
     if not ok:
@@ -1732,53 +1793,9 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         }
 
     if open_sweep_prs_fn is not None:
-        # Main may have advanced since an older PR was cut. Only the paths
-        # changed by this round distinguish its fix from that open PR.
-        changed_rc, changed_out, changed_err = run_git(
-            ["diff", "--name-only", "-z", origin_ref, comparison_tree], repo_root)
-        try:
-            if changed_rc != 0:
-                raise RuntimeError(f"could not list changed paths: {changed_err.strip()}")
-            changed_paths = [path for path in changed_out.split("\0") if path]
-            if not changed_paths:
-                raise RuntimeError("nonzero origin diff has no changed paths")
-            open_prs = open_sweep_prs_fn()
-            if not isinstance(open_prs, list):
-                raise RuntimeError("open sweep PR query did not return a list")
-            remote = origin_ref.split("/", 1)[0] if "/" in origin_ref else None
-            for pr in open_prs:
-                head = pr.get("headRefName") if isinstance(pr, dict) else None
-                if not head or head == branch:
-                    continue
-                candidate_ref = head
-                if remote:
-                    fetch_rc, _out, fetch_err = run_git(
-                        ["fetch", remote, f"{head}:refs/remotes/{remote}/{head}"], repo_root)
-                    if fetch_rc != 0:
-                        raise RuntimeError(f"could not fetch open PR {head}: {fetch_err.strip()}")
-                    candidate_ref = f"refs/remotes/{remote}/{head}"
-                cmp_rc, _out, cmp_err = run_git(
-                    ["diff", "--quiet", candidate_ref, comparison_tree, "--", *changed_paths], repo_root)
-                if cmp_rc > 1:
-                    raise RuntimeError(f"could not compare open PR {head}: {cmp_err.strip()}")
-                if cmp_rc == 0:
-                    pr_ref = pr.get("url") or pr.get("number") or head
-                    log_fn(f"{branch} duplicates already-open {pr_ref} ({head}) on this round's "
-                           "changed paths -- skipping publication")
-                    # An open PR can close unmerged. Keep both the stamp
-                    # cursor and branch discovery retryable until content
-                    # actually lands; a duplicate is not a failed attempt.
-                    clear_parks(merge_infos.keys())
-                    persist_cursor(durable_squads)
-                    return {"status": "duplicate_of_open_pr", "branch": branch,
-                            "duplicate_of": pr_ref, "merged_squads": sorted(merge_infos),
-                            "failed_squads": failed_squads, "bisection": bisection_result,
-                            "preflight": health}
-        except (OSError, ValueError, RuntimeError) as exc:
-            log_fn(f"cannot verify open sweep PRs for {branch}: {exc} -- refusing to publish")
-            persist_cursor(durable_squads)
-            return {"status": "open_pr_lookup_failed", "branch": branch,
-                    "message": str(exc), "failed_squads": failed_squads, "preflight": health}
+        duplicate_result = open_pr_duplicate_result(comparison_tree)
+        if duplicate_result is not None:
+            return duplicate_result
 
     all_shas = []
     for squad, info in merge_infos.items():
@@ -1894,6 +1911,13 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         return {"status": "lint_failed", "branch": branch, "message": lint_output[-2000:],
                 "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
                 "preflight": health, "fmt": fmt_result}
+
+    # Lint bisection may have removed a squad, and formatting may have
+    # changed the final tree. Recheck idempotency on the exact HEAD to push.
+    if open_sweep_prs_fn is not None:
+        duplicate_result = open_pr_duplicate_result("HEAD")
+        if duplicate_result is not None:
+            return duplicate_result
 
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
