@@ -1892,9 +1892,11 @@ fn file_source_raw(raw: &str) -> TagValue {
 /// 11.78 has `chr($val)`, while 12.64 and 13.59 use `chr($val & 0xff)`.
 /// The unmasked source writes wide Perl characters above 255 into the JPEG
 /// byte stream and invalidates offsets, so those inputs are refused before
-/// any write. Non-exponent decimal strings retain their integer part exactly, including fixed
-/// fractions, across Perl's signed IV / unsigned UV 64-bit ranges. Sending
-/// these through f64 first loses low bits above 2^53 (PR959 local review).
+/// any write. The masked `& 0xff` path retains the integer part of fixed
+/// decimals exactly across Perl's IV / UV 64-bit ranges; sending those through
+/// f64 loses low bits above 2^53 (PR959 local review). The unmasked
+/// `chr($val)` path instead uses Perl's floating-point conversion for fixed
+/// decimals: a value just below 1 can round to 1 before chr truncates it.
 /// Exponent strings use Perl's floating-point coercion; only finite values
 /// below 2^53 are supported here. Larger exponent values and decimal integer
 /// parts outside the IV/UV ranges refuse rather than guess at coercion.
@@ -1921,10 +1923,30 @@ fn scene_type_raw_with_mask(tag_name: &str, raw: &str, masks_to_byte: bool) -> R
                 )
             })?;
         let integer = numeric.trunc();
-        if !masks_to_byte && !(0.0..=255.0).contains(&integer) {
+        if !masks_to_byte && (numeric < 0.0 || !(0.0..=255.0).contains(&integer)) {
             return Err(scene_type_unmasked_refusal(tag_name));
         }
         (integer as i64 as u64 & 0xff) as u8
+    } else if !masks_to_byte && raw.contains('.') {
+        // Perl chr($val) converts a fixed decimal to NV before its integer
+        // coercion. In contrast, `$val & 0xff` uses the decimal integer part.
+        // Keep the two source-selected paths separate; 11.78's unmasked chr
+        // can round 0.999999999999999999999 to 1 and 254.99999999999999
+        // to 255. A negative nonzero fixed decimal is refused before write,
+        // matching the native warning/no-touch boundary.
+        if raw.starts_with('-') && raw.bytes().any(|byte| (b'1'..=b'9').contains(&byte)) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        let numeric = raw
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| scene_type_unmasked_refusal(tag_name))?;
+        let integer = numeric.trunc();
+        if !(0.0..=255.0).contains(&integer) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        integer as u8
     } else {
         let negative = raw.starts_with('-');
         let unsigned = raw.strip_prefix(['+', '-']).unwrap_or(raw);
@@ -3215,14 +3237,32 @@ mod tests {
 
     #[test]
     fn scene_type_inverse_modes_preserve_byte_values_and_refuse_old_wide_writes() {
-        for (raw, byte) in [("0", 0), ("1", 1), ("1.5", 1), ("255", 255)] {
+        for (raw, byte) in [
+            ("0", 0),
+            ("1", 1),
+            ("1.5", 1),
+            ("255", 255),
+            ("-0.0", 0),
+            ("0.999999999999999999999", 1),
+            ("0.9999999999999999", 0),
+            ("254.99999999999999", 255),
+        ] {
             assert_eq!(
                 scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap(),
                 TagValue::Binary(vec![byte]),
                 "unmasked {raw}"
             );
         }
-        for raw in ["-1", "256", "257", "9007199254740993", "2.57e2"] {
+        for raw in [
+            "-1",
+            "256",
+            "257",
+            "9007199254740993",
+            "2.57e2",
+            "255.99999999999999999999",
+            "-0.00000000000000000001",
+            "-0.5e0",
+        ] {
             let error = scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap_err();
             assert!(
                 error.to_string().contains("lossless write"),
@@ -3230,6 +3270,18 @@ mod tests {
             );
         }
         for (raw, byte) in [("-1", 255), ("256", 0), ("257", 1), ("9007199254740993", 1)] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, true).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "masked {raw}"
+            );
+        }
+        for (raw, byte) in [
+            ("0.999999999999999999999", 0),
+            ("254.99999999999999", 254),
+            ("255.99999999999999999999", 255),
+            ("-0.00000000000000000001", 0),
+        ] {
             assert_eq!(
                 scene_type_raw_with_mask("ExifIFD:SceneType", raw, true).unwrap(),
                 TagValue::Binary(vec![byte]),

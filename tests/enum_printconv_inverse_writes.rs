@@ -2092,6 +2092,10 @@ fn raw_scene_type_respects_selected_inverse_at_numeric_boundaries() {
         ("18446744073709551615.0", "255", false),
         ("-9007199254740993.5", "255", false),
         ("0.999999999999999999999", "0", true),
+        ("254.99999999999999", "254", true),
+        ("255.99999999999999999999", "255", false),
+        ("-0.0", "0", true),
+        ("-0.00000000000000000001", "0", false),
         ("1.5", "1", true),
         ("-1.5", "255", false),
         ("2.57e2", "1", false),
@@ -2130,7 +2134,16 @@ fn raw_scene_type_respects_selected_inverse_at_numeric_boundaries() {
             let mut args = ox_args;
             args.push(path.to_str().unwrap());
             assert!(oxidex(&args).status.success());
-            assert_eq!(oracle_read_n(oracle, &path, "ExifIFD:SceneType"), code);
+            let expected = if scene_type_masks_to_byte() {
+                code
+            } else {
+                match raw {
+                    "0.999999999999999999999" => "1",
+                    "254.99999999999999" => "255",
+                    _ => code,
+                }
+            };
+            assert_eq!(oracle_read_n(oracle, &path, "ExifIFD:SceneType"), expected);
         }
     }
 }
