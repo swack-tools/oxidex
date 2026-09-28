@@ -9,8 +9,10 @@
 //! Each read below builds new maps, so repeated reads in one process
 //! exercise different iteration orders; the recorded sequence must not move.
 //!
-//! One file per path, from ExifTool's own `t/images` (skipped when that tree
-//! is absent, like the other pinned-sample tests).
+//! One file per path, usually from the selected ExifTool `t/images`. PCAPNG
+//! uses the separately verified combined corpus because historical source
+//! trees do not all carry that sample. This tests Rust read order, not parity
+//! with the selected native ExifTool release.
 
 use crate::core::operations::read_metadata_report;
 use std::path::Path;
@@ -82,8 +84,13 @@ fn recorded_sequence(path: &Path) -> Vec<String> {
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
     let mut failures = Vec::new();
     for (file, exercises) in PATHS {
-        let Some(path) = crate::test_support::pinned_t_images_fixture_path(file) else {
-            eprintln!("skip: configured t/images fixture {file} is absent");
+        let path = if *file == "PCAP.pcapng" {
+            crate::test_support::pinned_combined_fixture_path(file)
+        } else {
+            crate::test_support::pinned_t_images_fixture_path(file)
+        };
+        let Some(path) = path else {
+            eprintln!("skip: configured fixture {file} is absent");
             return;
         };
         let first = recorded_sequence(&path);

@@ -6,6 +6,9 @@
 //! marking is each producer's job: its body runs inside
 //! `crate::core::metadata_map::file_rows`, or it calls
 //! `mark_read_complete` itself.
+//! Real carrier inputs come from the verified combined corpus. This checks
+//! Rust read-row provenance and does not compare with the selected native
+//! ExifTool release, which may not support a newer carrier.
 //!
 //! This scans `src/` for every `pub fn ... -> Result<MetadataMap>` /
 //! `-> MetadataMap` -- any `Result` spelling, with the default error or its
@@ -596,7 +599,8 @@ fn newly_covered_producers_hand_out_read_rows() {
     let mut failures = Vec::new();
     let mut checked = 0;
     for (name, sample, produce) in producers {
-        let Some(path) = fixtures::pinned_t_images_fixture_path(sample) else {
+        let path = fixtures::pinned_combined_fixture_path(sample);
+        let Some(path) = path else {
             continue;
         };
         let map = match produce(&path) {
@@ -621,7 +625,7 @@ fn newly_covered_producers_hand_out_read_rows() {
         }
     }
     if checked == 0 {
-        eprintln!("skipping: no pinned t/images samples");
+        eprintln!("skipping: no pinned combined-corpus samples");
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

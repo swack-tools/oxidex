@@ -2,9 +2,11 @@
 //! `-a`, `--no-print-conv` and multi-file interactions, run through the real
 //! `oxidex` binary.
 //!
-//! Every expected string below is the pinned ExifTool 13.59 oracle's own
-//! stdout (`exiftool` asserted with `-ver` = 13.59 and the `OOXML.docx`
-//! capability probe = `DOCX`), recorded verbatim -- not re-derived. The rules
+//! Except for the carrier's FileSize, expected strings below are the pinned
+//! ExifTool 13.59 oracle's own stdout (`exiftool` asserted with `-ver` = 13.59
+//! and the `OOXML.docx` capability probe = `DOCX`), recorded verbatim.
+//! FileSize comes from the selected native oracle and selected file bytes so
+//! historical carriers remain valid. The rules
 //! they pin come from the `exiftool` script's text writer (13.59,
 //! `exiftool`:1243-1244 option parsing, :3034-3061 line layout):
 //!
@@ -136,13 +138,39 @@ fn exiftool_jpg(options: &[&str]) -> Option<String> {
     Some(run_with(options, TAGS, &[file.as_path()]))
 }
 
+/// Keep the fixture's human-readable size grounded in the selected native
+/// oracle, independently of OxiDex's own formatter.
+fn exiftool_jpg_display_size() -> Option<String> {
+    let file = pinned_fixture_path("ExifTool.jpg")?;
+    let mut oracle = oxidex::exiftool_oracle::shared_command()?;
+    let output = oracle
+        .args(["-s3", "-FileSize"])
+        .arg(&file)
+        .output()
+        .expect("run selected ExifTool for ExifTool.jpg size");
+    assert!(
+        output.status.success(),
+        "selected ExifTool failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(
+        String::from_utf8(output.stdout)
+            .expect("ExifTool FileSize is UTF-8")
+            .trim()
+            .to_owned(),
+    )
+}
+
 #[test]
 fn level_one_spellings() {
+    let Some(size) = exiftool_jpg_display_size() else {
+        return;
+    };
     let expected = format!(
         "Make                            : Canon\n\
          FileType                        : JPEG\n\
          Comment                         : {COMMENT}\n\
-         FileSize                        : 26 kB\n"
+         FileSize                        : {size}\n"
     );
     for options in [&["-s"][..], &["-short"][..], &["-s1"][..]] {
         let Some(output) = exiftool_jpg(options) else {
@@ -154,7 +182,10 @@ fn level_one_spellings() {
 
 #[test]
 fn level_two_spellings() {
-    let expected = format!("Make: Canon\nFileType: JPEG\nComment: {COMMENT}\nFileSize: 26 kB\n");
+    let Some(size) = exiftool_jpg_display_size() else {
+        return;
+    };
+    let expected = format!("Make: Canon\nFileType: JPEG\nComment: {COMMENT}\nFileSize: {size}\n");
     for options in [
         &["-s2"][..],
         &["-S"][..],
@@ -171,7 +202,10 @@ fn level_two_spellings() {
 
 #[test]
 fn level_three_spellings() {
-    let expected = format!("Canon\nJPEG\n{COMMENT}\n26 kB\n");
+    let Some(size) = exiftool_jpg_display_size() else {
+        return;
+    };
+    let expected = format!("Canon\nJPEG\n{COMMENT}\n{size}\n");
     for options in [
         &["-s3"][..],
         &["-s", "-s", "-s"][..],
@@ -191,13 +225,14 @@ fn family_zero_group_at_each_level() {
     let Some(level1) = exiftool_jpg(&["-G", "-s"]) else {
         return;
     };
+    let size = exiftool_jpg_display_size().expect("selected native FileSize");
     assert_eq!(
         level1,
         format!(
             "[MakerNotes]    Make                            : Canon\n\
              [File]          FileType                        : JPEG\n\
              [File]          Comment                         : {COMMENT}\n\
-             [File]          FileSize                        : 26 kB\n"
+             [File]          FileSize                        : {size}\n"
         )
     );
 }
@@ -207,25 +242,26 @@ fn family_one_group_at_each_level() {
     let Some(level1) = exiftool_jpg(&["-G1", "-s"]) else {
         return;
     };
+    let size = exiftool_jpg_display_size().expect("selected native FileSize");
     assert_eq!(
         level1,
         format!(
             "[CIFF]          Make                            : Canon\n\
              [File]          FileType                        : JPEG\n\
              [File]          Comment                         : {COMMENT}\n\
-             [System]        FileSize                        : 26 kB\n"
+             [System]        FileSize                        : {size}\n"
         )
     );
     assert_eq!(
         exiftool_jpg(&["-G1", "-s2"]).unwrap(),
         format!(
             "[CIFF] Make: Canon\n[File] FileType: JPEG\n[File] Comment: {COMMENT}\n\
-             [System] FileSize: 26 kB\n"
+             [System] FileSize: {size}\n"
         )
     );
     assert_eq!(
         exiftool_jpg(&["-G1", "-s3"]).unwrap(),
-        format!("CIFF Canon\nFile JPEG\nFile {COMMENT}\nSystem 26 kB\n")
+        format!("CIFF Canon\nFile JPEG\nFile {COMMENT}\nSystem {size}\n")
     );
 }
 
@@ -234,6 +270,7 @@ fn multi_family_group_labels_simplify_and_shorten_the_name_column() {
     let Some(level1) = exiftool_jpg(&["-G0:1", "-s"]) else {
         return;
     };
+    let size = exiftool_jpg_display_size().expect("selected native FileSize");
     // `[MakerNotes:CIFF]` is 17 wide, 2 past the 15-column group field, so
     // the name column shrinks from 32 to 30 to keep `:` aligned.
     assert_eq!(
@@ -242,19 +279,19 @@ fn multi_family_group_labels_simplify_and_shorten_the_name_column() {
             "[MakerNotes:CIFF] Make                          : Canon\n\
              [File]          FileType                        : JPEG\n\
              [File]          Comment                         : {COMMENT}\n\
-             [File:System]   FileSize                        : 26 kB\n"
+             [File:System]   FileSize                        : {size}\n"
         )
     );
     assert_eq!(
         exiftool_jpg(&["-G0:1", "-s2"]).unwrap(),
         format!(
             "[MakerNotes:CIFF] Make: Canon\n[File] FileType: JPEG\n[File] Comment: {COMMENT}\n\
-             [File:System] FileSize: 26 kB\n"
+             [File:System] FileSize: {size}\n"
         )
     );
     assert_eq!(
         exiftool_jpg(&["-G0:1", "-s3"]).unwrap(),
-        format!("MakerNotes:CIFF Canon\nFile JPEG\nFile {COMMENT}\nFile:System 26 kB\n")
+        format!("MakerNotes:CIFF Canon\nFile JPEG\nFile {COMMENT}\nFile:System {size}\n")
     );
 }
 
@@ -263,6 +300,7 @@ fn all_occurrences_keep_request_order_and_plain_names() {
     let Some(level1) = exiftool_jpg(&["-a", "-s"]) else {
         return;
     };
+    let size = exiftool_jpg_display_size().expect("selected native FileSize");
     assert_eq!(
         level1,
         format!(
@@ -271,12 +309,12 @@ fn all_occurrences_keep_request_order_and_plain_names() {
              FileType                        : JPEG\n\
              Comment                         : {COMMENT}\n\
              Comment                         : a comment\n\
-             FileSize                        : 26 kB\n"
+             FileSize                        : {size}\n"
         )
     );
     assert_eq!(
         exiftool_jpg(&["-a", "-s3"]).unwrap(),
-        format!("FUJIFILM\nCanon\nJPEG\n{COMMENT}\na comment\n26 kB\n")
+        format!("FUJIFILM\nCanon\nJPEG\n{COMMENT}\na comment\n{size}\n")
     );
     assert_eq!(
         exiftool_jpg(&["-a", "-G1", "-s"]).unwrap(),
@@ -286,19 +324,23 @@ fn all_occurrences_keep_request_order_and_plain_names() {
              [File]          FileType                        : JPEG\n\
              [File]          Comment                         : {COMMENT}\n\
              [File]          Comment                         : a comment\n\
-             [System]        FileSize                        : 26 kB\n"
+             [System]        FileSize                        : {size}\n"
         )
     );
 }
 
 #[test]
 fn no_print_conv_level_two() {
-    let Some(output) = exiftool_jpg(&["--no-print-conv", "-s2"]) else {
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
         return;
     };
+    let raw_size = std::fs::metadata(&file)
+        .expect("read selected ExifTool.jpg size")
+        .len();
+    let output = run_with(&["--no-print-conv", "-s2"], TAGS, &[file.as_path()]);
     assert_eq!(
         output,
-        format!("Make: Canon\nFileType: JPEG\nComment: {COMMENT}\nFileSize: 26106\n")
+        format!("Make: Canon\nFileType: JPEG\nComment: {COMMENT}\nFileSize: {raw_size}\n")
     );
 }
 
