@@ -362,6 +362,60 @@ fn mie_holding_exif(tiff: &[u8]) -> Vec<u8> {
     out
 }
 
+/// A truncated Adobe successor leaves maker-note presence uncertain even
+/// though the census has counted no complete MakN record. A named note
+/// request or group clear must stop the whole transaction, including an ordinary sibling.
+#[test]
+fn malformed_adobe_mie_note_refuses_write_atomically() {
+    let canon = std::fs::read(fixtures::required_t_images_fixture_path("Canon.jpg")).unwrap();
+    let mut private = b"Adobe\0XxxN".to_vec();
+    private.extend_from_slice(&17_u32.to_be_bytes());
+    private.extend_from_slice(b"payload MakN text");
+    private.push(0); // even-sized Adobe record
+    private.extend_from_slice(b"MakN\0\0\0\x06II"); // truncated successor
+    let mut tiff = b"MM\0*\0\0\0\x08\0\x01\xc6\x34\0\x07".to_vec();
+    tiff.extend_from_slice(&(private.len() as u32).to_be_bytes());
+    tiff.extend_from_slice(&26_u32.to_be_bytes());
+    tiff.extend_from_slice(&[0; 4]); // no next IFD
+    tiff.extend_from_slice(&private);
+    let original = [canon.as_slice(), &mie_holding_exif(&tiff)].concat();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("malformed-adobe-mie.jpg");
+    std::fs::write(&file, &original).unwrap();
+    let sibling = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Make=")
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(
+        sibling.status.success(),
+        "sibling alone: {}",
+        String::from_utf8_lossy(&sibling.stderr)
+    );
+    assert_ne!(std::fs::read(&file).unwrap(), original);
+    for requests in [
+        &["-MakerNotes:OwnerName=", "-IFD0:Make="][..],
+        &["-IFD0:Make=", "-MakerNotes:OwnerName="][..],
+        &["-MakerNotes:All=", "-IFD0:Make="][..],
+        &["-IFD0:Make=", "-MakerNotes:All="][..],
+    ] {
+        std::fs::write(&file, &original).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(requests)
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{requests:?}");
+        assert!(output.stdout.is_empty(), "{requests:?}");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("MIE") && error.contains("MakerNotes"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), original, "{requests:?}");
+    }
+}
+
 /// The TIFF payload of the first `Exif\0\0` APP1 of `jpeg`.
 fn jpeg_exif_tiff(jpeg: &[u8]) -> Vec<u8> {
     let at = jpeg.windows(2).position(|w| w == [0xFF, 0xE1]).unwrap();

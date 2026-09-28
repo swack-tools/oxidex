@@ -1117,7 +1117,8 @@ pub(crate) fn ensure_no_mie_copy(
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
             let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
-            makernote_census(&tiffs, EXIF_BLOCK_MAGICS).tag_bearing == 0
+            let census = makernote_census(&tiffs, EXIF_BLOCK_MAGICS);
+            census.tag_bearing == 0 && !census.uncertain_outside_ifd1 && !census.uncertain_ifd1
         });
         if untouched {
             return Ok(());
@@ -2288,11 +2289,13 @@ mod tests {
                 Some(count) => {
                     assert_eq!((notes.notes, notes.tag_bearing), (count, count), "{label}")
                 }
-                None => assert_eq!(
-                    notes.notes,
-                    super::super::exif_surgical::MakerNoteCensus::UNKNOWN.notes,
-                    "{label}"
-                ),
+                None => {
+                    assert_eq!(notes.notes, 0, "{label}: no confirmed record");
+                    assert!(
+                        notes.uncertain_outside_ifd1,
+                        "{label}: malformed successor must not prove absence"
+                    );
+                }
             }
             for (tag, removal) in [("MakerNotes:All", true), ("MakerNotes:OwnerName", false)] {
                 assert_eq!(
