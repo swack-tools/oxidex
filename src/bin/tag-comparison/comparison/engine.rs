@@ -196,7 +196,7 @@ fn normalize_value_for_comparison(value: &str) -> String {
     //    ExifTool can actually produce costs nothing and closes the blind
     //    spot: all 33 boolean-valued instances in the corpus still match.
     if matches!(normalized, "true" | "false" | "True" | "False") {
-        return normalized.to_ascii_lowercase();
+        return normalize_boolean_transport(normalized).to_string();
     }
 
     // 3. List-valued tags. `-json` serializes them as a JSON array where
@@ -214,6 +214,16 @@ fn normalize_value_for_comparison(value: &str) -> String {
     }
 
     normalized.to_string()
+}
+
+/// Fold only the boolean spellings used by the existing scalar comparison.
+/// Array elements retain their whitespace and boundaries.
+fn normalize_boolean_transport(value: &str) -> &str {
+    match value {
+        "True" => "true",
+        "False" => "false",
+        _ => value,
+    }
 }
 
 /// Parse JSON array transport into its element texts without joining them.
@@ -237,7 +247,12 @@ fn values_match(oxidex: &str, exiftool: &str) -> bool {
     if let (Some(ox_items), Some(et_items)) =
         (json_array_elements(oxidex), json_array_elements(exiftool))
     {
-        return ox_items == et_items;
+        return ox_items
+            .iter()
+            .map(|item| normalize_boolean_transport(item))
+            .eq(et_items
+                .iter()
+                .map(|item| normalize_boolean_transport(item)));
     }
     normalize_value_for_comparison(oxidex) == normalize_value_for_comparison(exiftool)
 }
@@ -845,6 +860,38 @@ mod tests {
             "[literal, bracket]",
             r#"["literal","bracket"]"#
         ));
+    }
+
+    #[test]
+    fn json_array_boolean_transport_keeps_item_boundaries_and_whitespace() {
+        for (oxidex, native) in [
+            (r#"["True","False"]"#, "[true,false]"),
+            (r#"["true","false",""]"#, r#"[true,false,""]"#),
+        ] {
+            assert!(values_match(oxidex, native));
+            let result = ComparisonEngine::compare(
+                vec![TagInfo::new("Subject".into(), "XMP".into(), oxidex.into())],
+                vec![TagInfo::new("Subject".into(), "XMP".into(), native.into())],
+                "XMP",
+                1,
+                None,
+            );
+            assert_eq!(result.matched_tags.len(), 1);
+            assert_eq!(
+                count_instance_coverage(
+                    &instances(&[("sample.xmp", "XMP", "Subject", oxidex)]),
+                    &instances(&[("sample.xmp", "XMP", "Subject", native)]),
+                ),
+                (1, 1)
+            );
+        }
+        for (oxidex, native) in [
+            (r#"["True "]"#, "[true]"),
+            (r#"["TRUE"]"#, "[true]"),
+            (r#"["True",""]"#, "[true]"),
+        ] {
+            assert!(!values_match(oxidex, native));
+        }
     }
 
     #[test]
