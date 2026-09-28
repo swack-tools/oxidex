@@ -65,6 +65,7 @@
 use crate::core::operations_helpers::{read_u16, read_u32};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use std::cell::Cell;
 
 /// Directories walked past IFD1 at most.
 pub(crate) const MAX_CHAIN_DIRS: usize = 64;
@@ -216,6 +217,26 @@ fn u32_at(tiff: &[u8], at: usize, order: ByteOrder) -> Option<u32> {
 /// cycle. Never fails: what cannot be carried is recorded in
 /// [`IfdChain::refusal`].
 pub fn scan_chain(tiff: &[u8], order: ByteOrder, first: usize, seen: &[usize]) -> IfdChain {
+    scan_chain_inner(tiff, order, first, seen, None).expect("unbounded scan cannot exhaust budget")
+}
+
+pub(crate) fn scan_chain_budgeted(
+    tiff: &[u8],
+    order: ByteOrder,
+    first: usize,
+    seen: &[usize],
+    budget: &Cell<usize>,
+) -> Result<IfdChain> {
+    scan_chain_inner(tiff, order, first, seen, Some(budget))
+}
+
+fn scan_chain_inner(
+    tiff: &[u8],
+    order: ByteOrder,
+    first: usize,
+    seen: &[usize],
+    budget: Option<&Cell<usize>>,
+) -> Result<IfdChain> {
     let mut chain = IfdChain {
         first,
         dirs: Vec::new(),
@@ -242,7 +263,7 @@ pub fn scan_chain(tiff: &[u8], order: ByteOrder, first: usize, seen: &[usize]) -
         let Some(next) = u32_at(tiff, next_at, order) else {
             break Some(format!("IFD{index}'s table at {at} runs past the block"));
         };
-        let (dir, why) = scan_dir(tiff, order, at, count, index);
+        let (dir, why) = scan_dir(tiff, order, at, count, index, budget)?;
         chain.dirs.push(dir);
         if why.is_some() {
             break why;
@@ -253,7 +274,7 @@ pub fn scan_chain(tiff: &[u8], order: ByteOrder, first: usize, seen: &[usize]) -
         at = next as usize;
     };
     chain.refusal = refusal;
-    chain
+    Ok(chain)
 }
 
 /// The records of the directory at `at` with `count` entries, and why it
@@ -264,7 +285,8 @@ fn scan_dir(
     at: usize,
     count: usize,
     index: usize,
-) -> (ChainDir, Option<String>) {
+    budget: Option<&Cell<usize>>,
+) -> Result<(ChainDir, Option<String>)> {
     let mut dir = ChainDir {
         table_at: at,
         records: Vec::with_capacity(count),
@@ -327,10 +349,13 @@ fn scan_dir(
                     ChainValue::Outside { at: start, len }
                 }
                 (Some(start), Some(len)) => match tiff.get(start..start.saturating_add(len)) {
-                    Some(bytes) => ChainValue::Data {
-                        at: start,
-                        bytes: bytes.to_vec(),
-                    },
+                    Some(bytes) => {
+                        crate::writers::exif_surgical::charge_scan_copy(budget, bytes.len())?;
+                        ChainValue::Data {
+                            at: start,
+                            bytes: bytes.to_vec(),
+                        }
+                    }
                     None => {
                         refuse(format!(
                             "locates {len} bytes at {start}, running past the block's end"
@@ -354,10 +379,13 @@ fn scan_dir(
                 Some(size) => {
                     let start = read_u32(&field, order) as usize;
                     match tiff.get(start..start.saturating_add(size)) {
-                        Some(bytes) => ChainValue::Value {
-                            at: start,
-                            bytes: bytes.to_vec(),
-                        },
+                        Some(bytes) => {
+                            crate::writers::exif_surgical::charge_scan_copy(budget, bytes.len())?;
+                            ChainValue::Value {
+                                at: start,
+                                bytes: bytes.to_vec(),
+                            }
+                        }
                         None => {
                             refuse(format!(
                                 "has a {size}-byte value at {start}, outside the block"
@@ -380,7 +408,7 @@ fn scan_dir(
             value,
         });
     }
-    (dir, why)
+    Ok((dir, why))
 }
 
 /// The chain of the TIFF block `tiff` (IFD1's next pointer on), or `None`
