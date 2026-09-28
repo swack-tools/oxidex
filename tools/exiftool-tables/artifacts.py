@@ -123,6 +123,7 @@ STATIC_ARTIFACTS = (
     Artifact("value-ledger", 1, "codegen", "tools/exiftool-tables/value_conv_ledger.json"),
     Artifact("conv-exif-main", 1, "conv_codegen", "src/exiftool_tables/conv/exif_main.rs"),
     Artifact("conv-exif-main-ledger", 1, "conv_codegen", "tools/exiftool-tables/conv_exif_main_ledger.json"),
+    Artifact("conv-exif-main-worklist", 1, "conv_codegen", "tools/exiftool-tables/exif_main_refusal_worklist.json"),
     Artifact("conv-exif-main-oracle", 1, "conv_oracle", "tools/exiftool-tables/testdata/conv_exif_main_outputs.json"),
     Artifact("scalar-helpers", 1, "scalar_helper_codegen", "src/writers/generated_scalar_rules.rs"),
     Artifact("scalar-helper-ledger", 1, "scalar_helper_codegen", "tools/exiftool-tables/scalar_helper_ledger.json"),
