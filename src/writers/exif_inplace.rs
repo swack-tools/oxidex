@@ -90,6 +90,26 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
             "Cannot safely shift dates through an incomplete EXIF directory graph; nothing was written",
         )
     }
+    fn enqueue(
+        pending: &mut Vec<usize>,
+        discovered: &mut std::collections::BTreeSet<usize>,
+        at: usize,
+    ) -> Result<()> {
+        if at == 0 {
+            return Err(incomplete());
+        }
+        if discovered.contains(&at) {
+            return Ok(());
+        }
+        if discovered.len() >= 64 {
+            return Err(ExifToolError::unsupported_format(
+                "Cannot safely shift dates through more than 64 EXIF directories; nothing was written",
+            ));
+        }
+        discovered.insert(at);
+        pending.push(at);
+        Ok(())
+    }
     let byte_order = if tiff.starts_with(b"II") {
         ByteOrder::LittleEndian
     } else {
@@ -99,21 +119,10 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
     let exif_ifd = scan_ifd(tiff, ifd0, byte_order, Ifd::Ifd0, &mut Vec::new())?;
     // Inline values, entry descriptors and pointers are storage too.
     let mut spans = vec![(0, 8)];
-    let mut pending = vec![ifd0];
-    let mut visited = Vec::new();
+    let mut pending = Vec::new();
+    let mut discovered = std::collections::BTreeSet::new();
+    enqueue(&mut pending, &mut discovered, ifd0)?;
     while let Some(offset) = pending.pop() {
-        if offset == 0 {
-            return Err(incomplete());
-        }
-        if visited.contains(&offset) {
-            continue;
-        }
-        if visited.len() >= 64 {
-            return Err(ExifToolError::unsupported_format(
-                "Cannot safely shift dates through more than 64 EXIF directories; nothing was written",
-            ));
-        }
-        visited.push(offset);
         let count_end = offset.checked_add(2).ok_or_else(incomplete)?;
         let count = read_u16(
             tiff.get(offset..count_end).ok_or_else(incomplete)?,
@@ -152,12 +161,16 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
                 if value_count != 1 || !matches!(value_type, 1 | 3 | 4 | 9) {
                     return Err(incomplete());
                 }
-                pending.push(crate::writers::exif_surgical::inline_unsigned(
-                    value_type,
-                    1,
-                    &entry[8..12],
-                    byte_order,
-                ));
+                enqueue(
+                    &mut pending,
+                    &mut discovered,
+                    crate::writers::exif_surgical::inline_unsigned(
+                        value_type,
+                        1,
+                        &entry[8..12],
+                        byte_order,
+                    ),
+                )?;
                 continue;
             }
             if crate::writers::exif_surgical::OFFSET_LENGTH_PAIRS
@@ -205,7 +218,7 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
                     } else {
                         read_u32(child, byte_order) as usize
                     };
-                    pending.push(at);
+                    enqueue(&mut pending, &mut discovered, at)?;
                 }
                 continue;
             }
@@ -256,7 +269,7 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
         }
         let next = read_u32(&tiff[table_end..next_end], byte_order) as usize;
         if next != 0 {
-            pending.push(next);
+            enqueue(&mut pending, &mut discovered, next)?;
         }
     }
     Ok(spans)
@@ -767,5 +780,37 @@ mod tests {
         // ModifyDate from IFD0 must survive; the two ExifIFD tags are lost
         assert_eq!(located.len(), 1);
         assert_eq!(located[0].tag, ExifDateTag::ModifyDate);
+    }
+    #[test]
+    fn subifd_queue_deduplicates_and_caps_unique_directories() {
+        fn graph(children: usize, repeated: bool) -> Vec<u8> {
+            let rows = if repeated { 200 } else { children };
+            let child_at = 8 + 2 + rows * 12 + 4;
+            let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+            tiff.extend_from_slice(&(rows as u16).to_le_bytes());
+            for i in 0..rows {
+                let at = child_at + if repeated { 0 } else { i * 6 };
+                tiff.extend_from_slice(&0x014a_u16.to_le_bytes());
+                tiff.extend_from_slice(&4_u16.to_le_bytes());
+                tiff.extend_from_slice(&1_u32.to_le_bytes());
+                tiff.extend_from_slice(&(at as u32).to_le_bytes());
+            }
+            tiff.extend_from_slice(&0_u32.to_le_bytes());
+            for _ in 0..children {
+                tiff.extend_from_slice(&0_u16.to_le_bytes());
+                tiff.extend_from_slice(&0_u32.to_le_bytes());
+            }
+            tiff
+        }
+        // Hundreds of duplicate pointers consume one child slot.
+        let duplicates = graph(1, true);
+        assert!(other_value_spans(&duplicates, &[]).is_ok());
+        // IFD0 plus 64 distinct children exceeds the established limit.
+        let distinct = graph(64, false);
+        let error = other_value_spans(&distinct, &[]).unwrap_err();
+        assert!(
+            error.to_string().contains("more than 64 EXIF directories"),
+            "{error}"
+        );
     }
 }
