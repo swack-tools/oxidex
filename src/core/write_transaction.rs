@@ -654,7 +654,7 @@ fn plan_changes<'a>(
         // (either order) and `-MakerNotes:All= -MakerNotes:WhiteBalance#=1`
         // on Canon.jpg each delete the note and nothing else. Where the
         // deletion does not take effect (a raw type) the note is edited.
-        if makernote_request_gone(change, gone, &mut physical_ciff)? {
+        if makernote_request_gone(change, gone, path, &mut physical_ciff)? {
             continue;
         }
         match resolve_write_key_in_request_with_reader(
@@ -770,6 +770,7 @@ fn plan_changes<'a>(
 fn makernote_request_gone(
     change: &TagChange,
     gone: crate::writers::exif_surgical::RequestDeletions,
+    path: &Path,
     physical_ciff: &mut impl FnMut() -> Result<bool>,
 ) -> Result<bool> {
     use crate::writers::generated_makernote_groups::MAKERNOTE_ROOTS;
@@ -794,6 +795,15 @@ fn makernote_request_gone(
         makernote_group
     };
     if !named {
+        return Ok(false);
+    }
+    // ExifIFD:All leaves a direct IFD0 note in the JPEG/TIFF carrier. A
+    // grouped setter can still reach it even if our reader decoded no row.
+    // Entry deletions explicitly naming ExifIFD remain gone.
+    if !entry
+        && gone.exif_ifd_only()
+        && crate::core::operations::conversion_makernote_census(path).surviving_exif_ifd_clear > 0
+    {
         return Ok(false);
     }
     // A JPEG's CIFF segment survives every deletion but `MakerNotes:All`;

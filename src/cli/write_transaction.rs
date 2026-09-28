@@ -24,6 +24,7 @@
 use crate::cli::args::CliArgs;
 use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
+use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
     CopyReport, clear_all_metadata, conversion_makernote_census, copy_metadata_report_retaining,
     read_metadata, resolve_write_tag_in_request,
@@ -346,6 +347,8 @@ impl WritePlan {
         );
         let baseline = read_metadata(path).ok();
         let census = conversion_makernote_census(path);
+        let cleared_baseline = MetadataMap::new();
+        let cleared_census = crate::writers::exif_surgical::MakerNoteCensus::default();
         let classify = |at: usize, tag: &str, value: &OsString, with_deletions: bool| {
             if value.is_empty() {
                 return None;
@@ -354,15 +357,31 @@ impl WritePlan {
             if bare.contains(':') {
                 return None; // already classified in from_args
             }
-            if let Some(metadata) = baseline.as_ref()
+            // A surviving set after `-all=` is applied to the stripped
+            // scratch carrier. The original maker note cannot make one of
+            // its native candidates eligible there. A later TagsFromFile
+            // may repopulate the carrier; only sets before that copy have a
+            // provably empty effective carrier.
+            let cleared = with_deletions
+                && self.clear_all
+                && (self.copy_from.is_none()
+                    || self.copy_before_clear
+                    || at < self.sets_before_copy);
+            let effective = if cleared {
+                Some(&cleared_baseline)
+            } else {
+                baseline.as_ref()
+            };
+            let effective_census = if cleared { cleared_census } else { census };
+            if let Some(metadata) = effective
                 && let Some(warning) =
                     bare_conversion_warning(tag, value, self.raw_values, |candidate| {
-                        candidate_applies_to_file(candidate, bare, metadata, census)
+                        candidate_applies_to_file(candidate, bare, metadata, effective_census)
                     })
             {
                 return Some(warning);
             }
-            let typed = baseline.as_ref().and_then(|metadata| {
+            let typed = effective.and_then(|metadata| {
                 resolve_write_tag_in_request(
                     path,
                     bare,

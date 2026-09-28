@@ -2425,6 +2425,13 @@ pub(crate) struct RequestDeletions {
 }
 
 impl RequestDeletions {
+    /// `ExifIFD:All` removes the note in ExifIFD, but a direct IFD0 (or
+    /// other surviving top-level directory) note remains. A carrier clear or
+    /// `MakerNotes:All` removes those too.
+    pub(crate) fn exif_ifd_only(self) -> bool {
+        self.makernotes && !self.ciff && !self.exif_blocks
+    }
+
     /// What the planned group deletion `key` deletes.
     pub(crate) fn of(key: &str) -> Self {
         match group_removal(key) {
@@ -2462,9 +2469,8 @@ impl RequestDeletions {
 pub(crate) struct MakerNoteCensus {
     /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
     pub blocks: usize,
-    /// Maker-note entries of those blocks, every kind: each ExifIFD
-    /// MakerNote (0x927C) and each IFD0 `DNGPrivateData` with an Adobe
-    /// `MakN` record.
+    /// Maker-note entries of those blocks: every scanned 0x927C placement
+    /// and each IFD0 `DNGPrivateData` with a recognized maker-note record.
     pub notes: usize,
     /// The ones of [`notes`](Self::notes) that may hold tags ExifTool edits:
     /// every such entry, not every block holding one (an ExifIFD may carry
@@ -2475,6 +2481,10 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). A block the scan cannot walk counts as one, as does any count
     /// that cannot be made at all -- absence is what callers rely on.
     pub tag_bearing: usize,
+    /// Tag-bearing 0x927C entries outside ExifIFD and its Interop child,
+    /// plus IFD0 DNGPrivateData maker-note records. These survive
+    /// `ExifIFD:All`, even if the reader emits no note row.
+    pub surviving_exif_ifd_clear: usize,
     /// A physical JPEG APP0 CIFF container, including one whose fields the
     /// reader does not surface. Decoded rows cannot prove its absence.
     pub ciff: bool,
@@ -2488,6 +2498,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        surviving_exif_ifd_clear: usize::MAX,
         ciff: true,
         deletions: RequestDeletions {
             makernotes: false,
@@ -2523,7 +2534,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
         };
         let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
         for entry in &scan.entries {
-            if entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE {
+            if entry.tag_id == MAKERNOTE {
                 census.notes += 1;
                 if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
                     &entry.value,
@@ -2531,6 +2542,9 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     &model,
                 ) {
                     census.tag_bearing += 1;
+                    if entry.ifd != IfdKind::ExifIfd && entry.ifd != IfdKind::Interop {
+                        census.surviving_exif_ifd_clear += 1;
+                    }
                 }
             } else if entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA {
                 let Some(notes) = dng_private_makernote_count(&entry.value) else {
@@ -2539,6 +2553,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                 };
                 census.notes += notes;
                 census.tag_bearing += notes;
+                census.surviving_exif_ifd_clear += notes;
             }
         }
     }
@@ -4939,6 +4954,26 @@ mod tests {
     }
 
     #[test]
+    fn physical_census_counts_direct_ifd0_notes_without_decoded_rows() {
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&MAKERNOTE.to_le_bytes());
+        tiff.extend_from_slice(&7u16.to_le_bytes());
+        tiff.extend_from_slice(&16u32.to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(b"Nikon\0\x02\x10\0\0II\x2a\0\0\0");
+        let census = makernote_census(&[&tiff], &[42]);
+        assert_eq!(census.notes, 1);
+        assert_eq!(census.tag_bearing, 1);
+        assert_eq!(census.surviving_exif_ifd_clear, 1);
+        assert_eq!(
+            MakerNoteCensus::UNKNOWN.surviving_exif_ifd_clear,
+            usize::MAX
+        );
+    }
+
+    #[test]
     fn dng_makernote_census_uses_adobe_record_boundaries() {
         let record = |tag: &[u8; 4], payload: &[u8]| {
             let mut bytes = tag.to_vec();
@@ -4984,6 +5019,7 @@ mod tests {
             tiff.extend_from_slice(private);
             let census = makernote_census(&[&tiff], &[42]);
             assert_eq!((census.notes, census.tag_bearing), (1, 1));
+            assert_eq!(census.surviving_exif_ifd_clear, 1);
         }
         assert_eq!(dng_private_makernote_count(b"other private data"), Some(0));
 
@@ -4991,10 +5027,12 @@ mod tests {
         padded.extend_from_slice(&record(b"MakN", b"II\0\0\0\0"));
         let census = census_for(&padded);
         assert_eq!((census.notes, census.tag_bearing), (1, 1));
+        assert_eq!(census.surviving_exif_ifd_clear, 1);
 
         padded.extend_from_slice(&record(b"MakN", b"MM\0\0\0\0"));
         let census = census_for(&padded);
         assert_eq!((census.notes, census.tag_bearing), (2, 2));
+        assert_eq!(census.surviving_exif_ifd_clear, 2);
 
         // Corrupt framing remains an unknown destination, so the guard
         // conservatively refuses bare writes rather than partially writing.
