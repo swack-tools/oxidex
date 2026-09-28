@@ -29,7 +29,8 @@ use crate::core::formatters::{
     format_sharpness,
 };
 use crate::core::tag_conversion::{apply_tile_offsets_value_conv, exif_entry_to_tag_value};
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{FileReader, Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
     Acknowledged, Ctx, Emitted, GateA, KeyedBlock, KeyedDirectoryTable, KeyedEmissionSink,
@@ -8921,7 +8922,31 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
         match entry.id {
             0x080b if firmware_from_keyed.is_some() => {
                 if let Some(row) = firmware_from_keyed.take().flatten() {
-                    metadata.insert(format!("{}:{}", row.group1, row.name), row.value);
+                    let key = format!("{}:{}", row.group1, row.name);
+                    let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+                    metadata.record_occurrence(
+                        key,
+                        TagOccurrence {
+                            id: row.source_id,
+                            name: intern(row.name),
+                            group0: intern(row.group0),
+                            group1: intern(row.group1),
+                            group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
+                            instance: Instance::default(),
+                            raw: row.value.clone(),
+                            value: Some(value),
+                            print: Some(row.value),
+                            stored: Some(row.stored),
+                            priority: u8::from(!(row.low_priority || row.avoid)),
+                            is_list: row.is_list,
+                            order: 0,
+                            origin: Provenance {
+                                module: Some(row.module),
+                                table: Some(row.table),
+                                byte_range: None,
+                            },
+                        },
+                    );
                 }
             }
             0x080a => {}

@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
+use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::exiftool_tables::session::Session;
 use oxidex::exiftool_tables::{
     BinaryTable, Ctx, Dir, Emitted, Field, Fmt, GateA, IfdDir, IfdFlags, IfdTable, IfdTag,
@@ -1138,6 +1139,41 @@ const ROUTES: [(&str, &str, WalkerTag); 11] = [
         Some(("CanonRaw:CanonFirmwareVersion", "Firmware Version 1.1.1")),
     ),
 ];
+
+/// The real CRW route must retain the generated row's source identity,
+/// groups, value forms and provenance after the public read inserts it.
+#[test]
+fn canonraw_keyed_route_records_the_generated_occurrence() {
+    let path = fixtures::pinned_t_images_fixture_path("CanonRaw.crw")
+        .expect("Task 17 requires the pinned CanonRaw.crw route carrier");
+    let metadata = read_metadata(&path).expect("read real CanonRaw CRW through public API");
+    let key = "CanonRaw:CanonFirmwareVersion";
+    let rows: Vec<_> = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .filter(|(name, _, _)| *name == key)
+        .collect();
+    assert_eq!(rows.len(), 1, "one source firmware record");
+    let (_, row, print) = &rows[0];
+    assert_eq!(row.id, TagId::Numeric(0x080b));
+    assert_eq!(row.name.as_ref(), "CanonFirmwareVersion");
+    assert_eq!(row.group0.as_ref(), "MakerNotes");
+    assert_eq!(row.group1.as_ref(), "CanonRaw");
+    assert_eq!(row.group2.as_deref(), Some("Camera"));
+    assert_eq!(row.origin.module, Some("CanonRaw"));
+    assert_eq!(row.origin.table, Some("Main"));
+    assert_eq!(row.priority, 1);
+    assert!(!row.is_list);
+    let firmware = TagValue::new_string("Firmware Version 1.1.1");
+    assert_eq!(row.stored.as_ref(), Some(&firmware));
+    assert_eq!(row.value.as_ref(), Some(&firmware));
+    assert_eq!(row.print.as_ref(), Some(&firmware));
+    assert_eq!(print.as_ref(), &firmware);
+    assert_eq!(metadata.get(key), Some(&firmware));
+    assert!(
+        !metadata.is_assigned(key),
+        "file read must retain read provenance"
+    );
+}
 
 /// Silence attribution on the actual pinned CRW, not on a hand-built CIFF
 /// block. The sole missing occurrence must be the source key 0x080b field.
