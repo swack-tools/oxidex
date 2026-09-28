@@ -99,8 +99,9 @@ else:
     elif name=='conv_codegen.py':
         dump(args[0])
         assert args[args.index('--table')+1]=='Exif::Main'
-        assert {flag('-o'),flag('--ledger')}=={root/item.path for item in artifacts.select(producer='conv_codegen')}
+        assert {flag('-o'),flag('--ledger'),flag('--worklist')}=={root/item.path for item in artifacts.select(producer='conv_codegen')}
         output(flag('-o'),name);output(flag('--ledger'),name+'-ledger')
+        output(flag('--worklist'),name+'-worklist')
     elif name=='conv_oracle.py':
         assert '--write' in args and args[args.index('--table')+1]=='Exif::Main'
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])

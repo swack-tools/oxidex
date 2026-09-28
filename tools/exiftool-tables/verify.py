@@ -253,13 +253,40 @@ VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 
-# `Olympus::CameraSettings::StackedImage` carries this private StrEnum entry
-# as a runtime discriminator for fixed-array wildcard matching. It is not an
-# ExifTool PrintConv fact and therefore must not be compared with oracle ENUM
-# rows. Keep the exception tied to the one source-gated field and exact empty
-# value so a marker anywhere else remains visible to the verifier.
+# Wildcard-era `Olympus::CameraSettings::StackedImage` carries this private
+# StrEnum entry as a runtime discriminator. ExifTool 11.78 has only exact
+# pairs, so that source must not carry the marker. The marker is not an
+# ExifTool PrintConv fact and must not be compared with oracle ENUM rows.
 FIXED_ARRAY_PATTERN_ENUM_KEY = ("Olympus", "CameraSettings", "2052")
 FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
+
+def validate_fixed_array_marker(key, pairs):
+    """Require the private marker exactly when StackedImage has wildcard pairs."""
+    if key != FIXED_ARRAY_PATTERN_ENUM_KEY:
+        return
+    markers = [
+        (index, value)
+        for index, (enum_key, value) in enumerate(pairs)
+        if enum_key == FIXED_ARRAY_PATTERN_MARKER
+    ]
+    has_wildcard = False
+    for enum_key, rendered in pairs:
+        if enum_key == FIXED_ARRAY_PATTERN_MARKER:
+            continue
+        if not re.fullmatch(r"[0-9]+ (?:[0-9]+|\*)", enum_key):
+            raise SystemExit(f"enum for {key}: unknown fixed-array pattern {enum_key!r}")
+        wildcard = enum_key.endswith(" *")
+        if (wildcard and rendered.count("*") != 1) or (not wildcard and "*" in rendered):
+            raise SystemExit(f"enum for {key}: unknown fixed-array pattern {enum_key!r}")
+        has_wildcard |= wildcard
+    expected = [(0, "")] if has_wildcard else []
+    if markers != expected:
+        raise SystemExit(
+            f"enum for {key}: fixed-array runtime marker must occur exactly "
+            "once as the first entry with an empty value if wildcard pairs exist, "
+            "and must be absent for an exact map"
+        )
 
 
 # Step 26. ExifTool format name -> the Rust `Fmt` variant a correct
@@ -704,17 +731,8 @@ def _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, prin
             (kk, unescape(vv)) if int_keys else (unescape(kk), unescape(vv))
             for kk, vv in pairs
         ]
-        if not int_keys and k == FIXED_ARRAY_PATTERN_ENUM_KEY:
-            markers = [
-                (index, value)
-                for index, (enum_key, value) in enumerate(decoded_pairs)
-                if enum_key == FIXED_ARRAY_PATTERN_MARKER
-            ]
-            if markers != [(0, "")]:
-                raise SystemExit(
-                    f"enum for {k}: fixed-array runtime marker must occur exactly "
-                    "once as the first entry with an empty value"
-                )
+        if not int_keys:
+            validate_fixed_array_marker(k, decoded_pairs)
         for index, (enum_key, enum_value) in enumerate(decoded_pairs):
             if int_keys:
                 enums[k][enum_key] = enum_value
@@ -3070,6 +3088,14 @@ def verify_ifd(gen, orc, show=10, serial_tables=None):
                 t_enum.hit()
             else:
                 t_enum.miss((k, kk, vv, t))
+        if k == FIXED_ARRAY_PATTERN_ENUM_KEY:
+            # Ordinary enums may omit source rows. This one wildcard map
+            # cannot: losing both the marker and a wildcard row would make
+            # the generated exact map appear to be the valid 11.78 shape.
+            generated_keys = {norm_key(kk) for kk in gen.enums.get(k, {})}
+            for kk, vv in truth_enum.items():
+                if re.fullmatch(r"[0-9]+ \*", kk) and kk not in generated_keys:
+                    t_enum.miss((k, kk, None, vv))
         if k in gen.bitmasks:
             got = {norm_key(kk): vv for kk, vv in gen.bitmasks[k].items()}
             want = {norm_key(kk): vv for kk, vv in orc.bitmasks.get(k, {}).items()}
