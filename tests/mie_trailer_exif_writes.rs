@@ -410,6 +410,40 @@ fn jpeg_exif_tiff(jpeg: &[u8]) -> Vec<u8> {
     segment[6..].to_vec()
 }
 
+/// A MIE EXIF holding a Nikon maker note cannot own Canon:OwnerName.
+/// The requested vendor, not mere presence of any note, decides whether
+/// ExifTool touches MIE on a named maker-note deletion.
+#[test]
+fn mie_makernote_deletion_respects_requested_vendor() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let writer = std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap();
+    let nikon = std::fs::read(fixtures::required_t_images_fixture_path("Nikon.jpg")).unwrap();
+    let canon = std::fs::read(fixtures::required_t_images_fixture_path("Canon.jpg")).unwrap();
+    let cases: &[Case] = &[(&["-Canon:OwnerName="], "OwnerName")];
+    let nikon_mie = [
+        writer.as_slice(),
+        &mie_holding_exif(&jpeg_exif_tiff(&nikon)),
+    ]
+    .concat();
+    let canon_mie = [
+        writer.as_slice(),
+        &mie_holding_exif(&jpeg_exif_tiff(&canon)),
+    ]
+    .concat();
+    assert_eq!(
+        grade(oracle, "Writer+MIE Nikon", "jpg", &nikon_mie, cases),
+        Ok(0),
+        "Nikon note: the native deletion is unchanged"
+    );
+    assert_eq!(
+        grade(oracle, "Writer+MIE Canon", "jpg", &canon_mie, cases),
+        Ok(1),
+        "Canon note: native edits MIE, so this writer must refuse"
+    );
+}
+
 /// PR #966 review threads, each graded against the oracle as above:
 ///
 /// - 4112546168: a set a later deletion of the same field overrides is not

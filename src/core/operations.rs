@@ -2121,10 +2121,11 @@ pub(crate) fn conversion_makernote_census(
 /// does not hold it (under any spelling) and -- for an EXIF carrier -- no
 /// entry of any EXIF block is named by it (`exif_surgical::
 /// exif_request_is_no_op`, #943's up-front no-op decision, which also sees
-/// entries the reader surfaces no row for). A PDF Info field or a PNG text
-/// tag the map lacks names nothing. Pinned ExifTool 13.59 answers such a
-/// deletion `0 image files updated` / `1 image files unchanged`, bytes
-/// untouched.
+/// entries the reader surfaces no row for). A named maker-note vendor uses
+/// the physical root census instead, after the transaction checks MIE's
+/// EXIF copy. A PDF Info field or a PNG text tag the map lacks names nothing.
+/// Pinned ExifTool 13.59 answers such a deletion `0 image files updated` /
+/// `1 image files unchanged`, bytes untouched.
 pub(crate) fn removal_is_no_op_with_reader(
     key: &str,
     metadata: &MetadataMap,
@@ -2141,6 +2142,27 @@ pub(crate) fn removal_is_no_op_with_reader(
     // spells differently (the reader keys `XMP-dc:Title` as `XMP:Title`) is
     // never judged absent from the map alone.
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    // A named maker-note vendor may have no writable address in our EXIF
+    // writer, but a deletion is still ExifTool's unchanged when the main
+    // file cannot hold that vendor's tag. The transaction has already
+    // checked MIE's copy before asking this no-op question. Use the physical
+    // note census, never just decoded rows: an unidentified note may carry
+    // a tag the reader did not surface.
+    if crate::writers::exif_surgical::is_makernote_group(group) {
+        let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
+        let name = name.strip_suffix('#').unwrap_or(name);
+        let format = detect_format(reader)?;
+        let surgical = is_surgical_tiff_target(format, reader);
+        if !surgical && !matches!(format, FileFormat::JPEG | FileFormat::PNG) {
+            return Ok(false);
+        }
+        return Ok(!crate::writers::write_request::makernote_group_may_hold(
+            name,
+            group,
+            metadata,
+            &|| file_makernote_census(reader, format, surgical),
+        ));
+    }
     // The directory chain past IFD1 (`IFD2:`, ... -- #954's
     // `exif_surgical::chain_key_dir`) is scanned entry by entry too: a
     // removal naming nothing it holds is a no-op beside a real edit.

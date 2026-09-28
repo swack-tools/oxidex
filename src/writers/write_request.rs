@@ -1116,9 +1116,21 @@ pub(crate) fn ensure_no_mie_copy(
     };
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
-            let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
-            let census = makernote_census(&tiffs, EXIF_BLOCK_MAGICS);
-            census.tag_bearing == 0 && !census.uncertain_outside_ifd1 && !census.uncertain_ifd1
+            if group.eq_ignore_ascii_case("MakerNotes") {
+                let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
+                let census = makernote_census(&tiffs, EXIF_BLOCK_MAGICS);
+                census.tag_bearing == 0 && !census.uncertain_outside_ifd1 && !census.uncertain_ifd1
+            } else {
+                // A named vendor only selects roots whose source-derived
+                // closure reaches that group. A proven Nikon note cannot
+                // contain Canon:OwnerName, while an unidentified note may.
+                let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
+                blocks.iter().all(|block| {
+                    !makernote_group_may_hold(name, group, &block.rows, &|| {
+                        makernote_census(&[block.tiff.as_slice()], EXIF_BLOCK_MAGICS)
+                    })
+                })
+            }
         });
         if untouched {
             return Ok(());
