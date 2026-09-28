@@ -149,13 +149,18 @@ class WriteSetTests(unittest.TestCase):
             (directory / name).write_text(text)
 
     def test_release_that_adds_and_drops_modules_passes(self):
-        # 11.78 against 13.59: no DJI (dropped), a JSON module (added).
+        # Exercise both directions from any selected release's module set.
+        # A hard-coded DJI removal does nothing when 11.78 has no DJI table.
+        before = set(artifacts.module_stems('binary', self.root))
+        dropped = sorted(before)[0]
+        added = 'added_for_contract'
+        self.assertNotIn(added, before)
         saved = self.snap(tier='1')
-        stems = sorted((set(artifacts.module_stems('binary', self.root)) - {'dji'}) | {'json'})
+        stems = sorted((before - {dropped}) | {added})
         self.regenerate_family('binary', stems)
         changes = artifacts.check(self.root, saved)
-        self.assertIn('src/exiftool_tables/binary/dji.rs', changes)
-        self.assertIn('src/exiftool_tables/binary/json.rs', changes)
+        self.assertIn(f'src/exiftool_tables/binary/{dropped}.rs', changes)
+        self.assertIn(f'src/exiftool_tables/binary/{added}.rs', changes)
         self.assertIn('src/exiftool_tables/binary/mod.rs', changes)
         self.assertEqual([a.key for a in artifacts.select(1, root=self.root) if a.key.startswith('binary-')],
                          [f'binary-{stem}' for stem in stems])
@@ -184,7 +189,8 @@ class WriteSetTests(unittest.TestCase):
 
     def test_module_file_is_not_writable_from_the_other_tier(self):
         saved = self.snap(tier='2')
-        stems = sorted(set(artifacts.module_stems('binary', self.root)) - {'dji'})
+        before = set(artifacts.module_stems('binary', self.root))
+        stems = sorted(before - {sorted(before)[0]})
         self.regenerate_family('binary', stems)
         self.reject(saved)
 
