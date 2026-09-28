@@ -2825,6 +2825,24 @@ class ListOpenSweepPrsTests(unittest.TestCase):
         payload = _gh_pr_list(_gh_pr_entry(160, "sweep/tags-2026-07-26-4", isDraft=True))
         self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
 
+    def test_publication_checks_drafts_without_adopting_or_trusting_forks(self):
+        payload = _gh_pr_list(
+            _gh_pr_entry(160, "sweep/tags-2026-07-26-4", isDraft=True),
+            _gh_pr_entry(161, "sweep/tags-2026-07-26-5"),
+            _gh_pr_entry(162, "sweep/tags-2026-07-26-6", isDraft=True,
+                         isCrossRepository=True),
+            _gh_pr_entry(163, "sweep/tags-2026-07-26-7", isDraft=True,
+                         baseRefName="release/1.x"),
+        )
+        runner = lambda args, repo: (0, payload, "")
+        # Exercise the real publication callback, not a re-spelled filter.
+        with patch("overlord_sweep.run_sweep",
+                   side_effect=lambda **kw: kw["open_sweep_prs_fn"]()):
+            represented = parallel_model_fix_loop.default_sweep_fn(
+                repo_root="/repo", run_gh=runner)
+        self.assertEqual([p["number"] for p in represented], [160, 161])
+        self.assertEqual([p["number"] for p in list_open_sweep_prs("/repo", runner)], [161])
+
     def test_a_cross_repository_pr_is_never_adopted(self):
         # swack-tools/oxidex is PUBLIC with forks, and headRefName for a
         # cross-repo PR is the BARE branch name -- so a fork branch named

@@ -2333,7 +2333,8 @@ def default_sweep_fn(*, run_gh=default_run_gh, **kwargs):
     def open_sweep_prs_fn():
         # Publication must stop if the list cannot be checked. Adoption's
         # best-effort query remains unchanged for its separate use.
-        return list_open_sweep_prs(kwargs.get("repo_root"), run_gh=run_gh, strict=True)
+        return list_open_sweep_prs(kwargs.get("repo_root"), run_gh=run_gh,
+                                   strict=True, include_drafts=True)
 
     return overlord_sweep.run_sweep(
         comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout,
@@ -2521,12 +2522,15 @@ def is_own_sweep_branch(head):
     return bool(SWEEP_BRANCH_RE.match(str(head or "")))
 
 
-def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main", *, strict=False):
+def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main", *,
+                        strict=False, include_drafts=False):
     """Open PRs whose head branch is a sweep branch AND which this
     automation could actually have opened, oldest (lowest PR number)
     first. Adoption uses [] on failure so a transient `gh` error costs
     one pass. Publication passes strict=True and raises on a failed query,
     because an unknown PR list cannot establish that a sweep is new.
+    Publication also includes drafts: a human-held PR still represents its
+    content, even though adoption must not attempt to merge it.
 
     Three gates beyond the branch shape, each needing a field `gh` only
     returns when asked (which is why the field list below is part of the
@@ -2601,7 +2605,7 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main", *, st
     sweeps = [
         pr for pr in prs
         if isinstance(pr, dict) and is_own_sweep_branch(pr.get("headRefName"))
-        and not pr.get("isDraft") and not pr.get("isCrossRepository")
+        and (include_drafts or not pr.get("isDraft")) and not pr.get("isCrossRepository")
         and (pr.get("baseRefName") or base_ref) == base_ref
     ]
     return sorted(sweeps, key=lambda pr: pr.get("number") or 0)
