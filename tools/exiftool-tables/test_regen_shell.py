@@ -172,6 +172,11 @@ else:
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
+    elif name=='scene_type_inverse_codegen.py':
+        assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
+        dump(flag('--dump'))
+        for item in artifacts.select(producer='scene_type_inverse_codegen'):
+            output(root/item.path,name)
     elif name in ('quicktime_generated_specs.py', 'quicktime_keys_specs.py', 'quicktime_userdata_specs.py', 'quicktime_protocol_caps.py'):
         # This producer intentionally owns fixed manifest paths rather than
         # accepting output flags.  Its fresh dump is still part of the tier-1
@@ -367,6 +372,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('quicktime_keys_specs.py'), int(full), names)
                 self.assertEqual(names.count('quicktime_userdata_specs.py'), int(full), names)
                 self.assertEqual(names.count('quicktime_protocol_caps.py'), int(full), names)
+                self.assertEqual(names.count('scene_type_inverse_codegen.py'), int(full), names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))

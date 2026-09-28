@@ -52,6 +52,8 @@ use crate::error::{ExifToolError, Result};
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use chrono::{NaiveDate, TimeZone, Timelike, Utc};
 
+include!("generated_scene_type_inverse.rs");
+
 /// The largest numerator/denominator [`Rationalize`] may produce.
 ///
 /// ExifTool's `Rationalize` takes the cap as an argument: `0xffffffff` for
@@ -1886,15 +1888,21 @@ fn file_source_raw(raw: &str) -> TagValue {
     })
 }
 
-/// SceneType's raw write (Exif.pm 0xa301 `ValueConvInv => 'chr($val &
-/// 0xff)'`) uses Perl's integer coercion before masking. Non-exponent
-/// decimal strings retain their integer part exactly, including fixed
+/// SceneType's raw write uses the selected Exif::Main 0xa301 ValueConvInv:
+/// 11.78 has `chr($val)`, while 12.64 and 13.59 use `chr($val & 0xff)`.
+/// The unmasked source writes wide Perl characters above 255 into the JPEG
+/// byte stream and invalidates offsets, so those inputs are refused before
+/// any write. Non-exponent decimal strings retain their integer part exactly, including fixed
 /// fractions, across Perl's signed IV / unsigned UV 64-bit ranges. Sending
 /// these through f64 first loses low bits above 2^53 (PR959 local review).
 /// Exponent strings use Perl's floating-point coercion; only finite values
 /// below 2^53 are supported here. Larger exponent values and decimal integer
 /// parts outside the IV/UV ranges refuse rather than guess at coercion.
 fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
+    scene_type_raw_with_mask(tag_name, raw, SCENE_TYPE_MASKS_TO_BYTE)
+}
+
+fn scene_type_raw_with_mask(tag_name: &str, raw: &str, masks_to_byte: bool) -> Result<TagValue> {
     if !matches_float_shape(raw, b'.') {
         return Err(invalid(
             tag_name,
@@ -1912,7 +1920,11 @@ fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
                     "SceneType exponent value exceeds the supported precision range (abs < 2^53)",
                 )
             })?;
-        (numeric.trunc() as i64 as u64 & 0xff) as u8
+        let integer = numeric.trunc();
+        if !masks_to_byte && !(0.0..=255.0).contains(&integer) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        (integer as i64 as u64 & 0xff) as u8
     } else {
         let negative = raw.starts_with('-');
         let unsigned = raw.strip_prefix(['+', '-']).unwrap_or(raw);
@@ -1931,10 +1943,20 @@ fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
                 "SceneType decimal integer part exceeds the supported signed/unsigned 64-bit range",
             )
         })?;
+        if !masks_to_byte && (magnitude > 255 || negative && magnitude != 0) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
         let byte = (magnitude & 0xff) as u8;
         if negative { byte.wrapping_neg() } else { byte }
     };
     Ok(TagValue::Binary(vec![byte]))
+}
+
+fn scene_type_unmasked_refusal(tag_name: &str) -> ExifToolError {
+    invalid(
+        tag_name,
+        "SceneType source chr($val) permits only 0..=255 for a lossless write; wide or negative code points are unsupported",
+    )
 }
 
 /// Exif.pm's `ConvertParameter` inverse conversion used by Sharpness (0xa40a).
@@ -3151,12 +3173,20 @@ mod tests {
                 "FileSource#={value}"
             );
         }
-        for (value, byte) in [("1", 1u8), ("1.5", 1), ("257", 1), ("-1", 255)] {
+        for (value, byte) in [("1", 1u8), ("1.5", 1), ("255", 255)] {
             assert_eq!(
                 raw("ExifIFD:SceneType", value).unwrap(),
                 TagValue::Binary(vec![byte]),
                 "SceneType#={value}"
             );
+        }
+        for (value, masked_byte) in [("257", 1u8), ("-1", 255)] {
+            let result = raw("ExifIFD:SceneType", value);
+            if SCENE_TYPE_MASKS_TO_BYTE {
+                assert_eq!(result.unwrap(), TagValue::Binary(vec![masked_byte]));
+            } else {
+                assert!(result.unwrap_err().to_string().contains("lossless write"));
+            }
         }
         for value in ["abc", "0x2"] {
             assert!(
@@ -3180,6 +3210,36 @@ mod tests {
                 raw("ExifIFD:ComponentsConfiguration", value).is_err(),
                 "ComponentsConfiguration#={value}"
             );
+        }
+    }
+
+    #[test]
+    fn scene_type_inverse_modes_preserve_byte_values_and_refuse_old_wide_writes() {
+        for (raw, byte) in [("0", 0), ("1", 1), ("1.5", 1), ("255", 255)] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "unmasked {raw}"
+            );
+        }
+        for raw in ["-1", "256", "257", "9007199254740993", "2.57e2"] {
+            let error = scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap_err();
+            assert!(
+                error.to_string().contains("lossless write"),
+                "{raw}: {error}"
+            );
+        }
+        for (raw, byte) in [("-1", 255), ("256", 0), ("257", 1), ("9007199254740993", 1)] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, true).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "masked {raw}"
+            );
+        }
+        for masked in [false, true] {
+            for raw in ["abc", "18446744073709551616", "-9223372036854775809"] {
+                assert!(scene_type_raw_with_mask("ExifIFD:SceneType", raw, masked).is_err());
+            }
         }
     }
 

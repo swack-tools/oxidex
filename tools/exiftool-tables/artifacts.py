@@ -160,6 +160,8 @@ STATIC_ARTIFACTS = (
     Artifact("quicktime-keys-ledger", 1, "quicktime_keys_specs", "tools/exiftool-tables/quicktime_generated_keys_ledger.json"),
     Artifact("quicktime-protocol-caps", 1, "quicktime_protocol_caps", "src/parsers/quicktime/generated_protocol_caps.rs"),
     Artifact("quicktime-protocol-caps-ledger", 1, "quicktime_protocol_caps", "tools/exiftool-tables/quicktime_protocol_caps_ledger.json"),
+    Artifact("scene-type-inverse", 1, "scene_type_inverse_codegen", "src/cli/generated_scene_type_inverse.rs"),
+    Artifact("scene-type-inverse-ledger", 1, "scene_type_inverse_codegen", "tools/exiftool-tables/scene_type_inverse_ledger.json"),
     Artifact("fujifilm", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/fujifilm/settings_tables.rs"),
     Artifact("panasonic", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/panasonic/face_tables.rs"),
     Artifact("pentax", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/pentax/subdir_tables.rs"),

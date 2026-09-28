@@ -132,6 +132,9 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --fit-out "$FIT_OUT" --fit-ledger-out "$FIT_LEDGER" --fit-protocol-fact "$FIT_FACT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
+echo ">> selecting SceneType's raw write inverse from Exif::Main"
+python3 "$HERE/scene_type_inverse_codegen.py" --dump "$JSON" --replace
+
 echo
 echo ">> generating Autogeneration v2 conversion arms (Exif::Main) and proving them"
 # conv_codegen.py compiles each field's RawConv/ValueConv/PrintConv from this

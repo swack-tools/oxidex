@@ -1715,6 +1715,45 @@ fn raw_mode_skips_hand_written_inverses_like_the_oracle() {
     }
 }
 
+fn scene_type_masks_to_byte() -> bool {
+    let ledger: serde_json::Value = serde_json::from_str(include_str!(
+        "../tools/exiftool-tables/scene_type_inverse_ledger.json"
+    ))
+    .expect("generated SceneType inverse ledger");
+    match ledger["mode"]
+        .as_str()
+        .expect("source-selected inverse mode")
+    {
+        "masked_chr" => true,
+        "unmasked_chr" => false,
+        mode => panic!("unreviewed SceneType inverse mode: {mode}"),
+    }
+}
+
+fn assert_unmasked_scene_type_no_touch(base: &Path, raw: &str, global_raw: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = copy_into(&dir, base, "refused.jpg");
+    let before = std::fs::read(&path).unwrap();
+    let arg = format!(
+        "-ExifIFD:SceneType{}={raw}",
+        if global_raw { "" } else { "#" }
+    );
+    let mut args = vec!["--backup", "-IFD0:Artist=must not commit", arg.as_str()];
+    if global_raw {
+        args.push("--no-print-conv");
+    }
+    args.push(path.to_str().unwrap());
+    let out = oxidex(&args);
+    assert!(!out.status.success(), "{raw}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("lossless write"),
+        "source refusal must be explicit: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before, "{raw}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
 /// Codex pre-review of PR #959 (round 5, second run): raw FileSource,
 /// SceneType and ComponentsConfiguration writes follow each tag's own
 /// ValueConvInv / `CheckValue` exactly as pinned 13.59 does (FileSource
@@ -1735,7 +1774,6 @@ fn raw_undef_enum_writes_match_the_oracle() {
         "-ExifIFD:FileSource#=1.5",
         "-ExifIFD:FileSource#=abc",
         "-ExifIFD:SceneType#=1.5",
-        "-ExifIFD:SceneType#=257",
         "-ExifIFD:SceneType#=abc",
         "-ExifIFD:ComponentsConfiguration#=1 2",
         "-ExifIFD:ComponentsConfiguration#=1.5 2 3 0",
@@ -1743,6 +1781,17 @@ fn raw_undef_enum_writes_match_the_oracle() {
     ] {
         let tag = arg[1..].split('#').next().unwrap();
         assert_write_matches_oracle(oracle, &base, &[arg], &[arg], &[tag]);
+    }
+    if scene_type_masks_to_byte() {
+        assert_write_matches_oracle(
+            oracle,
+            &base,
+            &["-ExifIFD:SceneType#=257"],
+            &["-ExifIFD:SceneType#=257"],
+            &["ExifIFD:SceneType"],
+        );
+    } else {
+        assert_unmasked_scene_type_no_touch(&base, "257", false);
     }
 }
 
@@ -2025,30 +2074,34 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
     }
 }
 
-/// Raw SceneType uses Perl's integer coercion before masking, preserving
-/// low bits even when an integer or fixed decimal exceeds f64 precision.
+/// Raw SceneType uses the selected source inverse. The masked branch preserves
+/// low bits of large integers; the unmasked branch refuses native wide writes.
 #[test]
-fn raw_scene_type_preserves_integer_bits_at_numeric_boundaries() {
+fn raw_scene_type_respects_selected_inverse_at_numeric_boundaries() {
     let oracle = exiftool_oracle::graded().expect("pinned oracle required");
     let base = canon_jpg().expect("Canon.jpg required");
-    for (raw, code) in [
-        ("9007199254740993", "1"),
-        ("+9007199254740993", "1"),
-        ("-9007199254740993", "255"),
-        ("9223372036854775807", "255"),
-        ("9223372036854775808", "0"),
-        ("18446744073709551615", "255"),
-        ("-9223372036854775808", "0"),
-        ("9007199254740993.5", "1"),
-        ("18446744073709551615.0", "255"),
-        ("-9007199254740993.5", "255"),
-        ("0.999999999999999999999", "0"),
-        ("1.5", "1"),
-        ("-1.5", "255"),
-        ("2.57e2", "1"),
-        ("-2.57e2", "255"),
+    for (raw, code, unmasked_safe) in [
+        ("9007199254740993", "1", false),
+        ("+9007199254740993", "1", false),
+        ("-9007199254740993", "255", false),
+        ("9223372036854775807", "255", false),
+        ("9223372036854775808", "0", false),
+        ("18446744073709551615", "255", false),
+        ("-9223372036854775808", "0", false),
+        ("9007199254740993.5", "1", false),
+        ("18446744073709551615.0", "255", false),
+        ("-9007199254740993.5", "255", false),
+        ("0.999999999999999999999", "0", true),
+        ("1.5", "1", true),
+        ("-1.5", "255", false),
+        ("2.57e2", "1", false),
+        ("-2.57e2", "255", false),
     ] {
         for global_raw in [false, true] {
+            if !scene_type_masks_to_byte() && !unmasked_safe {
+                assert_unmasked_scene_type_no_touch(&base, raw, global_raw);
+                continue;
+            }
             let arg = format!(
                 "-ExifIFD:SceneType{}={raw}",
                 if global_raw { "" } else { "#" }

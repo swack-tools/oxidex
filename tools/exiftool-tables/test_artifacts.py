@@ -20,8 +20,10 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 74)
-        self.assertEqual(len(all_items), 75 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 76)
+        self.assertEqual(len(all_items), 77 + members)
+        self.assertEqual({item.key for item in artifacts.select(producer="scene_type_inverse_codegen")},
+                         {"scene-type-inverse", "scene-type-inverse-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
                          {"quicktime-keys-specs", "quicktime-keys-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_userdata_specs")},
