@@ -549,7 +549,8 @@ pub fn shift_tiff_png_exif_dates(
         // planner. A date shift is an EXIF set to ExifTool, which also writes
         // a TIFF's MIE trailer. Reuse the planner's MIE census before any
         // in-place edit of the outer TIFF.
-        let mie = crate::core::operations::mie_census(path)?;
+        let source_reader = crate::io::MMapReader::new(path)?;
+        let mie = crate::core::operations::mie_census_with_reader(&source_reader)?;
         for target in targets {
             crate::writers::write_request::ensure_no_mie_copy(
                 target.key(),
