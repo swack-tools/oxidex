@@ -411,6 +411,20 @@ const UNMODELED_FAMILY6_GROUPS: &[&str] = &[
     "ifd64",
 ];
 
+/// A bare hyphenated group can be ExifTool's family 5 metadata path:
+/// `MetadataPath` joins every directory in `PATH` with `-`, and
+/// `GroupMatches` checks bare groups against all families. These are the
+/// actual hyphenated family 1 names from pinned 13.59 `-listg1`; its family 0
+/// inventory has no hyphenated names. Preserve these 0/1 selectors, and
+/// refuse all other bare hyphenated groups until OxiDex records family 5.
+const FAMILY1_HYPHENATED_GROUPS: &str = include_str!("family1_hyphenated_groups_1359.txt");
+
+fn is_known_hyphenated_family1_group(name: &str) -> bool {
+    FAMILY1_HYPHENATED_GROUPS
+        .lines()
+        .any(|line| !line.starts_with('#') && line == name)
+}
+
 /// One `:`-separated part of a selector's group qualifier, as
 /// `GroupMatches` reads it: an optional leading family number and a
 /// case-insensitive name.
@@ -518,6 +532,11 @@ fn parse_group_part(selector: &str, part: &str) -> Result<Option<GroupPart>, Str
     };
     let lower = name.to_ascii_lowercase();
     if family.is_none() {
+        if lower.contains('-') && !is_known_hyphenated_family1_group(&lower) {
+            return refuse(&format!(
+                "'{name}' may be an ExifTool family 5 metadata path, which OxiDex does not resolve"
+            ));
+        }
         let numbered = |prefix: &str| {
             lower
                 .strip_prefix(prefix)
@@ -1466,6 +1485,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
 mod tests {
     use super::*;
     use crate::core::{Instance, Provenance, TagOccurrence};
+
+    #[test]
+    fn bare_metadata_paths_are_refused_without_losing_real_hyphenated_groups() {
+        for path in [
+            "JPEG-APP1",
+            "JPEG-APP1-IFD0",
+            "JPEG-APP1-IFD0-ExifIFD",
+            "JPEG-SOF0",
+            "TIFF-IFD0",
+        ] {
+            let error = parse_group_part(path, path).unwrap_err();
+            assert!(error.contains("family 5 metadata path"), "{path}: {error}");
+        }
+        for group in ["XMP-dc", "JPEG-HDR", "DjVu-Meta", "MIE-Audio"] {
+            assert!(parse_group_part(group, group).unwrap().is_some(), "{group}");
+        }
+        for group in ["0JPEG-APP1-IFD0", "1XMP-dc"] {
+            assert!(parse_group_part(group, group).unwrap().is_some(), "{group}");
+        }
+    }
 
     fn canonical_occurrence(
         stored: i64,

@@ -143,6 +143,40 @@ fn unmodeled_selectors_are_refused_by_name_with_a_failing_exit() {
 }
 
 #[test]
+fn family5_metadata_paths_fail_closed_for_requests_and_exclusions() {
+    for args in [
+        &["-G5", "-s", "-JPEG-APP1-IFD0:Make"][..],
+        &["-G5", "-s", "-Make", "--JPEG-APP1-IFD0:Make"][..],
+        &["-G5", "-s", "-Make", "-x", "JPEG-APP1-IFD0:Make"][..],
+        &["-G5", "-s", "-Make", "--JPEG-APP1-IFD0-ExifIFD:Make"][..],
+    ] {
+        let output = oxidex(args, Path::new(REPO_FIXTURE));
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("family 5 metadata path"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    // Pinned family 0/1 selectors continue to resolve despite a hyphen or
+    // an explicit family number.
+    assert_eq!(
+        repo(&["-G1", "-s", "-0EXIF:Make"]),
+        repo(&["-G1", "-s", "-Make"])
+    );
+    assert_eq!(
+        repo(&["-G1", "-s", "-1IFD0:Make"]),
+        repo(&["-G1", "-s", "-Make"])
+    );
+    let xmp_file = Path::new("tests/fixtures/jpeg/sample_with_exif_xmp.jpg");
+    assert_eq!(
+        stdout(&["-G1", "-s", "-XMP-dc:Title"], xmp_file),
+        "[XMP-dc]        Title                           : Sample Photo\n"
+    );
+}
+
+#[test]
 fn multipart_star_group_is_invalid_in_pinned_set_found_tags() {
     // ExifTool 13.59 SetFoundTags validates the entire group with
     // /^[-\w:]*$/ before calling GroupMatches. The latter skips `*`, but
