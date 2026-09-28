@@ -344,6 +344,7 @@ impl WritePlan {
                 .enumerate()
                 .filter(|(_, (_, value))| value.is_empty())
                 .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+            None,
         );
         let baseline = read_metadata(path).ok();
         let census = conversion_makernote_census(path);
@@ -659,7 +660,7 @@ pub fn write_file_with_warnings(
 ///
 /// `global_raw_values` is `plan.raw_values` (ExifTool's `-n`, always applying
 /// to every set here). A tag's own trailing `#` (`canonical_request_tag`
-/// leaves it on the name, e.g. `"IFD0:Orientation#"`) is stripped here,
+/// leaves it on the name, for example `"IFD0:Orientation#"`) is stripped here,
 /// before the name reaches either the value parser or the write key: the
 /// address resolvers downstream (`write_request::canonical_write_key`,
 /// `resolve_write_key`) have no `#` handling of their own and either pass a
@@ -686,6 +687,7 @@ fn apply_sets(
             .enumerate()
             .filter(|(_, (_, value))| value.is_empty())
             .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+        None,
     );
     // Read once for every bare name the loop types (`Some(None)` when the
     // file cannot be read: the name is typed as spelled, and the
