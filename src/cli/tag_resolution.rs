@@ -194,6 +194,9 @@ pub struct ResolvedOccurrence<'a> {
     /// The literal public key retained by `MetadataMap`, independent of the
     /// occurrence's canonical source identity and true family groups.
     pub lookup_key: String,
+    /// FoundTag copy number for selected rows. Full-list projections did not
+    /// pass through `exiftool_keys` and retain their existing ordering rule.
+    pub copy: Option<u32>,
 }
 
 /// The occurrences `token` names: every active occurrence whose short name
@@ -363,6 +366,7 @@ pub fn resolve_requested_tags<'a>(
                     .map(|(key, occurrence)| ResolvedOccurrence {
                         lookup_key: key.to_string(),
                         occurrence,
+                        copy: None,
                     }),
             );
         } else if let Some((key, winner)) =
@@ -371,6 +375,7 @@ pub fn resolve_requested_tags<'a>(
             out.push(ResolvedOccurrence {
                 lookup_key: key.to_string(),
                 occurrence: winner,
+                copy: None,
             });
         }
     }
@@ -943,6 +948,7 @@ fn select_occurrences<'m>(
         .map(|i| ResolvedOccurrence {
             occurrence: keys[i].occurrence,
             lookup_key: keys[i].lookup_key.to_string(),
+            copy: Some(keys[i].copy),
         })
         .collect()
 }
@@ -1040,8 +1046,9 @@ pub fn build_display_map(
     bracketed: bool,
 ) -> MetadataMap {
     let mut out = MetadataMap::with_capacity(resolved.len());
-    for entry in resolved {
-        let base_key = match group_display {
+    let base_keys: Vec<String> = resolved
+        .iter()
+        .map(|entry| match group_display {
             Some(families) => {
                 let label = joined_family_label(entry.occurrence, families);
                 if bracketed {
@@ -1051,8 +1058,36 @@ pub fn build_display_map(
                 }
             }
             None => entry.lookup_key.clone(),
+        })
+        .collect();
+    // A later priority winner may displace an earlier occurrence with the
+    // same literal key. Reserve that winner's bare display key before naming
+    // losing copies, independent of file-order output.
+    let mut bare_winners: HashMap<&str, usize> = HashMap::new();
+    for (index, base_key) in base_keys.iter().enumerate() {
+        if !bare_winners.contains_key(base_key.as_str()) || resolved[index].copy == Some(0) {
+            bare_winners.insert(base_key, index);
+        }
+    }
+    let mut reserved: HashSet<&str> = HashSet::new();
+    for (index, entry) in resolved.iter().enumerate() {
+        let base_key = &base_keys[index];
+        let key = if bare_winners[base_key.as_str()] == index {
+            base_key.clone()
+        } else {
+            let mut n = 2u32;
+            loop {
+                let candidate = format!("{base_key} ({n})");
+                if !out.contains_key(&candidate)
+                    && !reserved.contains(candidate.as_str())
+                    && !bare_winners.contains_key(candidate.as_str())
+                {
+                    break candidate;
+                }
+                n += 1;
+            }
         };
-        let key = dedupe_key(&out, base_key);
+        reserved.insert(base_key);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         out.insert(key, value);
     }
@@ -1060,24 +1095,6 @@ pub fn build_display_map(
     // assignment.
     out.mark_read_complete();
     out
-}
-
-/// Appends `" (N)"` if `base_key` is already present in `map`, trying
-/// successive `N` until a free key is found -- the numbering
-/// `insert_low_priority_retained`/`FoundTag` itself uses for a genuine
-/// same-key duplicate (`ExifTool.pm:9532`).
-fn dedupe_key(map: &MetadataMap, base_key: String) -> String {
-    if !map.contains_key(&base_key) {
-        return base_key;
-    }
-    let mut n = 2u32;
-    loop {
-        let candidate = format!("{base_key} ({n})");
-        if !map.contains_key(&candidate) {
-            return candidate;
-        }
-        n += 1;
-    }
 }
 
 /// Renders `-a -Gn` human/short output directly, in `resolved`'s own order,
@@ -1389,6 +1406,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .map(|(lookup_key, occurrence)| ResolvedOccurrence {
                     occurrence,
                     lookup_key,
+                    copy: None,
                 })
                 .collect()
         } else {
@@ -1398,6 +1416,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .map(|(key, occurrence)| ResolvedOccurrence {
                     occurrence,
                     lookup_key: key.clone(),
+                    copy: None,
                 })
                 .collect()
         };
@@ -1446,7 +1465,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         }
 
         // Ungrouped `-a`: the same occurrence set, keyed by each occurrence's
-        // own literal `lookup_key`. `build_display_map`'s `dedupe_key` gives
+        // own literal `lookup_key`. `build_display_map` gives
         // occurrences that share one key the `" (N)"` suffix `FoundTag` itself
         // uses (`ExifTool.pm:9532`), so two `File:Comment`s survive into the
         // synthesized map instead of overwriting each other. Values go through
@@ -1811,6 +1830,31 @@ mod tests {
         metadata.insert("IFD0:Make", TagValue::new_string("FUJIFILM"));
         metadata.insert("CIFF:Make", TagValue::new_string("Canon"));
         metadata
+    }
+
+    #[test]
+    fn selected_duplicate_projection_keeps_later_winner_under_bare_key() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence(
+            "File:Comment",
+            TagValue::new_string("first"),
+            1,
+            "",
+            Instance::default(),
+        );
+        metadata.insert_occurrence(
+            "File:Comment",
+            TagValue::new_string("winner"),
+            1,
+            "",
+            Instance::default(),
+        );
+        let projected = output_map(
+            &metadata,
+            &canonical_cli_args(&["all:Comment"], false, false, None),
+        );
+        assert_eq!(projected.get_string("File:Comment"), Some("winner"));
+        assert_eq!(projected.get_string("File:Comment (2)"), Some("first"));
     }
 
     #[test]
