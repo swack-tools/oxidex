@@ -1960,6 +1960,10 @@ fn plan_exif_write_inner(
         if borrowed_keys.iter().any(|k| *k == key) && original_map.get(&key) == Some(value) {
             continue;
         }
+        if let Some(refusal) = crate::writers::write_request::exif_duplicate_row_misaddressed(&key)
+        {
+            return Err(refusal);
+        }
         if requires_subifd_write(&key) {
             return Err(ExifToolError::tag_not_written(
                 key.to_string(),

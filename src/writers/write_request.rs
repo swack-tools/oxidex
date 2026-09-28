@@ -547,6 +547,101 @@ pub(crate) fn resolve_write_key(
     Ok(format!("{group}:{}", field.name))
 }
 
+/// The `Exif::Main` row a grouped (or bare) EXIF `key` addresses when the
+/// table carries more than one row of that name -- chosen by the request's
+/// destination directory, as ExifTool's `SetNewValue` chooses it, never by
+/// the documentation registry's id or by first-row order (PR #959,
+/// `4112816750`). `Exif::Main` repeats `ChromaticAberrationCorrection` and
+/// `DistortionCorrection`: the Sony ARW rows `0x7034`/`0x7036` carry
+/// `WriteGroup => 'SubIFD'` and an `Off`/`Auto` PrintConv, while the Exif 3.1
+/// rows `0xa410`/`0xa40f` default to ExifIFD with `No`/`Yes`. Pinned 13.59
+/// writes `-ExifIFD:ChromaticAberrationCorrection=Yes` (and `-IFD0:`,
+/// `-EXIF:`, bare) to `0xa410` and refuses `=Auto` as not in PrintConv.
+///
+/// A `SubIFD*` destination selects the rows whose SetNewValue write group is
+/// `SubIFD`; any other EXIF-family destination (bare, `EXIF`, `IFD0`,
+/// `ExifIFD`, `IFD1`, `InteropIFD`) selects the rest. `None` when the name
+/// has at most one row (nothing to choose), when the group is not an EXIF
+/// directory, or when the destination still leaves more than one row -- the
+/// caller then keeps its own single-row resolution.
+pub(crate) fn exif_main_row_for_destination(
+    key: &str,
+) -> Option<&'static crate::exiftool_tables::IfdTag> {
+    let (group, name) = match key.rsplit_once(':') {
+        Some((group, name)) => (Some(group), name),
+        None => (None, key),
+    };
+    let to_subifd = match group {
+        None => false,
+        Some(group) if group.len() >= 6 && group[..6].eq_ignore_ascii_case("SubIFD") => true,
+        Some(group)
+            if ["EXIF", "IFD0", "ExifIFD", "IFD1", "InteropIFD"]
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(group)) =>
+        {
+            false
+        }
+        Some(_) => return None,
+    };
+    let table = crate::exiftool_tables::find_ifd_table("Exif", "Main")?;
+    let rows: Vec<&'static crate::exiftool_tables::IfdTag> = table
+        .tags
+        .iter()
+        .filter(|row| row.name.eq_ignore_ascii_case(name))
+        .collect();
+    if rows.len() < 2 {
+        return None;
+    }
+    let write_group = |row: &crate::exiftool_tables::IfdTag| {
+        SET_NEW_VALUE_LOOKUP
+            .iter()
+            .find(|candidate| {
+                is_exif_main(candidate)
+                    && candidate.name.eq_ignore_ascii_case(row.name)
+                    && match candidate.raw_id.strip_prefix("0x") {
+                        Some(hex) => u16::from_str_radix(hex, 16).ok(),
+                        None => candidate.raw_id.parse().ok(),
+                    } == Some(row.id)
+            })
+            .and_then(|candidate| candidate.write_group)
+            .unwrap_or(EXIF_MAIN_WRITE_GROUP)
+    };
+    let mut chosen = rows
+        .into_iter()
+        .filter(|row| write_group(row).eq_ignore_ascii_case("SubIFD") == to_subifd);
+    match (chosen.next(), chosen.next()) {
+        (Some(row), None) => Some(row),
+        _ => None,
+    }
+}
+
+/// The refusal for an EXIF `key` whose destination row
+/// ([`exif_main_row_for_destination`]) is not the row the tag registry --
+/// and so the EXIF writers, which take the tag id from `get_tag_descriptor`
+/// -- would address. The registry names `ChromaticAberrationCorrection` by
+/// the Sony SubIFD row `0x7034`, so `-ExifIFD:ChromaticAberrationCorrection#=1`
+/// used to store `1` under tag `0x7034` in ExifIFD, where pinned 13.59 writes
+/// `0xa410`: a wrong tag id under a real name. Refused by name instead
+/// (`TagsNotWritten`), whatever the value or conversion mode.
+pub(crate) fn exif_duplicate_row_misaddressed(key: &str) -> Option<ExifToolError> {
+    let row = exif_main_row_for_destination(key)?;
+    let registry_id = match crate::tag_db::tag_registry::get_tag_descriptor(key)?.id() {
+        crate::core::TagId::Numeric(id) => *id,
+        crate::core::TagId::Named(_) => return None,
+    };
+    (registry_id != row.id).then(|| {
+        refuse(
+            key,
+            format!(
+                "ExifTool writes this name as tag 0x{:04x} here, but oxidex's tag \
+                 registry addresses it as 0x{registry_id:04x}; refusing rather than \
+                 write the wrong tag",
+                row.id
+            ),
+        )
+    })
+}
+
 /// Refuses an ungrouped `tag` resolved to `key` when the file carries the
 /// same name in a group ExifTool would also update (Writer.pl:613-782: every
 /// non-preferred candidate is written "if tag exists") but oxidex cannot

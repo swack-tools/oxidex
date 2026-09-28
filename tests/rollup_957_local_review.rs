@@ -363,12 +363,20 @@ fn deletion_of_an_absent_field_remains_a_final_postcondition() {
             .args([
                 "-ExifIFD:ColorSpace=",
                 "-ExifIFD:ISO=200",
-                "-ExifIFD:ColorSpace=1",
+                "-ExifIFD:ColorSpace#=1",
             ])
             .arg(&path)
             .output()
             .unwrap();
         assert!(replacement.status.success(), "{replacement:?}");
+        let color_space = oracle
+            .command()
+            .args(["-n", "-s3", "-ExifIFD:ColorSpace"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(color_space.status.success(), "{color_space:?}");
+        assert_eq!(String::from_utf8_lossy(&color_space.stdout).trim(), "1");
     }
 }
 
