@@ -167,7 +167,10 @@ fn unmodelled_pointer<'a>(scan: &'a ExifScan, groups: &[GroupRemoval]) -> Option
         entry.ifd != IfdKind::Gps
             && !deleted(entry.ifd)
             && (UNMODELLED_POINTER_TAGS.contains(&entry.tag_id)
-                || NAMED_POINTER_TAGS.contains(&entry.tag_id))
+                || NAMED_POINTER_TAGS.contains(&entry.tag_id)
+                || (entry.tag_id == EXIF_IFD_POINTER && entry.ifd != IfdKind::Ifd0)
+                || (entry.tag_id == GPS_IFD_POINTER && entry.ifd != IfdKind::Ifd0)
+                || (entry.tag_id == INTEROP_POINTER && entry.ifd != IfdKind::ExifIfd))
     })
 }
 
@@ -2602,6 +2605,95 @@ fn has_unwalked_note_directory(ifd: IfdKind, tag_id: u16) -> bool {
         || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
 }
 
+/// A SubIFDs edge may point at reduced-image directories with no maker note.
+/// Prove that case by walking every child; any malformed entry, cycle, nested
+/// directory kind we do not model, or note-bearing entry keeps the census
+/// uncertain. This is only an absence proof, never a serializer plan: the
+/// offset still requires the separate relocation guard before a rewrite.
+fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> bool {
+    fn offsets(
+        field_type: u16,
+        count: usize,
+        value: &[u8],
+        order: ByteOrder,
+    ) -> Option<Vec<usize>> {
+        let width = match field_type {
+            3 => 2,
+            4 => 4,
+            _ => return None,
+        };
+        if count == 0 || value.len() != count.checked_mul(width)? {
+            return None;
+        }
+        Some(
+            value
+                .chunks_exact(width)
+                .map(|chunk| match width {
+                    2 => read_u16(chunk, order) as usize,
+                    _ => read_u32(chunk, order) as usize,
+                })
+                .collect(),
+        )
+    }
+    fn walk(
+        tiff: &[u8],
+        order: ByteOrder,
+        at: usize,
+        visited: &mut std::collections::BTreeSet<usize>,
+    ) -> Option<()> {
+        if visited.len() >= 64 || !visited.insert(at) {
+            return None;
+        }
+        let count_end = at.checked_add(2)?;
+        let count = read_u16(tiff.get(at..count_end)?, order) as usize;
+        let table_end = count_end.checked_add(count.checked_mul(12)?)?;
+        let next_end = table_end.checked_add(4)?;
+        tiff.get(at..next_end)?;
+        for raw in tiff[count_end..table_end].chunks_exact(12) {
+            let tag = read_u16(&raw[..2], order);
+            let field_type = read_u16(&raw[2..4], order);
+            let count = read_u32(&raw[4..8], order) as usize;
+            if !(1..=12).contains(&field_type) {
+                return None;
+            }
+            let size = type_size(field_type).checked_mul(count)?;
+            let value = if size <= 4 {
+                &raw[8..8 + size]
+            } else {
+                let start = read_u32(&raw[8..12], order) as usize;
+                tiff.get(start..start.checked_add(size)?)?
+            };
+            if tag == MAKERNOTE
+                || tag == DNG_PRIVATE_DATA
+                || matches!(tag, EXIF_IFD_POINTER | INTEROP_POINTER)
+                || (has_unwalked_note_directory(IfdKind::Ifd0, tag) && tag != 0x014a)
+            {
+                return None;
+            }
+            if tag == 0x014a {
+                for child in offsets(field_type, count, value, order)? {
+                    walk(tiff, order, child, visited)?;
+                }
+            }
+        }
+        let next = read_u32(&tiff[table_end..next_end], order) as usize;
+        if next != 0 {
+            walk(tiff, order, next, visited)?;
+        }
+        Some(())
+    }
+    if edge.tag_id != 0x014a {
+        return false;
+    }
+    let Some(children) = offsets(edge.field_type, edge.count as usize, &edge.value, order) else {
+        return false;
+    };
+    let mut visited = std::collections::BTreeSet::new();
+    children
+        .into_iter()
+        .all(|child| walk(tiff, order, child, &mut visited).is_some())
+}
+
 /// Check the five directories `scan_entries_with_magics` intends to walk.
 /// That scanner skips corrupt entries to preserve reader behavior; the
 /// safety census cannot turn such a skip into a proof of absence.
@@ -2638,6 +2730,17 @@ fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
                         | (IfdKind::ExifIfd, INTEROP_POINTER)
                 )
             {
+                return None;
+            }
+            if matches!(
+                (kind, tag),
+                (IfdKind::Ifd0, EXIF_IFD_POINTER | GPS_IFD_POINTER)
+                    | (IfdKind::ExifIfd, INTEROP_POINTER)
+            ) && !matches!(field_type, 1 | 3 | 4 | 9)
+            {
+                // The ordinary scanner decodes only these widths exactly.
+                // In particular SBYTE/SSHORT fall back to reading all four
+                // value bytes, potentially visiting a different directory.
                 return None;
             }
             let size = type_size(field_type).checked_mul(count)?;
@@ -2733,7 +2836,9 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
             census.uncertain_survivor_ifd1 = true;
         }
         for entry in &scan.entries {
-            if has_unwalked_note_directory(entry.ifd, entry.tag_id) {
+            if has_unwalked_note_directory(entry.ifd, entry.tag_id)
+                && !subifds_proven_note_free(block, scan.byte_order, entry)
+            {
                 census.mark_uncertain_at(entry.ifd);
             }
         }
@@ -5406,7 +5511,7 @@ mod tests {
     }
 
     #[test]
-    fn unwalked_ifd2_and_subifd_never_prove_absence() {
+    fn note_bearing_ifd2_and_subifd_never_prove_absence() {
         let mut ifd2 = private_data_in(IfdKind::Ifd1, DNG_PRIVATE_DATA);
         // Replace IFD1's private row with an empty IFD1 linked to IFD2.
         ifd2[64..66].copy_from_slice(&0u16.to_le_bytes());
@@ -5431,6 +5536,8 @@ mod tests {
 
         let mut subifd = private_data_in(IfdKind::Ifd0, DNG_PRIVATE_DATA);
         subifd[10..22].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 64, 0, 0, 0]);
+        subifd[64..66].copy_from_slice(&1u16.to_le_bytes());
+        subifd[66..78].copy_from_slice(&[0x7c, 0x92, 7, 0, 12, 0, 0, 0, 0, 1, 0, 0]);
         let census = makernote_census(&[&subifd], EXIF_BLOCK_MAGICS);
         assert!(census.uncertain_outside_ifd1 && census.uncertain_survivor_outside_ifd1);
         assert_eq!(census.tag_bearing, 0);
@@ -5605,6 +5712,8 @@ mod tests {
             (3, 1, 64, true),
             (4, 1, 64, true),
             (9, 1, 64, true),
+            (6, 1, 320, false),
+            (8, 1, 320, false),
             (4, 0, 64, false),
             (4, 2, 128, false),
             (3, 3, 128, false),
@@ -5625,6 +5734,65 @@ mod tests {
                 "field type {field_type}, count {count}"
             );
         }
+    }
+
+    #[test]
+    fn subifd_absence_proof_checks_all_children_and_next_links() {
+        let mut tiff = vec![0; 256];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        let edge = RawEntry {
+            ifd: IfdKind::Ifd0,
+            tag_id: 0x014a,
+            field_type: 4,
+            count: 2,
+            value: [64u32.to_le_bytes(), 96u32.to_le_bytes()].concat(),
+        };
+        tiff[64..66].copy_from_slice(&1u16.to_le_bytes());
+        tiff[66..78].copy_from_slice(&[0x00, 0x01, 4, 0, 1, 0, 0, 0, 32, 0, 0, 0]);
+        assert!(subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &edge
+        ));
+        tiff[96..98].copy_from_slice(&1u16.to_le_bytes());
+        tiff[98..110].copy_from_slice(&[0x7c, 0x92, 7, 0, 4, 0, 0, 0, 1, 2, 3, 4]);
+        assert!(!subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &edge
+        ));
+        tiff[98..110].copy_from_slice(&[0x00, 0x01, 4, 0, 1, 0, 0, 0, 32, 0, 0, 0]);
+        tiff[110..114].copy_from_slice(&128u32.to_le_bytes());
+        tiff[128..130].copy_from_slice(&1u16.to_le_bytes());
+        tiff[130..142].copy_from_slice(&[0x7c, 0x92, 7, 0, 4, 0, 0, 0, 1, 2, 3, 4]);
+        assert!(!subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &edge
+        ));
+        tiff[110..114].copy_from_slice(&0u32.to_le_bytes());
+        assert!(subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &edge
+        ));
+        tiff[66..78].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 96, 0, 0, 0]);
+        tiff[98..110].copy_from_slice(&[0x4a, 0x01, 4, 0, 1, 0, 0, 0, 64, 0, 0, 0]);
+        assert!(!subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &edge
+        ));
+        let outside = RawEntry {
+            value: 400u32.to_le_bytes().to_vec(),
+            count: 1,
+            ..edge
+        };
+        assert!(!subifds_proven_note_free(
+            &tiff,
+            ByteOrder::LittleEndian,
+            &outside
+        ));
     }
 
     fn u16b(v: u16, bo: ByteOrder) -> [u8; 2] {
@@ -7497,6 +7665,37 @@ mod tests {
         }
         for (offset, _) in OFFSET_LENGTH_PAIRS {
             assert!(refused(*offset), "pair 0x{offset:04x} not refused");
+        }
+    }
+
+    #[test]
+    fn structural_edges_outside_modelled_contexts_require_relocation_proof() {
+        for (ifd, tag) in [
+            (IfdKind::ExifIfd, GPS_IFD_POINTER),
+            (IfdKind::Ifd1, EXIF_IFD_POINTER),
+            (IfdKind::Ifd0, INTEROP_POINTER),
+        ] {
+            let scan = ExifScan {
+                byte_order: ByteOrder::LittleEndian,
+                entries: vec![RawEntry {
+                    ifd,
+                    tag_id: tag,
+                    field_type: 4,
+                    count: 1,
+                    value: 64u32.to_le_bytes().to_vec(),
+                }],
+                thumbnail: None,
+                makernote_offset: None,
+                ifd1_next: None,
+                raw_entry_counts: Vec::new(),
+            };
+            assert_eq!(
+                unmodelled_pointer(&scan, &[]).map(|entry| entry.tag_id),
+                Some(tag)
+            );
+            if ifd == IfdKind::ExifIfd {
+                assert!(unmodelled_pointer(&scan, &[GroupRemoval::ExifIfd]).is_none());
+            }
         }
     }
 

@@ -3494,9 +3494,8 @@ fn rebuild_relocated_makernote(
 ///     $pos += $size;
 ///     ++$pos if $size & 0x01;   # (darn padding)
 /// ```
-/// Only the `MakN` record is handled here; `CRW `, `MRW `, `SR2 `, `RAF `,
-/// `Pano`, `Koda` and `Leaf` carry formats this function does not decode, and
-/// are skipped rather than guessed at.
+/// Only the `MakN` record is decoded here. Other records may still contain
+/// writable maker-note tags; the write census accounts for those separately.
 ///
 /// The MakN record's own header is `ProcessAdobeMakN` (DNG.pm:685): two bytes
 /// of byte order ("II"/"MM") -- which need NOT match the enclosing TIFF, and
@@ -3514,13 +3513,15 @@ fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut Metada
     });
 }
 
-/// Count maker-note records at Adobe DNG record boundaries, never bytes
-/// inside another record's payload. `None` means truncated framing and
-/// lets write guards retain their conservative refusal for unknown data.
+/// Count records that may hold writable maker-note tags at Adobe DNG record
+/// boundaries, never bytes inside another record's payload. Pinned DNG.pm's
+/// `ProcessAdobeCRW` and `ProcessAdobeMRW` write through the CanonRaw and
+/// MinoltaRaw tables. `None` means truncated framing, which prevents a proof
+/// that no such record follows.
 pub(crate) fn dng_adobe_makernote_count(data: &[u8]) -> Option<usize> {
     let mut count = 0;
     walk_dng_adobe_records(data, |record_tag, _| {
-        if record_tag == b"MakN" {
+        if matches!(record_tag, b"MakN" | b"CRW " | b"MRW ") {
             count += 1;
         }
     })?;
@@ -10779,6 +10780,16 @@ mod backlog_group_1_printconv_tests {
         complete.extend_from_slice(&4u32.to_be_bytes());
         complete.extend_from_slice(b"MakN");
         assert_eq!(dng_adobe_makernote_count(&complete), Some(0));
+        let writable = |tag: &[u8; 4]| {
+            let mut data = b"Adobe\0".to_vec();
+            data.extend_from_slice(tag);
+            data.extend_from_slice(&4u32.to_be_bytes());
+            data.extend_from_slice(b"data");
+            data
+        };
+        assert_eq!(dng_adobe_makernote_count(&writable(b"CRW ")), Some(1));
+        assert_eq!(dng_adobe_makernote_count(&writable(b"MRW ")), Some(1));
+        assert_eq!(dng_adobe_makernote_count(&writable(b"SR2 ")), Some(0));
         for tail in [&b"Mak"[..], &b"MakN\0\0\0\x06II"[..]] {
             let mut truncated = complete.clone();
             truncated.extend_from_slice(tail);
