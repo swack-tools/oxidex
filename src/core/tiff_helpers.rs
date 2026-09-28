@@ -2275,6 +2275,13 @@ fn kodak7_serial(val: &[u8]) -> bool {
 /// the value (Exif.pm:6717) - and `make`/`model` the trimmed DataMembers.
 #[allow(clippy::too_many_lines)]
 fn claimed_before_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
+    claimed_before_minolta(make, model, val) || claimed_from_minolta_to_samsung1a(make, model, val)
+}
+
+/// [`claimed_before_samsung1a`]'s entries before `MakerNoteMinolta`
+/// (MakerNotes.pm 13.59:38-492, `MakerNoteApple` through `MakerNoteKyocera`).
+#[allow(clippy::too_many_lines)]
+fn claimed_before_minolta(make: &str, model: &str, val: &[u8]) -> bool {
     // MakerNoteApple: $$valPt =~ /^Apple iOS\0/
     if val.starts_with(b"Apple iOS\0") {
         return true;
@@ -2491,6 +2498,13 @@ fn claimed_before_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
     if val.starts_with(b"KYOCERA") {
         return true;
     }
+    false
+}
+
+/// [`claimed_before_samsung1a`]'s entries from `MakerNoteMinolta` on
+/// (MakerNotes.pm 13.59:495-942), once every earlier entry has failed.
+#[allow(clippy::too_many_lines)]
+fn claimed_from_minolta_to_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
     // MakerNoteMinolta (Make and !^(MINOL|CAMER|MLY0|KC|\+M\+M|\xd7)) plus the
     // MakerNoteMinolta3 catch-all on the same /^(Konica Minolta|Minolta)/i.
     if ci_starts_with(make, "Konica Minolta") || ci_starts_with(make, "Minolta") {
@@ -2770,6 +2784,37 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
         || matches!(prefix.split_last(), Some((b'\n', body)) if text_then_nuls(body))
 }
 
+/// Whether pinned MakerNotes::Main selects its headerless Nikon directory.
+/// The earlier conditions in that ordered table take precedence over the
+/// Nikon Make fallback. This proves a root group, not the note's tag values.
+pub(crate) fn selected_headerless_nikon_note(data: &[u8], make: &str, model: &str) -> bool {
+    let prefix = &data[..data.len().min(128)];
+    ci_starts_with(make, "NIKON")
+        && !claimed_before_minolta(make, model, prefix)
+        && !prefix.starts_with(b"MINOL\0")
+        && !prefix.starts_with(b"CAMER\0")
+        && !prefix.starts_with(b"MOT\0")
+        && !prefix.starts_with(b"Nikon\0\x01")
+}
+
+#[cfg(test)]
+#[test]
+fn headerless_nikon_root_respects_ordered_maker_conditions() {
+    assert!(selected_headerless_nikon_note(
+        b"\x12\0\x01\0",
+        "NIKON",
+        "E775"
+    ));
+    for earlier in [
+        b"Nikon\0\x01".as_slice(),
+        b"MOT\0",
+        b"MINOL\0",
+        b"Apple iOS\0",
+    ] {
+        assert!(!selected_headerless_nikon_note(earlier, "NIKON", "E775"));
+    }
+}
+
 /// Applies ExifTool's condition-specific names to the MakerNote (0x927C)
 /// values it stores as plain values rather than parsed subdirectories:
 /// `MakerNoteSamsung1a`, `MakerNoteUnknownText` and `MakerNoteUnknownBinary`
@@ -2810,6 +2855,30 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
 /// `Condition` for `MakerNoteUnknown` is empty (it always matches), and the
 /// JPEG test lives in the ProcessProc, which sees `$dirLen` -- the entire
 /// value.
+/// Whether pinned ExifTool reads the MakerNote (0x927C) value `data` of a
+/// block whose IFD0 says `make`/`model` as one value that holds no tags --
+/// `MakerNoteSamsung1a`, `MakerNoteUnknownText`, `MakerNoteUnknownBinary`,
+/// or a JPEG `ProcessUnknownOrPreview` reports as `PreviewImage` (see
+/// [`special_makernote_value`]) -- so that no maker-note tag of it can be
+/// edited.
+pub(crate) fn makernote_value_holds_no_tags(data: &[u8], make: &str, model: &str) -> bool {
+    let prefix = &data[..data.len().min(128)];
+    // MakerNoteMinolta3 (MakerNotes.pm 13.59:516-526): a Minolta Make whose
+    // note starts with a prefix `MakerNoteMinolta` excludes
+    // (`MLY0|KC|+M+M|\xd7`, or `MINOL`/`CAMER` without the NUL
+    // `MakerNoteMinolta2` needs) is one `Binary` value with no table.
+    let minolta = ci_starts_with(make, "Konica Minolta") || ci_starts_with(make, "Minolta");
+    if minolta && !claimed_before_minolta(make, model, prefix) {
+        let excluded = any_prefix(
+            prefix,
+            &[b"MINOL", b"CAMER", b"MLY0", b"KC", b"+M+M", b"\xd7"],
+        );
+        let minolta2 = prefix.starts_with(b"MINOL\0") || prefix.starts_with(b"CAMER\0");
+        return excluded && !minolta2;
+    }
+    special_makernote_value("MakerNote", data, make, model).is_some()
+}
+
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],
@@ -4151,6 +4220,7 @@ pub fn parse_ifd1_directory(
 /// directly against `reader`.
 pub fn parse_ifd2_preview_image(
     reader: &dyn FileReader,
+    tiff_data: &[u8],
     ifd0_offset: u64,
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
@@ -4195,6 +4265,32 @@ pub fn parse_ifd2_preview_image(
     let Ok(ifd2_entries) = parse_ifd(reader, ifd2_offset, byte_order) else {
         return;
     };
+
+    // Exif::Main applies to the chained IFD2 as well as IFD0/IFD1. Read only
+    // the seven image-layout rows missing from this adapter. The generated
+    // walk keeps their physical order, Priority 0, and exact value/stored
+    // forms; the preview pointer pairs remain owned by the hand path below.
+    // `tiff_data` is the APP1 TIFF block, not the whole JPEG that `reader`
+    // can address for an external preview. ExifTool refuses ordinary entries
+    // whose values point beyond that APP1 block.
+    if let Some(table) = find_ifd_table("Exif", "Main").filter(|table| table.enabled()) {
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        exif_dir_engine::walk_with_session(
+            table,
+            tiff_data,
+            tiff_base,
+            ifd2_offset,
+            byte_order,
+            "IFD2",
+            metadata,
+            &mut session,
+            &mut ctx,
+        )
+        .with_ifd1_forms()
+        .finish_ifd2_image_layout(metadata);
+    }
 
     let mut preview_start: Option<u64> = None;
     let mut preview_length: Option<u64> = None;
@@ -4418,10 +4514,18 @@ fn parse_makernote_with_session(
     // group, so decode it with the same code (ported from origin/main
     // 47037a04).
     if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
-        for (tag, value) in
-            crate::parsers::xmp::google_hdrp::decode_hdrp_makernote_bytes(ctx.payload())
-        {
-            metadata.insert(tag, TagValue::String(value));
+        use crate::parsers::xmp::google_hdrp::{
+            HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
+        };
+        for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
+            let priority = hdrp_tag_priority(&tag);
+            metadata.insert_occurrence(
+                tag,
+                TagValue::String(value),
+                priority,
+                HDRP_GROUP1,
+                crate::core::Instance::default(),
+            );
         }
         return;
     }
@@ -8738,6 +8842,94 @@ mod ifd2_preview_image_tests {
     /// 8-byte TIFF header).
     const TIFF_HEADER_SIZE: u64 = 8;
 
+    #[test]
+    fn leica_cl_ifd2_image_layout_keeps_generated_occurrences() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Leica/LeicaCL.jpg")
+        else {
+            return;
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("LeicaCL parses");
+        for (name, id, expected) in [
+            ("ImageWidth", 0x0100, 1620),
+            ("ImageHeight", 0x0101, 1080),
+            ("BitsPerSample", 0x0102, 8),
+            ("SamplesPerPixel", 0x0115, 3),
+        ] {
+            let key = format!("IFD2:{name}");
+            assert_eq!(metadata.get_integer(&key), Some(expected), "{key}");
+            let (_, occurrence, stored) = metadata
+                .project_occurrences(ValueChannel::Stored)
+                .find(|(candidate, _, _)| *candidate == key)
+                .expect("IFD2 occurrence");
+            assert_eq!(occurrence.id, oxidex_tags::TagId::Numeric(id), "{key}");
+            assert_eq!(&*occurrence.group0, "EXIF", "{key}");
+            assert_eq!(&*occurrence.group1, "IFD2", "{key}");
+            assert_eq!(occurrence.priority, 0, "{key}");
+            assert_eq!(*stored, TagValue::Integer(expected), "{key}");
+            assert_eq!(occurrence.origin.module, Some("Exif"), "{key}");
+            assert_eq!(occurrence.origin.table, Some("Main"), "{key}");
+        }
+        let photo = metadata
+            .project_occurrences(ValueChannel::ValueConv)
+            .find(|(key, _, _)| *key == "IFD2:PhotometricInterpretation")
+            .expect("photometric occurrence");
+        assert_eq!(photo.1.id, oxidex_tags::TagId::Numeric(0x0106));
+        assert_eq!(*photo.2, TagValue::Integer(6));
+        let printed = crate::core::exiftool_compat::format_for_exiftool(&metadata);
+        assert_eq!(
+            printed.get_string("IFD2:PhotometricInterpretation"),
+            Some("YCbCr")
+        );
+        assert!(metadata.get("IFD2:PreviewImageStart").is_some());
+        assert!(metadata.get("IFD2:PreviewImageLength").is_some());
+        assert!(metadata.get("IFD2:PreviewImage").is_some());
+    }
+
+    #[test]
+    fn ifd2_layout_fields_without_a_corpus_witness_keep_both_forms() {
+        // IFD0 @8 -> IFD1 @14 -> IFD2 @20. The second SHORT pair fits in
+        // its four-byte value slot, just as Exif::Main's 0x0212 declares.
+        let mut buffer = b"II\x2a\0\x08\0\0\0".to_vec();
+        buffer.extend_from_slice(&0u16.to_le_bytes());
+        buffer.extend_from_slice(&14u32.to_le_bytes());
+        buffer.extend_from_slice(&0u16.to_le_bytes());
+        buffer.extend_from_slice(&20u32.to_le_bytes());
+        buffer.extend_from_slice(&2u16.to_le_bytes());
+        for (id, count, value) in [
+            (0x011cu16, 1u32, [1u8, 0, 0, 0]),
+            (0x0212, 2, [2u8, 0, 1, 0]),
+        ] {
+            buffer.extend_from_slice(&id.to_le_bytes());
+            buffer.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+            buffer.extend_from_slice(&count.to_le_bytes());
+            buffer.extend_from_slice(&value);
+        }
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(&buffer);
+        let mut metadata = MetadataMap::new();
+        parse_ifd2_preview_image(
+            &reader,
+            &buffer,
+            TIFF_HEADER_SIZE,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            &mut metadata,
+        );
+        let printed = crate::core::exiftool_compat::format_for_exiftool(&metadata);
+        assert_eq!(
+            printed.get_string("IFD2:PlanarConfiguration"),
+            Some("Chunky")
+        );
+        assert_eq!(
+            printed.get_string("IFD2:YCbCrSubSampling"),
+            Some("YCbCr4:2:2 (2 1)")
+        );
+        let raw = metadata.without_print_conv();
+        assert_eq!(raw.get_integer("IFD2:PlanarConfiguration"), Some(1));
+        assert_eq!(raw.get_string("IFD2:YCbCrSubSampling"), Some("2 1"));
+    }
+
     /// Builds a little-endian TIFF: IFD0 (no entries) -> IFD1 (no entries) ->
     /// IFD2 carrying `0x0111`=`preview_start` (LONG) and `0x0117`=`preview_length`
     /// (LONG), followed by `trailing` bytes.
@@ -8833,6 +9025,7 @@ mod ifd2_preview_image_tests {
 
         parse_ifd2_preview_image(
             &reader,
+            &buffer,
             TIFF_HEADER_SIZE,
             0,
             ByteOrder::LittleEndian,
@@ -8863,6 +9056,7 @@ mod ifd2_preview_image_tests {
 
         parse_ifd2_preview_image(
             &reader,
+            &buffer,
             TIFF_HEADER_SIZE,
             0,
             ByteOrder::LittleEndian,
@@ -8889,6 +9083,7 @@ mod ifd2_preview_image_tests {
 
         parse_ifd2_preview_image(
             &reader,
+            &buffer,
             TIFF_HEADER_SIZE,
             0,
             ByteOrder::LittleEndian,

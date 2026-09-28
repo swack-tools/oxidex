@@ -11,6 +11,17 @@ const SOUNDSHOT: u16 = 0x0100;
 /// IdentifyTrailer reads at most 64 bytes before the current end.
 const IDENTIFY_WINDOW: usize = 64;
 
+/// The keys of the Sound & Shot rows this reader emits (`Samsung::Trailer`
+/// 0x0100, family 0 `MakerNotes`, family 1 `Samsung`). Pinned 13.59 files
+/// them under the same groups as a Samsung EXIF maker note's rows, so the
+/// bare-name write resolver tells the two apart by these names, which no
+/// Samsung maker-note table defines (`write_request::makernote_may_hold`).
+pub(crate) const EMBEDDED_AUDIO_FILE_NAME: &str = "MakerNotes:EmbeddedAudioFileName";
+/// See [`EMBEDDED_AUDIO_FILE_NAME`].
+pub(crate) const EMBEDDED_AUDIO_FILE: &str = "MakerNotes:EmbeddedAudioFile";
+/// Every row key the Samsung trailer reader emits.
+pub(crate) const TRAILER_ROW_KEYS: &[&str] = &[EMBEDDED_AUDIO_FILE_NAME, EMBEDDED_AUDIO_FILE];
+
 fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
@@ -49,7 +60,7 @@ pub fn parse_trailer_chain(file: &[u8], jpeg_trailer_start: Option<usize>) -> Me
             } else if window.ends_with(b"\0\0QDIOBS") || window.ends_with(DIRECT_SEFT) {
                 let samsung = parse_samsung_trailer(file, end);
                 // `Samsung::Trailer` has `PRIORITY => 0`: the first one wins.
-                if !metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
+                if !metadata.contains_key(EMBEDDED_AUDIO_FILE_NAME) {
                     metadata.merge_winners_keeping_group1(&samsung.metadata);
                 }
                 samsung.data_pos
@@ -200,7 +211,7 @@ fn parse_samsung_from_block_end(file: &[u8], mut block_end: usize) -> Option<Sam
                 // `last if $len + 8 > $size` leaves only the entry loop.
                 break;
             };
-            if ty != SOUNDSHOT || metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
+            if ty != SOUNDSHOT || metadata.contains_key(EMBEDDED_AUDIO_FILE_NAME) {
                 continue;
             }
             // HandleTag receives the raw bytes.  Pinned ExifTool's public
@@ -209,12 +220,12 @@ fn parse_samsung_from_block_end(file: &[u8], mut block_end: usize) -> Option<Sam
             // faithful than preserving its public representation here.
             let name = String::from_utf8_lossy(&data[8..name_end]).replace('\u{fffd}', "?");
             metadata.insert_with_group1(
-                "MakerNotes:EmbeddedAudioFileName",
+                EMBEDDED_AUDIO_FILE_NAME,
                 TagValue::new_string(name.trim_end_matches('\0')),
                 "Samsung",
             );
             metadata.insert_with_group1(
-                "MakerNotes:EmbeddedAudioFile",
+                EMBEDDED_AUDIO_FILE,
                 TagValue::new_binary(data[name_end..].to_vec()),
                 "Samsung",
             );

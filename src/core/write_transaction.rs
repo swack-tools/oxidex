@@ -44,8 +44,9 @@
 use crate::core::FileReader;
 use crate::core::metadata_map::{MetadataMap, SourceIdentity, handle_identity};
 use crate::core::operations::{
-    exif_group_in_pdf_with_reader, field_spellings, plan_group_deletion_with_reader, read_metadata,
-    removal_is_no_op_with_reader, remove_field, resolve_write_key_for_with_reader,
+    bare_removal_is_no_op_with_reader, exif_group_in_pdf_with_reader, field_spellings,
+    group_removal_takes_effect_with_reader, plan_group_deletion_with_reader, read_metadata,
+    removal_is_no_op_with_reader, remove_field, resolve_write_key_in_request_with_reader,
     write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
@@ -434,6 +435,86 @@ struct Pending<'a> {
     at: usize,
 }
 
+/// The group deletions of one request, each planned once: its position in
+/// the request, the `<group>:All` key [`plan_group_deletion_with_reader`] planned for it
+/// (`MakerNotes:*` is `MakerNotes:All`), and whether the format's writer
+/// really makes it ([`group_removal_takes_effect_with_reader`]).
+#[derive(Debug, Default)]
+pub(crate) struct GroupDeletions(Vec<(usize, String, bool)>);
+
+impl GroupDeletions {
+    /// Plans the group deletions among `deletions` -- each a request's
+    /// position and tag -- against the opened file. Only a deletion
+    /// [`plan_group_deletion_with_reader`] plans for real counts; one it proves a
+    /// no-op (a note ExifTool files under EXIF) removes nothing.
+    pub(crate) fn plan<'a>(
+        path: &Path,
+        deletions: impl IntoIterator<Item = (usize, &'a str)>,
+    ) -> Self {
+        let Ok(reader) = MMapReader::new(path) else {
+            return Self::default();
+        };
+        let Ok(baseline) = read_metadata(path) else {
+            return Self::default();
+        };
+        Self::plan_with_reader(&baseline, &reader, deletions)
+    }
+
+    fn plan_with_reader<'a>(
+        baseline: &MetadataMap,
+        reader: &MMapReader,
+        deletions: impl IntoIterator<Item = (usize, &'a str)>,
+    ) -> Self {
+        Self(
+            deletions
+                .into_iter()
+                .filter_map(|(at, tag)| {
+                    let group = group_deletion(tag)?;
+                    let key =
+                        plan_group_deletion_with_reader(tag, group, baseline, reader).ok()??;
+                    let effective = group_removal_takes_effect_with_reader(&key, baseline, reader);
+                    Some((at, key, effective))
+                })
+                .collect(),
+        )
+    }
+
+    /// What they leave of the file for the bare name set at position `at`
+    /// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)),
+    /// as pinned 13.59 applies a command line in order:
+    ///
+    /// - a deletion *before* the set deletes the group, and the set then
+    ///   writes every copy that remains -- so it counts only where the
+    ///   format's writer really makes it: a TIFF-structured file drops
+    ///   `IFD0:All`, and a raw type's ExifIFD/MakerNotes removals, as 13.59's
+    ///   no-ops, and its maker note survives to be edited
+    ///   (`-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef writes
+    ///   `[Nikon]` and `[ExifIFD] WhiteBalance`);
+    /// - a deletion *after* the set cancels the set's new values in the
+    ///   groups it names, whether or not the deletion itself takes effect
+    ///   (`-WhiteBalance#=1 -MakerNotes:All=` on Nikon.nef writes `[ExifIFD]`
+    ///   alone and keeps the note; on Canon.jpg it also deletes the note).
+    /// What the deletions that take effect remove, wherever they sit in the
+    /// request: what is gone from the file once it is written.
+    fn effective(&self) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(_, _, effective)| *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
+
+    pub(crate) fn for_set_at(&self, at: usize) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(position, _, effective)| *position > at || *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
+}
+
 /// Resolves every request against the file at `path`, in request order, and
 /// drops the no-ops: all refusals are collected into one
 /// [`ExifToolError::TagsNotWritten`]. Nothing is written.
@@ -519,6 +600,33 @@ fn plan_changes<'a>(
     let mut request_refusals: Vec<(usize, &'a str, TagNotWritten)> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
+    // What the request's group deletions remove, for the bare names it
+    // also sets (`GroupDeletions::for_set_at`).
+    let deletions = GroupDeletions::plan_with_reader(
+        &baseline,
+        reader,
+        changes
+            .iter()
+            .enumerate()
+            .filter(|(_, change)| change.value().is_none())
+            .map(|(at, change)| (at, change.tag())),
+    );
+    let gone = deletions.effective();
+    // Resolve CIFF presence from its APP0 bytes only if a surviving request
+    // can address it. Decoded rows cannot prove that an APP0 is absent.
+    let mut ciff_presence = None;
+    let mut physical_ciff = || -> Result<bool> {
+        if let Some(present) = ciff_presence {
+            return Ok(present);
+        }
+        let present = if head.starts_with(&[0xff, 0xd8]) {
+            crate::writers::exif_surgical::jpeg_has_ciff(reader.read(0, reader.size() as usize)?)?
+        } else {
+            false
+        };
+        ciff_presence = Some(present);
+        Ok(present)
+    };
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -583,7 +691,23 @@ fn plan_changes<'a>(
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for_with_reader(change.tag(), &baseline, reader) {
+        // A maker-note request in a request whose group deletion takes the
+        // maker note away is a no-op: ExifTool never creates a maker-note
+        // tag, and a tag or entry of a note that is gone is nothing to
+        // delete. 13.59: `-MakerNotes:All= -MakerNotes:FocusMode=` on
+        // t/images/Nikon.jpg, `-MakerNotes:All= -ExifIFD:MakerNoteCanon=`
+        // (either order) and `-MakerNotes:All= -MakerNotes:WhiteBalance#=1`
+        // on Canon.jpg each delete the note and nothing else. Where the
+        // deletion does not take effect (a raw type) the note is edited.
+        if makernote_request_gone(change, gone, path, &mut physical_ciff)? {
+            continue;
+        }
+        match resolve_write_key_in_request_with_reader(
+            change.tag(),
+            &baseline,
+            deletions.for_set_at(at),
+            reader,
+        ) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
@@ -593,6 +717,12 @@ fn plan_changes<'a>(
                 addressed,
                 at,
             }),
+            // A bare name whose deletion provably removes nothing is
+            // ExifTool's `unchanged`, whatever the resolver would refuse to
+            // write (`operations::bare_removal_is_no_op_with_reader`).
+            Err(ExifToolError::TagsNotWritten { .. })
+                if change.value().is_none()
+                    && bare_removal_is_no_op_with_reader(change.tag(), &baseline, reader) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
                 request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
             }
@@ -674,6 +804,68 @@ fn plan_changes<'a>(
         steps: steps.into_iter().map(|(_, step)| step).collect(),
         absent_deletions,
     })
+}
+
+/// Whether `change` names only the maker note, which the request's effective
+/// group deletions (`gone`) remove from the file at `baseline`: a tag of a
+/// maker-note group (`MakerNotes:FocusMode`, `Canon:WhiteBalance`), set or
+/// deleted, or the deletion of a maker-note entry (`ExifIFD:MakerNoteCanon`,
+/// `MakerNotes:MakerNoteCanon`). A JPEG's CIFF segment is a maker note too,
+/// which only `MakerNotes:All` removes: while one survives, nothing is gone.
+fn makernote_request_gone(
+    change: &TagChange,
+    gone: crate::writers::exif_surgical::RequestDeletions,
+    path: &Path,
+    physical_ciff: &mut impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    use crate::writers::generated_makernote_groups::MAKERNOTE_ROOTS;
+    if !gone.makernotes {
+        return Ok(false);
+    }
+    let Some((group, name)) = change.tag().split_once(':') else {
+        return Ok(false);
+    };
+    let name = name.strip_suffix('#').unwrap_or(name);
+    let entry = MAKERNOTE_ROOTS
+        .iter()
+        .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
+    let makernote_group = group.eq_ignore_ascii_case("MakerNotes")
+        || crate::writers::exif_surgical::is_makernote_group(group);
+    let named = if entry {
+        change.value().is_none()
+            && (makernote_group
+                || group.eq_ignore_ascii_case("ExifIFD")
+                || group.eq_ignore_ascii_case("EXIF"))
+    } else {
+        makernote_group
+    };
+    if !named {
+        return Ok(false);
+    }
+    // ExifIFD:All leaves a direct IFD0 note in the JPEG/TIFF carrier. A
+    // grouped setter can still reach it even if our reader decoded no row.
+    // Entry deletions explicitly naming ExifIFD remain gone.
+    if !entry
+        && gone.exif_ifd_only()
+        && crate::core::operations::conversion_makernote_census(path).surviving_exif_ifd_clear > 0
+    {
+        return Ok(false);
+    }
+    // A JPEG's CIFF segment survives every deletion but `MakerNotes:All`;
+    // only a request that can address it stays live beside it: `MakerNotes:`
+    // or a group of the CIFF root's closure (`Canon:FocalLength`), never an
+    // EXIF maker-note entry (13.59: `-EXIF:All= -ExifIFD:MakerNoteCanon=` on
+    // Canon.jpg carrying ExifTool.jpg's CIFF deletes the EXIF note).
+    let can_address_ciff = !entry
+        && (group.eq_ignore_ascii_case("MakerNotes")
+            || MAKERNOTE_ROOTS.iter().any(|root| {
+                root.entry == "CIFF"
+                    && root
+                        .closure
+                        .iter()
+                        .any(|reached| reached.eq_ignore_ascii_case(group))
+            }));
+    Ok(gone.ciff || !can_address_ciff || !physical_ciff()?)
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
@@ -1222,6 +1414,26 @@ mod tests {
         assert!(!same_bytes(&a, &write("c", &changed)).unwrap());
         assert!(!same_bytes(&a, &write("d", &big[..big.len() - 1])).unwrap());
         assert!(same_bytes(&write("e", b""), &write("f", b"")).unwrap());
+    }
+
+    /// A group deletion before a set counts only where it takes effect; one
+    /// after it cancels the set's copies in its groups either way (#960
+    /// review 4113017923; pinned 13.59 on t/images/Nikon.nef:
+    /// `-MakerNotes:All= -WhiteBalance#=1` writes `[Nikon]` too,
+    /// `-WhiteBalance#=1 -MakerNotes:All=` writes `[ExifIFD]` alone).
+    #[test]
+    fn group_deletions_follow_argument_order() {
+        let raw = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), false)]);
+        assert!(raw.for_set_at(0).makernotes);
+        assert!(!raw.for_set_at(2).makernotes);
+        let jpeg = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), true)]);
+        assert!(jpeg.for_set_at(0).makernotes && jpeg.for_set_at(2).makernotes);
+        assert!(jpeg.for_set_at(2).ciff);
+        let carrier = GroupDeletions(vec![(0, "IFD0:All".to_string(), false)]);
+        assert_eq!(
+            carrier.for_set_at(1),
+            crate::writers::exif_surgical::RequestDeletions::default()
+        );
     }
 
     #[test]

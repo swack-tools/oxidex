@@ -10,18 +10,21 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
+use crate::cli::write_transaction::{
+    WriteOutcome, partition_defined, prepare_write_file, write_plan_file,
+};
 use crate::core::MetadataMap;
 use crate::core::operations::read_metadata_report_with_detector_and_options;
 use crate::core::read_report::{ParseStatus, ReadReport};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -53,6 +56,18 @@ pub struct BatchStats {
     /// extension absent from ExifTool's own `%fileTypeLookup`-derived
     /// table), not merely omitted from a list someone forgot to extend.
     pub unidentified: usize,
+    /// Number of directories this run walked: one for each directory named
+    /// on the command line, plus (when `-r` is set) one more for every
+    /// subdirectory descended into -- exactly `$countDir` in ExifTool's
+    /// `ScanDir` (`exiftool:4421`, 13.59), which increments once per call
+    /// regardless of whether that directory held any files at all. A plain
+    /// file argument never contributes to this count. Printed first in the
+    /// summary, before every other line (`exiftool:2067`), whenever it is
+    /// non-zero -- including a `0 image files read` line for a directory
+    /// scan that matched nothing, which is ExifTool's own fallback
+    /// (`exiftool:2076`: `$countDir and not $totWr`) rather than the usual
+    /// `image files updated`/`read` count.
+    pub directories_scanned: usize,
 }
 
 impl BatchStats {
@@ -65,6 +80,7 @@ impl BatchStats {
             write_mode: false,
             errors: 0,
             unidentified: 0,
+            directories_scanned: 0,
         }
     }
 
@@ -78,6 +94,12 @@ impl BatchStats {
 
     /// Prints the statistics in ExifTool-compatible format
     pub fn print(&self) {
+        // `directories scanned` always leads the summary when this run
+        // walked at least one directory (`exiftool`:2067, 13.59), before the
+        // read/write counts below.
+        if self.directories_scanned > 0 {
+            println!("{:5} directories scanned", self.directories_scanned);
+        }
         // A write run prints what exiftool:2071-2074 (13.59) prints for one:
         // `updated` whenever a write was attempted (even `0`), `unchanged`
         // and `weren't updated due to errors` when non-zero, and no read
@@ -102,7 +124,10 @@ impl BatchStats {
         // ExifTool's summary is `printf("%5d image files read\n", ...)`
         // (`exiftool`:2071-2077, 13.59): the count is right-aligned in five
         // columns, so ten or more files print `   12 ...`, not `    12 ...`.
-        if self.files_read > 0 {
+        // A directory scan that matched no files still gets this line at
+        // `0` (`exiftool`:2076, `$countDir and not $totWr`) -- e.g. an empty
+        // directory, or one holding only unrecognized extensions.
+        if self.files_read > 0 || self.directories_scanned > 0 {
             println!("{:5} image files read", self.files_read);
         }
         if self.files_updated > 0 {
@@ -116,6 +141,25 @@ impl BatchStats {
                 "{:5} files skipped (extension not recognized)",
                 self.unidentified
             );
+        }
+    }
+
+    /// ExifTool sends read summaries for JSON/CSV to stderr, including a
+    /// single-file directory scan and a multi-file scan without directories.
+    /// Keep structured stdout reserved for the requested format.
+    pub fn print_structured_read_summary(&self) {
+        let total = self.files_read + self.errors;
+        if self.directories_scanned == 0 && total <= 1 {
+            return;
+        }
+        if self.directories_scanned > 0 {
+            eprintln!("{:5} directories scanned", self.directories_scanned);
+        }
+        if total > 1 || self.directories_scanned > 0 {
+            eprintln!("{:5} image files read", self.files_read);
+        }
+        if self.errors > 0 {
+            eprintln!("{:5} files could not be read", self.errors);
         }
     }
 }
@@ -175,7 +219,7 @@ pub fn batch_process_requests(
     }
 
     // Collect all files to process
-    let (files, unidentified) = collect_files(path, args.recursive)?;
+    let (files, unidentified, directories_scanned) = collect_files(path, args.recursive)?;
 
     if files.is_empty() {
         PathLine::new("Warning: No supported image files found in ")
@@ -183,6 +227,10 @@ pub fn batch_process_requests(
             .eprint();
         let mut stats = BatchStats::new();
         stats.unidentified = unidentified;
+        stats.directories_scanned = directories_scanned;
+        if modifications.is_empty() && (args.json || args.csv) {
+            print_structured_output_for_no_files(args)?;
+        }
         return Ok(stats);
     }
 
@@ -204,25 +252,57 @@ pub fn batch_process_requests(
         batch_read(files, args)?
     };
     stats.unidentified = unidentified;
+    stats.directories_scanned = directories_scanned;
     Ok(stats)
 }
 
-/// Expand directory arguments wherever they appear in an explicit input list.
-/// Plain files, including missing paths, stay in the list for per-file handling.
-/// The skipped-extension count is retained for the caller's batch summary.
-pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>, usize)> {
+/// Expands a command line that mixes explicit file arguments with directory
+/// arguments into one file list, the way ExifTool's `ProcessFiles` does
+/// (`exiftool`:4258-4260, 13.59): an explicit file is processed as given, with
+/// no extension filtering (matching `main.rs::handle_multi_file_processing`'s
+/// existing explicit-file semantics), while a directory argument is walked
+/// with [`collect_files`] and contributes to the `directories scanned` count.
+/// Input order of the top-level paths does not affect the resulting counts
+/// (each is independent), but the returned file list preserves it.
+///
+/// A path that does not exist is neither a directory nor rejected up front
+/// (PRRT_kwDOQNbr5M6mTOLD): it falls through to the plain-file branch below
+/// exactly as `Path::is_dir` already answers `false` for it, so it becomes
+/// one more entry [`batch_read`]/[`batch_write`] will fail on and count as a
+/// per-file error -- the same "ordinary multi-file processing" outcome a
+/// missing path among several plain files has always had. An early `Err`
+/// here would abort the whole command before any real directory in the mix
+/// was ever read, which pinned 13.59 does not do: `exiftool realdir
+/// missing.jpg` still reads `realdir` and reports the miss as one `files
+/// could not be read`.
+///
+/// # Returns
+///
+/// `(files, unidentified, directories_scanned)`, ready to feed to
+/// [`batch_read`]/[`batch_write`] and to attach to the resulting
+/// [`BatchStats`].
+pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>, usize, usize)> {
     let mut files = Vec::new();
-    let mut unidentified = 0;
+    let mut unidentified = 0usize;
+    let mut directories_scanned = 0usize;
+
     for path in paths {
         if path.is_dir() {
-            let (dir_files, dir_unidentified) = collect_files(path, recursive)?;
+            let (dir_files, dir_unidentified, dir_count) = collect_files(path, recursive)?;
             files.extend(dir_files);
             unidentified += dir_unidentified;
+            directories_scanned += dir_count;
         } else {
+            // Named explicitly on the command line: processed as given, not
+            // filtered by extension (see `handle_multi_file_processing`'s
+            // doc comment in `src/main.rs`) -- including one that turns out
+            // not to exist at all, left for the per-file read/write attempt
+            // to fail and count instead of aborting collection here.
             files.push(path.clone());
         }
     }
-    Ok((files, unidentified))
+
+    Ok((files, unidentified, directories_scanned))
 }
 
 /// Collects all identifiable files from the given path, and counts (without
@@ -235,14 +315,34 @@ pub fn collect_paths(paths: &[PathBuf], recursive: bool) -> Result<(Vec<PathBuf>
 ///
 /// # Returns
 ///
-/// `(files, unidentified)`: the files to attempt, and a count of files this
-/// walk declined to queue because [`is_supported_file`] could not recognize
-/// their extension. That count is never dropped -- see
-/// [`BatchStats::unidentified`] -- it travels back up through
-/// [`batch_process`] into the stats the caller prints.
-fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> {
+/// `(files, unidentified, directories_scanned)`: the files to attempt, a
+/// count of files this walk declined to queue because [`is_supported_file`]
+/// could not recognize their extension, and the number of directories this
+/// walk visited (see [`BatchStats::directories_scanned`]). `unidentified` is
+/// never dropped -- see [`BatchStats::unidentified`] -- it travels back up
+/// through [`batch_process`] into the stats the caller prints, and neither is
+/// `directories_scanned`.
+///
+/// A lone file argument scans zero directories. A directory argument that
+/// can be opened scans at least the directory itself -- even when it is
+/// empty or holds only unrecognized extensions -- exactly as ExifTool's
+/// `ScanDir` increments `$countDir` once per call that reaches the end of
+/// the function (`exiftool:4421`, 13.59), including an empty one. One that
+/// cannot be opened (permission denied, or a symlink to nowhere) scans zero
+/// directories instead, matching `ScanDir`'s own `opendir`-or-`Warn`-and-
+/// `return` guard (`exiftool:4340-4342`), which returns before that
+/// increment. Without `-r`, only the root is ever eligible: subdirectories
+/// are neither descended into nor counted (`exiftool:4358`, `next unless
+/// $recurse`). With `-r`, every subdirectory the walk opens adds one more,
+/// however deep and whether or not it is empty.
+fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, usize)> {
     let mut files = Vec::new();
     let mut unidentified = 0usize;
+    // Every directory this walk actually opens counts once -- see the loop
+    // below for what "actually opens" means and why a directory is never
+    // pre-counted just because `path.is_dir()`/`WalkDir` classified it as
+    // one.
+    let mut directories_scanned = 0usize;
 
     if path.is_file() {
         // Single file - check if supported
@@ -257,19 +357,66 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
     } else if path.is_dir() {
         // Directory - walk and collect files
         let walker = if recursive {
-            WalkDir::new(path)
-                .follow_links(false) // Avoid symlink loops
-                .into_iter()
+            // ExifTool's ScanDir follows nested directory symlinks by default
+            // (`IsDirectory`, exiftool:4356-4362). WalkDir detects ancestor
+            // cycles and returns an error for that entry, bounding the walk
+            // while still visiting distinct paths to the same directory.
+            WalkDir::new(path).follow_links(true)
         } else {
-            WalkDir::new(path)
-                .max_depth(1)
-                .follow_links(false)
-                .into_iter()
+            WalkDir::new(path).max_depth(1).follow_links(false)
         };
 
-        for entry in walker {
+        // `filter_entry` prunes a directory entry it rejects along with
+        // everything under it, before the walk ever descends into it -- see
+        // `keep_recursive_entry`'s doc comment for what it keeps and why.
+        //
+        // `.peekable()` lets a directory entry check the *next* item before
+        // deciding whether it counts: pinned 13.59's `ScanDir` only reaches
+        // `++$countDir` (`exiftool:4421`) after `opendir` succeeds
+        // (`exiftool:4340-4342`), and returns immediately -- printing
+        // `Error opening directory ...` and nothing else, no summary line at
+        // all if it was the only directory -- when it does not. `WalkDir`
+        // reports an unreadable directory the same way: the directory's own
+        // `Ok` entry (from a plain `lstat`, which does not require opening
+        // it) is followed immediately by an `Err` naming that exact path,
+        // with nothing else in between (depth-first: a just-pushed
+        // directory's own contents, even an open failure recorded for
+        // later, are always visited before any sibling). So a directory is
+        // counted only when the very next item is not that same-path `Err`;
+        // an empty-but-readable directory's next item is unrelated (a
+        // sibling, an ancestor's sibling, or the walk ending) and still
+        // counts. Both `keep_recursive_entry_tests` and the oracle-gated
+        // `directories_scanned_tests` pin this against a `chmod 000`
+        // directory -- oxidex used to print `1 directories scanned` /
+        // `0 image files read` for one, where pinned 13.59 prints neither.
+        let mut walker = walker
+            .into_iter()
+            .filter_entry(keep_recursive_entry)
+            .peekable();
+        while let Some(entry) = walker.next() {
             match entry {
                 Ok(entry) => {
+                    // Root links can still appear as symlink entries even
+                    // though `path.is_dir()` confirmed their directory target.
+                    let is_root_symlink = entry.depth() == 0 && entry.file_type().is_symlink();
+                    if entry.file_type().is_dir() || is_root_symlink {
+                        // Non-recursive: only the root (depth 0) is ever
+                        // "scanned" -- a `max_depth(1)` walk still yields a
+                        // child directory as an entry (so it can be
+                        // skipped, not read into), but pinned 13.59 never
+                        // counts it (`exiftool:4358`, `next unless
+                        // $recurse`). Recursive: every directory the walk
+                        // opens counts, root included.
+                        let in_scope = recursive || entry.depth() == 0;
+                        let open_failed = matches!(
+                            walker.peek(),
+                            Some(Err(e)) if e.path() == Some(entry.path())
+                        );
+                        if in_scope && !open_failed {
+                            directories_scanned += 1;
+                        }
+                        continue;
+                    }
                     if !entry.file_type().is_file() {
                         continue;
                     }
@@ -286,7 +433,250 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> 
         }
     }
 
-    Ok((files, unidentified))
+    Ok((files, unidentified, directories_scanned))
+}
+
+#[cfg(test)]
+mod collect_files_open_failure_tests {
+    use super::*;
+
+    /// A directory `collect_files` cannot open (permission denied) must not
+    /// be counted -- pinned 13.59's `ScanDir` returns before `++$countDir`
+    /// on an `opendir` failure (`exiftool:4340-4342, 4421`) and prints
+    /// `Error opening directory ...` with no `directories scanned` /
+    /// `image files read` summary at all. oxidex used to count it anyway
+    /// (`directories_scanned` pre-set to `1` before the walk ever tried to
+    /// open it), printing `1 directories scanned` / `0 image files read`
+    /// where pinned 13.59 prints neither line (both codex reviews on PR
+    /// #965's follow-up round, independently).
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_opened_is_not_counted() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root ignores directory permissions entirely, so the property this
+        // test checks would be unobservable -- confirm the lockout actually
+        // holds before asserting on it, matching this suite's existing
+        // root-detection pattern (`tests/library_write_codex_threads.rs`).
+        let locked_out = std::fs::read_dir(&locked).is_err();
+        if !locked_out {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping: this directory is readable despite 0o000 (running as root?)");
+            return;
+        }
+
+        for recursive in [false, true] {
+            let result = collect_files(&locked, recursive);
+            let (files, _unidentified, directories_scanned) = result.unwrap();
+            assert!(files.is_empty(), "recursive={recursive}");
+            assert_eq!(
+                directories_scanned, 0,
+                "an unopenable directory must not be counted (recursive={recursive})"
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The counterpart to the test above: a directory that opens
+    /// successfully but is simply empty must still be counted (pinned
+    /// 13.59's `ScanDir` increments `$countDir` unconditionally once
+    /// `opendir` succeeds, empty or not) -- this pins that the open-failure
+    /// carve-out above did not also swallow the ordinary, successful case.
+    #[test]
+    fn an_empty_but_openable_directory_is_still_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+
+        for recursive in [false, true] {
+            let (files, _unidentified, directories_scanned) =
+                collect_files(&empty, recursive).unwrap();
+            assert!(files.is_empty(), "recursive={recursive}");
+            assert_eq!(
+                directories_scanned, 1,
+                "an empty but openable directory must still be counted (recursive={recursive})"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod nested_symlink_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn follows_nested_links_and_repeats_distinct_paths() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("root");
+        let target = fixture.path().join("one");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("photo.jpg"), b"jpeg fixture").unwrap();
+        symlink("../one", root.join("linked-a")).unwrap();
+        symlink("../one", root.join("linked-b")).unwrap();
+        let (files, unidentified, dirs) = collect_files(&root, true).unwrap();
+        assert_eq!(dirs, 3);
+        assert_eq!(unidentified, 0);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p == &root.join("linked-a/photo.jpg")));
+        assert!(files.iter().any(|p| p == &root.join("linked-b/photo.jpg")));
+    }
+
+    #[test]
+    fn ancestor_cycle_is_bounded_and_hidden_link_is_pruned() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("photo.jpg"), b"jpeg fixture").unwrap();
+        symlink(".", root.join("again")).unwrap();
+        symlink(".", root.join(".hidden")).unwrap();
+        let (files, unidentified, dirs) = collect_files(&root, true).unwrap();
+        assert_eq!(dirs, 1);
+        assert_eq!(unidentified, 0);
+        assert_eq!(files, [root.join("photo.jpg")]);
+    }
+}
+
+/// Whether a recursive walk should keep (not prune) `entry`.
+///
+/// `WalkDir::filter_entry` prunes a directory entry it rejects along with
+/// everything under it, before the walk ever descends into it -- so a
+/// dot-prefixed subdirectory (PRRT_kwDOQNbr5M6mTOLF) is neither counted nor
+/// read from, matching ExifTool's own default `-r` (`exiftool:4358-4359`,
+/// `next if $file =~ /^\./ and $recurse == 1`): only `-r.` (`$recurse == 2`,
+/// which oxidex does not have a separate flag for) would include it. The
+/// root itself (depth 0) is exempt, so a hidden directory named explicitly
+/// on the command line is still scanned.
+///
+/// The check reads the name's raw bytes ([`os_bytes`]) rather than going
+/// through `to_str()`: a non-UTF-8 name such as `.private\xff` still starts
+/// with an ASCII `.` byte, but `to_str()` returns `None` for it, and
+/// `None.is_some_and(..)` is `false` -- which used to let a hidden directory
+/// with an invalid-UTF-8 name pass through unpruned (PRRT_kwDOQNbr5M6mTzLL).
+/// ExifTool's own check (`$file =~ /^\./`) is a byte-string match against
+/// whatever `readdir` returned, with no UTF-8 validity requirement, so this
+/// matches it for a name Perl's regex would also see as leading with `.`.
+fn keep_recursive_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() == 0
+        || !entry.file_type().is_dir()
+        || !os_bytes(entry.file_name()).starts_with(b".")
+}
+
+#[cfg(test)]
+mod keep_recursive_entry_tests {
+    use super::*;
+
+    /// Builds a real temp directory tree so a `WalkDir` traversal (which
+    /// needs actual filesystem entries) yields real `DirEntry` values --
+    /// exercising `keep_recursive_entry` exactly as `collect_files` calls
+    /// it, without depending on `collect_files`'s own file-collection logic.
+    fn dir_entries_at_depth_1(root: &Path) -> Vec<walkdir::DirEntry> {
+        WalkDir::new(root)
+            .follow_links(false)
+            .max_depth(1)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .collect()
+    }
+
+    #[test]
+    fn root_is_always_kept_even_when_its_own_name_starts_with_a_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden_root = dir.path().join(".hidden-root");
+        std::fs::create_dir(&hidden_root).unwrap();
+        let root_entry = WalkDir::new(&hidden_root)
+            .follow_links(false)
+            .max_depth(0)
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(root_entry.depth(), 0);
+        assert!(keep_recursive_entry(&root_entry));
+    }
+
+    #[test]
+    fn a_plain_ascii_dot_prefixed_subdirectory_is_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::create_dir(dir.path().join("visible")).unwrap();
+        let entries = dir_entries_at_depth_1(dir.path());
+        let hidden = entries
+            .iter()
+            .find(|e| e.file_name() == std::ffi::OsStr::new(".git"))
+            .unwrap();
+        let visible = entries
+            .iter()
+            .find(|e| e.file_name() == std::ffi::OsStr::new("visible"))
+            .unwrap();
+        assert!(!keep_recursive_entry(hidden), "`.git` must be pruned");
+        assert!(keep_recursive_entry(visible), "`visible` must be kept");
+    }
+
+    /// The regression this thread is about: on a filesystem that accepts
+    /// arbitrary bytes in a name (Unix), a hidden directory whose name is
+    /// not valid UTF-8 -- `.private\xff` -- must still be recognized as
+    /// hidden. Building the name from raw bytes and never decoding it to a
+    /// `str` is exactly the scenario `to_str()` handled wrong.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_hidden_subdirectory_is_pruned() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b".private\xff");
+        assert!(
+            name.to_str().is_none(),
+            "the name must actually be invalid UTF-8 for this test to mean anything"
+        );
+        let hidden = dir.path().join(name);
+        if std::fs::create_dir(&hidden).is_err() {
+            // Some filesystems (notably macOS's APFS/HFS+) refuse to create
+            // a directory entry with invalid UTF-8 bytes at all -- there is
+            // then nothing here for a real `WalkDir` traversal to yield, so
+            // this environment cannot exercise the regression and the test
+            // is skipped rather than failed. Linux (ext4, tmpfs, and CI's
+            // runners) accepts arbitrary bytes and does exercise it.
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        let entries = dir_entries_at_depth_1(dir.path());
+        let entry = entries
+            .iter()
+            .find(|e| e.file_name() == name)
+            .expect("the non-UTF-8 directory must still appear in the listing");
+        assert!(
+            !keep_recursive_entry(entry),
+            "a non-UTF-8 name starting with `.` must be pruned, not kept"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_hidden_non_utf8_subdirectory_is_kept() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"caf\xe9");
+        let visible = dir.path().join(name);
+        if std::fs::create_dir(&visible).is_err() {
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        let entries = dir_entries_at_depth_1(dir.path());
+        let entry = entries
+            .iter()
+            .find(|e| e.file_name() == name)
+            .expect("the non-UTF-8 directory must still appear in the listing");
+        assert!(
+            keep_recursive_entry(entry),
+            "a non-UTF-8 name not starting with `.` must still be kept"
+        );
+    }
 }
 
 /// Whether a file's extension is one that identification can recognize at
@@ -428,6 +818,7 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         write_mode: false,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
+        directories_scanned: 0,
     })
 }
 
@@ -486,10 +877,13 @@ pub fn batch_write(
     let updated_count = AtomicUsize::new(0);
     let unchanged_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
+    let warnings = Mutex::new(BTreeSet::<String>::new());
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
-        match apply_modifications(path, &modifications, args) {
+        let (result, file_warnings) = apply_modifications(path, &modifications, args);
+        warnings.lock().unwrap().extend(file_warnings);
+        match result {
             Ok(WriteOutcome::Updated) => {
                 updated_count.fetch_add(1, Ordering::Relaxed);
             }
@@ -509,6 +903,9 @@ pub fn batch_write(
     });
 
     progress.finish_and_clear();
+    for warning in warnings.into_inner().unwrap() {
+        eprintln!("Warning: {warning}");
+    }
 
     Ok(BatchStats {
         files_read: 0,
@@ -517,6 +914,7 @@ pub fn batch_write(
         write_mode: true,
         errors: error_count.load(Ordering::Relaxed),
         unidentified: 0,
+        directories_scanned: 0,
     })
 }
 
@@ -531,17 +929,28 @@ fn apply_modifications(
     path: &Path,
     modifications: &[(String, OsString)],
     args: &CliArgs,
-) -> std::result::Result<WriteOutcome, String> {
+) -> (std::result::Result<WriteOutcome, String>, Vec<String>) {
+    let (plan, warnings) = prepare_write_file(path, modifications, !args.exiftool_compat());
     // Every write target is checked as the single-file write checks it
     // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
     // over a file list does: a read-only file is refused, never replaced.
     // The atomic rename below would replace a 0444 file in a writable
     // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
     // `-Artist=x ro.jpg` refuses.
-    let target = fs::metadata(path)
-        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    let target = match fs::metadata(path) {
+        Ok(target) => target,
+        Err(e) => {
+            return (
+                Err(format!("Cannot access file '{}': {}", path.display(), e)),
+                warnings,
+            );
+        }
+    };
     if target.permissions().readonly() {
-        return Err(format!("File is read-only: {}", path.display()));
+        return (
+            Err(format!("File is read-only: {}", path.display())),
+            warnings,
+        );
     }
     // Preserve original file times if requested
     let original_metadata = args.preserve_file_times.then_some(target);
@@ -560,7 +969,10 @@ fn apply_modifications(
             .map_err(|e| e.to_string())
     };
 
-    let outcome = write_file(path, modifications, !args.exiftool_compat(), backup)?;
+    let outcome = match write_plan_file(path, &plan, backup) {
+        Ok(done) => done.outcome,
+        Err(error) => return (Err(error), warnings),
+    };
 
     // Restore file times if requested
     if outcome == WriteOutcome::Updated
@@ -574,7 +986,7 @@ fn apply_modifications(
         }
     }
 
-    Ok(outcome)
+    (Ok(outcome), warnings)
 }
 
 /// Creates a progress bar for batch processing.
@@ -609,6 +1021,16 @@ fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArg
         ResolvedFileOutput::Metadata(m) => m,
         ResolvedFileOutput::Lines(_) => MetadataMap::new(),
     }
+}
+
+/// Emit the normal CSV header or silent JSON for a read matching no files.
+/// The caller prints the summary once, after the batch result is known.
+/// Reuse the CSV formatter so its fixed columns cannot drift.
+pub fn print_structured_output_for_no_files(args: &CliArgs) -> Result<()> {
+    if args.csv {
+        output_csv_results(&[], args)?;
+    }
+    Ok(())
 }
 
 fn output_csv_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {

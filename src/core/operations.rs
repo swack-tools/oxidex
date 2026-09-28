@@ -39,6 +39,7 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
+use crate::writers::exif_surgical::RequestDeletions;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
@@ -1792,13 +1793,45 @@ pub(crate) fn resolve_write_key_for(
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request(path, tag_name, baseline, RequestDeletions::default())
+}
+
+/// [`resolve_write_key_for`] for one request of a transaction whose other
+/// requests delete what `deletions` says (planned `-MakerNotes:All=`,
+/// `-ExifIFD:All=` or `-EXIF:All=` deletions,
+/// `core::write_transaction::GroupDeletions::for_set_at`). Pinned 13.59
+/// then edits no deleted copy of a bare name: on t/images/Canon.jpg
+/// `-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` both leave `[ExifIFD] WhiteBalance` 1 and no maker
+/// note (which deletions count for which set is `for_set_at`'s: on a raw
+/// file only the second order leaves the note unedited).
+pub(crate) fn resolve_write_key_in_request(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+    deletions: RequestDeletions,
+) -> Result<(String, Result<()>)> {
     let reader = MMapReader::new(path)?;
-    resolve_write_key_for_with_reader(tag_name, baseline, &reader)
+    resolve_write_key_in_request_with_reader(tag_name, baseline, deletions, &reader)
 }
 
 pub(crate) fn resolve_write_key_for_with_reader(
     tag_name: &str,
     baseline: &MetadataMap,
+    reader: &MMapReader,
+) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request_with_reader(
+        tag_name,
+        baseline,
+        RequestDeletions::default(),
+        reader,
+    )
+}
+
+pub(crate) fn resolve_write_key_in_request_with_reader(
+    tag_name: &str,
+    baseline: &MetadataMap,
+    deletions: RequestDeletions,
     reader: &MMapReader,
 ) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
@@ -1814,6 +1847,12 @@ pub(crate) fn resolve_write_key_for_with_reader(
     // (`write_request::canonical_request_tag`): the hand-kept spellings below
     // are matched exactly, so `-exposuretime=1/30` missed `ExposureTime` and
     // was refused as a write ExifTool also applies elsewhere.
+    // A trailing `#` (ExifTool's "this value is raw") names the same tag:
+    // the CLI strips it before typing the value (`cli::write_transaction::
+    // apply_sets`), and a library or C ABI caller's typed value is raw
+    // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
+    let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
+    let ungrouped = !tag_name.contains(':');
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1863,6 +1902,12 @@ pub(crate) fn resolve_write_key_for_with_reader(
     } else {
         tag_name
     };
+    // Whether the file's EXIF carries a maker note, scanned only when a name
+    // with a maker-note candidate asks (`write_request::makernote_may_hold`).
+    let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
+        deletions,
+        ..file_makernote_census(reader, format, surgical)
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1871,13 +1916,19 @@ pub(crate) fn resolve_write_key_for_with_reader(
         // ExifTool's `PNG:Software`), and never half of a write ExifTool also
         // applies to another group (`XMP-tiff:Software`).
         if (!exif_ifd0_target && !surgical) || (png && png_prefers_text(tag_name)) {
-            return Err(resolve_write_key(tag_name, exif_ifd0_target, png, baseline)
-                .err()
-                .unwrap_or_else(|| {
-                    ExifToolError::tag_not_written(tag_name, "name its group explicitly")
-                }));
+            return Err(resolve_write_key(
+                tag_name,
+                exif_ifd0_target,
+                png,
+                baseline,
+                &makernote_block,
+            )
+            .err()
+            .unwrap_or_else(|| {
+                ExifToolError::tag_not_written(tag_name, "name its group explicitly")
+            }));
         }
-        ensure_not_also_updated(tag_name, canonical, baseline)?;
+        ensure_not_also_updated(tag_name, canonical, baseline, &makernote_block)?;
         canonical.to_string()
     } else if !tag_name.contains(':')
         && surgical
@@ -1893,8 +1944,20 @@ pub(crate) fn resolve_write_key_for_with_reader(
         // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
         resolved
     } else {
-        resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
+        resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
+    // An ungrouped EXIF write in a file with MIE is written into MIE's EXIF
+    // too (pinned 13.59), set or deletion alike; refused, never half-done.
+    // (A grouped `-IFD0:Artist=` there is the same in 13.59; oxidex's
+    // EXIF-only write of it predates this resolver and is left as it was.)
+    if ungrouped {
+        crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
+    }
+    crate::writers::write_request::ensure_makernote_entry_not_named(
+        tag_name,
+        &key,
+        &makernote_block,
+    )?;
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
@@ -1914,6 +1977,68 @@ pub(crate) fn resolve_write_key_for_with_reader(
         ensure_writer_addresses(tag_name, &key, format, surgical)
     };
     Ok((key, addressed))
+}
+
+/// The file's EXIF blocks and the ones carrying a maker note that may hold
+/// tags (`exif_surgical::makernote_census`): the JPEG's APP1 EXIF blocks, a
+/// PNG's `eXIf`, or a TIFF-structured file itself. Unprovable -- a file
+/// that cannot be read or split into blocks -- is
+/// [`MakerNoteCensus::UNKNOWN`](crate::writers::exif_surgical::MakerNoteCensus::UNKNOWN).
+fn file_makernote_census(
+    reader: &MMapReader,
+    format: FileFormat,
+    surgical: bool,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, MakerNoteCensus, jpeg_exif_payloads, makernote_census,
+    };
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let payloads = if surgical {
+        return makernote_census(
+            &[file_bytes],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        );
+    } else {
+        match format {
+            FileFormat::JPEG => jpeg_exif_payloads(file_bytes).ok(),
+            // `None` is a raw EXIF profile, not an empty set of eXIf
+            // chunks. The maker-note census cannot prove what it holds.
+            FileFormat::PNG => crate::writers::png_writer::png_exif_payloads(reader)
+                .ok()
+                .flatten(),
+            _ => return MakerNoteCensus::default(),
+        }
+    };
+    let Some(payloads) = payloads else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+    let mut census = makernote_census(&blocks, EXIF_BLOCK_MAGICS);
+    if matches!(format, FileFormat::JPEG) {
+        census.ciff = match crate::writers::exif_surgical::jpeg_has_ciff(file_bytes) {
+            Ok(present) => present,
+            Err(_) => return MakerNoteCensus::UNKNOWN,
+        };
+    }
+    census
+}
+
+/// Physical census for the CLI's file-phase candidate conversion proof. A
+/// failed read is unknown, never evidence that a maker-note candidate is
+/// absent. This uses the same scanner as bare write resolution.
+pub(crate) fn conversion_makernote_census(
+    path: &Path,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::MakerNoteCensus;
+    let Ok(reader) = MMapReader::new(path) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let Ok(format) = detect_format(&reader) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    file_makernote_census(&reader, format, is_surgical_tiff_target(format, &reader))
 }
 
 /// Whether deleting `key` from the file at `path` changes nothing: the map
@@ -1952,6 +2077,28 @@ pub(crate) fn removal_is_no_op_with_reader(
     }
     let removed = [key.to_string()];
     let format = detect_format(reader)?;
+    // A maker-note tag is never judged absent from the map alone: the
+    // reader does not surface every row ExifTool reads (pinned 13.59 deletes
+    // `[Nikon] WhiteBalance` from t/images/Nikon.jpg on
+    // `-MakerNotes:WhiteBalance=`, a row oxidex's reader lacks), so a
+    // deletion the file's maker note may name is not a no-op
+    // (`write_request::makernote_may_hold`) -- and the writer, which cannot
+    // edit a maker note, refuses it. The maker-note blob's own names
+    // (`MakerNotes:MakerNoteCanon`) keep the block scan below.
+    if group == "MakerNotes" {
+        let name = key.split_once(':').map_or(key, |(_, name)| name);
+        let name = name.strip_suffix('#').unwrap_or(name);
+        let surgical = is_surgical_tiff_target(format, reader);
+        if !name.eq_ignore_ascii_case("all")
+            && !name.starts_with("MakerNote")
+            && crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
+                file_makernote_census(reader, format, surgical)
+            })
+            .is_some()
+        {
+            return Ok(false);
+        }
+    }
     let file_bytes = reader.read(0, reader.size() as usize)?;
     // A PNG with a bad chunk CRC is refused before any no-op decision, as the
     // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned
@@ -2024,6 +2171,21 @@ pub(crate) fn removal_is_no_op_with_reader(
 pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     let metadata = read_metadata(path)?;
     resolve_write_address(path, tag_name, &metadata)
+}
+
+/// [`resolve_write_tag`] for one set of a request whose other requests
+/// delete what `deletions` says (`core::write_transaction::GroupDeletions::
+/// for_set_at`), against the file's `metadata` (read once for the whole
+/// request): the address the transaction writes it at.
+pub(crate) fn resolve_write_tag_in_request(
+    path: &Path,
+    tag_name: &str,
+    metadata: &MetadataMap,
+    deletions: RequestDeletions,
+) -> Result<String> {
+    let (key, addressed) = resolve_write_key_in_request(path, tag_name, metadata, deletions)?;
+    addressed?;
+    Ok(key)
 }
 
 /// Whether `tag_name` names an EXIF-family group in a PDF: ExifTool keeps no
@@ -2119,6 +2281,79 @@ pub(crate) fn plan_group_deletion_with_reader(
              cannot prove it holds no {group} tags; delete the tags by name"
         ),
     ))
+}
+
+/// Whether deleting the bare (ungrouped) `name` from the file at `path`,
+/// read into `metadata`, changes nothing: every group pinned 13.59 would
+/// delete it from is one whose absence is provable
+/// ([`candidates_are_provable`](crate::writers::write_request::candidates_are_provable)),
+/// the map holds no row of that name, no maker note may hold it
+/// (`write_request::makernote_may_hold`), and no entry of any EXIF block
+/// is named by it ([`removal_is_no_op_with_reader`] on `EXIF:<name>`, which scans every
+/// block). 13.59 on t/images/Nikon.jpg with Canon.jpg's EXIF APP1 added:
+/// `-CalibrationIlluminant1=` and `-Artist=` are `1 image files
+/// unchanged`, which the several-EXIF-blocks refusal used to refuse.
+pub(crate) fn bare_removal_is_no_op_with_reader(
+    name: &str,
+    metadata: &MetadataMap,
+    reader: &MMapReader,
+) -> bool {
+    let name = name.strip_suffix('#').unwrap_or(name);
+    if name.contains(':') || !crate::writers::write_request::candidates_are_provable(name, metadata)
+    {
+        return false;
+    }
+    let named = |key: &str| {
+        key.rsplit_once(':')
+            .map_or(key, |(_, row)| row)
+            .eq_ignore_ascii_case(name)
+    };
+    if metadata.keys().any(|key| named(key)) {
+        return false;
+    }
+    let Ok(format) = detect_format(reader) else {
+        return false;
+    };
+    let surgical = is_surgical_tiff_target(format, reader);
+    if crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
+        file_makernote_census(reader, format, surgical)
+    })
+    .is_some()
+    {
+        return false;
+    }
+    removal_is_no_op_with_reader(&format!("EXIF:{name}"), metadata, reader).unwrap_or(false)
+}
+
+/// Whether the group-wide removal `key` that [`plan_group_deletion_with_reader`] planned
+/// for the file at `path` really removes its group when written, as the
+/// format's writer resolves it -- for judging what a request's other
+/// requests may still find there (`core::write_transaction::
+/// GroupDeletions`). A TIFF-structured file's removals go through
+/// [`resolve_tiff_group_removals`](crate::writers::exif_surgical::resolve_tiff_group_removals),
+/// which drops `IFD0:All` on every TIFF and the ExifIFD/MakerNotes
+/// removals on a raw type (pinned 13.59: "Can't delete ... from NEF", file
+/// unchanged) and refuses the rest: none of those leaves the maker note
+/// gone. `-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef: 13.59
+/// writes `[ExifIFD]` and `[Nikon] WhiteBalance` 1. Unprovable (the file
+/// cannot be read) is `false`: nothing is taken as deleted.
+pub(crate) fn group_removal_takes_effect_with_reader(
+    key: &str,
+    baseline: &MetadataMap,
+    reader: &MMapReader,
+) -> bool {
+    let Ok(format) = detect_format(reader) else {
+        return false;
+    };
+    if !is_surgical_tiff_target(format, reader) {
+        return true;
+    }
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return false;
+    };
+    let removed = [key.to_string()];
+    crate::writers::exif_surgical::resolve_tiff_group_removals(file_bytes, baseline, &removed)
+        .is_ok_and(|kept| kept.iter().any(|kept| kept == key))
 }
 
 /// Whether the reader's map proves the file holds nothing in `group`.
@@ -2577,74 +2812,16 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // `t/images/ExifTool.jpg` requires (`-Make` resolves to CIFF's `Canon`,
     // not `IFD0`'s `FUJIFILM`). See `jpeg::ciff_app0` for the citation.
     crate::parsers::jpeg::ciff_app0::process_ciff_app0_segments(&segments, &mut metadata);
-    process_xmp_segments(&segments, &mut metadata, diagnostics);
-
-    // AFCP and FotoStation write their records after the JPEG's EOI, so they
-    // need the whole file rather than the parsed segment list. Both can carry
-    // an IPTC block, and ExifTool ranks the three possible sources like this:
-    //
-    // * `IPTC::ProcessIPTC` (IPTC.pm:1064-1102) checks each IPTC directory's
-    //   metadata path against `%isStandardIPTC` (IPTC.pm:38-54). Only
-    //   `JPEG-APP13-Photoshop-IPTC` is standard in a JPEG; a trailer's path is
-    //   not, so ExifTool sets `LOW_PRIORITY_DIR{IPTC}` for it and files it
-    //   under a numbered family-1 group (`IPTC2`, `IPTC3`, ...).
-    // * `FoundTag` (ExifTool.pm:9535-9543) turns that into priority 0 and
-    //   keeps the existing value unless `$priority >= $oldPriority`, so a
-    //   trailer never displaces the APP13 value -- it is only reachable with
-    //   `exiftool -a`.
-    // * Between two low-priority directories the *first* one processed wins:
-    //   FoundTag promotes an existing 0-priority tag to 1 before comparing
-    //   ("promote existing 0-priority tag so it takes precedence over a new
-    //   0-tag", ExifTool.pm:9518-9527). `ProcessTrailers` works inwards from
-    //   the end of the file, so the outermost trailer is the one processed
-    //   first. In `combined-samples/ExifTool.jpg` that is FotoStation, with
-    //   AFCP innermost.
-    //
-    // Inserting into a map keeps the *last* write, so the order below is the
-    // reverse of ExifTool's processing order: innermost trailer, outermost
-    // trailer, then the standard APP13 resource.
-    //
-    // The numbered family-1 groups follow ExifTool's processing order
-    // instead: every trailer IPTC directory is non-standard, so each takes
-    // the next of `IPTC2`, `IPTC3`, ... (see `NonStandardIptcGroups`), handed
-    // out outermost trailer first. A second APP13 IPTC resource would itself
-    // be non-standard and take `IPTC2` ahead of them; this reader merges all
-    // APP13 IPTC under the one standard group, so for such a file the
-    // trailers keep the unnumbered legacy group rather than a number that
-    // would be off by the directories it cannot see.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
-        // An IFD0 IPTC-NAA block is non-standard too and would be numbered
-        // before the trailers; keep the trailers unnumbered rather than
-        // assign them the number that belongs to it.
-        let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(&segments) <= 1
-            && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(&segments, reader)
-        {
-            iptc_parser::NonStandardIptcGroups::first()
-        } else {
-            iptc_parser::NonStandardIptcGroups::unnumbered()
-        };
-        let (afcp_trailer, fotostation_trailer);
-        if fotostation::fotostation_trailer_position(file) > afcp::afcp_trailer_position(file) {
-            fotostation_trailer =
-                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
-            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
-        } else {
-            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
-            fotostation_trailer =
-                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
-        }
-        metadata.merge_winners_keeping_group1(&afcp_trailer);
-        metadata.merge_winners_keeping_group1(&fotostation_trailer);
-    }
-
-    process_iptc_segments(&segments, &mut metadata, diagnostics);
-    process_photoshop_segments(&segments, &mut metadata, diagnostics);
+    // ExifTool reads the segments in file order (ProcessJPEG), and an XMP and
+    // an IPTC copy of one tag tie on priority, so the later segment's copy
+    // takes the bare name (ExifTool.pm:9564). XMP usually precedes APP13, but
+    // not always: `t/images/MWG.jpg` writes APP13 first, and its bare
+    // `-City` is XMP-photoshop's `RIGHT-XMP-City`. A file can also carry a
+    // standard XMP packet on EACH side of the IPTC-bearing APP13, so this
+    // walks every step in real file order rather than positioning one XMP
+    // batch by its first packet.
+    process_xmp_and_iptc_in_file_order(&segments, &mut metadata, diagnostics);
     process_uniform_resource_name_segments(&segments, &mut metadata);
-    process_icc_segments(&segments, &mut metadata);
-    process_mpf_segments(&segments, &mut metadata);
-    // APP2/APP4 FPXR: FlashPix streams split across application segments.
-    crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
     // SPIFF (APP8) runs before SOF: in a real JPEG byte stream every APPn
     // marker precedes the SOF marker, so ExifTool's own file-order-driven
     // FoundTag arbitration always records SPIFF's ImageWidth/ImageHeight
@@ -2659,53 +2836,20 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // (`Composite:ImageSize` "3000x4500"/"13.5" MP where the pinned oracle
     // reports "8x8"/"6.4e-05" MP), caught only once Step 22 replaced the
     // old hard-coded group-rank table with real priority+order arbitration.
+    // SPIFF (APP8) is, by its specification, the first segment of a file
+    // that has one, so ExifTool finds it before an APP2 ICC profile: both
+    // report `ProfileID`, and `t/images/ExifTool.jpg`'s bare `-ProfileID` is
+    // the ICC header's `0`, found later (ExifTool.pm:9564).
     process_spiff_segments(&segments, &mut metadata);
+    process_icc_segments(&segments, &mut metadata);
+    process_mpf_segments(&segments, &mut metadata);
+    // APP2/APP4 FPXR: FlashPix streams split across application segments.
+    crate::parsers::jpeg::flashpix::process_fpxr_segments(&segments, &mut metadata);
     process_sof_segments_with_options(&segments, &mut metadata, options);
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments_with_options(&segments, &mut metadata, options);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
     process_media_jukebox_segments(&segments, &mut metadata);
-
-    // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
-    // than the parsed segment list, which stops at the EOI marker. It carries
-    // no IPTC, so unlike the AFCP and FotoStation trailers read further up it
-    // does not have to run before `process_iptc_segments`.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Photo Mechanic's trailer is format-agnostic (ExifTool reads it from
-    // ProcessTrailers, not a JPEG-specific proc), so like Canon VRD it needs
-    // the whole file rather than the parsed segment list. It carries no
-    // IPTC either, so it runs here rather than before `process_iptc_segments`.
-    if let Ok(file) = reader.read(0, reader.size() as usize) {
-        for (key, value) in
-            crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
-        {
-            metadata.insert(key.clone(), value.clone());
-        }
-        for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-        // ProcessJPEG identifies and walks trailers only once it reaches SOS
-        // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
-        // before SOS, a format error) has none read. TrailerStart, which
-        // ProcessVivo scans from, is the byte after the EOI that the walk
-        // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
-        if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
-            let trailer_start = usize::try_from(sos.offset)
-                .ok()
-                .and_then(|offset| offset.checked_add(2))
-                .and_then(|after_marker| {
-                    crate::parsers::vivo::jpeg_trailer_start(file, after_marker)
-                });
-            metadata.merge_winners_keeping_group1(
-                &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
-            );
-        }
-    }
 
     // Process HDR and manufacturer-specific APP segments
     process_app3_segments(&segments, &mut metadata);
@@ -2740,11 +2884,392 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_app14_segments(&segments, &mut metadata);
     process_app15_segments(&segments, &mut metadata);
 
+    // Trailers last: ProcessJPEG reaches them only after the whole marker
+    // walk (ExifTool.pm:7627-7634).
+    process_jpeg_trailers(reader, &segments, &mut metadata);
+
     // Normalize tag families to match ExifTool conventions (ExifIFD: -> EXIF:)
     use crate::core::tag_normalization::normalize_metadata_map;
     let normalized = normalize_metadata_map(&metadata);
 
     Ok(normalized)
+}
+
+/// Runs XMP and IPTC/Photoshop processing in the segments' real file order.
+///
+/// ExifTool reads a JPEG's segments in file order (`ProcessJPEG`), and a tag
+/// two formats both carry ties on priority, so the LATER segment's copy
+/// takes the bare name (`ExifTool.pm:9564`). `process_xmp_segments` extracts
+/// every standard XMP packet handed to it in one pass (plus any Extended XMP
+/// chunks anywhere in the list), so a single call cannot represent "XMP-A,
+/// then IPTC, then XMP-B": positioning the whole XMP batch by its first
+/// packet's offset lets an earlier XMP packet's presence stand in for a
+/// later one's real position. `t/images/MWG.jpg` needs only the two-way
+/// split (APP13 first, its bare `-City` is XMP-photoshop's); a file with a
+/// standard XMP packet on EACH side of the IPTC-bearing APP13 needs each
+/// packet to be its own step.
+///
+/// Each standard XMP APP1 segment gets its own step, including its history.
+/// Extended XMP is assembled and emitted once after the standard packets.
+/// IPTC/Photoshop stays a single step -- multiple non-standard IPTC
+/// directories are already ExifTool's own edge case, not this fix's concern
+/// -- positioned at the first IPTC-bearing APP13's offset
+/// (`app13_segment_carries_iptc_resource`; an APP13 with the Photoshop
+/// signature but no IPTC (0x0404) resource inside contributes nothing to
+/// `process_iptc_segments`'s output, so its position cannot stand in for
+/// "where IPTC is found") or first, when no IPTC-bearing APP13 exists --
+/// matching the previous always-run-once behavior for a file with a
+/// non-IPTC Photoshop APP13 only.
+fn process_xmp_and_iptc_in_file_order(
+    segments: &[crate::parsers::jpeg::segment_parser::Segment],
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
+    use crate::parsers::jpeg::iptc_parser::app13_segment_carries_iptc_resource;
+    use crate::parsers::jpeg::xmp_parser::{is_extended_xmp_segment, is_xmp_segment};
+
+    enum Step {
+        Xmp(usize),
+        IptcPhotoshop,
+    }
+
+    let iptc_offset = segments
+        .iter()
+        .find(|segment| app13_segment_carries_iptc_resource(segment))
+        .map(|segment| segment.offset)
+        .unwrap_or(0);
+
+    let mut steps: Vec<(u64, Step)> = segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| is_xmp_segment(segment))
+        .map(|(index, segment)| (segment.offset, Step::Xmp(index)))
+        .collect();
+    steps.push((iptc_offset, Step::IptcPhotoshop));
+    steps.sort_by_key(|(offset, _)| *offset);
+
+    for (_, step) in steps {
+        match step {
+            Step::Xmp(index) => {
+                process_xmp_segments(
+                    std::slice::from_ref(&segments[index]),
+                    metadata,
+                    diagnostics,
+                );
+            }
+            Step::IptcPhotoshop => {
+                process_iptc_segments(segments, metadata, diagnostics);
+                process_photoshop_segments(segments, metadata, diagnostics);
+            }
+        }
+    }
+    // ProcessJPEG defers Extended XMP until SOS (ExifTool.pm:7580-7630).
+    // One assembled packet is one occurrence source, regardless of how many
+    // standard packets precede it. The extension reader retains its existing
+    // eligibility rules; only its emission position and multiplicity change.
+    let extended: Vec<_> = segments
+        .iter()
+        .filter(|s| is_extended_xmp_segment(s))
+        .cloned()
+        .collect();
+    process_xmp_segments(&extended, metadata, diagnostics);
+}
+
+#[cfg(test)]
+mod process_xmp_and_iptc_in_file_order_tests {
+    use super::process_xmp_and_iptc_in_file_order;
+    use crate::cli::tag_resolution::{arbitrate_keyed, matching_keyed_occurrences};
+    use crate::core::MetadataMap;
+    use crate::core::read_report::DiagnosticSink;
+    use crate::parsers::jpeg::segment_parser::Segment;
+
+    const APP13_MARKER: u16 = 0xFFED;
+    const APP1_MARKER: u16 = 0xFFE1;
+
+    fn resource(id: u16, data: &[u8]) -> Vec<u8> {
+        let mut out = b"8BIM".to_vec();
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&[0, 0]); // empty name, padded
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn iptc_app13(city: &str) -> Vec<u8> {
+        let mut iim = vec![0x1c, 2, 90]; // tag marker, Application record, City dataset
+        iim.extend_from_slice(&(city.len() as u16).to_be_bytes());
+        iim.extend_from_slice(city.as_bytes());
+        let mut out = b"Photoshop 3.0\0".to_vec();
+        out.extend(resource(0x0404, &iim));
+        out
+    }
+
+    fn xmp_city(city: &str) -> Vec<u8> {
+        let mut out = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        out.extend_from_slice(
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"><photoshop:City>{city}</photoshop:City></rdf:Description></rdf:RDF>"#
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    /// The bare `-City` winner `process_xmp_and_iptc_in_file_order` leaves
+    /// behind: whichever occurrence [`arbitrate_keyed`] (the same
+    /// arbitration `resolve_requested_tags` uses for a bare CLI request)
+    /// picks among every occurrence named `City`.
+    fn bare_city(metadata: &MetadataMap) -> Option<String> {
+        arbitrate_keyed(matching_keyed_occurrences(metadata, "City"))
+            .and_then(|(_, occurrence)| occurrence.raw.as_string())
+            .map(str::to_string)
+    }
+
+    /// Codex thread 4114690049: a standard XMP packet on EACH side of the
+    /// IPTC-bearing APP13 (XMP-A, then IPTC `City`, then XMP-B `City`) must
+    /// let XMP-B -- found last in real file order -- win the bare name, not
+    /// IPTC. Before this fix, the whole XMP batch (both packets read
+    /// together) was positioned by XMP-A's earlier offset, so it was
+    /// recorded entirely before IPTC and IPTC won instead. Verified against
+    /// the pinned 13.59 oracle on an equivalent crafted JPEG in
+    /// `tests/bare_name_priority.rs`.
+    #[test]
+    fn xmp_packets_on_both_sides_of_iptc_let_the_later_one_win() {
+        let xmp_a = xmp_city("XMP-A-City");
+        let iptc = iptc_app13("IPTC-City");
+        let xmp_b = xmp_city("XMP-B-City");
+
+        let segments = [
+            Segment::new(APP1_MARKER, 100, &xmp_a),
+            Segment::new(APP13_MARKER, 200, &iptc),
+            Segment::new(APP1_MARKER, 300, &xmp_b),
+        ];
+
+        let mut metadata = MetadataMap::new();
+        let mut diagnostics = DiagnosticSink::new();
+        process_xmp_and_iptc_in_file_order(&segments, &mut metadata, &mut diagnostics);
+
+        let winner = bare_city(&metadata).expect("a City winner");
+        assert!(
+            winner.contains("XMP-B-City"),
+            "XMP-B is found last and must win the bare name; got {winner}"
+        );
+    }
+
+    /// Both standard XMP packets precede the final IPTC copy.
+    #[test]
+    fn iptc_after_both_xmp_packets_wins() {
+        let xmp_first = xmp_city("XMP-First-City");
+        let iptc = iptc_app13("IPTC-City");
+        let xmp_last = xmp_city("XMP-Last-City");
+
+        let segments = [
+            Segment::new(APP1_MARKER, 100, &xmp_first),
+            Segment::new(APP1_MARKER, 200, &xmp_last),
+            Segment::new(APP13_MARKER, 300, &iptc),
+        ];
+
+        let mut metadata = MetadataMap::new();
+        let mut diagnostics = DiagnosticSink::new();
+        process_xmp_and_iptc_in_file_order(&segments, &mut metadata, &mut diagnostics);
+
+        let winner = bare_city(&metadata).expect("a City winner");
+        assert!(winner.contains("IPTC-City"), "got {winner}");
+    }
+
+    /// `t/images/MWG.jpg`'s own shape still works: IPTC before a single XMP
+    /// packet lets XMP win (the ordinary two-way case this replaced).
+    #[test]
+    fn iptc_before_a_single_xmp_packet_lets_xmp_win() {
+        let iptc = iptc_app13("IPTC-City");
+        let xmp = xmp_city("XMP-City");
+
+        let segments = [
+            Segment::new(APP13_MARKER, 100, &iptc),
+            Segment::new(APP1_MARKER, 200, &xmp),
+        ];
+
+        let mut metadata = MetadataMap::new();
+        let mut diagnostics = DiagnosticSink::new();
+        process_xmp_and_iptc_in_file_order(&segments, &mut metadata, &mut diagnostics);
+
+        let winner = bare_city(&metadata).expect("a City winner");
+        assert!(winner.contains("XMP-City"), "got {winner}");
+    }
+
+    /// Codex #4113270297-adjacent finding on this PR: an APP13 with the
+    /// Photoshop signature but no IPTC (0x0404) resource inside -- an IRB of
+    /// a thumbnail only -- must not stand in for "where IPTC is found".
+    /// An empty Photoshop APP13 first, XMP second, and the real
+    /// IPTC-bearing APP13 last must still let IPTC (found last) win.
+    #[test]
+    fn empty_photoshop_app13_does_not_anchor_the_iptc_step() {
+        let mut empty_app13 = b"Photoshop 3.0\0".to_vec();
+        empty_app13.extend(resource(0x040c, b"thumb"));
+        let xmp = xmp_city("XMP-City");
+        let iptc = iptc_app13("IPTC-City");
+
+        let segments = [
+            Segment::new(APP13_MARKER, 100, &empty_app13),
+            Segment::new(APP1_MARKER, 200, &xmp),
+            Segment::new(APP13_MARKER, 300, &iptc),
+        ];
+
+        let mut metadata = MetadataMap::new();
+        let mut diagnostics = DiagnosticSink::new();
+        process_xmp_and_iptc_in_file_order(&segments, &mut metadata, &mut diagnostics);
+
+        let winner = bare_city(&metadata).expect("a City winner");
+        assert!(
+            winner.contains("IPTC-City"),
+            "the real IPTC-bearing APP13 comes after XMP, so IPTC must win; got {winner}"
+        );
+    }
+}
+
+/// One JPEG trailer [`process_jpeg_trailers`] reads by position.
+#[derive(Clone, Copy)]
+enum JpegTrailer {
+    Afcp,
+    FotoStation,
+    CanonVrd,
+    PhotoMechanic,
+    Mie,
+}
+
+/// The trailers after a JPEG's EOI, in the order `ProcessTrailers`
+/// (ExifTool.pm:7019-7182) processes them: inwards from the end of the file,
+/// the outermost first. FoundTag gives an equal-priority tie to the tag found
+/// later (ExifTool.pm:9564), so the order decides bare names the trailers
+/// share: `t/images/ExifTool.jpg` has, from the end inwards, Vivo, Samsung,
+/// MIE, PhotoMechanic, CanonVRD, two FotoStation records and AFCP, and its
+/// bare `-CropLeft` is FotoStation's `24.557%`, `-Copyright` MIE's.
+///
+/// The Samsung/Vivo chain comes first: `parse_trailer_chain` stops at every
+/// trailer it cannot size, so whatever it reaches lies outside the others
+/// read here save MIE and PhotoMechanic, whose names it never shares.
+fn process_jpeg_trailers(
+    reader: &dyn FileReader,
+    segments: &[crate::parsers::jpeg::segment_parser::Segment],
+    metadata: &mut MetadataMap,
+) {
+    use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
+    let Ok(file) = reader.read(0, reader.size() as usize) else {
+        return;
+    };
+
+    // ProcessJPEG identifies and walks trailers only once it reaches SOS
+    // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
+    // before SOS, a format error) has none read. TrailerStart, which
+    // ProcessVivo scans from, is the byte after the EOI that the walk
+    // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
+    if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
+        let trailer_start = usize::try_from(sos.offset)
+            .ok()
+            .and_then(|offset| offset.checked_add(2))
+            .and_then(|after_marker| crate::parsers::vivo::jpeg_trailer_start(file, after_marker));
+        metadata.merge_winners_keeping_group1(
+            &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
+        );
+    }
+
+    let mut trailers: Vec<(usize, JpegTrailer)> = [
+        (afcp::afcp_trailer_position(file), JpegTrailer::Afcp),
+        (
+            fotostation::fotostation_trailer_position(file),
+            JpegTrailer::FotoStation,
+        ),
+        (
+            crate::parsers::canon_vrd::canon_vrd_trailer_position(file),
+            JpegTrailer::CanonVrd,
+        ),
+        (
+            crate::parsers::photo_mechanic::photo_mechanic_trailer_position(file),
+            JpegTrailer::PhotoMechanic,
+        ),
+        (
+            crate::parsers::mie::mie_trailer_position(file),
+            JpegTrailer::Mie,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(position, trailer)| position.map(|position| (position, trailer)))
+    .collect();
+    trailers.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // The numbered family-1 IPTC groups follow the same processing order:
+    // every trailer IPTC directory is non-standard, so each takes the next
+    // of `IPTC2`, `IPTC3`, ... (see `NonStandardIptcGroups`), handed out
+    // outermost trailer first. A second APP13 IPTC resource would itself be
+    // non-standard and take `IPTC2` ahead of them; this reader merges all
+    // APP13 IPTC under the one standard group, so for such a file the
+    // trailers keep the unnumbered legacy group rather than a number that
+    // would be off by the directories it cannot see. An IFD0 IPTC-NAA block
+    // is non-standard too and would be numbered before the trailers.
+    let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(segments) <= 1
+        && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(segments, reader)
+    {
+        iptc_parser::NonStandardIptcGroups::first()
+    } else {
+        iptc_parser::NonStandardIptcGroups::unnumbered()
+    };
+    for (_, trailer) in trailers {
+        match trailer {
+            JpegTrailer::Afcp => merge_trailer_winners(
+                metadata,
+                &afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups),
+            ),
+            JpegTrailer::FotoStation => merge_trailer_winners(
+                metadata,
+                &fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups),
+            ),
+            JpegTrailer::CanonVrd => {
+                for (key, value) in crate::parsers::canon_vrd::parse_canon_vrd_trailer(file).iter()
+                {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            JpegTrailer::PhotoMechanic => {
+                for (key, value) in
+                    crate::parsers::photo_mechanic::parse_photo_mechanic_trailer(file).iter()
+                {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            JpegTrailer::Mie => {
+                for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Copies an AFCP or FotoStation trailer's winners into `metadata`, each
+/// IPTC row at priority 0: `IPTC::ProcessIPTC` checks the directory's path
+/// against `%isStandardIPTC` (IPTC.pm:38-54, 1064-1102), and a trailer's is
+/// never standard, so it sets `LOW_PRIORITY_DIR{IPTC}` and `FoundTag`
+/// records every such tag at priority 0 (ExifTool.pm:9557-9560). A trailer's
+/// IPTC copy therefore never displaces a tag found before it -- the APP13
+/// IPTC or an XMP copy -- and is reachable only with `-a`.
+fn merge_trailer_winners(metadata: &mut MetadataMap, source: &MetadataMap) {
+    for (key, occurrence) in source.winner_occurrences() {
+        let priority = if key.starts_with("IPTC:") {
+            0
+        } else {
+            occurrence.priority
+        };
+        metadata.insert_copied_occurrence(
+            key.clone(),
+            occurrence,
+            priority,
+            &occurrence.group1,
+            occurrence.instance,
+        );
+    }
 }
 
 // ============================================================================

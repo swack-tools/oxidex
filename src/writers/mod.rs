@@ -44,6 +44,7 @@ pub mod pdf_writer;
 pub mod png_writer;
 pub(crate) mod rw2_ifd0;
 // Source-selected final scalar stage remains internal until file parity is proved.
+pub(crate) mod generated_makernote_groups;
 pub(crate) mod generated_tag_exists;
 // Where pinned ExifTool's `-TagsFromFile` writes each copied name (SetNewValue
 // captured per name), and which of those a destination realises.

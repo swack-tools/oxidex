@@ -123,6 +123,7 @@ STATIC_ARTIFACTS = (
     Artifact("value-ledger", 1, "codegen", "tools/exiftool-tables/value_conv_ledger.json"),
     Artifact("conv-exif-main", 1, "conv_codegen", "src/exiftool_tables/conv/exif_main.rs"),
     Artifact("conv-exif-main-ledger", 1, "conv_codegen", "tools/exiftool-tables/conv_exif_main_ledger.json"),
+    Artifact("conv-exif-main-worklist", 1, "conv_codegen", "tools/exiftool-tables/exif_main_refusal_worklist.json"),
     Artifact("conv-exif-main-oracle", 1, "conv_oracle", "tools/exiftool-tables/testdata/conv_exif_main_outputs.json"),
     Artifact("scalar-helpers", 1, "scalar_helper_codegen", "src/writers/generated_scalar_rules.rs"),
     Artifact("scalar-helper-ledger", 1, "scalar_helper_codegen", "tools/exiftool-tables/scalar_helper_ledger.json"),
@@ -182,6 +183,7 @@ STATIC_ARTIFACTS = (
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
     Artifact("tag-exists", 2, "tag_exists_codegen", "src/writers/generated_tag_exists.rs"),
     Artifact("copy-targets", 2, "copy_targets_codegen", "src/writers/generated_copy_targets.rs"),
+    Artifact("makernote-groups", 2, "makernote_groups_codegen", "src/writers/generated_makernote_groups.rs"),
 )
 
 

@@ -220,7 +220,12 @@ fn matching_occurrences<'a, 'm>(
 
 /// [`matching_occurrences`] with the retained literal public key alongside
 /// each canonical occurrence.
-fn matching_keyed_occurrences<'a, 'm>(
+///
+/// `pub(crate)`, not `pub`: `core::operations`'s tests use it (and
+/// [`arbitrate_keyed`]) to check bare-name arbitration directly against a
+/// crafted `MetadataMap`, the same algorithm a bare CLI request runs through
+/// [`resolve_requested_tags`], without reaching for a full CLI round-trip.
+pub(crate) fn matching_keyed_occurrences<'a, 'm>(
     metadata: &'m MetadataMap,
     token: &'a str,
 ) -> impl Iterator<Item = (&'m str, &'m TagOccurrence)> {
@@ -233,7 +238,7 @@ fn matching_keyed_occurrences<'a, 'm>(
         })
 }
 
-fn arbitrate_keyed<'m>(
+pub(crate) fn arbitrate_keyed<'m>(
     candidates: impl Iterator<Item = (&'m str, &'m TagOccurrence)>,
 ) -> Option<(&'m str, &'m TagOccurrence)> {
     let mut remaining = candidates;

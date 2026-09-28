@@ -603,7 +603,7 @@ pub(crate) fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> Jso
             // for a zero denominator. EscapeJSON then decides number vs.
             // quoted sentinel exactly as for a rendered String value.
             let rendered = if *denominator == 0 {
-                if *numerator == 0 { "undef" } else { "inf" }.to_string()
+                zero_denominator_rational(*numerator).to_string()
             } else {
                 exiftool_rational_number(f64::from(*numerator) / f64::from(*denominator))
             };
@@ -841,6 +841,17 @@ fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
     format_tag_value_short_with_mode(tag_name, value, false)
 }
 
+/// What ExifTool reads a rational with a zero denominator as, in every
+/// output mode: `ReadValue`'s `GetRational32s`/`32u`/`64s`/`64u`
+/// (ExifTool.pm 13.59:6090-6119) return `$ratNumer ? 'inf' : 'undef'` in
+/// place of a number, and a tag with no conversion prints that string as is
+/// -- under `-s3`, `-n` and `-j` alike (`t/images/Casio2.jpg`'s 0/0
+/// `DigitalZoomRatio` is `undef` in all three). The numerator is tested for
+/// truth, not sign, so `-1/0` is `inf` too.
+fn zero_denominator_rational(numerator: i32) -> &'static str {
+    if numerator == 0 { "undef" } else { "inf" }
+}
+
 pub(crate) fn format_tag_value_short_with_mode(
     tag_name: &str,
     value: &TagValue,
@@ -883,12 +894,12 @@ pub(crate) fn format_tag_value_short_with_mode(
             numerator,
             denominator,
         } => {
-            if tag_name == "GPS:GPSDOP" && *denominator != 0 {
+            if *denominator == 0 {
+                zero_denominator_rational(*numerator).to_string()
+            } else if tag_name == "GPS:GPSDOP" {
                 exiftool_rational_number(*numerator as f64 / *denominator as f64)
             } else if *denominator == 1 {
                 numerator.to_string()
-            } else if *denominator == 0 {
-                "0".to_string()
             } else {
                 format!("{}/{}", numerator, denominator)
             }
@@ -1004,8 +1015,12 @@ pub(crate) fn format_tag_value_with_mode(
         TagValue::Float(f) => f.to_string(),
         TagValue::Rational {
             numerator,
+            denominator: 0,
+        } => zero_denominator_rational(*numerator).to_string(),
+        TagValue::Rational {
+            numerator,
             denominator,
-        } if tag_name == "GPS:GPSDOP" && *denominator != 0 => {
+        } if tag_name == "GPS:GPSDOP" => {
             exiftool_rational_number(*numerator as f64 / *denominator as f64)
         }
         TagValue::Rational {
@@ -1207,6 +1222,31 @@ fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    /// ExifTool.pm 13.59:6090-6119: a zero denominator reads as `undef`
+    /// (numerator 0) or `inf` (any other numerator), and an unconverted tag
+    /// prints that in the text renderers too, with or without `-n` -- the
+    /// short renderer used to print `0` and the plain one `0/0`.
+    #[test]
+    fn zero_denominator_rationals_render_as_readvalue_sentinels() {
+        for (numerator, expected) in [(0, "undef"), (7, "inf"), (-1, "inf")] {
+            let value = TagValue::new_rational(numerator, 0);
+            for no_print_conv in [false, true] {
+                assert_eq!(
+                    format_tag_value_short_with_mode(
+                        "ExifIFD:DigitalZoomRatio",
+                        &value,
+                        no_print_conv
+                    ),
+                    expected
+                );
+                assert_eq!(
+                    format_tag_value_with_mode("ExifIFD:DigitalZoomRatio", &value, no_print_conv),
+                    expected
+                );
+            }
+        }
+    }
 
     /// These signed/unsigned 64-bit rational sentinels were checked as real
     /// TIFF XResolution fields against pinned 13.59, in both -j and -j -n.

@@ -245,6 +245,15 @@ impl XmpEntry {
         }
     }
 
+    /// An entry decoded from Google's `HdrPlusMakernote`/`ShotLogData`
+    /// (`google_hdrp`): a `MakerNotes` tag under family-1 group `Google`.
+    fn hdrp(key: String, value: XmpValue) -> Self {
+        Self {
+            group1: super::google_hdrp::HDRP_GROUP1.to_string(),
+            ..Self::plain(key, value)
+        }
+    }
+
     /// The value as stored: a list as an array of strings when `typed`,
     /// else joined.
     pub fn tag_value(&self, typed: bool) -> crate::core::TagValue {
@@ -325,8 +334,18 @@ pub fn insert_xmp_entry(
         metadata.insert(entry.key.clone(), value);
         return;
     }
-    let priority = if entry.shadowed {
+    let priority = if entry.shadowed || entry.group1 == "XMP" {
+        // The bare `XMP` group is a property no XMP table defines: one with
+        // no namespace, or in one of ExifTool's own `-X` static-group
+        // namespaces (`namespace_resolver::group_for_prefix`). FoundXMP gives
+        // such a tag the default `{ Name => $name, IsDefault => 1,
+        // Priority => 0 }` (XMP.pm 13.59:3589-3596), so it never displaces a
+        // same-named tag already found: `t/images/XMP.xml`'s bare
+        // `-FileType` is the file's own `XMP`, not the `JPEG` its RDF/XML
+        // records for the image it was written from.
         0
+    } else if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
+        super::google_hdrp::hdrp_tag_priority(&entry.key)
     } else {
         crate::core::tag_occurrence::shim_group_priority(
             entry.key.split_once(':').map_or("", |(group, _)| group),
@@ -1048,10 +1067,7 @@ fn parse_xmp_packet(
         );
     for (tag, value) in decoded_hdrp {
         if !formatted.iter().any(|(t, _)| *t == tag) {
-            entries.push(XmpEntry::plain(
-                tag.clone(),
-                XmpValue::Scalar(value.clone()),
-            ));
+            entries.push(XmpEntry::hdrp(tag.clone(), XmpValue::Scalar(value.clone())));
             formatted.push((tag, XmpValue::Scalar(value)));
         }
     }
@@ -1978,6 +1994,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     let mut description_depth: Option<usize> = None;
     let mut container_depth: Option<usize> = None;
+    let mut container_index = 0usize;
     let mut container_name = String::new();
     // Family-1 group of the container property (the first property that
     // contributes to every flattened name below it).
@@ -1993,27 +2010,48 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // retaining every value in a list that belongs to that one struct.
     let mut resource_entry_depth: Option<usize> = None;
     let mut resource_entry_index = 0usize;
+    // Each RDF collection has its own identity. A literal li may repeat a
+    // flattened field only within its Bag/Seq, never across properties or in
+    // a language alternative.
+    let mut collection_index = 0usize;
+    let mut collections: Vec<(usize, usize, bool)> = Vec::new();
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
     let mut text = String::new();
-    // (flattened id, values, resource entry of the last value) in first-seen
-    // order.
-    let mut collected: Vec<(String, Vec<String>, Option<usize>)> = Vec::new();
+    // (flattened id, values, property, resource entry, literal collection)
+    // in first-seen order.
+    let mut collected: Vec<(String, Vec<String>, usize, Option<usize>, Option<usize>)> = Vec::new();
 
     let mut push_value = |flat_id: String,
                           value: String,
-                          allow_repeat: bool,
-                          resource_entry: Option<usize>| {
-        if let Some((_, values, previous_entry)) =
-            collected.iter_mut().find(|(id, _, _)| *id == flat_id)
+                          property: usize,
+                          repeat_struct_field: bool,
+                          resource_entry: Option<usize>,
+                          literal_collection: Option<usize>| {
+        if let Some((_, values, first_property, previous_entry, first_collection)) =
+            collected.iter_mut().find(|(id, _, _, _, _)| *id == flat_id)
         {
-            if allow_repeat || resource_entry.is_some_and(|entry| Some(entry) == *previous_entry) {
+            let same_collection =
+                literal_collection.is_some_and(|id| Some(id) == *first_collection);
+            let can_repeat = if literal_collection.is_some() || first_collection.is_some() {
+                same_collection
+            } else {
+                repeat_struct_field
+                    || resource_entry.is_some_and(|entry| Some(entry) == *previous_entry)
+            };
+            if *first_property == property && can_repeat {
                 values.push(value);
                 *previous_entry = resource_entry;
             }
         } else {
-            collected.push((flat_id, vec![value], resource_entry));
+            collected.push((
+                flat_id,
+                vec![value],
+                property,
+                resource_entry,
+                literal_collection,
+            ));
         }
     };
 
@@ -2037,6 +2075,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                         && !has_parse_type_resource(&e)
                         && !is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver);
                     if is_container_candidate {
+                        container_index += 1;
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
                         container_group = resolver.group_for_qname(&tag_name);
@@ -2054,7 +2093,14 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     }
                 } else if is_rdf_namespace(&tag_name, &resolver) {
                     // rdf:Bag / rdf:Seq / rdf:Alt / rdf:li carry no name.
-                    if is_rdf_li(&tag_name, &resolver) {
+                    if is_collection_container(&tag_name, &resolver) {
+                        collection_index += 1;
+                        collections.push((
+                            depth,
+                            collection_index,
+                            NamespaceResolver::extract_local_name(&tag_name) != "Alt",
+                        ));
+                    } else if is_rdf_li(&tag_name, &resolver) {
                         if resource_entry_depth.is_none() && has_parse_type_resource(&e) {
                             resource_entry_depth = Some(depth);
                             resource_entry_index += 1;
@@ -2088,17 +2134,33 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     text.clear();
                 } else if container_depth.is_some() {
                     let value = text.trim().to_string();
+                    let literal_collection =
+                        if is_rdf_li(&tag_name, &resolver) && resource_entry_depth.is_none() {
+                            collections
+                                .last()
+                                .and_then(|(_, id, is_list)| is_list.then_some(*id))
+                        } else {
+                            None
+                        };
                     // Only struct *fields* are flattened; text directly under
                     // the container is the whole property, which the ordinary
                     // RDF pass already reports.
-                    if !value.is_empty() && !path.is_empty() {
+                    // LangAlt is handled by the language-aware generic walk.
+                    if !value.is_empty()
+                        && !path.is_empty()
+                        && (!is_rdf_li(&tag_name, &resolver)
+                            || literal_collection.is_some()
+                            || resource_entry_depth.is_some())
+                    {
                         let flat_id =
                             format!("{}:{}{}", container_group, container_name, path.join(""));
                         push_value(
                             flat_id,
                             value,
+                            container_index,
                             container_allows_repeated_fields,
                             resource_entry_depth.map(|_| resource_entry_index),
+                            literal_collection,
                         );
                     }
                     text.clear();
@@ -2112,6 +2174,12 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                 }
                 if resource_entry_depth == Some(depth) {
                     resource_entry_depth = None;
+                }
+                if collections
+                    .last()
+                    .is_some_and(|(start, _, _)| *start == depth)
+                {
+                    collections.pop();
                 }
                 depth = depth.saturating_sub(1);
             }
@@ -2133,7 +2201,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values, _)| {
+        .map(|(flat_id, values, _, _, _)| {
             let (group, id) = flat_id.split_once(':').unwrap_or(("XMP", &flat_id));
             (format!("{group}:{}", exiftool_flat_tag_name(id)), values)
         })
@@ -7026,6 +7094,19 @@ mod top_level_struct_tests {
   </rdf:Bag></test:StructList2>
  </rdf:Description>
 </rdf:RDF>"#;
+        let typed = parse_xmp_typed(xml).unwrap();
+        for (tag, expected) in [
+            ("XMP-test:StructList2Item1", "c1-1"),
+            ("XMP-test:StructList2Item2", "c2-1"),
+        ] {
+            assert_eq!(
+                typed
+                    .iter()
+                    .find(|(name, _)| name == tag)
+                    .map(|(_, value)| value),
+                Some(&XmpValue::Scalar(expected.to_string()))
+            );
+        }
         let tags = extract_list_struct_values(xml).unwrap();
         assert_eq!(
             tags.iter()
@@ -7165,6 +7246,81 @@ mod entry_tests {
         format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {namespaces}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
         )
+    }
+
+    #[test]
+    fn duplicate_nested_sequences_keep_the_first_collection() {
+        // Pinned ExifTool 13.59 -j -G1 -s: WrapPts is ["a", "b"].
+        // A later property with the same path is a duplicate, not a
+        // continuation of the first sequence.
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:test="http://ns.test.com/"><rdf:Description><test:Wrap><rdf:Description><test:Pts><rdf:Seq><rdf:li>a</rdf:li><rdf:li>b</rdf:li></rdf:Seq></test:Pts></rdf:Description></test:Wrap></rdf:Description><rdf:Description><test:Wrap><rdf:Description><test:Pts><rdf:Seq><rdf:li>c</rdf:li><rdf:li>d</rdf:li></rdf:Seq></test:Pts></rdf:Description></test:Wrap></rdf:Description></rdf:RDF>"#;
+        let entries = parse_xmp_entries(xml).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.tag == "XMP-test:WrapPts")
+                .map(|entry| &entry.value),
+            Some(&XmpValue::List(vec!["a".into(), "b".into()])),
+            "{entries:?}"
+        );
+        assert_eq!(
+            extract_list_struct_values(xml).unwrap(),
+            vec![("XMP-test:WrapPts".into(), vec!["a".into(), "b".into()])]
+        );
+    }
+
+    #[test]
+    fn nested_language_alt_keeps_scalar_and_qualified_language() {
+        // Pinned ExifTool 13.59 -j -G1 -s reports WrapTitle = "hello"
+        // and WrapTitle-fr = "bonjour".
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:test="http://ns.test.com/"><rdf:Description><test:Wrap><rdf:Description><test:Title><rdf:Alt><rdf:li xml:lang="x-default">hello</rdf:li><rdf:li xml:lang="fr">bonjour</rdf:li></rdf:Alt></test:Title></rdf:Description></test:Wrap></rdf:Description></rdf:RDF>"#;
+        let entries = parse_xmp_entries(xml).unwrap();
+        for (tag, expected) in [
+            ("XMP-test:WrapTitle", "hello"),
+            ("XMP-test:WrapTitle-fr", "bonjour"),
+        ] {
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|entry| entry.tag == tag)
+                    .map(|entry| &entry.value),
+                Some(&XmpValue::Scalar(expected.into())),
+                "{entries:?}"
+            );
+        }
+        assert!(extract_list_struct_values(xml).unwrap().is_empty());
+    }
+
+    #[test]
+    fn nested_look_curve_keeps_all_points_in_typed_occurrence() {
+        // ExifTool 13.59 reports this as a Seq, even though the ordinary RDF
+        // walk sees the first li as a scalar before the flattening pass runs.
+        let xml = packet(
+            "<c:Look><rdf:Description><c:Parameters><rdf:Description><c:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>22, 16</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></c:ToneCurvePV2012></rdf:Description></c:Parameters></rdf:Description></c:Look>",
+            r#"xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/""#,
+        );
+        let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+        let curve = entries
+            .iter()
+            .find(|entry| entry.tag == "XMP-crs:LookParametersToneCurvePV2012")
+            .unwrap_or_else(|| panic!("curve missing from {entries:?}"));
+        assert_eq!(curve.group1, "XMP-crs");
+        assert_eq!(
+            curve.value,
+            XmpValue::List(vec![
+                "0, 0".to_string(),
+                "22, 16".to_string(),
+                "255, 255".to_string(),
+            ])
+        );
+        assert_eq!(
+            curve.tag_value(true),
+            TagValue::new_array(vec![
+                TagValue::new_string("0, 0"),
+                TagValue::new_string("22, 16"),
+                TagValue::new_string("255, 255"),
+            ])
+        );
     }
 
     /// Same-named properties of two namespaces the reader always filed under

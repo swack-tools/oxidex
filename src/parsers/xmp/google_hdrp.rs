@@ -17,6 +17,23 @@
 
 use std::io::Read;
 
+/// The family-1 group of every row this module decodes. `HDRPlusMakerNote`,
+/// `ShotLogData` and `HDRPMakerNote` declare `GROUPS => { 0 => 'MakerNotes',
+/// 2 => 'Image' }` and no family 1 (Google.pm:514-515, 579-580, 591-592), so
+/// `GetGroup` reports the module name: the pinned oracle prints
+/// `[Google] CreateDate` for `t/images/Google.jpg`.
+pub(crate) const HDRP_GROUP1: &str = "Google";
+
+/// `FoundTag`'s priority (ExifTool.pm:9469-9473) for one decoded row, by its
+/// `MakerNotes:<Name>` key. `9-36-1` `CreateDate` is the one field the Google
+/// tables declare `Priority => 0` for -- "to give EXIF priority"
+/// (Google.pm:539-546) -- so it never displaces an `ExifIFD:CreateDate`
+/// already found, although the XMP packet (and the Exif MakerNote) is found
+/// after it; every other field has the default 1.
+pub(crate) fn hdrp_tag_priority(key: &str) -> u8 {
+    u8::from(key != "MakerNotes:CreateDate")
+}
+
 /// Decodes a `GCamera:HdrPlusMakernote` XMP property value (still
 /// base64-encoded, exactly as read from the XMP packet) into the
 /// `MakerNotes:*` tags ExifTool reports for it.
