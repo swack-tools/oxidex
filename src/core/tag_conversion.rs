@@ -19,49 +19,74 @@ use crate::core::operations_helpers::{
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
-/// Exact ExifTool 13.59 source projections admitted for hand-owned
-/// `Exif::Main` conversion residuals. The helper oracle independently dumps
-/// the pinned table, checks these hashes, executes the native entries, and
-/// commits their channel outputs for the Rust replay below.
-pub(crate) const EXIF_MAIN_RESIDUAL_PORTS: &[(u16, &str)] = &[
-    (
-        0x8298,
-        "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd",
-    ),
-    (
-        0x9287,
-        "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c",
-    ),
-    (
-        0xA462,
-        "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953",
-    ),
-    (
-        0xC740,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC741,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC74E,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC763,
-        "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5",
-    ),
-];
+/// Reviewed native Exif::Main residual rows for 11.78, 12.64 and 13.59.
+/// An absent source row or unreviewed release has no hand-port admission.
+pub(crate) const EXIF_MAIN_RESIDUAL_IDS: &[u16] =
+    &[0x8298, 0x9287, 0xA462, 0xC740, 0xC741, 0xC74E, 0xC763];
 
 #[must_use]
 pub(crate) fn exif_main_residual_source(tag_id: u16) -> Option<&'static str> {
-    EXIF_MAIN_RESIDUAL_PORTS
-        .binary_search_by_key(&tag_id, |(id, _)| *id)
-        .ok()
-        .map(|index| EXIF_MAIN_RESIDUAL_PORTS[index].1)
+    match (crate::exiftool_tables::EXIFTOOL_VERSION, tag_id) {
+        ("11.78", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("11.78", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("11.78", 0xC740) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC741) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC74E) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        ("12.64", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("12.64", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("12.64", 0xC740) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC741) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC74E) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        ("13.59", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("13.59", 0x9287) => {
+            Some("e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c")
+        }
+        ("13.59", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("13.59", 0xC740) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC741) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC74E) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        _ => None,
+    }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExifMainResidualPort {
     Copyright,
@@ -90,7 +115,9 @@ pub(crate) fn exif_main_residual_port(tag_id: u16) -> Option<ExifMainResidualPor
             0xC740 | 0xC741 | 0xC74E,
             Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"),
         ) => Some(ExifMainResidualPort::OpcodeList),
-        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")) => {
+        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5"))
+            if crate::exiftool_tables::EXIFTOOL_VERSION == "13.59" =>
+        {
             Some(ExifMainResidualPort::TimeCodes)
         }
         _ => None,
@@ -2329,9 +2356,17 @@ mod tests {
         )))
         .expect("valid helper capture");
         let residuals = capture["residuals"].as_object().expect("residual capture");
-        assert_eq!(residuals.len(), EXIF_MAIN_RESIDUAL_PORTS.len());
+        assert_eq!(
+            capture["capture"]["exiftool_version"].as_str(),
+            Some(crate::exiftool_tables::EXIFTOOL_VERSION)
+        );
+        let selected = EXIF_MAIN_RESIDUAL_IDS
+            .iter()
+            .filter_map(|&id| exif_main_residual_source(id).map(|source| (id, source)))
+            .collect::<Vec<_>>();
+        assert_eq!(residuals.len(), selected.len());
 
-        for &(tag_id, source_sha256) in EXIF_MAIN_RESIDUAL_PORTS {
+        for (tag_id, source_sha256) in selected {
             let key = format!("0x{tag_id:04x}");
             let proof = &residuals[&key];
             assert_eq!(proof["source_sha256"].as_str(), Some(source_sha256));

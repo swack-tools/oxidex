@@ -125,6 +125,8 @@ STATIC_ARTIFACTS = (
     Artifact("conv-exif-main-ledger", 1, "conv_codegen", "tools/exiftool-tables/conv_exif_main_ledger.json"),
     Artifact("conv-exif-main-worklist", 1, "conv_codegen", "tools/exiftool-tables/exif_main_refusal_worklist.json"),
     Artifact("conv-exif-main-oracle", 1, "conv_oracle", "tools/exiftool-tables/testdata/conv_exif_main_outputs.json"),
+    Artifact("helper-oracle", 1, "helper_oracle", "tools/exiftool-tables/testdata/helper_oracle_outputs.json"),
+    Artifact("charset-tables", 1, "codegen_charsets", "src/exiftool_tables/charset_tables.rs"),
     Artifact("scalar-helpers", 1, "scalar_helper_codegen", "src/writers/generated_scalar_rules.rs"),
     Artifact("scalar-helper-ledger", 1, "scalar_helper_codegen", "tools/exiftool-tables/scalar_helper_ledger.json"),
     Artifact("checkexif-rules", 1, "checkexif_rust_codegen", "src/writers/generated_checkexif_rules.rs"),

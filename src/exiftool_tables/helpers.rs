@@ -220,6 +220,76 @@ pub const PORTS: &[HelperPort] = &[
     },
 ];
 
+/// Reviewed folded native source for a port in a known ExifTool release.
+/// Unknown releases and unported subs refuse admission.
+#[must_use]
+pub fn selected_port_source_for_version(version: &str, perl: &str) -> Option<&'static str> {
+    match (version, perl) {
+        ("11.78", "Image::ExifTool::ConvertDateTime") => {
+            Some("14b595dc50ff73b7e3ba40e474b6e80dc13c9fc2ac62f11ee33e360967878be1")
+        }
+        ("11.78", "Image::ExifTool::ConvertFileSize") => {
+            Some("20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e")
+        }
+        ("11.78", "Image::ExifTool::ConvertUnixTime") => {
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee")
+        }
+        ("11.78", "Image::ExifTool::Encode") => {
+            Some("9810479e9b0ee6be7c5c03aff6e20df7a64e9d3a8d21a38bc5e61a7f3c1372e2")
+        }
+        ("11.78", "Image::ExifTool::Exif::PrintExposureTime") => {
+            Some("90f77cb8733bb7e3f93e16f5b6e3815f7c10c06d6ea0678f2e83668ec9b7a180")
+        }
+        ("11.78", "Image::ExifTool::GPS::ToDMS") => {
+            Some("00d7ec75c5a1ad1d67e215c182390a922f9c7995afa3e9491230a019645e8b72")
+        }
+        ("11.78", "Image::ExifTool::GPS::ToDegrees") => {
+            Some("2a673a743dfb66f36972400c549b96bcc1876d95e8d241da25f789fcf17cc539")
+        }
+        ("11.78", "Image::ExifTool::GetUnixTime") => {
+            Some("4b6e1babf8d17d4f43b3e8591f9c33a36909039cdfef88944eea613ad599c8ee")
+        }
+        ("11.78", "Image::ExifTool::Printable") => {
+            Some("80b805ee1fbd6bb79f2e686681286cccc56477af0ac85a7e243ddc7a3a3693f6")
+        }
+        ("11.78", "Image::ExifTool::XMP::ConvertXMPDate") => {
+            Some("96a2f2acf9adb8585ddc3253322d40dcf0f223efc664a300666d085dace7c2ae")
+        }
+        ("12.64", "Image::ExifTool::ConvertDateTime") => {
+            Some("de9f9f6e44242aa6e171881847b7e1804dc3e020f9dcd286629cff7f3bedb0c4")
+        }
+        ("12.64", "Image::ExifTool::ConvertFileSize") => {
+            Some("54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117")
+        }
+        ("12.64", "Image::ExifTool::ConvertUnixTime") => {
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee")
+        }
+        ("12.64", "Image::ExifTool::Encode") => {
+            Some("9810479e9b0ee6be7c5c03aff6e20df7a64e9d3a8d21a38bc5e61a7f3c1372e2")
+        }
+        ("12.64", "Image::ExifTool::GPS::ToDMS") => {
+            Some("87e718031f1cf07c5fce36efb6cb8fc107aa9f0c19577a24ca912c16d5833366")
+        }
+        ("12.64", "Image::ExifTool::Printable") => {
+            Some("80b805ee1fbd6bb79f2e686681286cccc56477af0ac85a7e243ddc7a3a3693f6")
+        }
+        ("12.64", "Image::ExifTool::XMP::ConvertXMPDate") => {
+            Some("96a2f2acf9adb8585ddc3253322d40dcf0f223efc664a300666d085dace7c2ae")
+        }
+        ("11.78" | "12.64" | "13.59", _) => PORTS
+            .iter()
+            .find(|port| port.perl == perl)
+            .map(|port| port.source_sha256),
+        _ => None,
+    }
+}
+
+/// Selected release wrapper for native-source dispatch.
+#[must_use]
+pub fn selected_port_source(perl: &str) -> Option<&'static str> {
+    selected_port_source_for_version(super::EXIFTOOL_VERSION, perl)
+}
+
 /// The engine subs a port above reproduces inline rather than calls, by
 /// folded-source sha256 in the pinned tree: `(port, module, sub, digest)`.
 /// A port is proven only for a tree where these match too; the helper
@@ -1825,6 +1895,16 @@ mod tests {
     const CAPTURE: &str =
         include_str!("../../tools/exiftool-tables/testdata/helper_oracle_outputs.json");
 
+    fn reviewed_source_pins() -> Value {
+        let pins: Value = serde_json::from_str(include_str!(
+            "../../tools/exiftool-tables/testdata/helper_source_pins.json"
+        ))
+        .expect("reviewed source pins are JSON");
+        let selected = &pins[super::super::EXIFTOOL_VERSION];
+        assert!(selected.is_object(), "unreviewed helper source release");
+        selected.clone()
+    }
+
     fn capture() -> Value {
         let cap: Value = serde_json::from_str(CAPTURE).expect("capture is JSON");
         assert_eq!(
@@ -1836,18 +1916,16 @@ mod tests {
     }
 
     #[test]
-    fn helper_capture_scope_is_explicit() {
+    fn helper_capture_covers_selected_source() {
         let cap = capture();
-        if super::super::EXIFTOOL_VERSION == "13.59" {
-            assert!(cap["capture"].get("scope").is_none());
-            assert!(!cap["residuals"].as_object().expect("residuals").is_empty());
-        } else {
-            assert_eq!(
-                cap["capture"]["scope"],
-                "helpers only; residual and charset behaviour unqualified"
-            );
-            assert!(cap["residuals"].as_object().expect("residuals").is_empty());
-        }
+        assert!(cap["capture"].get("scope").is_none());
+        let residuals = cap["residuals"].as_object().expect("residuals");
+        let expected = match super::super::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => 6,
+            "13.59" => 7,
+            other => panic!("unreviewed helper capture release {other}"),
+        };
+        assert_eq!(residuals.len(), expected);
     }
 
     #[test]
@@ -2176,23 +2254,34 @@ mod tests {
         );
     }
 
-    /// Exact source: each port names the digest of the sub it was proven
-    /// against, and the capture (taken from the pinned tree) agrees. A
-    /// helper the capture marks ported must be in PORTS and vice versa.
+    /// The native capture must name the independently reviewed source for
+    /// the selected release. PORTS retains its 13.59 baseline; behavioural
+    /// replay below decides whether each old-source implementation qualifies.
     #[test]
     fn every_port_names_the_pinned_source_it_was_proven_against() {
         let cap = capture();
+        let pins = reviewed_source_pins();
         let helpers = cap["helpers"].as_object().expect("helpers");
+        let reviewed = pins["helpers"].as_object().expect("reviewed helpers");
+        assert_eq!(helpers.len(), reviewed.len());
+        for (name, h) in helpers {
+            assert_eq!(
+                h["source_sha256"], reviewed[name],
+                "{name}: unreviewed source"
+            );
+        }
         for port in PORTS {
             let h = &helpers[port.perl];
             assert_eq!(h["status"], "ported", "{}", port.perl);
             assert_eq!(h["module"], port.module, "{}", port.perl);
-            assert_eq!(
-                h["source_sha256"].as_str(),
-                Some(port.source_sha256),
-                "{}: pinned source differs from the one this port was proven against",
-                port.perl
-            );
+            if super::super::EXIFTOOL_VERSION == "13.59" {
+                assert_eq!(
+                    h["source_sha256"].as_str(),
+                    Some(port.source_sha256),
+                    "{}",
+                    port.perl
+                );
+            }
         }
         let ported: BTreeSet<&str> = PORTS.iter().map(|p| p.perl).collect();
         let refused: BTreeSet<&str> = REFUSED_HELPERS.iter().map(|(p, _)| *p).collect();
@@ -2203,10 +2292,36 @@ mod tests {
                     refused.contains(name.as_str()),
                     "{name} not in REFUSED_HELPERS"
                 ),
-                s => panic!("{name}: status {s:?}"),
+                other => panic!("{name}: status {other:?}"),
             }
         }
         assert_eq!(ported.len() + refused.len(), helpers.len());
+    }
+
+    #[test]
+    fn selected_port_sources_are_exactly_the_reviewed_native_pins() {
+        let all: Value = serde_json::from_str(include_str!(
+            "../../tools/exiftool-tables/testdata/helper_source_pins.json"
+        ))
+        .expect("reviewed pins");
+        for version in ["11.78", "12.64", "13.59"] {
+            for port in PORTS {
+                assert_eq!(
+                    selected_port_source_for_version(version, port.perl),
+                    all[version]["helpers"][port.perl].as_str(),
+                    "{version}: {}",
+                    port.perl
+                );
+            }
+        }
+        assert_eq!(
+            selected_port_source_for_version("14.00", PORTS[0].perl),
+            None
+        );
+        assert_eq!(
+            selected_port_source_for_version("11.78", "unreviewed"),
+            None
+        );
     }
 
     #[test]
@@ -2230,18 +2345,22 @@ mod tests {
         }
     }
 
-    /// Every inline-reproduced engine sub a port names has the digest the
-    /// capture recorded from the pinned tree.
+    /// Inline engine dependencies are selected from reviewed native source,
+    /// with the original 13.59 port declaration still checked exactly.
     #[test]
     fn port_dependencies_match_the_capture() {
         let cap = capture();
-        for (port, module, sub, digest) in PORT_DEPENDENCIES {
+        let pins = reviewed_source_pins();
+        for (port, module, sub, digest_1359) in PORT_DEPENDENCIES {
             assert!(PORTS.iter().any(|p| p.perl == *port), "{port} not in PORTS");
+            let key = format!("{module}::{sub}");
             assert_eq!(
-                cap["helpers"][*port]["dependencies"][&format!("{module}::{sub}")].as_str(),
-                Some(*digest),
-                "{port}: {module}::{sub}"
+                cap["helpers"][*port]["dependencies"][&key], pins["dependencies"][&key],
+                "{port}: {key}"
             );
+            if super::super::EXIFTOOL_VERSION == "13.59" {
+                assert_eq!(pins["dependencies"][&key].as_str(), Some(*digest_1359));
+            }
         }
     }
 
@@ -2250,10 +2369,7 @@ mod tests {
     #[test]
     fn decode_dependencies_and_charset_tables_match_the_capture() {
         let cap = capture();
-        assert!(
-            cap["capture"].get("scope").is_none(),
-            "selected-source helper-only capture does not qualify charset behaviour"
-        );
+        let pins = reviewed_source_pins();
         for helper in ["Image::ExifTool::Decode", "Image::ExifTool::Encode"] {
             let deps = cap["helpers"][helper]["dependencies"]
                 .as_object()
@@ -2261,19 +2377,21 @@ mod tests {
             for (module, sub, digest) in DECODE_DEPENDENCIES {
                 assert_eq!(
                     deps[&format!("{module}::{sub}")].as_str(),
-                    Some(*digest),
+                    pins["dependencies"][&format!("{module}::{sub}")].as_str(),
                     "{helper}: {module}::{sub}"
                 );
+                if super::super::EXIFTOOL_VERSION == "13.59" {
+                    assert_eq!(
+                        pins["dependencies"][&format!("{module}::{sub}")].as_str(),
+                        Some(*digest)
+                    );
+                }
             }
         }
-        let decode = PORTS
-            .iter()
-            .find(|p| p.perl == "Image::ExifTool::Decode")
-            .expect("Decode");
         assert_eq!(
             cap["helpers"]["Image::ExifTool::Encode"]["dependencies"]["Image/ExifTool.pm::Decode"]
                 .as_str(),
-            Some(decode.source_sha256)
+            pins["helpers"]["Image::ExifTool::Decode"].as_str()
         );
         let sources = cap["charset_sources"].as_object().expect("charset_sources");
         assert_eq!(sources.len(), super::super::charset_tables::SOURCES.len());

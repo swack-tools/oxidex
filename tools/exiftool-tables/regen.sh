@@ -76,17 +76,17 @@ echo ">> selecting PNG absent-date shift behavior from native source"
 python3 "$HERE/png_shift_contract.py" "$LIB" \
     --output "$(artifact_path png-shift-contract)"
 
-# Capture helper behaviour from this selected native source before any table
-# generation. Historical residual and charset behaviour are not qualified by
-# this helper-only capture; their separate checks must still pass.
-echo ">> capturing selected-source helper oracle"
-if [[ "$VERSION" == "13.59" ]]; then
-    python3 "$HERE/helper_oracle.py" --check --perl "$PERL" \
-        --exiftool-dir "$(dirname "$LIB")"
-else
-    python3 "$HERE/helper_oracle.py" --write --helpers-only --perl "$PERL" \
-        --exiftool-dir "$(dirname "$LIB")"
-fi
+# Both generated contracts are part of tier 1's declared write set. Capture
+# native helper and residual channels first, then regenerate the charset data
+# Decode/Encode consume. The final oracle check proves both selected artifacts.
+echo ">> capturing selected-source helper and residual oracle"
+python3 "$HERE/helper_oracle.py" --write --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
+echo ">> generating selected-source charset tables"
+python3 "$HERE/codegen_charsets.py" --write --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
+python3 "$HERE/helper_oracle.py" --check --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
 
 echo ">> extracting tag tables from Perl symbol table"
 # Keep writer capture separate from reader hydration. Hydration attaches a

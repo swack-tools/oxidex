@@ -105,13 +105,15 @@ class Capture(unittest.TestCase):
         self.assertEqual(cap["exiftool_version"],
                          (H.REPO / ".exiftool-version").read_text().strip())
         self.assertEqual(cap["tz"], "UTC")
-        if cap["exiftool_version"] == "13.59":
-            self.assertNotIn("scope", cap)
-            self.assertTrue(CAPTURE["residuals"])
-        else:
-            self.assertEqual(cap["scope"],
-                             "helpers only; residual and charset behaviour unqualified")
-            self.assertEqual(CAPTURE["residuals"], {})
+        self.assertNotIn("scope", cap)
+        pins = json.loads(H.RESIDUAL_SOURCE_PINS.read_text(encoding="utf-8"))
+        selected = {tag: digest for tag, digest in pins[cap["exiftool_version"]].items()
+                    if digest is not None}
+        self.assertEqual(set(CAPTURE["residuals"]), set(selected))
+        for tag, digest in selected.items():
+            self.assertEqual(CAPTURE["residuals"][tag]["source_sha256"], digest)
+            self.assertTrue(CAPTURE["residuals"][tag]["cases"])
+
 
 
 class ExactSource(unittest.TestCase):
