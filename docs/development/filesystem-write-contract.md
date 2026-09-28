@@ -10,7 +10,9 @@ links), nonregular files, files with no write permission bits, and files that
 cannot be opened for writing under the caller's actual access rights, including
 ACLs. Links are never redirected. Setuid/setgid files and Linux files with
 `security.capability` are refused to avoid conferring privileges on rewritten
-bytes. Darwin immutable and append-only flags are also refused.
+bytes. Linux `security.ima` and `security.evm` attributes also cause refusal:
+copying these integrity records would not authenticate the rewritten content.
+Darwin immutable and append-only flags are also refused.
 
 Linux and Darwin updates preserve owner, group, mode, and the exact extended
 attribute name/value set. Linux POSIX ACLs and security labels are included as
@@ -19,6 +21,13 @@ resource forks, Finder information and labels are included in its attributes.
 Ownership is restored before mode, then ACLs and attributes, with equality
 verification before commit. Unsupported metadata, inability to read or restore
 it, and verification mismatches cause refusal.
+
+Attribute capture accepts at most 64 KiB of encoded attribute names, 8 MiB per
+attribute value, and 16 MiB of attribute values in total. These bounds apply on
+Linux and Darwin, including to Darwin resource forks. A value exactly at a bound
+is accepted; exceeding any bound refuses the write without truncating or dropping
+attributes. The initial capture enforces these limits before scratch or backup
+creation, leaving the original file and any existing backup unchanged.
 
 Windows retains the existing permissions-only atomic-write behavior and the
 shared symbolic-link, readonly and actual writable-open guards. Permissions are
