@@ -212,6 +212,65 @@ fn resolved_conversion_warns_once_for_two_files() {
     assert_eq!(read_back(&second, "IFD0:Artist"), "x");
 }
 
+/// Pinned 13.59 discards the invalid pre-copy set, then applies the later
+/// Artist assignment after the copied Artist.
+#[test]
+fn dropped_pre_copy_conversion_keeps_post_copy_set_order() {
+    let dir = TempDir::new().unwrap();
+    let source = copy_into(&dir, JPEG, "copy-source.jpg");
+    assert_eq!(
+        run(&source, &["-IFD0:Artist=copy-sentinel"]).status.code(),
+        Some(0)
+    );
+    let destination = copy_into(&dir, JPEG, "copy-destination.jpg");
+    let output = run(
+        &destination,
+        &[
+            "-ColorSpace=bogus",
+            "-TagsFromFile",
+            s(&source),
+            "-IFD0:Artist",
+            "-IFD0:Artist=after",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", err(&output));
+    assert_eq!(
+        err(&output),
+        "Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)\n"
+    );
+    assert_eq!(read_back(&destination, "IFD0:Artist"), "after");
+}
+
+/// A failed batch still reports the command-level conversion warning once;
+/// unsupported XMP writes remain whole-file refusals with untouched files.
+#[test]
+fn failed_batch_keeps_conversion_warning_and_original_files() {
+    let dir = TempDir::new().unwrap();
+    let first = copy_into(&dir, JPEG, "first.jpg");
+    let second = copy_into(&dir, JPEG, "second.jpg");
+    let before_first = sha(&first);
+    let before_second = sha(&second);
+    let output = run(dir.path(), &["-ColorSpace=bogus", "-XMP:Title=x"]);
+    assert_eq!(output.status.code(), Some(1), "{}", out(&output));
+    assert!(out(&output).contains("2 files weren't updated due to errors"));
+    assert_eq!(
+        err(&output)
+            .matches("Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)")
+            .count(),
+        1,
+        "{}",
+        err(&output)
+    );
+    assert_eq!(
+        err(&output).matches("Cannot write tag 'XMP:Title'").count(),
+        2,
+        "{}",
+        err(&output)
+    );
+    assert_eq!(sha(&first), before_first);
+    assert_eq!(sha(&second), before_second);
+}
+
 // --- P1-1: -TagsFromFile goes through the write resolution gate ---------
 
 /// ExifTool 13.59, `-TagsFromFile sample_with_exif_xmp.jpg -XMP:Title

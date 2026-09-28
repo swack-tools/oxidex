@@ -491,14 +491,14 @@ pub fn batch_write(
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
-        match apply_modifications(path, &modifications, args) {
-            Ok((WriteOutcome::Updated, file_warnings)) => {
+        let (result, file_warnings) = apply_modifications(path, &modifications, args);
+        warnings.lock().unwrap().extend(file_warnings);
+        match result {
+            Ok(WriteOutcome::Updated) => {
                 updated_count.fetch_add(1, Ordering::Relaxed);
-                warnings.lock().unwrap().extend(file_warnings);
             }
-            Ok((WriteOutcome::Unchanged, file_warnings)) => {
+            Ok(WriteOutcome::Unchanged) => {
                 unchanged_count.fetch_add(1, Ordering::Relaxed);
-                warnings.lock().unwrap().extend(file_warnings);
             }
             Err(e) => {
                 error_count.fetch_add(1, Ordering::Relaxed);
@@ -538,17 +538,27 @@ fn apply_modifications(
     path: &Path,
     modifications: &[(String, OsString)],
     args: &CliArgs,
-) -> std::result::Result<(WriteOutcome, Vec<String>), String> {
+) -> (std::result::Result<WriteOutcome, String>, Vec<String>) {
     // Every write target is checked as the single-file write checks it
     // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
     // over a file list does: a read-only file is refused, never replaced.
     // The atomic rename below would replace a 0444 file in a writable
     // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
     // `-Artist=x ro.jpg` refuses.
-    let target = fs::metadata(path)
-        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    let target = match fs::metadata(path) {
+        Ok(target) => target,
+        Err(e) => {
+            return (
+                Err(format!("Cannot access file '{}': {}", path.display(), e)),
+                Vec::new(),
+            );
+        }
+    };
     if target.permissions().readonly() {
-        return Err(format!("File is read-only: {}", path.display()));
+        return (
+            Err(format!("File is read-only: {}", path.display())),
+            Vec::new(),
+        );
     }
     // Preserve original file times if requested
     let original_metadata = args.preserve_file_times.then_some(target);
@@ -568,7 +578,11 @@ fn apply_modifications(
     };
 
     let (outcome, warnings) =
-        write_file_with_warnings(path, modifications, !args.exiftool_compat(), backup)?;
+        write_file_with_warnings(path, modifications, !args.exiftool_compat(), backup);
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => return (Err(error), warnings),
+    };
 
     // Restore file times if requested
     if outcome == WriteOutcome::Updated
@@ -582,7 +596,7 @@ fn apply_modifications(
         }
     }
 
-    Ok((outcome, warnings))
+    (Ok(outcome), warnings)
 }
 
 /// Creates a progress bar for batch processing.

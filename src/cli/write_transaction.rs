@@ -376,6 +376,7 @@ impl WritePlan {
                 unconvertible_value_warning(&key, value, self.raw_values)
             })
         };
+        let mut sets_before_copy = 0;
         plan.sets = self
             .sets
             .iter()
@@ -385,9 +386,15 @@ impl WritePlan {
                     warnings.push(warning);
                     None
                 }
-                None => Some((tag.clone(), value.clone())),
+                None => {
+                    if at < self.sets_before_copy {
+                        sets_before_copy += 1;
+                    }
+                    Some((tag.clone(), value.clone()))
+                }
             })
             .collect();
+        plan.sets_before_copy = sets_before_copy;
         for (at, (tag, value)) in self.sets_before_clear.iter().enumerate() {
             if let Some(warning) = classify(at, tag, value, false) {
                 warnings.push(warning);
@@ -572,7 +579,7 @@ pub fn write_file(
     raw_values: bool,
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
-    write_file_with_warnings(path, modifications, raw_values, on_commit).map(|done| done.0)
+    write_file_with_warnings(path, modifications, raw_values, on_commit).0
 }
 
 /// Batch form of [`write_file`], returning destination-aware command warnings
@@ -582,7 +589,7 @@ pub fn write_file_with_warnings(
     modifications: &[(String, OsString)],
     raw_values: bool,
     on_commit: impl FnOnce() -> Result<(), String>,
-) -> Result<(WriteOutcome, Vec<String>), String> {
+) -> (Result<WriteOutcome, String>, Vec<String>) {
     // `raw_values` is `--no-print-conv` (ExifTool's `-n`), as
     // [`WritePlan::from_args`] reads it for one file: the multi-file path
     // used to build its plan without it, so `--no-print-conv
@@ -598,7 +605,10 @@ pub fn write_file_with_warnings(
         ..Default::default()
     };
     let (plan, warnings) = plan.for_file(path);
-    write_plan_file(path, &plan, on_commit).map(|done| (done.outcome, warnings))
+    (
+        write_plan_file(path, &plan, on_commit).map(|done| done.outcome),
+        warnings,
+    )
 }
 
 /// Applies every `-TAG=VALUE` of one file through the library's write
