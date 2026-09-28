@@ -8,6 +8,7 @@ these generators. 11.78 remains blocked because its reader branches differ.
 """
 
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -49,6 +50,20 @@ class HistoricalContracts(unittest.TestCase):
         for name, compiler in COMPILERS:
             self.assertIsNone(results[name]["protocol"]["reason"])
             itemlist.require_nonempty_supported(results[name], name)
+        for name, table in (("ItemList", "ItemList"), ("Keys", "Keys")):
+            recorded = results[name]["protocol"]["processor_contract" if name == "ItemList" else "processor"]["__deparse_sha256"]
+            body = document["modules"]["QuickTime"]["tables"][table]["meta"]["PROCESS_PROC"]["__deparse"]
+            self.assertEqual(recorded, hashlib.sha256(body.encode()).hexdigest())
+
+    def test_absent_itemlist_does_not_trigger_other_families_guard(self):
+        document = source("12.64")
+        table = document["modules"]["QuickTime"]["tables"]["ItemList"]
+        table["tags"] = {}
+        table["tag_count"] = 0
+        result = self.compile_all("12.64", document)["ItemList"]
+        self.assertEqual(result["identity_counts"]["source_records"], 252)
+        self.assertEqual(result["identity_counts"]["generated"], 0)
+        itemlist.require_nonempty_supported(result, "ItemList")
 
     def test_1178_is_explicitly_blocked_instead_of_emitting_empty_readers(self):
         results = self.compile_all("11.78", source("11.78"))
@@ -66,7 +81,7 @@ class HistoricalContracts(unittest.TestCase):
         self.assertEqual(results["ItemList"]["identity_counts"]["generated"], 0)
         self.assertEqual(results["Keys"]["identity_counts"]["generated"], 0)
         for name in ("ItemList", "Keys"):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "100 source rows" if name == "ItemList" else "60 source rows"):
                 itemlist.require_nonempty_supported(results[name], name)
 
         document = source("12.64")
@@ -82,6 +97,10 @@ class HistoricalContracts(unittest.TestCase):
         for name, compiler in COMPILERS:
             self.assertGreater(results[name]["identity_counts"]["generated"], 0)
             self.assertEqual(compiler.render_rust(results[name]), compiler.RUST.read_text())
+        for name in ("ItemList", "Keys"):
+            recorded = results[name]["protocol"]["processor_contract" if name == "ItemList" else "processor"]["__deparse_sha256"]
+            body = document["modules"]["QuickTime"]["tables"][name]["meta"]["PROCESS_PROC"]["__deparse"]
+            self.assertEqual(recorded, hashlib.sha256(body.encode()).hexdigest())
 
 
 if __name__ == "__main__":

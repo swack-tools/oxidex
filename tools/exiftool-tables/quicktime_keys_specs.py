@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse, hashlib, json
 from pathlib import Path
 import quicktime_atom_tables as selector
-from quicktime_generated_specs import source_format, rust_string, render_format, processor_reason, reader_protocol_reason, itemlist_use, require_nonempty_supported
+from quicktime_generated_specs import source_format, rust_string, render_format, processor_reason, reader_protocol_reason, itemlist_use, require_nonempty_supported, source_body_sha256
 
 ROOT = selector.ROOT
 SNAPSHOT = ROOT / "tools/exiftool-tables/fixtures/quicktime_source_13_59.json"
@@ -62,7 +62,7 @@ def compile_document(document):
             specs.append(operand); entry["generated_spec_sha256"]=hashlib.sha256(json.dumps(operand,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
         ledger.append(entry)
     specs.sort(key=lambda x:x["source_key"]); ledger.sort(key=lambda x:(x["identity"]["raw_key"],x["identity"]["variant_path"]))
-    return {"schema":"quicktime_generated_keys_specs_v1","scope":"direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted","source":{"exiftool_version":base["exiftool_version"],"table_sha256":keys_family["source_table_sha256"]},"protocol":{"processor":{"__name":PROCESSOR,"__deparse_sha256":PROCESSOR_SHA256,"source_file":proc.get("source_file"),"source_sha256":proc.get("source_sha256")},"normalization":"ProcessKeys: NUL-truncate; for mdta try com./com.apple.quicktime.-stripped key then full key; ordinal starts at 1","eligible":blocked is None,"reason":blocked},"specs":specs,"ledger":ledger,"identity_counts":{"source_records":len(ledger),"generated":len(specs),"omitted":len(ledger)-len(specs)}}
+    return {"schema":"quicktime_generated_keys_specs_v1","scope":"direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted","source":{"exiftool_version":base["exiftool_version"],"table_sha256":keys_family["source_table_sha256"]},"protocol":{"processor":{"__name":PROCESSOR,"__deparse_sha256":source_body_sha256(proc),"source_file":proc.get("source_file"),"source_sha256":proc.get("source_sha256")},"normalization":"ProcessKeys: NUL-truncate; for mdta try com./com.apple.quicktime.-stripped key then full key; ordinal starts at 1","eligible":blocked is None,"reason":blocked},"specs":specs,"ledger":ledger,"identity_counts":{"source_records":len(ledger),"generated":len(specs),"omitted":len(ledger)-len(specs)}}
 
 def render_rust(result):
     lines=["","#[derive(Clone, Copy, Debug, Eq, PartialEq)]","pub(crate) struct KeySpec {", "    pub source_key: &'static str,", "    pub data: ItemListSpec,", "}","","#[rustfmt::skip]","pub(crate) static KEYS_SPECS: &[KeySpec] = &["]

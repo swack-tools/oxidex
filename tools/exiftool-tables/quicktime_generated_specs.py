@@ -36,6 +36,11 @@ REVIEWED_PROCESSOR_SHA256 = {
     "12.64": "3121d19e978bbaf944c0d9698ce597234bb5dbb889dc2c1e4d3e42b11c02b58d",
     "13.59": EXPECTED_PROCESSOR_DEPARSE_SHA256,
 }
+
+
+def source_body_sha256(fact):
+    body = fact.get("__deparse") if isinstance(fact, dict) else None
+    return hashlib.sha256(body.encode()).hexdigest() if isinstance(body, str) else None
 EXPECTED_TABLE_CONTRACT = {"FORMAT": "string", "GROUPS.0": "QuickTime", "GROUPS.1": "ItemList",
                            "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo"}
 EXPECTED_READER_PROTOCOL = {
@@ -85,9 +90,8 @@ def processor_reason(document):
         return "missing_or_changed_processor_contract:PROCESS_PROC"
     if any(processor.get(key) != value for key, value in EXPECTED_PROCESSOR.items()):
         return "missing_or_changed_processor_contract:PROCESS_PROC"
-    body = processor.get("__deparse")
     expected = REVIEWED_PROCESSOR_SHA256.get(document.get("exiftool_version"))
-    if not isinstance(body, str) or expected is None or hashlib.sha256(body.encode()).hexdigest() != expected:
+    if expected is None or source_body_sha256(processor) != expected:
         return "missing_or_changed_processor_contract:PROCESS_PROC"
     meta = document["modules"]["QuickTime"]["tables"]["ItemList"].get("meta", {})
     if (meta.get("FORMAT") != EXPECTED_TABLE_CONTRACT["FORMAT"]
@@ -189,7 +193,8 @@ def compile_document(document):
                    "table_sha256": {family["table"]: family["source_table_sha256"]
                                     for family in base["families"]}},
         "protocol": {"table": "ItemList", "processor_contract": {
-            **EXPECTED_PROCESSOR, "__deparse_sha256": EXPECTED_PROCESSOR_DEPARSE_SHA256,
+            **EXPECTED_PROCESSOR,
+            "__deparse_sha256": source_body_sha256(document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"].get("PROCESS_PROC")),
             **EXPECTED_TABLE_CONTRACT},
                      "processor_provenance": {
                          "source_file": document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"].get("source_file"),
@@ -207,9 +212,10 @@ def compile_document(document):
 def require_nonempty_supported(result, label):
     """Do not publish a compileable empty reader for a populated source table."""
     counts = result["identity_counts"]
-    if counts["source_records"] and not counts["generated"]:
+    source_rows = sum(row["identity"]["table"] == label for row in result["ledger"])
+    if source_rows and not counts["generated"]:
         reason = result["protocol"].get("reason") or "all_source_rows_refused"
-        raise ValueError(f"{label}: {counts['source_records']} source rows but no generated specs ({reason})")
+        raise ValueError(f"{label}: {source_rows} source rows but no generated specs ({reason})")
 
 
 def rust_string(value):
