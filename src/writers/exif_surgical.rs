@@ -243,6 +243,28 @@ pub(crate) fn group_has_content(
     }
 }
 
+/// Whether `scan` walked a directory the group-wide removal `group`
+/// deletes, empty or not: pinned ExifTool 13.59 deletes an empty GPS IFD
+/// or ExifIFD with its IFD0 pointer (Writer.jpg + a MIE whose EXIF's IFD0
+/// points at an empty GPS IFD: `-GPS:All=` 357 -> 335 bytes; an empty
+/// ExifIFD and `-ExifIFD:All=` the same), which [`group_has_content`],
+/// counting entries, does not see.
+pub(crate) fn group_directory_walked(group: GroupRemoval, scan: &ExifScan) -> bool {
+    let walked = |ifds: &[IfdKind]| {
+        scan.raw_entry_counts
+            .iter()
+            .any(|(ifd, _)| ifds.contains(ifd))
+    };
+    match group {
+        GroupRemoval::Carrier => true,
+        GroupRemoval::ExifIfd => walked(&[IfdKind::ExifIfd, IfdKind::Interop]),
+        GroupRemoval::Gps => walked(&[IfdKind::Gps]),
+        GroupRemoval::Ifd1 => walked(&[IfdKind::Ifd1]),
+        GroupRemoval::Interop => walked(&[IfdKind::Interop]),
+        GroupRemoval::MakerNotes => false,
+    }
+}
+
 /// The EXIF rows a write sets: the planned rows of `desired` whose value is
 /// not `original_map`'s. After a carrier- or group-wide removal these, and
 /// only these, are written back (delete first, then set).
@@ -357,6 +379,20 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002e;
 /// IFD0 0xc634 DNGPrivateData, whose Adobe `MakN` record carries a maker
 /// note ExifTool files under MakerNotes.
 const DNG_PRIVATE_DATA: u16 = 0xc634;
+
+/// Whether `entry` is an IFD0 `DNGPrivateData` with an Adobe `MakN` record:
+/// a maker note ExifTool files under MakerNotes (`MakerNotes:All` deletes
+/// it).
+fn is_dng_makernote(entry: &RawEntry) -> bool {
+    entry.ifd == IfdKind::Ifd0
+        && entry.tag_id == DNG_PRIVATE_DATA
+        && crate::parsers::raw::metadata::dng_adobe_makernote_count(&entry.value).unwrap_or(1) > 0
+}
+
+/// Whether `scan` carries a `DNGPrivateData` maker note ([`is_dng_makernote`]).
+pub(crate) fn has_dng_makernote(scan: &ExifScan) -> bool {
+    scan.entries.iter().any(is_dng_makernote)
+}
 
 /// Resolves the group-wide `<group>:All` removals of a write to a
 /// TIFF-structured file (`file_bytes`, read by the reader into `baseline`)

@@ -51,6 +51,224 @@ pub(crate) fn trailer_start_ending_at(file: &[u8], end: usize) -> Option<usize> 
         })
 }
 
+/// What a MIE trailer holds of EXIF, as [`trailer_exif`] finds it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MieExif<'a> {
+    /// The whole trailer was walked and holds no `EXIF` element.
+    Absent,
+    /// The trailer's `EXIF` elements (TIFF structures), every one of them.
+    Held(Vec<&'a [u8]>),
+    /// The trailer may hold one the walk cannot see: a compressed group
+    /// (whose elements are unseen), a compressed `EXIF` element, or an
+    /// element the walk cannot read. Absence is what a caller relies on.
+    Unknown,
+}
+
+/// The EXIF of the MIE trailers ExifTool reads in `file` (`None` without
+/// one): only the trailers ProcessTrailers reaches, walking inward from the
+/// end of the file (`samsung_trailer::mie_trailers_in_chain`) and, for a
+/// JPEG, stopping at `jpeg_trailer_start` (the byte after its EOI). A MIE
+/// object inside an APP segment, a maker note or image data is no trailer
+/// to ExifTool, which leaves it as it is (13.59: Writer.jpg with a MIE
+/// holding Canon.jpg's EXIF inside an APP15 segment, `-IFD0:Make=` and
+/// `-OwnerName=`: `1 image files unchanged`). A walk stopped at a trailer it
+/// cannot size (AFCP, ...) that has a MIE footer anywhere before it is
+/// [`MieExif::Unknown`]: ExifTool may reach a MIE trailer there.
+///
+/// Pinned ExifTool 13.59 writes every EXIF-family set into MIE-Meta's
+/// `EXIF` element as well, creating it (`-IFD0:Artist=x` on
+/// t/images/ExifTool.jpg, `-v2`: `Creating EXIF` under `MIE1-Meta1`), and
+/// applies a deletion to it where it holds the tag (`-IFD0:Artist=` on that
+/// output shrinks the trailer back from 188 to 90 bytes) -- but a deletion
+/// leaves a trailer with no `EXIF` element, or one without the tag, as it
+/// was (ExifTool.jpg's own 90 bytes; `-IFD0:Software=` on the 188).
+///
+/// Every MIE trailer of the chain is walked, not just the last: 13.59
+/// reads a chain of them as one (Writer.jpg + a MIE holding EXIF + one
+/// without: `MIE trailer (278 bytes)`, `[MIE-Doc]` and `[MIE2-Doc]`) and
+/// `-IFD0:Artist=` deletes the inner copy (278 -> 266 bytes).
+pub(crate) fn trailer_exif(file: &[u8], jpeg_trailer_start: Option<usize>) -> Option<MieExif<'_>> {
+    #[cfg(test)]
+    TRAILER_WALKS.with(|walks| walks.set(walks.get() + 1));
+    use crate::parsers::samsung_trailer::{ChainEnd, mie_trailers_in_chain};
+    let (trailers, stop) = mie_trailers_in_chain(file, jpeg_trailer_start);
+    let hidden = match stop {
+        ChainEnd::Done => false,
+        ChainEnd::Unsized(end) => {
+            let before = &file[jpeg_trailer_start.unwrap_or(0).min(end)..end];
+            [SHORT_TRAILER_MARKER, LONG_TRAILER_MARKER]
+                .iter()
+                .any(|marker| memchr::memmem::find(before, marker).is_some())
+        }
+    };
+    if hidden {
+        return Some(MieExif::Unknown);
+    }
+    if trailers.is_empty() {
+        return None;
+    }
+    let mut held = Vec::new();
+    // Innermost first: file order.
+    for &(start, end) in trailers.iter().rev() {
+        match trailer_exif_elements(file, start, end) {
+            MieExif::Absent => {}
+            MieExif::Held(blocks) => held.extend(blocks),
+            MieExif::Unknown => return Some(MieExif::Unknown),
+        }
+    }
+    Some(if held.is_empty() {
+        MieExif::Absent
+    } else {
+        MieExif::Held(held)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`trailer_exif`] ran on this thread: a write
+    /// transaction takes one census of the file, never one per request.
+    pub(crate) static TRAILER_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Where an element of a MIE trailer sits, as far as its `EXIF` matters:
+/// MIE.pm declares one EXIF directory, MIE-Meta's `EXIF`
+/// (`%MIE::Meta{EXIF}`, a `SubDirectory` of `Exif::Main`), inside the
+/// trailer's main `0MIE` group (`%MIE::Main{Meta}`). An `EXIF` element
+/// anywhere else -- a user-defined leaf under `Document`, say -- is no EXIF
+/// to ExifTool (13.59: Writer.jpg + a MIE whose `Document` group holds
+/// Canon.jpg's EXIF as `EXIF`: `-IFD0:Make=` and `-Make=` leave it,
+/// `1 image files unchanged`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MieScope {
+    /// The trailer itself, whose one element is its `0MIE` group.
+    Trailer,
+    /// Inside `0MIE` (`MIE::Main`).
+    Main,
+    /// Inside `0MIE` / `Meta` (`MIE::Meta`): where `EXIF` is EXIF.
+    Meta,
+    /// Anywhere else.
+    Other,
+}
+
+impl MieScope {
+    /// The scope of the group `tag` opens inside this one.
+    fn child(self, tag: &[u8]) -> Self {
+        match (self, tag) {
+            (Self::Trailer, b"0MIE") => Self::Main,
+            (Self::Main, b"Meta") => Self::Meta,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether a group in this scope may hold MIE-Meta's `EXIF`.
+    fn may_hold_exif(self) -> bool {
+        !matches!(self, Self::Other)
+    }
+}
+
+/// ProcessMIEGroup strips `\((.*)\)$` before table lookup (MIE.pm:1495).
+/// Keep the raw tag length for framing, and compare only the normalized name.
+/// The greedy units match starts at the first opening parenthesis after any
+/// newline; arbitrary units bytes need not be UTF-8.
+fn mie_lookup_tag(tag: &[u8]) -> &[u8] {
+    if !tag.ends_with(b")") {
+        return tag;
+    }
+    let start = tag
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    memchr::memchr(b'(', &tag[start..]).map_or(tag, |open| &tag[..start + open])
+}
+
+/// Walks the MIE elements in `file[start..end]` (MIE.pm:1483-1580's element
+/// grammar, as [`subfile_identifier`] reads it), entering every group, for
+/// MIE-Meta's `EXIF` elements ([`MieScope`]).
+fn trailer_exif_elements(file: &[u8], start: usize, end: usize) -> MieExif<'_> {
+    let mut held = Vec::new();
+    // Sized groups (non-zero data length) hold their elements in their
+    // data; they are walked as their own ranges, in their own byte order
+    // (a group's `format & 0x08` governs its contents, not its own header;
+    // the trailer's `0MIE` header reads its length in its own order, as
+    // `subfile_identifier` reads a `.mie` file's).
+    let top = file.get(start + 1).is_some_and(|format| format & 0x08 != 0);
+    let mut ranges: Vec<(usize, usize, usize, bool, MieScope)> =
+        vec![(start, end, 1, top, MieScope::Trailer)];
+    let mut budget = MAX_TOP_LEVEL_ELEMENTS * 10;
+    while let Some((mut cursor, end, depth, order, scope)) = ranges.pop() {
+        if depth > 64 {
+            return MieExif::Unknown;
+        }
+        // The byte order and scope in effect at each open streamed depth.
+        let mut open: Vec<(bool, MieScope)> = vec![(order, scope)];
+        while cursor < end {
+            budget = match budget.checked_sub(1) {
+                Some(left) => left,
+                None => return MieExif::Unknown,
+            };
+            let Some(header) = file.get(cursor..cursor + 4) else {
+                return MieExif::Unknown;
+            };
+            if header[0] != b'~' {
+                return MieExif::Unknown;
+            }
+            let (format, tag_len, len_code) = (header[1], usize::from(header[2]), header[3]);
+            let tag_start = cursor + 4;
+            let Some(tag) = file.get(tag_start..tag_start + tag_len) else {
+                return MieExif::Unknown;
+            };
+            let (little_endian, scope) = open.last().copied().unwrap_or((false, MieScope::Other));
+            let Some((data_len, width)) =
+                mie_data_length(file, tag_start + tag_len, len_code, little_endian)
+            else {
+                return MieExif::Unknown;
+            };
+            let data_start = tag_start + tag_len + width;
+            let Some(data_end) = data_start.checked_add(data_len).filter(|e| *e <= end) else {
+                return MieExif::Unknown;
+            };
+            cursor = data_end;
+            let tag = mie_lookup_tag(tag);
+            if tag == b"EXIF" && scope == MieScope::Meta {
+                if format & 0x04 != 0 || format & 0xf0 == 0x10 {
+                    return MieExif::Unknown;
+                }
+                held.push(&file[data_start..data_end]);
+                continue;
+            }
+            if tag_len == 0 {
+                // A group terminator closes the innermost streamed group.
+                if open.len() > 1 {
+                    open.pop();
+                }
+                continue;
+            }
+            if format & 0xf0 == 0x10 {
+                let inner = scope.child(tag);
+                if format & 0x04 != 0 {
+                    // A compressed group: its elements are unseen. One
+                    // that cannot hold MIE-Meta's EXIF is skipped whole
+                    // when sized; a streamed one cannot be skipped.
+                    if inner.may_hold_exif() || data_len == 0 {
+                        return MieExif::Unknown;
+                    }
+                    continue;
+                }
+                if data_len == 0 {
+                    open.push((format & 0x08 != 0, inner));
+                } else {
+                    ranges.push((data_start, data_end, depth + 1, format & 0x08 != 0, inner));
+                }
+            }
+        }
+    }
+    if held.is_empty() {
+        MieExif::Absent
+    } else {
+        MieExif::Held(held)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MieTrailer {
     start: usize,
@@ -1150,6 +1368,125 @@ mod tests {
         }
         file.extend_from_slice(&[byte_order, length_width as u8]);
         file
+    }
+
+    /// A JPEG-like prefix, then a big-endian MIE trailer whose streamed
+    /// `0MIE` group holds `body`, closed by the `zmie` footer.
+    fn trailer_holding(body: &[u8]) -> Vec<u8> {
+        let mut file = b"image data".to_vec();
+        let start = file.len();
+        file.extend_from_slice(b"~\x10\x04\xfe0MIE\0\0\0\0");
+        file.extend_from_slice(body);
+        file.extend_from_slice(b"~\0\x04\0zmie~\0\0\x06");
+        let length = (file.len() + 4 + 2 - start) as u32;
+        file.extend_from_slice(&length.to_be_bytes());
+        file.extend_from_slice(&[0x10, 4]);
+        file
+    }
+
+    /// `trailer_exif` finds every `EXIF` element the trailer holds, proves
+    /// absence only from a trailer it walked whole, and answers `None`
+    /// without a trailer.
+    #[test]
+    fn trailer_exif_proves_absence_only_from_a_whole_walk() {
+        let doc = b"~\x10\x04\0Meta~\x10\x08\0Document~\x28\x09\x01Copyrightx~\0\0\0~\0\0\0";
+        assert_eq!(
+            trailer_exif(&trailer_holding(doc), None),
+            Some(MieExif::Absent)
+        );
+        let streamed = b"~\x10\x04\0Meta~\0\x04\x04EXIFMM\0*~\0\0\0";
+        let tiff: &[u8] = b"MM\0*";
+        let file = trailer_holding(streamed);
+        assert_eq!(trailer_exif(&file, None), Some(MieExif::Held(vec![tiff])));
+        let sized = b"~\x10\x04\x0cMeta~\0\x04\x04EXIFMM\0*";
+        let file = trailer_holding(sized);
+        assert_eq!(trailer_exif(&file, None), Some(MieExif::Held(vec![tiff])));
+        for opaque in [
+            &b"~\x14\x04\x03Metaxyz"[..],
+            b"~\x10\x04\0Meta~\x04\x04\x04EXIFxyzw~\0\0\0",
+            b"~\x10\x04\0Meta!",
+        ] {
+            let file = trailer_holding(opaque);
+            assert_eq!(
+                trailer_exif(&file, None),
+                Some(MieExif::Unknown),
+                "{opaque:?}"
+            );
+        }
+        assert_eq!(trailer_exif(b"image data with no trailer", None), None);
+        // An inner trailer holding EXIF before an outer one without it.
+        let inner = trailer_holding(streamed);
+        let two = [&inner[..], &trailer_holding(doc)[b"image data".len()..]].concat();
+        assert_eq!(trailer_exif(&two, None), Some(MieExif::Held(vec![tiff])));
+        if let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") {
+            let file = std::fs::read(&path).expect("pinned ExifTool.jpg");
+            // Its outermost trailer is Vivo, which ProcessVivo sizes only
+            // from the JPEG's TrailerStart: without it the walk stops there.
+            let trailer_start = crate::writers::exif_surgical::jpeg_scan_start(&file)
+                .and_then(|from| crate::parsers::vivo::jpeg_trailer_start(&file, from));
+            assert!(trailer_start.is_some());
+            assert_eq!(
+                trailer_exif(&file, trailer_start),
+                Some(MieExif::Absent),
+                "no EXIF in its MIE"
+            );
+            assert_eq!(trailer_exif(&file, None), None, "behind Vivo");
+        }
+    }
+
+    /// PR #966 review 4112736395: only MIE-Meta's `EXIF` is EXIF; an `EXIF`
+    /// leaf under `Document`, directly under `0MIE`, or inside a group
+    /// nested below `Meta` is not. A compressed group that cannot hold
+    /// MIE-Meta's `EXIF` is skipped whole; one that can proves nothing.
+    #[test]
+    fn trailer_exif_counts_only_mie_meta_exif() {
+        let tiff: &[u8] = b"MM\0*";
+        for (label, body) in [
+            (
+                "Document/EXIF",
+                &b"~\x10\x04\0Meta~\x10\x08\0Document~\0\x04\x04EXIFMM\0*~\0\0\0~\0\0\0"[..],
+            ),
+            ("0MIE/EXIF", b"~\0\x04\x04EXIFMM\0*"),
+            (
+                "Meta/Image/EXIF",
+                b"~\x10\x04\0Meta~\x10\x05\0Image~\0\x04\x04EXIFMM\0*~\0\0\0~\0\0\0",
+            ),
+            ("Geo(sized)/EXIF", b"~\x10\x03\x0cGeo~\0\x04\x04EXIFMM\0*"),
+            (
+                "compressed Doc",
+                b"~\x10\x04\0Meta~\x14\x08\x03Documentxyz~\0\0\0",
+            ),
+        ] {
+            let file = trailer_holding(body);
+            assert_eq!(trailer_exif(&file, None), Some(MieExif::Absent), "{label}");
+        }
+        // Meta after a Document holding an `EXIF` leaf: only Meta's counts.
+        let body = b"~\x10\x04\0Meta~\x10\x08\0Document~\0\x04\x04EXIFII*\0~\0\0\0~\0\x04\x04EXIFMM\0*~\0\0\0";
+        assert_eq!(
+            trailer_exif(&trailer_holding(body), None),
+            Some(MieExif::Held(vec![tiff]))
+        );
+    }
+
+    /// PR #966 review 4112736393: only the MIE trailers ProcessTrailers
+    /// reaches from the end of the file count. A valid MIE object followed
+    /// by bytes no trailer ends with (a MIE inside an APP segment, image
+    /// data) is none; one behind a trailer the walk cannot size (AFCP) may
+    /// be reached by ExifTool, so it proves nothing.
+    #[test]
+    fn trailer_exif_reads_only_the_trailer_chain() {
+        let meta_exif = b"~\x10\x04\0Meta~\0\x04\x04EXIFMM\0*~\0\0\0";
+        let trailer = trailer_holding(meta_exif);
+        assert_eq!(
+            trailer_exif(&trailer, None),
+            Some(MieExif::Held(vec![&b"MM\0*"[..]]))
+        );
+        let embedded = [&trailer[..], b"\xff\xd9"].concat();
+        assert_eq!(trailer_exif(&embedded, None), None, "not at the end");
+        let behind_afcp = [&trailer[..], b"AXS!\0\0\0\0\0\0\0\0"].concat();
+        assert_eq!(trailer_exif(&behind_afcp, None), Some(MieExif::Unknown));
+        let afcp_only = [&b"image data"[..], b"AXS!\0\0\0\0\0\0\0\0"].concat();
+        assert_eq!(trailer_exif(&afcp_only, None), None);
     }
 
     #[test]

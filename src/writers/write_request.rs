@@ -838,28 +838,237 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
         .map(|(key, _)| key)
 }
 
-/// Refuses an ungrouped request resolved to the EXIF-family `key` in a file
-/// that carries MIE: pinned 13.59
-/// writes an EXIF tag into MIE-Meta's own EXIF directory as well, creating
-/// it (`-IFD0:CalibrationIlluminant1#=20` on t/images/ExifTool.jpg, `-v2`:
-/// `Creating EXIF` under `MIE1-Meta1`, and two `[IFD0]
-/// CalibrationIlluminant1` rows after), and oxidex writes no MIE.
-pub(crate) fn ensure_no_mie_copy(tag: &str, key: &str, baseline: &MetadataMap) -> Result<()> {
+/// One EXIF element of a MIE trailer: its TIFF structure, and the rows the
+/// EXIF reader decodes from it (`core::operations::parse_tiff_metadata`;
+/// empty where the reader cannot read it).
+#[derive(Debug)]
+pub(crate) struct MieExifBlock {
+    pub tiff: Vec<u8>,
+    pub rows: MetadataMap,
+}
+
+/// What a file carries of MIE, as [`ensure_no_mie_copy`] asks it: taken once
+/// per request, or per write transaction, from the file's bytes
+/// (`core::operations::mie_census`), never once per requested tag (a walk
+/// of the trailer chain, and for a JPEG a scan for its EOI, are
+/// file-sized).
+#[derive(Debug)]
+pub(crate) enum MieCensus {
+    /// A file ExifTool reads no MIE trailer after (a PNG's IEND ends it;
+    /// a `.mie` document is its own writer's to refuse): the reader's MIE
+    /// rows alone say whether it carries MIE, whose EXIF is then unseen.
+    NotATrailerCarrier,
+    /// A JPEG or TIFF-structured file whose trailer chain holds no MIE
+    /// trailer ([`crate::parsers::mie::trailer_exif`]).
+    NoTrailer,
+    /// MIE trailers, none of which holds MIE-Meta's `EXIF`.
+    Absent,
+    /// Every MIE-Meta `EXIF` element of the file's MIE trailers.
+    Held(Vec<MieExifBlock>),
+    /// MIE trailers that may hold an `EXIF` element the walk cannot see.
+    Unknown,
+}
+
+impl MieCensus {
+    /// The MIE-Meta EXIF blocks the census holds (none unless
+    /// [`MieCensus::Held`]).
+    #[cfg(test)]
+    fn blocks(&self) -> &[MieExifBlock] {
+        match self {
+            Self::Held(blocks) => blocks,
+            _ => &[],
+        }
+    }
+
+    /// The census of a file ExifTool reads MIE trailers after (a JPEG,
+    /// with `jpeg_trailer_start` the byte after its EOI, or a
+    /// TIFF-structured file): each EXIF block decoded once.
+    pub(crate) fn of_trailers(file: &[u8], jpeg_trailer_start: Option<usize>) -> Self {
+        use crate::parsers::mie::{MieExif, trailer_exif};
+        match trailer_exif(file, jpeg_trailer_start) {
+            None => Self::NoTrailer,
+            Some(MieExif::Absent) => Self::Absent,
+            Some(MieExif::Unknown) => Self::Unknown,
+            Some(MieExif::Held(blocks)) => Self::Held(
+                blocks
+                    .into_iter()
+                    .map(|tiff| MieExifBlock {
+                        tiff: tiff.to_vec(),
+                        rows: crate::core::metadata_map::file_rows(|| {
+                            crate::core::operations::parse_tiff_metadata(
+                                &super::exif_surgical::SliceReader(tiff),
+                            )
+                            .unwrap_or_default()
+                        }),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// Refuses a request -- grouped or not -- resolved to the EXIF-family `key`
+/// in a file that carries MIE, wherever pinned 13.59 also edits MIE-Meta's
+/// own EXIF copy, which oxidex does not write. `mie` is the file's
+/// [`MieCensus`].
+///
+/// - A set is written into MIE's EXIF as well, which ExifTool creates when
+///   the trailer has none (`-IFD0:Artist=x` and `-IFD0:CalibrationIlluminant1#=20`
+///   on t/images/ExifTool.jpg, `-v2`: `Creating EXIF` under `MIE1-Meta1`,
+///   and two `[IFD0]` rows after): always refused.
+/// - A deletion (a tag, or `<group>:All`) is applied to MIE's EXIF where
+///   that holds the tag (`-IFD0:Artist=` on the output above shrinks the
+///   trailer from 188 to 90 bytes) and leaves a trailer without it as it was
+///   (ExifTool.jpg's own, which has no EXIF; `-IFD0:Software=` on the 188):
+///   refused unless every MIE-Meta EXIF block is proven not to hold the
+///   tag. An EXIF block the scan cannot read proves nothing: 13.59 reads
+///   one whose TIFF magic is not 42 anyway and deletes from it.
+///   - `<group>:All`, in any spelling (`-gps:all=`), is decided by the
+///     group it names (`exif_surgical::group_removal`): `MakerNotes:All`
+///     deletes a block's maker note -- an Adobe `DNGPrivateData` `MakN`
+///     note too (Writer.jpg + a MIE holding t/images/DNG.dng:
+///     13967 -> 5593 bytes) -- except a 0x927c note ExifTool files under
+///     ExifIFD (`MakerNoteUnknownText`, `MakerNoteUnknownBinary`,
+///     `MakerNoteSamsung1a`), which it leaves (`1 image files unchanged`),
+///     as the block's own decoded rows tell.
+///   - A named tag, by the no-op scan every EXIF deletion is decided by
+///     (`exif_surgical::exif_request_is_no_op`) and the block's decoded rows.
+///   - A bare name is deleted from MIE's maker note as well, where that may
+///     hold it (`makernote_may_hold` on the block's rows, as for the main
+///     EXIF's note; Writer.jpg + a MIE holding Nikon.jpg's EXIF, which has
+///     no ExifIFD WhiteBalance: `-WhiteBalance=` resolves to
+///     `ExifIFD:WhiteBalance` and 13.59 deletes `[Nikon] WhiteBalance`,
+///     1747 -> 1731 bytes).
+/// - A maker-note tag (`-MakerNotes:OwnerName=`, `-Canon:OwnerName=`, set
+///   or deletion) is edited in MIE's EXIF where that carries a maker note
+///   (Writer.jpg with a MIE holding Canon.jpg's EXIF: `[Canon] OwnerName`
+///   emptied, 2490 -> 2496 bytes, although the main EXIF has no maker
+///   note); ExifTool creates no maker note, so a MIE without one is left
+///   alone.
+pub(crate) fn ensure_no_mie_copy(
+    tag: &str,
+    key: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+    mie: &MieCensus,
+) -> Result<()> {
+    use super::exif_surgical::{
+        EXIF_BLOCK_MAGICS, GroupRemoval, exif_request_is_no_op, group_directory_walked,
+        group_has_content, group_removal, has_dng_makernote, is_makernote_group, makernote_census,
+        scan_entries_with_magics,
+    };
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    let removed_group = if removal { group_removal(key) } else { None };
+    let makernote = removed_group.is_none()
+        && (group.eq_ignore_ascii_case("MakerNotes") || is_makernote_group(group));
     let exif = matches!(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "SubIFD"
-    ) || super::exif_surgical::chain_key_dir(key).is_some();
-    match mie_row(baseline) {
-        Some(mie) if exif => Err(refuse(
+    ) || super::exif_surgical::chain_key_dir(key).is_some()
+        || removed_group.is_some();
+    if !exif && !makernote {
+        return Ok(());
+    }
+    let (mie_name, blocks): (String, Option<&[MieExifBlock]>) = match mie {
+        MieCensus::NoTrailer => return Ok(()),
+        MieCensus::NotATrailerCarrier => match mie_row(baseline) {
+            Some(row) => (row.to_string(), None),
+            None => return Ok(()),
+        },
+        MieCensus::Absent => ("a MIE trailer".to_string(), Some(&[])),
+        MieCensus::Held(blocks) => ("a MIE trailer".to_string(), Some(blocks.as_slice())),
+        MieCensus::Unknown => ("a MIE trailer".to_string(), None),
+    };
+    let scans = |blocks: &[MieExifBlock]| -> Option<Vec<_>> {
+        blocks
+            .iter()
+            .map(|block| scan_entries_with_magics(&block.tiff, EXIF_BLOCK_MAGICS).ok())
+            .collect()
+    };
+    if makernote {
+        let untouched = blocks.is_some_and(|blocks| {
+            let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
+            makernote_census(&tiffs, EXIF_BLOCK_MAGICS).tag_bearing == 0
+        });
+        if untouched {
+            return Ok(());
+        }
+        return Err(refuse(
             tag,
             format!(
-                "the file carries MIE ({mie}), whose EXIF directory ExifTool also writes \
-                 {key} to, which oxidex cannot write"
+                "the file carries MIE ({mie_name}) whose EXIF directory holds a maker note (or \
+                 may), where ExifTool also edits {key}, which oxidex cannot write"
             ),
-        )),
-        _ => Ok(()),
+        ));
     }
+    if !removal {
+        return Err(refuse(
+            tag,
+            format!(
+                "the file carries MIE ({mie_name}), whose EXIF directory ExifTool also writes \
+                 {key} to (creating it), which oxidex cannot write"
+            ),
+        ));
+    }
+    let untouched = blocks.is_some_and(|blocks| {
+        let Some(scans) = scans(blocks) else {
+            return false;
+        };
+        blocks
+            .iter()
+            .zip(&scans)
+            .all(|(block, scan)| match removed_group {
+                // The block's decoded rows tell a note ExifTool files under
+                // ExifIFD; a DNGPrivateData maker note is deleted as well.
+                Some(GroupRemoval::MakerNotes) => {
+                    !group_has_content(GroupRemoval::MakerNotes, scan, &block.rows)
+                        && !has_dng_makernote(scan)
+                }
+                // An empty directory the group names goes too.
+                Some(group) => {
+                    !group_has_content(group, scan, &block.rows)
+                        && !group_directory_walked(group, scan)
+                }
+                None => {
+                    !block.rows.contains_key(key)
+                        && exif_request_is_no_op(
+                            &[block.tiff.as_slice()],
+                            &[block.tiff.as_slice()],
+                            EXIF_BLOCK_MAGICS,
+                            false,
+                            &MetadataMap::new(),
+                            &MetadataMap::new(),
+                            &[key.to_string()],
+                        )
+                }
+            })
+    });
+    // A bare name is deleted from every group that holds it: MIE's maker
+    // note too, where that may hold it -- decided as for the main EXIF's
+    // own note (`ensure_not_also_updated`), from the block's decoded rows.
+    if untouched
+        && !tag.contains(':')
+        && let Some(reason) = blocks.unwrap_or_default().iter().find_map(|block| {
+            makernote_may_hold(key.rsplit(':').next().unwrap_or(key), &block.rows, &|| {
+                makernote_census(&[block.tiff.as_slice()], EXIF_BLOCK_MAGICS)
+            })
+        })
+    {
+        return Err(refuse(
+            tag,
+            format!("the file carries MIE ({mie_name}) with its own EXIF, and {reason}"),
+        ));
+    }
+    if untouched {
+        return Ok(());
+    }
+    Err(refuse(
+        tag,
+        format!(
+            "the file carries MIE ({mie_name}) whose EXIF directory holds {key} (or may), \
+             which ExifTool also deletes and oxidex cannot write"
+        ),
+    ))
 }
 
 /// Whether a row the reader files under family-1 `group` can be a candidate
@@ -1671,9 +1880,239 @@ mod tests {
         );
         let mut mie = MetadataMap::new();
         mie.insert("MIE:TrailerSignature", TagValue::new_string("x"));
-        assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &mie).is_err());
-        assert!(ensure_no_mie_copy("PNG:Title", "PNG:Title", &mie).is_ok());
-        assert!(ensure_no_mie_copy("Artist", "IFD0:Artist", &MetadataMap::new()).is_ok());
+        let empty = MetadataMap::new();
+        for removal in [false, true] {
+            assert!(
+                ensure_no_mie_copy(
+                    "Artist",
+                    "IFD0:Artist",
+                    &mie,
+                    removal,
+                    &MieCensus::NotATrailerCarrier
+                )
+                .is_err()
+            );
+            assert!(
+                ensure_no_mie_copy(
+                    "PNG:Title",
+                    "PNG:Title",
+                    &mie,
+                    removal,
+                    &MieCensus::NotATrailerCarrier
+                )
+                .is_ok()
+            );
+            assert!(
+                ensure_no_mie_copy(
+                    "Artist",
+                    "IFD0:Artist",
+                    &empty,
+                    removal,
+                    &MieCensus::NotATrailerCarrier
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    /// A big-endian TIFF: IFD0 holding `ifd0` (tag, type, value bytes) and,
+    /// when `exif` is not empty, an ExifIFD holding those. Every value is
+    /// stored out of line (each is longer than four bytes).
+    fn tiff_with(ifd0: &[(u16, u16, &[u8])], exif: &[(u16, u16, &[u8])]) -> Vec<u8> {
+        let ifd_len = |n: usize| 2 + 12 * n + 4;
+        let n0 = ifd0.len() + usize::from(!exif.is_empty());
+        let exif_at = 8 + ifd_len(n0);
+        let mut data_at = exif_at
+            + if exif.is_empty() {
+                0
+            } else {
+                ifd_len(exif.len())
+            };
+        let mut data = Vec::new();
+        let mut ifd = |entries: &[(u16, u16, &[u8])], pointer: Option<usize>| {
+            let mut out = ((entries.len() + usize::from(pointer.is_some())) as u16)
+                .to_be_bytes()
+                .to_vec();
+            for (tag, kind, value) in entries {
+                out.extend_from_slice(&tag.to_be_bytes());
+                out.extend_from_slice(&kind.to_be_bytes());
+                out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+                out.extend_from_slice(&(data_at as u32).to_be_bytes());
+                data.extend_from_slice(value);
+                data_at += value.len();
+            }
+            if let Some(at) = pointer {
+                out.extend_from_slice(&[0x87, 0x69, 0, 4, 0, 0, 0, 1]);
+                out.extend_from_slice(&(at as u32).to_be_bytes());
+            }
+            out.extend_from_slice(&[0; 4]);
+            out
+        };
+        let mut out = b"MM\0*\0\0\0\x08".to_vec();
+        out.extend(ifd(ifd0, (!exif.is_empty()).then_some(exif_at)));
+        if !exif.is_empty() {
+            out.extend(ifd(exif, None));
+        }
+        out.extend(data);
+        out
+    }
+
+    /// A MIE census holding `tiff` as its one MIE-Meta EXIF block, decoded
+    /// as `MieCensus::of_trailers` decodes one.
+    fn census_holding(tiff: Vec<u8>) -> MieCensus {
+        let rows = crate::core::metadata_map::file_rows(|| {
+            crate::core::operations::parse_tiff_metadata(&super::super::exif_surgical::SliceReader(
+                &tiff,
+            ))
+            .unwrap_or_default()
+        });
+        MieCensus::Held(vec![MieExifBlock { tiff, rows }])
+    }
+
+    /// MIE deletion safety shares PR960's Adobe framing and record count.
+    #[test]
+    fn mie_dng_census_uses_framed_adobe_records() {
+        use super::super::exif_surgical::{EXIF_BLOCK_MAGICS, makernote_census};
+        let record = |tag: &[u8; 4], payload: &[u8]| {
+            let mut bytes = tag.to_vec();
+            bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(payload);
+            if payload.len() & 1 == 1 {
+                bytes.push(0);
+            }
+            bytes
+        };
+        let foreign = record(b"XxxN", b"payload MakN text");
+        let mut two = record(b"MakN", b"II\0\0\0\0");
+        two.extend(record(b"MakN", b"MM\0\0\0\0"));
+        let malformed = [foreign.clone(), b"MakN\0\0\0\x06II".to_vec()].concat();
+        let empty = MetadataMap::new();
+        for (label, records, count, refused) in [
+            ("foreign payload", foreign, Some(0), false),
+            ("two actual records", two, Some(2), true),
+            ("malformed successor", malformed, None, true),
+        ] {
+            let data = [b"Adobe\0".as_slice(), &records].concat();
+            let tiff = tiff_with(&[(0xc634, 7, &data)], &[]);
+            let mut mie = b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\x04\xfeEXIF".to_vec();
+            mie.extend_from_slice(&(tiff.len() as u32).to_be_bytes());
+            mie.extend_from_slice(&tiff);
+            mie.extend_from_slice(b"~\0\0\0~\0\x04\0zmie~\0\0\x06");
+            let total = mie.len() as u32 + 6;
+            mie.extend_from_slice(&total.to_be_bytes());
+            mie.extend_from_slice(&[0x10, 4]);
+            let census = MieCensus::of_trailers(&mie, None);
+            let blocks = census.blocks();
+            assert_eq!(blocks.len(), 1, "{label}: MIE EXIF block");
+            let notes = makernote_census(&[&blocks[0].tiff], EXIF_BLOCK_MAGICS);
+            match count {
+                Some(count) => {
+                    assert_eq!((notes.notes, notes.tag_bearing), (count, count), "{label}")
+                }
+                None => assert_eq!(
+                    notes.notes,
+                    super::super::exif_surgical::MakerNoteCensus::UNKNOWN.notes,
+                    "{label}"
+                ),
+            }
+            for (tag, removal) in [("MakerNotes:All", true), ("MakerNotes:OwnerName", false)] {
+                assert_eq!(
+                    ensure_no_mie_copy(tag, tag, &empty, removal, &census).is_err(),
+                    refused,
+                    "{label}: {tag}"
+                );
+            }
+        }
+    }
+
+    /// PR #966 review threads on the MIE census: a group removal in any
+    /// spelling (4112736390), a DNGPrivateData maker note (4112736397), a
+    /// note ExifTool files under ExifIFD (4113020034), and what each census
+    /// proves.
+    #[test]
+    fn mie_census_decides_deletions_as_the_oracle_does() {
+        let empty = MetadataMap::new();
+        let make: &[u8] = b"FooCam\0";
+        let dng = tiff_with(
+            &[
+                (0x010f, 2, make),
+                (0xc634, 1, b"Adobe\0MakN\0\0\0\x04II\0\0"),
+            ],
+            &[],
+        );
+        let unknown_note = tiff_with(
+            &[(0x010f, 2, make)],
+            &[(0x927c, 7, b"Plain text maker note\0")],
+        );
+        let gps_all = |census: &MieCensus, spelling: &str| {
+            ensure_no_mie_copy(spelling, spelling, &empty, true, census)
+        };
+        let dng = census_holding(dng);
+        assert!(gps_all(&dng, "MakerNotes:All").is_err(), "DNG MakN note");
+        assert!(gps_all(&dng, "makernotes:all").is_err(), "any spelling");
+        assert!(gps_all(&dng, "gps:all").is_ok(), "no GPS in MIE's EXIF");
+        // Codex pre-review of 1fdcc215: an empty GPS IFD (or ExifIFD) the
+        // block's IFD0 points at is deleted with its pointer.
+        let empty_ifd = |pointer: u16| {
+            // IFD0 at 8 (Make at 38, then a pad byte), an empty IFD at 46.
+            let mut tiff = b"MM\0*\0\0\0\x08\0\x02\x01\x0f\0\x02\0\0\0\x07\0\0\0\x26".to_vec();
+            tiff.extend_from_slice(&pointer.to_be_bytes());
+            tiff.extend_from_slice(b"\0\x04\0\0\0\x01\0\0\0\x2e\0\0\0\0FooCam\0\0\0\0\0\0\0\0");
+            census_holding(tiff)
+        };
+        assert!(
+            gps_all(&empty_ifd(0x8825), "GPS:All").is_err(),
+            "empty GPS IFD"
+        );
+        assert!(
+            gps_all(&empty_ifd(0x8769), "ExifIFD:All").is_err(),
+            "empty ExifIFD"
+        );
+        assert!(gps_all(&empty_ifd(0x8825), "IFD1:All").is_ok(), "no IFD1");
+        assert!(gps_all(&dng, "IFD0:All").is_err(), "the block goes");
+        let unknown_note = census_holding(unknown_note);
+        assert!(
+            unknown_note
+                .blocks()
+                .iter()
+                .any(|block| block.rows.contains_key("ExifIFD:MakerNoteUnknownText")),
+            "the reader files the note under ExifIFD"
+        );
+        assert!(gps_all(&unknown_note, "MakerNotes:All").is_ok());
+        assert!(gps_all(&unknown_note, "ExifIFD:All").is_err());
+        assert!(ensure_no_mie_copy("IFD0:Make", "IFD0:Make", &empty, true, &unknown_note).is_err());
+        assert!(
+            ensure_no_mie_copy("IFD0:Model", "IFD0:Model", &empty, true, &unknown_note).is_ok()
+        );
+        // Sets are refused wherever ExifTool reads a MIE trailer; nothing is
+        // refused without one.
+        for census in [&MieCensus::Absent, &MieCensus::Unknown, &unknown_note] {
+            assert!(ensure_no_mie_copy("IFD0:Model", "IFD0:Model", &empty, false, census).is_err());
+        }
+        assert!(
+            ensure_no_mie_copy(
+                "IFD0:Model",
+                "IFD0:Model",
+                &empty,
+                false,
+                &MieCensus::NoTrailer
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_no_mie_copy("IFD0:Model", "IFD0:Model", &empty, true, &MieCensus::Absent)
+                .is_ok()
+        );
+        assert!(
+            ensure_no_mie_copy(
+                "IFD0:Model",
+                "IFD0:Model",
+                &empty,
+                true,
+                &MieCensus::Unknown
+            )
+            .is_err()
+        );
     }
 
     #[test]

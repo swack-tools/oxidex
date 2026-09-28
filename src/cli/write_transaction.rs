@@ -657,6 +657,7 @@ fn apply_sets(
             .enumerate()
             .filter(|(_, (_, value))| value.is_empty())
             .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+        None,
     );
     // Read once for every bare name the loop types (`Some(None)` when the
     // file cannot be read: the name is typed as spelled, and the

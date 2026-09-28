@@ -1768,15 +1768,93 @@ pub(crate) fn resolve_write_address(
     baseline: &MetadataMap,
 ) -> Result<String> {
     let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    // An address lookup does not know whether a set or a deletion will
+    // follow, so it refuses only where both are refused: where a MIE
+    // trailer's EXIF copy holds the tag (or may). A set is refused wherever
+    // ExifTool reads a MIE trailer at all -- the write itself decides that
+    // (`core::write_transaction::plan_changes`).
+    ensure_no_mie_copy_for(path, tag_name, &key, baseline, true)?;
     addressed?;
     Ok(key)
+}
+
+/// Refuses the request `tag_name`, resolved to `key`, where pinned 13.59
+/// would also edit the EXIF copy a MIE trailer of the file at `path` carries
+/// (`write_request::ensure_no_mie_copy`), which oxidex does not write.
+/// `removal` says whether the request is a deletion, which 13.59 applies
+/// to fewer copies than a set.
+///
+/// A transaction asks the same question of the requests left after its
+/// same-field reduction, on one census of the file ([`mie_census`], taken
+/// once by `core::write_transaction::plan_changes`): a set a later
+/// deletion of the field overrides is never ExifTool's to write (13.59:
+/// `-IFD0:XPTitle=x -IFD0:XPTitle=` on t/images/ExifTool.jpg is
+/// `unchanged`, `-IFD0:Artist=x -IFD0:Artist=` deletes the main Artist and
+/// leaves the MIE trailer's 90 bytes as they were). ExifTool reads a MIE
+/// trailer after a JPEG or a TIFF-structured file (DNG, CR2), not after a
+/// PNG's IEND.
+pub(crate) fn ensure_no_mie_copy_for(
+    path: &Path,
+    tag_name: &str,
+    key: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+) -> Result<()> {
+    crate::writers::write_request::ensure_no_mie_copy(
+        tag_name.strip_suffix('#').unwrap_or(tag_name),
+        key,
+        baseline,
+        removal,
+        &mie_census(path)?,
+    )
+}
+
+/// The MIE census of the file at `path` (`write_request::MieCensus`), for
+/// [`ensure_no_mie_copy_for`] and a write transaction, which takes it once
+/// for all of its requests: the MIE trailers of a JPEG (whose trailer chain
+/// ends at the byte after its EOI) or a TIFF-structured file; any other
+/// file is no trailer carrier to ExifTool. A `.mie` document is not either:
+/// oxidex writes no MIE file at all, and its writer's refusal answers for
+/// it.
+pub(crate) fn mie_census(path: &Path) -> Result<crate::writers::write_request::MieCensus> {
+    let reader = MMapReader::new(path)?;
+    mie_census_with_reader(&reader)
+}
+
+pub(crate) fn mie_census_with_reader(
+    reader: &MMapReader,
+) -> Result<crate::writers::write_request::MieCensus> {
+    use crate::writers::write_request::MieCensus;
+    let format = detect_format(reader)?;
+    if matches!(format, FileFormat::MIE) {
+        return Ok(MieCensus::NoTrailer);
+    }
+    let jpeg = matches!(format, FileFormat::JPEG);
+    if !jpeg && !is_surgical_tiff_target(format, reader) {
+        return Ok(MieCensus::NotATrailerCarrier);
+    }
+    let file = reader.read(0, reader.size() as usize)?;
+    let trailer_start = if jpeg {
+        // The writer's scan boundary also accepts EOI before SOS. MIE is
+        // read only after ProcessJPEG traverses an actual SOS to its EOI.
+        let trailer_start = crate::parsers::vivo::jpeg_sos_marker_end(file)
+            .and_then(|after_marker| crate::parsers::vivo::jpeg_trailer_start(file, after_marker));
+        let Some(trailer_start) = trailer_start else {
+            return Ok(MieCensus::NoTrailer);
+        };
+        Some(trailer_start)
+    } else {
+        None
+    };
+    Ok(MieCensus::of_trailers(file, trailer_start))
 }
 
 /// [`resolve_write_address`] in two parts: the resolved key (or the error
 /// resolving it), and whether the format's writer addresses that key. A
 /// removal asks whether it is a no-op between the two (`remove_tag`): a
 /// deletion that names nothing succeeds untouched even where the writer
-/// could not have written the key.
+/// could not have written the key. Whether a MIE trailer's EXIF copy also
+/// takes the request is asked separately ([`ensure_no_mie_copy_for`]).
 pub(crate) fn resolve_write_key_for(
     path: &Path,
     tag_name: &str,
@@ -1841,7 +1919,6 @@ pub(crate) fn resolve_write_key_in_request_with_reader(
     // apply_sets`), and a library or C ABI caller's typed value is raw
     // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
     let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
-    let ungrouped = !tag_name.contains(':');
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1935,13 +2012,6 @@ pub(crate) fn resolve_write_key_in_request_with_reader(
     } else {
         resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
-    // An ungrouped EXIF write in a file with MIE is written into MIE's EXIF
-    // too (pinned 13.59), set or deletion alike; refused, never half-done.
-    // (A grouped `-IFD0:Artist=` there is the same in 13.59; oxidex's
-    // EXIF-only write of it predates this resolver and is left as it was.)
-    if ungrouped {
-        crate::writers::write_request::ensure_no_mie_copy(tag_name, &key, baseline)?;
-    }
     crate::writers::write_request::ensure_makernote_entry_not_named(
         tag_name,
         &key,
@@ -2229,12 +2299,26 @@ pub(crate) fn plan_group_deletion_with_reader(
     group: &str,
     baseline: &MetadataMap,
     reader: &MMapReader,
+    mie: &crate::writers::write_request::MieCensus,
 ) -> Result<Option<String>> {
     let key = format!("{group}:All");
     let format = detect_format(reader)?;
     if crate::writers::exif_surgical::group_removal(&key).is_some() {
-        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
-            || is_surgical_tiff_target(format, reader);
+        let surgical = is_surgical_tiff_target(format, reader);
+        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG) || surgical;
+        // Pinned 13.59 applies an EXIF group deletion to a MIE trailer's own
+        // EXIF directory too, where that holds the group (`-EXIF:All=`
+        // shrinks the 188-byte trailer an `-IFD0:Artist=x` leaves on
+        // t/images/ExifTool.jpg back to 90 bytes), which oxidex does not
+        // write (`write_request::ensure_no_mie_copy`; `mie` is the file's
+        // census, [`mie_census`], taken once by the caller).
+        crate::writers::write_request::ensure_no_mie_copy(
+            tag_name,
+            &key,
+            &MetadataMap::new(),
+            true,
+            mie,
+        )?;
         if expanded {
             return Ok(Some(key));
         }
@@ -3151,6 +3235,88 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn mie_census_requires_a_successful_jpeg_sos_to_eoi_walk() {
+        let Some(writer) = crate::test_support::pinned_t_images_fixture_path("Writer.jpg") else {
+            return;
+        };
+        let file = std::fs::read(writer).unwrap();
+        let sos = file
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xda])
+            .unwrap();
+        // A complete, valid MIE trailer without EXIF would refuse a set if
+        // inventoried. ProcessJPEG never reaches it without an SOS and EOI.
+        let mut mie =
+            b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\0\0~\0\x04\0zmie~\0\0\x06".to_vec();
+        let total = mie.len() as u32 + 6;
+        mie.extend_from_slice(&total.to_be_bytes());
+        mie.extend_from_slice(&[0x10, 4]);
+        let dir = tempfile::tempdir().unwrap();
+        for (name, carrier) in [
+            ("eoi-before-sos", [&file[..sos], &[0xff, 0xd9]].concat()),
+            (
+                "fake-sos-inside-app1",
+                b"\xff\xd8\xff\xe1\0\x06\xff\xda\0\x02\xff\xd9".to_vec(),
+            ),
+            (
+                "sos-without-eoi",
+                file[..sos + 4 + usize::from(u16::from_be_bytes([file[sos + 2], file[sos + 3]]))
+                    - 2]
+                    .to_vec(),
+            ),
+        ] {
+            let path = dir.path().join(format!("{name}.jpg"));
+            std::fs::write(&path, [carrier, mie.clone()].concat()).unwrap();
+            assert!(
+                matches!(
+                    mie_census(&path).unwrap(),
+                    crate::writers::write_request::MieCensus::NoTrailer
+                ),
+                "{name} has no readable JPEG trailer"
+            );
+        }
+    }
+
+    /// Codex pre-review of 1fdcc215: the public address lookup refuses only
+    /// what a set and a deletion both refuse -- a MIE trailer without EXIF
+    /// (t/images/ExifTool.jpg) leaves `IFD0:Software` resolvable, as
+    /// `remove_tag` may delete it; a MIE copy holding the tag refuses it.
+    #[test]
+    fn resolve_write_tag_refuses_only_a_mie_copy_holding_the_tag() {
+        let (Some(exiftool), Some(writer), Some(canon)) = (
+            crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg"),
+            crate::test_support::pinned_t_images_fixture_path("Writer.jpg"),
+            crate::test_support::pinned_t_images_fixture_path("Canon.jpg"),
+        ) else {
+            return;
+        };
+        assert_eq!(
+            resolve_write_tag(&exiftool, "IFD0:Software").unwrap(),
+            "IFD0:Software"
+        );
+        // Writer.jpg + a MIE trailer holding Canon.jpg's EXIF (IFD0 Make).
+        let canon = std::fs::read(&canon).unwrap();
+        let at = canon.windows(2).position(|w| w == [0xFF, 0xE1]).unwrap();
+        let length = usize::from(u16::from_be_bytes([canon[at + 2], canon[at + 3]]));
+        let tiff = &canon[at + 10..at + 2 + length];
+        let mut mie = b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\x04\xfeEXIF".to_vec();
+        mie.extend_from_slice(&(tiff.len() as u32).to_be_bytes());
+        mie.extend_from_slice(tiff);
+        mie.extend_from_slice(b"~\0\0\0~\0\x04\0zmie~\0\0\x06");
+        let total = mie.len() as u32 + 6;
+        mie.extend_from_slice(&total.to_be_bytes());
+        mie.extend_from_slice(&[0x10, 4]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mie-exif.jpg");
+        std::fs::write(&path, [std::fs::read(&writer).unwrap(), mie].concat()).unwrap();
+        assert!(resolve_write_tag(&path, "IFD0:Make").is_err());
+        assert_eq!(
+            resolve_write_tag(&path, "IFD0:Artist").unwrap(),
+            "IFD0:Artist"
+        );
+    }
 
     /// A map as it reaches `normalize_identity_tags`: the `File:` group as the
     /// generated tables left it, plus whatever the parser inserted ungrouped.

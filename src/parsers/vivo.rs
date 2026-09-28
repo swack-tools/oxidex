@@ -16,6 +16,58 @@ pub(crate) struct VivoTrailer<'a> {
     pub json: Option<&'a str>,
 }
 
+/// Walk JPEG header markers by their declared lengths to the first SOS.
+/// JPEG permits FF fill before a marker (ExifTool.pm:7362-7367). This is
+/// a framed walk from SOI, so an SOS signature inside a payload is ignored.
+/// Require a complete SOS header before handing its marker end to the
+/// existing entropy-data/EOI walker; EOI before SOS and malformed framing
+/// provide no reachable scan.
+pub(crate) fn jpeg_sos_marker_end(file: &[u8]) -> Option<usize> {
+    if !file.starts_with(b"\xff\xd8") {
+        return None;
+    }
+    let mut pos = 2;
+    loop {
+        if *file.get(pos)? != 0xff {
+            return None;
+        }
+        while *file.get(pos + 1)? == 0xff {
+            pos += 1;
+        }
+        let marker = *file.get(pos + 1)?;
+        let after_marker = pos + 2;
+        if matches!(marker, 0x00 | 0xd9 | 0x93) {
+            return None;
+        }
+        pos = match marker {
+            0x01 | 0xd0..=0xd8 | 0x30..=0x3f | 0x4f | 0x92 => after_marker,
+            0x74 | 0x75 | 0x77 => {
+                let length =
+                    u32::from_be_bytes(file.get(after_marker..after_marker + 4)?.try_into().ok()?);
+                let length = usize::try_from(length).ok().filter(|length| *length >= 4)?;
+                let end = after_marker.checked_add(length)?;
+                (end <= file.len()).then_some(end)?
+            }
+            _ => {
+                let length = usize::from(u16::from_be_bytes(
+                    file.get(after_marker..after_marker + 2)?.try_into().ok()?,
+                ));
+                if length < 2 {
+                    return None;
+                }
+                let end = after_marker.checked_add(length)?;
+                if end > file.len() {
+                    return None;
+                }
+                if marker == 0xda {
+                    return Some(after_marker);
+                }
+                end
+            }
+        };
+    }
+}
+
 /// The JPEG `TrailerStart`: the byte after the EOI that ProcessJPEG reaches by
 /// continuing its marker walk from `scan_from` (just past the SOS marker's
 /// fixed bytes) through the entropy-coded data (ExifTool.pm:7337-7400,7464-7468).
