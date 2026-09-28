@@ -268,8 +268,9 @@ HAND_OWNED = {
 # Why each field that stays refused stays refused, beyond the generator's
 # first-hit reason: what it would take, checked against the pinned 13.59
 # source and the static IFD table (`src/exiftool_tables/ifd/exif.rs`).
-# Recorded in the ledger as `note`; a note for a field that is no longer
-# refused is an error (`ledger`), so this cannot go stale silently.
+# Recorded in the ledger as `note`. For a selected source release, notes for
+# absent fields do not apply; a note for a present field that is no longer
+# refused is still an error (`ledger`), so it cannot go stale silently.
 REFUSAL_NOTES = {
     0x00FE: "RawConv calls $self->SetPriorityDir() (writes PRIORITY_DIR, the duplicate-tag "
             "priority directory, ExifTool.pm:9636) and reads/writes PageCount and MultiPage, "
@@ -407,6 +408,28 @@ REFUSAL_CLOSURES = {
         probes=["time only", "YYMMDD plus timezone", "incomplete trailing group"],
         target_owner="residual", implementation_file="src/core/tag_conversion.rs",
         named_test="time_codes_match_value_and_print_conversions"),
+}
+
+# Reviewed native Exif.pm declarations for 0xc51b (HasselbladExif). In 11.78
+# and 12.64 it is a RawConv that sets DOC_NUM/DOC_COUNT, recursively calls
+# ExtractInfo with ReEntry, clears DOC_NUM and returns undef. In 13.59 it is a
+# SubDirectory edge to Exif::Main. These are full dumped-tag fingerprints,
+# selected by source content rather than a release string. An unfamiliar
+# declaration must be reviewed before the worklist assigns an owner.
+REVIEWED_C51B = {
+    "5de77a806449ea8536e48f2309f9c937050eb0048c6e709eec8838c9baa7e347": dict(
+        category="refused",
+        closure=dict(
+            required_behavior="planned residual: increment DOC_COUNT, set DOC_NUM, re-enter ExtractInfo on the embedded value, clear DOC_NUM, and suppress the parent tag",
+            probes=["embedded Exif directory", "duplicate tag priority across DOC_NUM", "malformed embedded value"],
+            target_owner="residual", implementation_file="src/core/tiff_helpers.rs",
+            verification_status="planned_residual",
+            named_test="test_reviewed_historical_reentry_has_a_planned_closure",
+        ),
+    ),
+    "a606c77524432ce1423c1b2ddd555defc777747ed9f40d9d584e718d6c8d0c2f": dict(
+        category="not_conversion_fields", closure=None,
+    ),
 }
 
 
@@ -1714,7 +1737,13 @@ def generate(dump_path, table_name):
     mod = Module()
     arms, generated, refused, skipped = [], [], [], []
     hand_owned = HAND_OWNED if table_name == DEFAULT_TABLE else {}
-    refusal_notes = REFUSAL_NOTES if table_name == DEFAULT_TABLE else {}
+    # These explanations characterize the current source, but earlier Exif
+    # releases need not contain every field. Keep notes for every field the
+    # selected table actually names, including skipped/non-dict entries, so
+    # ledger() still catches a present field that stopped being refused.
+    source_ids = {tid for tid, _tag in keyed_tags}
+    refusal_notes = ({tid: note for tid, note in REFUSAL_NOTES.items()
+                      if tid in source_ids} if table_name == DEFAULT_TABLE else {})
     for tid, tag in sorted(keyed_tags, key=lambda row: row[0]):
         if not isinstance(tag, dict):
             continue
@@ -1753,7 +1782,7 @@ def generate(dump_path, table_name):
         json.dumps(tbl, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return dict(version=version, module=module, table=table, mod=mod, arms=arms, table_sha=table_sha,
                 generated=generated, refused=refused, skipped=skipped,
-                refusal_notes=refusal_notes)
+                refusal_notes=refusal_notes, source_tags=dict(keyed_tags))
 
 
 def render_rust(g, dump_sha):
@@ -1912,7 +1941,22 @@ def refusal_worklist(g):
     if f"{g['module']}::{g['table']}" != DEFAULT_TABLE:
         raise ValueError("the refusal worklist is defined only for Exif::Main")
     refused_ids = {row["id"] for row in g["refused"]}
-    closure_ids = set(REFUSAL_CLOSURES)
+    source_tags = g["source_tags"]
+    closures = {tid: closure for tid, closure in REFUSAL_CLOSURES.items()
+                if tid in source_tags}
+    if 0xC51B in source_tags:
+        fingerprint = hashlib.sha256(source_text(source_tags[0xC51B]).encode()).hexdigest()
+        reviewed = REVIEWED_C51B.get(fingerprint)
+        if reviewed is None:
+            raise ValueError(f"Exif::Main 0xc51b has unreviewed source {fingerprint}")
+        category = reviewed["category"]
+        actual_ids = (refused_ids if category == "refused" else
+                      {row["id"] for row in g["skipped"]})
+        if 0xC51B not in actual_ids:
+            raise ValueError(f"Exif::Main 0xc51b reviewed as {category} but changed classification")
+        if reviewed["closure"] is not None:
+            closures[0xC51B] = reviewed["closure"]
+    closure_ids = set(closures)
     if refused_ids != closure_ids:
         missing = sorted(refused_ids - closure_ids)
         stale = sorted(closure_ids - refused_ids)
@@ -1924,7 +1968,7 @@ def refusal_worklist(g):
     rows = []
     for refused in g["refused"]:
         body = refusal_source_body(refused["source"])
-        closure = REFUSAL_CLOSURES[refused["id"]]
+        closure = closures[refused["id"]]
         rows.append({
             "id": f"0x{refused['id']:04x}",
             "name": refused["name"],

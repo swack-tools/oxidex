@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -185,6 +186,101 @@ class Fields(unittest.TestCase):
                 }))
                 with self.assertRaisesRegex(C.Refuse, "non-IFD tag key"):
                     C.generate(dump, "Synthetic::Second")
+
+
+class RefusalNotes(unittest.TestCase):
+    def generate(self, tags):
+        with tempfile.TemporaryDirectory() as td:
+            dump = Path(td) / "dump.json"
+            dump.write_text(json.dumps({
+                "exiftool_version": "historical",
+                "modules": {"Exif": {"tables": {"Main": {"tags": tags}}}},
+            }))
+            with mock.patch.object(C, "REFUSAL_NOTES", {0x9287: "source-specific refusal"}):
+                return C.generate(dump, "Exif::Main")
+
+    def test_note_for_field_absent_from_selected_source_is_not_stale(self):
+        g = self.generate({"1": {"Name": "Other"}})
+        result = C.ledger(g, g["table_sha"], "rust-sha")
+        self.assertEqual(result["counts"], {
+            "generated": 1, "refused": 0, "not_conversion_fields": 0,
+        })
+        self.assertEqual(result["refused"], [])
+
+    def test_note_for_present_refused_field_is_preserved(self):
+        g = self.generate({str(0x9287): {"Name": "X", "RawConv": {
+            "kind": "expr", "expr": "$self->SetPriorityDir(); $val",
+        }}})
+        result = C.ledger(g, g["table_sha"], "rust-sha")
+        self.assertEqual(result["refused"][0]["note"], "source-specific refusal")
+
+    def test_note_for_present_admitted_or_skipped_field_remains_stale(self):
+        for tag in ({"Name": "X"}, {"Name": "X", "SubDirectory": "Other"}):
+            with self.subTest(tag=tag):
+                g = self.generate({str(0x9287): tag})
+                with self.assertRaisesRegex(SystemExit, "0x9287"):
+                    C.ledger(g, g["table_sha"], "rust-sha")
+
+
+class HistoricalRefusalWorklist(unittest.TestCase):
+    # This is the RawConv declared by Exif.pm 11.78 and 12.64 for 0xc51b.
+    hasselblad = {"Name": "HasselbladExif", "Format": "undef", "RawConv": {
+        "kind": "expr", "expr": "\n            $$self{DOC_NUM} = ++$$self{DOC_COUNT};\n"
+        "            $self->ExtractInfo(\\$val, { ReEntry => 1 });\n"
+        "            $$self{DOC_NUM} = 0;\n"
+        "            return undef;\n        ",
+    }}
+
+    def generate(self, tags):
+        with tempfile.TemporaryDirectory() as td:
+            dump = Path(td) / "dump.json"
+            dump.write_text(json.dumps({
+                "exiftool_version": "historical",
+                "modules": {"Exif": {"tables": {"Main": {"tags": tags}}}},
+            }))
+            return C.generate(dump, "Exif::Main")
+
+    def test_reviewed_historical_reentry_has_a_planned_closure(self):
+        g = self.generate({str(0xc51b): self.hasselblad})
+        # 0x9287 is a reviewed current refusal, absent from this source.
+        with mock.patch.object(C, "REFUSAL_CLOSURES", {0x9287: {"target_owner": "residual"}}):
+            rows = C.refusal_worklist(g)["rows"]
+        self.assertEqual([row["id"] for row in rows], ["0xc51b"])
+        self.assertEqual(rows[0]["verification_status"], "planned_residual")
+        self.assertEqual(rows[0]["target_owner"], "residual")
+        self.assertIn("ExtractInfo", rows[0]["source_body"])
+
+    def test_changed_historical_reentry_is_not_inferred_from_tag_id(self):
+        changed = json.loads(json.dumps(self.hasselblad))
+        changed["RawConv"]["expr"] = changed["RawConv"]["expr"].replace("ReEntry => 1", "ReEntry => 0")
+        g = self.generate({str(0xc51b): changed})
+        with mock.patch.object(C, "REFUSAL_CLOSURES", {}):
+            with self.assertRaisesRegex(ValueError, "0xc51b"):
+                C.refusal_worklist(g)
+
+    def test_present_nonmapping_declaration_requires_review_but_absence_does_not(self):
+        with mock.patch.object(C, "REFUSAL_CLOSURES", {}):
+            self.assertEqual(self.generate({})["source_tags"], {})
+            self.assertEqual(C.refusal_worklist(self.generate({}))["rows"], [])
+            for value in (None, "unexpected"):
+                with self.subTest(value=value):
+                    g = self.generate({str(0xc51b): value})
+                    with self.assertRaisesRegex(ValueError, "0xc51b"):
+                        C.refusal_worklist(g)
+
+    def test_new_present_refusal_without_reviewed_closure_fails(self):
+        g = self.generate({"17476": {"Name": "New", "RawConv": {
+            "kind": "expr", "expr": "$self->SetPriorityDir(); $val",
+        }}})
+        with mock.patch.object(C, "REFUSAL_CLOSURES", {}):
+            with self.assertRaisesRegex(ValueError, "0x4444"):
+                C.refusal_worklist(g)
+
+    def test_present_current_closure_that_is_no_longer_refused_still_fails(self):
+        g = self.generate({str(0x9287): {"Name": "NowGenerated"}})
+        with mock.patch.object(C, "REFUSAL_CLOSURES", {0x9287: {"target_owner": "residual"}}):
+            with self.assertRaisesRegex(ValueError, "0x9287"):
+                C.refusal_worklist(g)
 
 
 class Registry(unittest.TestCase):
