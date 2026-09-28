@@ -28,7 +28,7 @@ use crate::core::formatters::{
     file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
     format_sharpness,
 };
-use crate::core::tag_conversion::apply_tile_offsets_value_conv;
+use crate::core::tag_conversion::{apply_tile_offsets_value_conv, exif_entry_to_tag_value};
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
@@ -929,12 +929,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // 0x0118 (RawDataOffset) and "IFD0:XResolution" = 1 for
                     // 0x011A (which PanasonicRaw::Main does not define at all,
                     // so ExifTool does not report it).
-                    // Artist 0x013b first appears in the later reviewed
-                    // PanasonicRaw::Main tables. 11.78 ignores the physical
-                    // row even when a synthetic RW2 carries it.
+                    // The handwritten names cover the newest reviewed table.
+                    // Historical selected sources omit some of those rows
+                    // (including 0x0037 and 0x013b); only the selected
+                    // PanasonicRaw::Main may authorize an outer IFD0 name.
                     if format == RawFormat::PanasonicRW2
                         && ifd_index == 0
-                        && *tag_id == 0x013b
                         && !crate::exiftool_tables::find_ifd_table("PanasonicRaw", "Main")
                             .is_some_and(|table| table.tag(*tag_id).is_some())
                     {
@@ -1126,8 +1126,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                         }
 
+                        // The registry contains the production spelling, but
+                        // older selected Exif::Main sources have no 0x9287
+                        // row. Match the TIFF/JPEG source gate here too.
+                        if *tag_id == 0x9287
+                            && crate::core::tag_conversion::exif_main_residual_port(*tag_id)
+                                .is_none()
+                        {
+                            continue;
+                        }
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                        let tag_value = if let Some(value) = format_exif_display_value(
+                        let tag_value = if *tag_id == 0x9287 {
+                            let Some(value) = exif_entry_to_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                *tag_id,
+                                byte_order,
+                            ) else {
+                                continue;
+                            };
+                            value
+                        } else if let Some(value) = format_exif_display_value(
                             *tag_id,
                             bytes,
                             *field_type,
