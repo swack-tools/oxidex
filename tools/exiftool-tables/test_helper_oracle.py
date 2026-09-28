@@ -27,6 +27,26 @@ import helper_oracle as H
 CAPTURE = json.loads(H.CAPTURE.read_text(encoding="utf-8"))
 PINNED = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cache/exiftool"))
 
+# Reviewed native Charset.pm %csType declarations. DOSCyrillic was added
+# after 11.78; it remains in the probe list to exercise the unsupported path.
+CS_TYPE_1178 = frozenset({
+    "ASCII", "Arabic", "Baltic", "Cyrillic", "DOSLatin1", "DOSLatinUS",
+    "Greek", "Hebrew", "JIS", "Latin", "Latin2", "MacArabic",
+    "MacChineseCN", "MacChineseTW", "MacCroatian", "MacCyrillic",
+    "MacGreek", "MacHebrew", "MacIceland", "MacJapanese", "MacKorean",
+    "MacLatin2", "MacRSymbol", "MacRoman", "MacRomanian", "MacThai",
+    "MacTurkish", "PDFDoc", "ShiftJIS", "Symbol", "Thai", "Turkish",
+    "UCS2", "UCS4", "UTF16", "UTF8", "Unicode", "Vietnam",
+})
+REVIEWED_CS_TYPE = {
+    ("11.78", "c380b6f66da803852b3ffa50554062ffbdadfc152d672f0bc0e837ecdb2d2da6"):
+        CS_TYPE_1178,
+    ("12.64", "a323c2e1a7188250e3d6ffdf30c901862787390aaf78deaa8d763d8be83cbd48"):
+        CS_TYPE_1178 | {"DOSCyrillic"},
+    ("13.59", "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"):
+        CS_TYPE_1178 | {"DOSCyrillic"},
+}
+
 
 class Capture(unittest.TestCase):
     def test_probe_cases_use_explicit_selected_charset_render(self):
@@ -93,10 +113,23 @@ class Capture(unittest.TestCase):
 
     def test_probe_charsets_are_the_generated_cs_type(self):
         cs, tables, _ = codegen_charsets.generated_tables()
-        self.assertEqual(sorted(H.CHARSETS), sorted(cs))
+        source = (CAPTURE["capture"]["exiftool_version"],
+                  CAPTURE["charset_sources"]["Image/ExifTool/Charset.pm"])
+        self.assertIn(source, REVIEWED_CS_TYPE, "unreviewed native Charset.pm source")
+        self.assertEqual(set(cs), REVIEWED_CS_TYPE[source])
+        self.assertEqual(set(H.CHARSETS), CS_TYPE_1178 | {"DOSCyrillic"})
         self.assertFalse(set(H.NOT_CHARSETS) & set(cs))
         self.assertEqual(sorted(H.FIXED_MULTI), sorted(n for n, t in cs.items() if t & 0x600))
         self.assertEqual(set(tables), {n for n, t in cs.items() if t & 0x001})
+
+    def test_unreviewed_charset_source_is_rejected(self):
+        key = "Image/ExifTool/Charset.pm"
+        with patch.dict(CAPTURE["charset_sources"], {key: "0" * 64}):
+            with self.assertRaisesRegex(AssertionError, "unreviewed native Charset.pm source"):
+                self.test_probe_charsets_are_the_generated_cs_type()
+        with patch.dict(CAPTURE["capture"], {"exiftool_version": "14.00"}):
+            with self.assertRaisesRegex(AssertionError, "unreviewed native Charset.pm source"):
+                self.test_probe_charsets_are_the_generated_cs_type()
 
     def test_decode_dependencies_are_recorded(self):
         for name in [h["perl"] for h in H.HELPERS if h.get("deps")]:
