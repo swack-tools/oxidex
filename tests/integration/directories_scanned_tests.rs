@@ -1,0 +1,1120 @@
+//! `oxidex -Artist=x DIR` (and a plain read of a directory) used to print
+//! only the `image files updated`/`read` line: pinned ExifTool 13.59 always
+//! leads a directory-touching summary with a `%5d directories scanned\n`
+//! line first (`exiftool:2067`, from `$countDir` -- `exiftool:4421`
+//! increments it once per `ScanDir` call, whether or not that directory held
+//! any files). Alongside it, two dispatch gaps in `main.rs` meant a mix of
+//! file and directory arguments on one command line either silently dropped
+//! every argument but the last (when the last happened to be a directory) or
+//! tried to read a directory as if it were a plain file (when it was not
+//! last) -- see `handle_multi_file_processing`'s doc comment.
+//!
+//! Every expected line below is re-measured against the pinned oracle
+//! through `exiftool_oracle::graded()` (13.59, `-ver` + `OOXML.docx` ->
+//! `DOCX` verified), not hard-coded from a prior run, using temporary
+//! directories built from ExifTool's own `t/images` fixtures. Only the
+//! lines in ExifTool's own summary vocabulary are compared -- oxidex's own
+//! `N files skipped (extension not recognized)` diagnostic
+//! (`BatchStats::unidentified`) has no ExifTool counterpart and is
+//! deliberately left out of the comparison.
+
+use crate::fixtures::pinned_t_images_fixture_path;
+use oxidex::exiftool_oracle::{self, Oracle};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use tempfile::TempDir;
+
+fn oxidex_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_oxidex")
+}
+
+fn run_oxidex(args: &[&str]) -> Output {
+    Command::new(oxidex_bin())
+        .args(args)
+        .output()
+        .expect("run oxidex binary")
+}
+
+fn run_oracle(oracle: &Oracle, args: &[&str]) -> Output {
+    oracle.command().args(args).output().expect("run oracle")
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+/// A JPEG fixture, real enough that ExifTool considers it writable -- unlike
+/// e.g. BMP, which a directory *write* scan filters out via `CanWrite`
+/// (`scanWritable`, `exiftool:4374-4382`) silently, with no error, no
+/// warning and no count anywhere: a divergence real but out of scope here.
+/// Panics (skipping the test, matching every other pinned-fixture helper in
+/// this suite) when the pinned corpus is not configured.
+fn copy_jpeg(name: &str, dest_dir: &Path, dest_name: &str) -> Option<PathBuf> {
+    let src = pinned_t_images_fixture_path(name)?;
+    let dest = dest_dir.join(dest_name);
+    std::fs::copy(&src, &dest).unwrap_or_else(|e| panic!("copy {name} into {dest_dir:?}: {e}"));
+    Some(dest)
+}
+
+/// Every line in ExifTool's own directory/file summary vocabulary
+/// (`exiftool`:2067-2081, 13.59), in the order printed. Anything else --
+/// including oxidex's own `unidentified` diagnostic line -- is left out, so
+/// the comparison is exactly the lines this feature is about.
+fn summary_lines(output: &str) -> Vec<String> {
+    const SUFFIXES: &[&str] = &[
+        "directories scanned",
+        "image files read",
+        "image files updated",
+        "image files unchanged",
+        "files weren't updated due to errors",
+        "files could not be read",
+    ];
+    output
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with(|c: char| c.is_ascii_digit())
+                && SUFFIXES.iter().any(|suffix| trimmed.ends_with(suffix))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+macro_rules! require_oracle {
+    () => {
+        match exiftool_oracle::graded() {
+            Some(oracle) => oracle,
+            None => {
+                eprintln!(
+                    "skipping: no ExifTool oracle may grade output (pinned -ver + DOCX probe)"
+                );
+                return;
+            }
+        }
+    };
+}
+
+// --- read of a directory ---------------------------------------------------
+
+#[test]
+fn read_of_a_directory_matches_oracle() {
+    let oracle = require_oracle!();
+    let dir = TempDir::new().expect("temp dir");
+    let Some(_a) = copy_jpeg("Canon.jpg", dir.path(), "Canon.jpg") else {
+        return;
+    };
+    let Some(_b) = copy_jpeg("Casio.jpg", dir.path(), "Casio.jpg") else {
+        return;
+    };
+
+    let path = dir.path().to_str().unwrap();
+    let theirs = run_oracle(oracle, &[path]);
+    let ours = run_oxidex(&[path]);
+
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs)),
+        "ours: {}\ntheirs: {}",
+        stdout(&ours),
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        vec![
+            "    1 directories scanned".to_string(),
+            "    2 image files read".to_string()
+        ]
+    );
+}
+
+// --- write to a directory --------------------------------------------------
+
+#[test]
+fn write_to_a_directory_matches_oracle() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    for dest in [their_dir.path(), our_dir.path()] {
+        if copy_jpeg("Canon.jpg", dest, "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", dest, "Casio.jpg").is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(
+        oracle,
+        &[
+            "-overwrite_original",
+            "-Artist=Test",
+            their_dir.path().to_str().unwrap(),
+        ],
+    );
+    let ours = run_oxidex(&[
+        "-overwrite_original",
+        "-Artist=Test",
+        our_dir.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs)),
+        "ours: {}\ntheirs: {}",
+        stdout(&ours),
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        vec![
+            "    1 directories scanned".to_string(),
+            "    2 image files updated".to_string()
+        ]
+    );
+    // No `*_original` backup litter from either side.
+    assert!(std::fs::read_dir(their_dir.path()).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("_original")
+    }));
+}
+
+// --- -r recursive read and write, counting every directory walked ---------
+
+/// Builds `root/Canon.jpg`, `root/sub1/Casio.jpg`,
+/// `root/sub1/sub2/Apple.jpg`, `root/sub3/Nikon.jpg`: four directories
+/// (the root plus three nested), four writable JPEGs. Returns `None`
+/// (skipping the test) when the pinned corpus is not configured.
+fn build_recursive_tree(root: &Path) -> Option<()> {
+    std::fs::create_dir_all(root.join("sub1/sub2")).unwrap();
+    std::fs::create_dir_all(root.join("sub3")).unwrap();
+    copy_jpeg("Canon.jpg", root, "Canon.jpg")?;
+    copy_jpeg("Casio.jpg", &root.join("sub1"), "Casio.jpg")?;
+    copy_jpeg("Apple.jpg", &root.join("sub1/sub2"), "Apple.jpg")?;
+    copy_jpeg("Nikon.jpg", &root.join("sub3"), "Nikon.jpg")?;
+    Some(())
+}
+
+#[test]
+fn recursive_read_counts_every_directory_walked() {
+    let oracle = require_oracle!();
+    let dir = TempDir::new().expect("temp dir");
+    if build_recursive_tree(dir.path()).is_none() {
+        return;
+    }
+
+    let path = dir.path().to_str().unwrap();
+    let theirs = run_oracle(oracle, &["-r", path]);
+    let ours = run_oxidex(&["-r", path]);
+
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs)),
+        "ours: {}\ntheirs: {}",
+        stdout(&ours),
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        vec![
+            "    4 directories scanned".to_string(),
+            "    4 image files read".to_string()
+        ]
+    );
+
+    // Without `-r`, only the root is scanned: the nested files are neither
+    // descended into nor counted, exactly as ExifTool's `next unless
+    // $recurse` (`exiftool:4358`) never calls `ScanDir` on them.
+    let non_recursive = run_oxidex(&[path]);
+    assert_eq!(
+        summary_lines(&stdout(&non_recursive)),
+        vec![
+            "    1 directories scanned".to_string(),
+            "    1 image files read".to_string()
+        ]
+    );
+}
+
+#[test]
+fn recursive_write_counts_every_directory_walked() {
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    for root in [their_root.path(), our_root.path()] {
+        if build_recursive_tree(root).is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(
+        oracle,
+        &[
+            "-overwrite_original",
+            "-r",
+            "-Artist=Test",
+            their_root.path().to_str().unwrap(),
+        ],
+    );
+    let ours = run_oxidex(&[
+        "-overwrite_original",
+        "-r",
+        "-Artist=Test",
+        our_root.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs)),
+        "ours: {}\ntheirs: {}",
+        stdout(&ours),
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        vec![
+            "    4 directories scanned".to_string(),
+            "    4 image files updated".to_string()
+        ]
+    );
+}
+
+// --- a directory holding no supported files --------------------------------
+
+#[test]
+fn directory_with_no_supported_files_matches_oracle() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    for dir in [their_dir.path(), our_dir.path()] {
+        std::fs::write(dir.join("notes.oxidextestunknown"), b"not an image").unwrap();
+    }
+
+    // Read.
+    let path = their_dir.path().to_str().unwrap();
+    let their_read = run_oracle(oracle, &[path]);
+    let our_read = run_oxidex(&[our_dir.path().to_str().unwrap()]);
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    0 image files read".to_string(),
+    ];
+    assert_eq!(summary_lines(&stdout(&their_read)), expected);
+    assert_eq!(summary_lines(&stdout(&our_read)), expected);
+    // No summary line about a write ExifTool never attempted.
+    assert!(!stdout(&our_read).contains("image files updated"));
+
+    // Write: ExifTool's own fallback for "nothing to write" is the read-style
+    // `0 image files read`, never `image files updated`
+    // (`exiftool`:2076, `$countDir and not $totWr`).
+    let their_write = run_oracle(oracle, &["-overwrite_original", "-Artist=Test", path]);
+    let our_write = run_oxidex(&[
+        "-overwrite_original",
+        "-Artist=Test",
+        our_dir.path().to_str().unwrap(),
+    ]);
+    assert_eq!(summary_lines(&stdout(&their_write)), expected);
+    assert_eq!(summary_lines(&stdout(&our_write)), expected);
+    assert!(!stdout(&our_write).contains("image files updated"));
+}
+
+// --- mixed files plus directories on one command line ----------------------
+
+#[test]
+fn mixed_files_and_directories_read_matches_oracle() {
+    let oracle = require_oracle!();
+    let dir = TempDir::new().expect("temp dir");
+    let top = TempDir::new().expect("temp dir");
+    if copy_jpeg("Canon.jpg", dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    let Some(top_file) = copy_jpeg("Casio.jpg", top.path(), "top.jpg") else {
+        return;
+    };
+
+    let dir_path = dir.path().to_str().unwrap();
+    let top_path = top_file.to_str().unwrap();
+
+    for args in [[dir_path, top_path], [top_path, dir_path]] {
+        let theirs = run_oracle(oracle, &args);
+        let ours = run_oxidex(&args);
+        assert_eq!(
+            summary_lines(&stdout(&ours)),
+            summary_lines(&stdout(&theirs)),
+            "{args:?}\nours: {}\ntheirs: {}",
+            stdout(&ours),
+            stdout(&theirs)
+        );
+        assert_eq!(
+            summary_lines(&stdout(&ours)),
+            vec![
+                "    1 directories scanned".to_string(),
+                "    2 image files read".to_string()
+            ],
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn mixed_files_and_directories_write_matches_oracle() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let their_top = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    let our_top = TempDir::new().expect("temp dir");
+    if copy_jpeg("Canon.jpg", their_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    if copy_jpeg("Canon.jpg", our_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    let Some(their_top_file) = copy_jpeg("Casio.jpg", their_top.path(), "top.jpg") else {
+        return;
+    };
+    let Some(our_top_file) = copy_jpeg("Casio.jpg", our_top.path(), "top.jpg") else {
+        return;
+    };
+
+    let theirs = run_oracle(
+        oracle,
+        &[
+            "-overwrite_original",
+            "-Artist=Test",
+            their_dir.path().to_str().unwrap(),
+            their_top_file.to_str().unwrap(),
+        ],
+    );
+    let ours = run_oxidex(&[
+        "-overwrite_original",
+        "-Artist=Test",
+        our_dir.path().to_str().unwrap(),
+        our_top_file.to_str().unwrap(),
+    ]);
+
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs)),
+        "ours: {}\ntheirs: {}",
+        stdout(&ours),
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        vec![
+            "    1 directories scanned".to_string(),
+            "    2 image files updated".to_string()
+        ]
+    );
+}
+
+// --- an empty directory ------------------------------------------------
+
+#[test]
+fn empty_directory_matches_oracle() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    0 image files read".to_string(),
+    ];
+
+    let their_read = run_oracle(oracle, &[their_dir.path().to_str().unwrap()]);
+    let our_read = run_oxidex(&[our_dir.path().to_str().unwrap()]);
+    assert_eq!(summary_lines(&stdout(&their_read)), expected);
+    assert_eq!(summary_lines(&stdout(&our_read)), expected);
+
+    let their_write = run_oracle(
+        oracle,
+        &[
+            "-overwrite_original",
+            "-Artist=Test",
+            their_dir.path().to_str().unwrap(),
+        ],
+    );
+    let our_write = run_oxidex(&[
+        "-overwrite_original",
+        "-Artist=Test",
+        our_dir.path().to_str().unwrap(),
+    ]);
+    assert_eq!(summary_lines(&stdout(&their_write)), expected);
+    assert_eq!(summary_lines(&stdout(&our_write)), expected);
+}
+
+// --- ExifTool omits the line entirely for plain file arguments -------------
+
+#[test]
+fn plain_file_arguments_have_no_directories_scanned_line() {
+    let oracle = require_oracle!();
+    let Some(a) = pinned_t_images_fixture_path("Canon.jpg") else {
+        return;
+    };
+    let Some(b) = pinned_t_images_fixture_path("Casio.jpg") else {
+        return;
+    };
+    let a = a.to_str().unwrap();
+    let b = b.to_str().unwrap();
+
+    for args in [vec![a], vec![a, b]] {
+        let args: Vec<&str> = args;
+        let theirs = run_oracle(oracle, &args);
+        let ours = run_oxidex(&args);
+        assert!(
+            !stdout(&theirs).contains("directories scanned"),
+            "oracle unexpectedly printed a directories-scanned line for {args:?}: {}",
+            stdout(&theirs)
+        );
+        assert!(
+            !stdout(&ours).contains("directories scanned"),
+            "oxidex must not print a directories-scanned line for plain file arguments {args:?}: {}",
+            stdout(&ours)
+        );
+        assert!(stderr(&ours).is_empty() || !stderr(&ours).contains("directories scanned"));
+    }
+}
+
+// --- Codex review threads on PR #965 ---------------------------------------
+//
+// Five P2 findings against 206f336c and b103c909, verified against the
+// pinned oracle (see PR #965's review threads, `chatgpt-codex-connector`):
+//
+// 1. `PRRT_kwDOQNbr5M6mTOK-`: a mixed-argument expansion that finds no files
+//    at all (every directory among the arguments empty or unsupported, no
+//    plain file argument) printed the human-readable summary straight to
+//    stdout even under `-j`/`-csv`, unlike every other read path in this CLI,
+//    which keeps stdout clean for structured output
+//    (`handle_batch_processing`'s single-directory path included).
+// 2. `PRRT_kwDOQNbr5M6mTOLD`: `collect_paths` aborted the whole command the
+//    moment any one top-level argument did not exist, so `oxidex realdir
+//    missing.jpg` never read `realdir` at all. Ordinary multi-file
+//    processing (no directory in the mix) instead counts a missing path as
+//    one more per-file error and keeps going -- pinned 13.59 does the same
+//    for a directory mixed with a missing path.
+// 3. `PRRT_kwDOQNbr5M6mTOLF`: a recursive (`-r`) walk counted (and read
+//    files from) a dot-prefixed subdirectory such as `.git`. ExifTool's
+//    default `-r` (`exiftool:4358`, `$recurse == 1`) never descends into a
+//    directory whose name starts with `.` -- only `-r.` does.
+// 4. `PRRT_kwDOQNbr5M6mTzLL`: the hidden-subdirectory prune from (3) checked
+//    the name through `OsStr::to_str()`, so a hidden directory whose name is
+//    not valid UTF-8 (Unix only, e.g. `.private\xff`) passed through
+//    unpruned -- `to_str()` returns `None` for it, and
+//    `None.is_some_and(..)` is `false`. Fixed by checking the name's raw
+//    encoded bytes instead (`batch_processor::keep_recursive_entry`, unit
+//    tested directly in that module since most local filesystems, including
+//    this repo's usual macOS dev machines, refuse to create a non-UTF-8
+//    directory name at all).
+// 5. `PRRT_kwDOQNbr5M6mTzLO`: `-r` given a command-line path that is itself
+//    a symlink to a directory read that directory's files (`WalkDir`'s
+//    `follow_root_links`, on by default, already follows the root) but
+//    never counted the root itself in `directories_scanned`, because the
+//    `DirEntry` `WalkDir` yields for a `follow_links(false)` root still
+//    reports itself as a symlink, not a directory. A symlinked root whose
+//    target holds no subdirectories used to print no
+//    `directories_scanned` line at all where pinned 13.59 prints `1`.
+//    Nested symlinks are still never followed (`follow_links(false)`
+//    remains in force below the root), matching this CLI's pre-existing
+//    symlink-loop guard.
+
+#[test]
+fn structured_output_stays_clean_when_mixed_expansion_finds_nothing() {
+    let oracle = require_oracle!();
+    for flag in ["-j", "-csv"] {
+        let their_a = TempDir::new().expect("temp dir");
+        let their_b = TempDir::new().expect("temp dir");
+        let our_a = TempDir::new().expect("temp dir");
+        let our_b = TempDir::new().expect("temp dir");
+
+        let theirs = run_oracle(
+            oracle,
+            &[
+                flag,
+                their_a.path().to_str().unwrap(),
+                their_b.path().to_str().unwrap(),
+            ],
+        );
+        let ours = run_oxidex(&[
+            flag,
+            our_a.path().to_str().unwrap(),
+            our_b.path().to_str().unwrap(),
+        ]);
+
+        // The oracle puts its summary on stderr and leaves stdout either
+        // empty (`-j`) or header-only (`-csv`); either way, stdout never
+        // carries the `directories scanned`/`image files` vocabulary. oxidex
+        // already keeps stdout free of it for a *single* empty directory
+        // (`handle_batch_processing`) -- this pins the same for a mixed,
+        // multi-argument expansion that also finds nothing.
+        assert!(
+            !stdout(&theirs).contains("directories scanned")
+                && !stdout(&theirs).contains("image files"),
+            "{flag}: oracle stdout unexpectedly carries the summary: {}",
+            stdout(&theirs)
+        );
+        assert!(
+            !stdout(&ours).contains("directories scanned")
+                && !stdout(&ours).contains("image files"),
+            "{flag}: oxidex must not print the human-readable summary to stdout \
+             when structured output was requested, got: {}",
+            stdout(&ours)
+        );
+    }
+}
+
+#[test]
+fn a_missing_path_in_a_mixed_batch_does_not_abort_the_real_directory() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    if copy_jpeg("Canon.jpg", their_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    if copy_jpeg("Canon.jpg", our_dir.path(), "Canon.jpg").is_none() {
+        return;
+    }
+    let missing = "does-not-exist-oxidex-965.jpg";
+
+    let theirs = run_oracle(oracle, &[their_dir.path().to_str().unwrap(), missing]);
+    let ours = run_oxidex(&[our_dir.path().to_str().unwrap(), missing]);
+
+    assert_eq!(theirs.status.code(), Some(1), "oracle: {}", stderr(&theirs));
+    assert_eq!(
+        ours.status.code(),
+        Some(1),
+        "oxidex must still exit 1 (the missing path is a real error): {}",
+        stderr(&ours)
+    );
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+        "    1 files could not be read".to_string(),
+    ];
+    assert_eq!(summary_lines(&stdout(&theirs)), expected);
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "the real directory's file must still be read despite the missing path; got: {}",
+        stdout(&ours)
+    );
+}
+
+#[test]
+fn recursive_walk_prunes_hidden_subdirectories_like_exiftool() {
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    for root in [their_root.path(), our_root.path()] {
+        std::fs::create_dir_all(root.join("visible")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        if copy_jpeg("Canon.jpg", &root.join("visible"), "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &root.join(".hidden"), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(oracle, &["-r", their_root.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.path().to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk must skip `.hidden` entirely (not descend, not count, not read its \
+         files), matching ExifTool's default recursion; got: {}",
+        stdout(&ours)
+    );
+    // The hidden file's own tag must never have been read.
+    assert!(
+        !stdout(&ours).contains("QV-3000EX"),
+        "Casio.jpg must not have been read"
+    );
+}
+
+// --- PRRT_kwDOQNbr5M6mTzLO: an explicitly named root directory symlink ----
+
+/// A root symlink whose target holds files directly (no subdirectory of its
+/// own): pinned 13.59 still counts the root once (`ScanDir` is called on it
+/// regardless of how it was reached), so this is `1 directories scanned`,
+/// not the `0` (no line printed at all) oxidex used to produce.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_follows_a_flat_root_symlink_and_counts_it() {
+    let oracle = require_oracle!();
+    let their_target = TempDir::new().expect("temp dir");
+    let our_target = TempDir::new().expect("temp dir");
+    for target in [their_target.path(), our_target.path()] {
+        if copy_jpeg("Canon.jpg", target, "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", target, "Casio.jpg").is_none() {
+            return;
+        }
+    }
+    let their_link_dir = TempDir::new().expect("temp dir");
+    let our_link_dir = TempDir::new().expect("temp dir");
+    let their_root = their_link_dir.path().join("link");
+    let our_root = our_link_dir.path().join("link");
+    std::os::unix::fs::symlink(their_target.path(), &their_root).unwrap();
+    std::os::unix::fs::symlink(our_target.path(), &our_root).unwrap();
+
+    let theirs = run_oracle(oracle, &["-r", their_root.to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.to_str().unwrap()]);
+
+    let expected = vec![
+        "    1 directories scanned".to_string(),
+        "    2 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk of an explicitly named directory symlink must both read its files \
+         and count the root once; got: {}",
+        stdout(&ours)
+    );
+}
+
+/// A root symlink whose target also holds a real (non-symlink) subdirectory:
+/// both the root and the nested subdirectory must be counted -- the root via
+/// the new symlink carve-out, the nested directory via the ordinary walk.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_follows_a_root_symlink_and_still_counts_nested_directories() {
+    let oracle = require_oracle!();
+    let their_target = TempDir::new().expect("temp dir");
+    let our_target = TempDir::new().expect("temp dir");
+    for target in [their_target.path(), our_target.path()] {
+        std::fs::create_dir(target.join("nested")).unwrap();
+        if copy_jpeg("Canon.jpg", target, "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &target.join("nested"), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+    let their_link_dir = TempDir::new().expect("temp dir");
+    let our_link_dir = TempDir::new().expect("temp dir");
+    let their_root = their_link_dir.path().join("link");
+    let our_root = our_link_dir.path().join("link");
+    std::os::unix::fs::symlink(their_target.path(), &their_root).unwrap();
+    std::os::unix::fs::symlink(our_target.path(), &our_root).unwrap();
+
+    let theirs = run_oracle(oracle, &["-r", their_root.to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    2 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "the root symlink and the real nested subdirectory must both be counted; got: {}",
+        stdout(&ours)
+    );
+}
+
+// --- PRRT_kwDOQNbr5M6mTzLL: a hidden directory with a non-UTF-8 name ------
+
+/// The same hidden-subdirectory prune as
+/// `recursive_walk_prunes_hidden_subdirectories_like_exiftool`, but the
+/// hidden directory's name is not valid UTF-8 (`.private\xff`, Unix only).
+/// Some filesystems (macOS's APFS/HFS+ among them) refuse to create such a
+/// name at all -- `std::fs::create_dir` returns an OS error -- in which case
+/// there is nothing here for either tool to disagree about, and the test is
+/// skipped rather than failed; a unit test in
+/// `batch_processor::keep_recursive_entry_tests` uses the same filesystem-dependent
+/// traversal and can also skip on macOS. Linux (ext4, tmpfs, and this repo's CI runners)
+/// does allow the name and exercises the real regression end to end.
+#[cfg(unix)]
+#[test]
+fn recursive_walk_prunes_a_hidden_subdirectory_with_a_non_utf8_name() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    let name = std::ffi::OsStr::from_bytes(b".private\xff");
+    for root in [their_root.path(), our_root.path()] {
+        std::fs::create_dir(root.join("visible")).unwrap();
+        if std::fs::create_dir(root.join(name)).is_err() {
+            eprintln!("skipping: this filesystem does not allow a non-UTF-8 directory name");
+            return;
+        }
+        if copy_jpeg("Canon.jpg", &root.join("visible"), "Canon.jpg").is_none() {
+            return;
+        }
+        if copy_jpeg("Casio.jpg", &root.join(name), "Casio.jpg").is_none() {
+            return;
+        }
+    }
+
+    let theirs = run_oracle(oracle, &["-r", their_root.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.path().to_str().unwrap()]);
+
+    let expected = vec![
+        "    2 directories scanned".to_string(),
+        "    1 image files read".to_string(),
+    ];
+    assert_eq!(
+        summary_lines(&stdout(&theirs)),
+        expected,
+        "oracle: {}",
+        stdout(&theirs)
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        expected,
+        "a `-r` walk must skip a hidden directory with a non-UTF-8 name exactly like an \
+         ASCII one (not descend, not count, not read its files); got: {}",
+        stdout(&ours)
+    );
+    assert!(
+        !stdout(&ours).contains("QV-3000EX"),
+        "the hidden non-UTF-8 directory's file must not have been read"
+    );
+}
+
+// --- codex re-review: count only a directory that was actually opened -----
+
+/// A directory that cannot be opened at all (`chmod 000`) must not be
+/// counted: pinned 13.59's `ScanDir` returns before `++$countDir` on an
+/// `opendir` failure, so this run's `$countDir` stays `0` and no
+/// `directories scanned` / `image files read` summary is printed at all --
+/// only its `Error opening directory ...` warning. oxidex used to count the
+/// directory anyway (both before *and* immediately after the root-symlink
+/// fix above, which introduced the same premature-counting pattern in a
+/// second place), printing `1 directories scanned` / `0 image files read`.
+/// Found independently by two `codex review` passes against this PR.
+#[cfg(unix)]
+#[test]
+fn a_directory_that_cannot_be_opened_is_not_counted_in_the_summary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let oracle = require_oracle!();
+    let their_root = TempDir::new().expect("temp dir");
+    let our_root = TempDir::new().expect("temp dir");
+    let mut locked_paths = Vec::new();
+    for root in [their_root.path(), our_root.path()] {
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        locked_paths.push(locked);
+    }
+    // Root ignores directory permissions; skip rather than assert on an
+    // unobservable property (matches `tests/library_write_codex_threads.rs`).
+    let locked_out = std::fs::read_dir(&locked_paths[1]).is_err();
+    if !locked_out {
+        for locked in &locked_paths {
+            let _ = std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755));
+        }
+        eprintln!("skipping: this directory is readable despite 0o000 (running as root?)");
+        return;
+    }
+
+    for recursive_flag in [None, Some("-r")] {
+        let mut their_args: Vec<&str> = vec![locked_paths[0].to_str().unwrap()];
+        let mut our_args: Vec<&str> = vec![locked_paths[1].to_str().unwrap()];
+        if let Some(flag) = recursive_flag {
+            their_args.insert(0, flag);
+            our_args.insert(0, flag);
+        }
+        let theirs = run_oracle(oracle, &their_args);
+        let ours = run_oxidex(&our_args);
+
+        assert!(
+            summary_lines(&stdout(&theirs)).is_empty(),
+            "oracle unexpectedly printed a summary for an unopenable directory: {}",
+            stdout(&theirs)
+        );
+        assert!(
+            summary_lines(&stdout(&ours)).is_empty(),
+            "oxidex must print no directories-scanned/image-files summary for a directory \
+             it could not open ({:?}): {}",
+            recursive_flag,
+            stdout(&ours)
+        );
+    }
+
+    for locked in &locked_paths {
+        let _ = std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+fn assert_zero_match_summary(theirs: &Output, ours: &Output) {
+    assert!(theirs.status.success(), "oracle: {}", stderr(theirs));
+    assert!(ours.status.success(), "oxidex: {}", stderr(ours));
+    let expected = summary_lines(&stderr(theirs));
+    assert!(!expected.is_empty(), "oracle must produce a summary");
+    assert_eq!(summary_lines(&stderr(ours)), expected);
+    assert!(summary_lines(&stdout(ours)).is_empty());
+}
+
+// --- `-csv` with zero matched files still prints its header row -----------
+//
+// Pinned 13.59's own `-csv <empty dir>` prints one line to stdout --
+// `SourceFile`, its wide-format header -- and puts `N directories scanned` /
+// `0 image files read` on stderr; a `-j` run of the same command prints
+// nothing at all to stdout. Before this fix, oxidex printed an empty stdout
+// for `-csv` in every zero-match shape (single empty directory, multiple
+// empty directories, a directory of only unrecognized extensions), because
+// both zero-match early-return paths (`main.rs::handle_multi_file_processing`
+// and `batch_processor::batch_process_requests`) skipped the CSV/JSON
+// formatters entirely rather than only the human-readable one. oxidex's own
+// `-csv` is a LONG-format dump with a fixed header of `SourceFile,Tag,Value`
+// (see `output_csv_results`), so the fix -- and these tests -- assert *that*
+// header, never ExifTool's literal wide one.
+
+/// Parses `stdout` as CSV (no implicit header handling, matching how
+/// `output_csv_results` itself re-parses each file's rendered CSV) and
+/// returns every record as owned strings, so a test can assert on the exact
+/// header row, while also pinning the exact header-only stdout.
+fn csv_records(stdout: &str) -> Vec<Vec<String>> {
+    assert_eq!(stdout, "SourceFile,Tag,Value\n", "exact CSV stdout");
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(stdout.as_bytes());
+    reader
+        .records()
+        .map(|r| {
+            r.expect("valid csv record")
+                .iter()
+                .map(str::to_string)
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn csv_zero_match_prints_only_the_header_for_a_single_empty_directory() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+
+    let theirs = run_oracle(oracle, &["-csv", their_dir.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-csv", our_dir.path().to_str().unwrap()]);
+
+    assert_zero_match_summary(&theirs, &ours);
+
+    // The oracle: exactly one line on stdout (its own wide header), the
+    // summary on stderr, never on stdout.
+    assert_eq!(
+        stdout(&theirs).trim_end(),
+        "SourceFile",
+        "oracle stdout: {}",
+        stdout(&theirs)
+    );
+    assert!(
+        !stdout(&theirs).contains("directories scanned"),
+        "oracle put the summary on stdout: {}",
+        stdout(&theirs)
+    );
+
+    // oxidex: its own long-format header, no data rows, and the
+    // `directories scanned`/`image files read` summary stays off stdout.
+    assert_eq!(
+        csv_records(&stdout(&ours)),
+        vec![vec![
+            "SourceFile".to_string(),
+            "Tag".to_string(),
+            "Value".to_string()
+        ]],
+        "oxidex must print exactly its own CSV header and nothing else; got: {:?}",
+        stdout(&ours)
+    );
+    assert!(
+        !stdout(&ours).contains("directories scanned") && !stdout(&ours).contains("image files"),
+        "the human-readable summary must stay off stdout under -csv: {}",
+        stdout(&ours)
+    );
+    assert!(stderr(&ours).contains("directories scanned"));
+    assert!(stderr(&ours).contains("image files read"));
+}
+
+#[test]
+fn csv_zero_match_prints_only_the_header_for_two_empty_directories() {
+    let oracle = require_oracle!();
+    let their_a = TempDir::new().expect("temp dir");
+    let their_b = TempDir::new().expect("temp dir");
+    let our_a = TempDir::new().expect("temp dir");
+    let our_b = TempDir::new().expect("temp dir");
+
+    let theirs = run_oracle(
+        oracle,
+        &[
+            "-csv",
+            their_a.path().to_str().unwrap(),
+            their_b.path().to_str().unwrap(),
+        ],
+    );
+    let ours = run_oxidex(&[
+        "-csv",
+        our_a.path().to_str().unwrap(),
+        our_b.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(stdout(&theirs), "SourceFile\n");
+    assert_zero_match_summary(&theirs, &ours);
+    assert_eq!(
+        csv_records(&stdout(&ours)),
+        vec![vec![
+            "SourceFile".to_string(),
+            "Tag".to_string(),
+            "Value".to_string()
+        ]],
+        "mixed multi-directory expansion that finds nothing must still print \
+         oxidex's CSV header; got: {:?}",
+        stdout(&ours)
+    );
+}
+
+#[test]
+fn csv_zero_match_prints_only_the_header_for_unrecognized_extensions() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+    for dir in [their_dir.path(), our_dir.path()] {
+        std::fs::write(dir.join("notes.oxidextestunknown"), b"not an image").unwrap();
+    }
+
+    let theirs = run_oracle(oracle, &["-csv", their_dir.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-csv", our_dir.path().to_str().unwrap()]);
+
+    assert_eq!(stdout(&theirs), "SourceFile\n");
+    assert_zero_match_summary(&theirs, &ours);
+    assert_eq!(
+        csv_records(&stdout(&ours)),
+        vec![vec![
+            "SourceFile".to_string(),
+            "Tag".to_string(),
+            "Value".to_string()
+        ]],
+        "a directory holding only unrecognized extensions must still print \
+         oxidex's CSV header under -csv; got: {:?}",
+        stdout(&ours)
+    );
+}
+
+#[test]
+fn csv_zero_match_prints_only_the_header_with_recursive_flag() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().expect("temp dir");
+    let our_dir = TempDir::new().expect("temp dir");
+
+    let theirs = run_oracle(oracle, &["-csv", "-r", their_dir.path().to_str().unwrap()]);
+    let ours = run_oxidex(&["-csv", "-r", our_dir.path().to_str().unwrap()]);
+
+    assert_eq!(stdout(&theirs), "SourceFile\n");
+    assert_zero_match_summary(&theirs, &ours);
+    assert_eq!(
+        csv_records(&stdout(&ours)),
+        vec![vec![
+            "SourceFile".to_string(),
+            "Tag".to_string(),
+            "Value".to_string()
+        ]],
+        "-r must not change the zero-match CSV header behaviour; got: {:?}",
+        stdout(&ours)
+    );
+}
+
+#[test]
+fn json_zero_match_stays_completely_silent_on_stdout() {
+    let oracle = require_oracle!();
+    // Single directory (batch_process_requests's own zero-match path) and a
+    // mixed multi-directory expansion (handle_multi_file_processing's own
+    // zero-match path) must both match the oracle's empty stdout under -j --
+    // unlike -csv, which must NOT stay silent (see the tests above).
+    let their_one = TempDir::new().expect("temp dir");
+    let our_one = TempDir::new().expect("temp dir");
+    let theirs_one = run_oracle(oracle, &["-j", their_one.path().to_str().unwrap()]);
+    let ours_one = run_oxidex(&["-j", our_one.path().to_str().unwrap()]);
+    assert_zero_match_summary(&theirs_one, &ours_one);
+    assert_eq!(
+        stdout(&theirs_one),
+        "",
+        "oracle -j single dir must be silent"
+    );
+    assert_eq!(
+        stdout(&ours_one),
+        "",
+        "oxidex -j on a single empty directory must print nothing to stdout; got: {:?}",
+        stdout(&ours_one)
+    );
+
+    let their_a = TempDir::new().expect("temp dir");
+    let their_b = TempDir::new().expect("temp dir");
+    let our_a = TempDir::new().expect("temp dir");
+    let our_b = TempDir::new().expect("temp dir");
+    let theirs_two = run_oracle(
+        oracle,
+        &[
+            "-j",
+            their_a.path().to_str().unwrap(),
+            their_b.path().to_str().unwrap(),
+        ],
+    );
+    let ours_two = run_oxidex(&[
+        "-j",
+        our_a.path().to_str().unwrap(),
+        our_b.path().to_str().unwrap(),
+    ]);
+    assert_zero_match_summary(&theirs_two, &ours_two);
+    assert_eq!(stdout(&theirs_two), "", "oracle -j two dirs must be silent");
+    assert_eq!(
+        stdout(&ours_two),
+        "",
+        "oxidex -j on a mixed multi-directory expansion that finds nothing must print \
+         nothing to stdout; got: {:?}",
+        stdout(&ours_two)
+    );
+
+    for recursive in [false, true] {
+        let their_dir = TempDir::new().unwrap();
+        let our_dir = TempDir::new().unwrap();
+        for dir in [their_dir.path(), our_dir.path()] {
+            if recursive {
+                std::fs::create_dir(dir.join("child")).unwrap();
+            } else {
+                std::fs::write(dir.join("notes.oxidextestunknown"), b"not an image").unwrap();
+            }
+        }
+        let mut their_args = vec!["-j", their_dir.path().to_str().unwrap()];
+        let mut our_args = vec!["-j", our_dir.path().to_str().unwrap()];
+        if recursive {
+            their_args.push("-r");
+            our_args.push("-r");
+        }
+        let theirs = run_oracle(oracle, &their_args);
+        let ours = run_oxidex(&our_args);
+        assert_eq!(stdout(&theirs), "");
+        assert_eq!(stdout(&ours), "");
+        assert_zero_match_summary(&theirs, &ours);
+    }
+}
