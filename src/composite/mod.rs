@@ -1035,21 +1035,49 @@ mod tests {
     }
 
     #[test]
-    fn auto_focus_needs_a_nikon_focus_mode_specifically() {
-        // Nikon.pm's Composite::AutoFocus writes its dependency group-qualified
-        // (`Require => { 0 => 'Nikon:FocusMode' }`), and that qualification is
-        // the whole reason ExifTool stays silent on the 3900-odd corpus files
-        // that are not Nikons. Twelve other makers publish a `FocusMode` of
-        // their own -- Canon on 610 corpus files, FujiFilm on 366, Panasonic
-        // on 312, Sony on 253 -- and `Composite:AutoFocus` appears on exactly
-        // the 298 that carry `Nikon:FocusMode`, on none of the rest.
-        let mut m = map_of(&[("Nikon:FocusMode", "Manual")]);
-        apply(&mut m);
-        assert_eq!(m.get_string("Composite:AutoFocus"), Some("Off"));
-
-        let mut m = map_of(&[("Nikon:FocusMode", "AF-S")]);
-        apply(&mut m);
-        assert_eq!(m.get_string("Composite:AutoFocus"), Some("On"));
+    fn auto_focus_needs_the_selected_nikon_dependencies() {
+        let autofocus = COMPOSITES
+            .iter()
+            .find(|c| c.module == "Nikon" && c.name == "AutoFocus")
+            .expect("Nikon AutoFocus composite");
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => {
+                // Both selected sources require the two AF indicators and
+                // evaluate `($val[0] or $val[1]) ? 1 : 0`.
+                assert_eq!(
+                    autofocus.require,
+                    &[(0, "Nikon:PhaseDetectAF"), (1, "Nikon:ContrastDetectAF")]
+                );
+                for (phase, contrast, expected) in
+                    [("0", "0", "Off"), ("1", "0", "On"), ("0", "1", "On")]
+                {
+                    let mut m = map_of(&[
+                        ("Nikon:PhaseDetectAF", phase),
+                        ("Nikon:ContrastDetectAF", contrast),
+                    ]);
+                    apply(&mut m);
+                    assert_eq!(m.get_string("Composite:AutoFocus"), Some(expected));
+                }
+                let mut m = map_of(&[("Nikon:FocusMode", "Manual")]);
+                apply(&mut m);
+                assert_eq!(m.get_string("Composite:AutoFocus"), None);
+            }
+            "13.59" => {
+                assert_eq!(autofocus.require, &[(0, "Nikon:FocusMode")]);
+                for (focus, expected) in [("Manual", "Off"), ("AF-S", "On")] {
+                    let mut m = map_of(&[("Nikon:FocusMode", focus)]);
+                    apply(&mut m);
+                    assert_eq!(m.get_string("Composite:AutoFocus"), Some(expected));
+                }
+                let mut m = map_of(&[
+                    ("Nikon:PhaseDetectAF", "1"),
+                    ("Nikon:ContrastDetectAF", "0"),
+                ]);
+                apply(&mut m);
+                assert_eq!(m.get_string("Composite:AutoFocus"), None);
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        }
 
         // `exiftool -a -G1 -s -FocusMode -AutoFocus` on the pinned 13.59:
         //
@@ -1143,17 +1171,23 @@ mod tests {
             .iter()
             .filter(|c| c.module == "Exif" && c.name == "LensID")
             .collect();
-        assert_eq!(
-            exif_lens_ids.len(),
-            2,
-            "expected Exif's primary LensID and its LensID-2 fallback"
-        );
+        let has_fallback = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => false,
+            "12.64" | "13.59" => true,
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        assert_eq!(exif_lens_ids.len(), if has_fallback { 2 } else { 1 });
         let primary = exif_lens_ids
             .iter()
             .find(|c| !c.require.is_empty())
             .expect("the LensType-requiring primary");
         assert!(primary.inhibit.is_empty());
         assert_eq!(primary.require, &[(0, "LensType")]);
+
+        if !has_fallback {
+            assert!(exif_lens_ids.iter().all(|c| !c.require.is_empty()));
+            return;
+        }
 
         let fallback = exif_lens_ids
             .iter()
@@ -1243,7 +1277,13 @@ mod tests {
             ("IFD0:Make", "Canon"),
         ]);
         apply(&mut m);
-        assert_eq!(m.get_string("Composite:LensID"), Some("EF 50mm f/1.8"));
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => assert_eq!(m.get_string("Composite:LensID"), None),
+            "12.64" | "13.59" => {
+                assert_eq!(m.get_string("Composite:LensID"), Some("EF 50mm f/1.8"));
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        }
     }
 
     /// The regression this step exists to prevent: a maker `LensType` whose
@@ -1491,11 +1531,36 @@ mod step29_generated_expression_regression {
     fn canon_primary_lens_id_keeps_original_ef_value_when_rf_print_wins() {
         use super::apply;
         use crate::core::{MetadataMap, TagValue};
-        for (ef, rf, printed) in [
-            (129, 257, "Canon RF 50mm F1.2L USM"),
-            (136, 324, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
-            (129, 0, "Canon EF 300mm f/2.8L USM"),
-        ] {
+        let cases: &[(i32, Option<(i32, &str)>, &str)] = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => &[
+                (129, None, "Canon EF 300mm f/2.8L USM"),
+                (136, None, "Tamron SP 15-30mm f/2.8 Di VC USD"),
+            ],
+            "12.64" => &[
+                (
+                    129,
+                    Some((257, "Canon RF 50mm F1.2L USM")),
+                    "Canon RF 50mm F1.2L USM",
+                ),
+                (136, Some((324, "Unknown (324)")), "Unknown (324)"),
+                (129, Some((0, "n/a")), "Canon EF 300mm f/2.8L USM"),
+            ],
+            "13.59" => &[
+                (
+                    129,
+                    Some((257, "Canon RF 50mm F1.2L USM")),
+                    "Canon RF 50mm F1.2L USM",
+                ),
+                (
+                    136,
+                    Some((324, "Canon RF-S 14-30mm F4-6.3 IS STM PZ")),
+                    "Canon RF-S 14-30mm F4-6.3 IS STM PZ",
+                ),
+                (129, Some((0, "n/a")), "Canon EF 300mm f/2.8L USM"),
+            ],
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        for &(ef, rf, printed) in cases {
             let mut map = MetadataMap::new();
             map.insert("IFD0:Make", TagValue::new_string("Canon"));
             map.insert("ExifIFD:FocalLength", TagValue::new_integer(20));
@@ -1516,19 +1581,16 @@ mod step29_generated_expression_regression {
                 "Canon",
                 crate::core::Instance::default(),
             );
-            let rf_print = match rf {
-                257 => "Canon RF 50mm F1.2L USM",
-                324 => "Canon RF-S 14-30mm F4-6.3 IS STM PZ",
-                _ => "n/a",
-            };
-            map.insert_occurrence_with_raw(
-                "Canon:RFLensType",
-                TagValue::new_string(rf_print),
-                TagValue::new_string(rf.to_string()),
-                1,
-                "Canon",
-                crate::core::Instance::default(),
-            );
+            if let Some((rf, rf_print)) = rf {
+                map.insert_occurrence_with_raw(
+                    "Canon:RFLensType",
+                    TagValue::new_string(rf_print),
+                    TagValue::new_string(rf.to_string()),
+                    1,
+                    "Canon",
+                    crate::core::Instance::default(),
+                );
+            }
             apply(&mut map);
             assert_eq!(map.get_string("Composite:LensID"), Some(printed));
             assert_eq!(

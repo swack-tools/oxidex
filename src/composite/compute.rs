@@ -1882,12 +1882,14 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same(get(i, white_balance + 2)?)
         }
 
-        // Nikon.pm:13240-13246 Composite::AutoFocus:
-        //   Require   => { 0 => 'Nikon:FocusMode' }
+        // Nikon.pm 11.78/12.64 requires PhaseDetectAF and ContrastDetectAF:
+        //   ValueConv => '($val[0] or $val[1]) ? 1 : 0'
+        // Nikon.pm 13.59 instead requires FocusMode:
         //   ValueConv => '($val[0] =~ /^Manual/i) ? 0 : 1'
-        //   PrintConv => \%offOn            # ( 0 => 'Off', 1 => 'On' )
+        // The selected generated definition supplies two or one positional
+        // inputs respectively. Refuse any unreviewed shape.
         //
-        // The sole input is Nikon MakerNotes 0x0007, a `Writable => 'string'`
+        // In 13.59 the sole input is Nikon MakerNotes 0x0007, a `Writable => 'string'`
         // tag whose `RawConv` only stashes the value (Nikon.pm:1816-1820), so
         // `$val[0]` is the string as the camera wrote it -- typically all caps,
         // "MANUAL". Nikon::Main's table-wide `PRINT_CONV => \&FormatString`
@@ -1895,16 +1897,20 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // and that is the form oxidex stores under `Nikon:FocusMode`. The `/i`
         // makes the two indistinguishable here, so this reads either.
         //
-        // Only "Manual" is Off; every autofocus mode the corpus carries
+        // On that source only "Manual" is Off; every autofocus mode the corpus carries
         // (AF-S, AF-C, AF-A, AF-F, AF-P) falls through to On, which is exactly
         // what a negated match on one prefix means.
         ("Nikon", "AutoFocus") => {
-            let manual = get(i, 0)?
-                .get(..6)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Manual"));
+            let active = match i.len() {
+                2 => perl_truthy(get(i, 0)) || perl_truthy(get(i, 1)),
+                1 => !get(i, 0)?
+                    .get(..6)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Manual")),
+                _ => return None,
+            };
             Computed::new(
-                if manual { "0" } else { "1" },
-                if manual { "Off" } else { "On" },
+                if active { "1" } else { "0" },
+                if active { "On" } else { "Off" },
             )
         }
 

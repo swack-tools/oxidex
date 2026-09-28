@@ -643,15 +643,28 @@ mod tests {
         use crate::parsers::image::embedded::test_fixtures::canon_lens_tiff;
 
         const EF: &str = "Canon EF 300mm f/2.8L USM";
-        const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
         const RF50: &str = "Canon RF 50mm F1.2L USM";
-        const RFS: &str = "Canon RF-S 14-30mm F4-6.3 IS STM PZ";
+        let (tamron, rf257, rf324): (&str, Option<&str>, Option<&str>) =
+            match crate::exiftool_oracle::repo_pin() {
+                "11.78" => ("Tamron SP 15-30mm f/2.8 Di VC USD", None, None),
+                "12.64" => (
+                    "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                    Some(RF50),
+                    Some("Unknown (324)"),
+                ),
+                "13.59" => (
+                    "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                    Some(RF50),
+                    Some("Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+                ),
+                pin => panic!("unreviewed ExifTool source {pin}"),
+            };
         for (lens, rf, rf_label, expected) in [
             (129, None, None, EF),
-            (136, None, None, TAMRON),
-            (129, Some(257), Some(RF50), RF50),
-            (136, Some(324), Some(RFS), RFS),
-            (136, Some(0), Some("n/a"), TAMRON),
+            (136, None, None, tamron),
+            (129, Some(257), rf257, rf257.unwrap_or(EF)),
+            (136, Some(324), rf324, rf324.unwrap_or(tamron)),
+            (136, Some(0), rf257.map(|_| "n/a"), tamron),
         ] {
             let block = canon_lens_tiff(lens, rf);
             for prefix in [b"".as_slice(), b"Exif\0\0".as_slice()] {
@@ -664,7 +677,7 @@ mod tests {
                 assert_eq!(map.value_form("Canon:LensType"), Some(raw.as_str()));
                 assert_eq!(map.occurrences_for("Canon:LensType").len(), 1);
                 assert_eq!(map.get_string("Canon:RFLensType"), rf_label);
-                let raw_rf = rf.map(|n| n.to_string());
+                let raw_rf = rf_label.and_then(|_| rf.map(|n| n.to_string()));
                 assert_eq!(map.value_form("Canon:RFLensType"), raw_rf.as_deref());
                 crate::composite::apply(&mut map);
                 assert_eq!(
@@ -687,33 +700,50 @@ mod tests {
         use crate::parsers::image::embedded::test_fixtures::canon_lens_tiff;
 
         const EF: &str = "Canon EF 300mm f/2.8L USM";
-        const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
         const RF50: &str = "Canon RF 50mm F1.2L USM";
-        const RFS: &str = "Canon RF-S 14-30mm F4-6.3 IS STM PZ";
-        for (key, seed_raw, seed_label, seed_priority, rf, incoming_raw, expected_raw, expected) in [
+        let (tamron, rf324) = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => ("Tamron SP 15-30mm f/2.8 Di VC USD", None),
+            "12.64" => (
+                "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                Some("Unknown (324)"),
+            ),
+            "13.59" => (
+                "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                Some("Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+            ),
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        let mut cases = vec![
             ("Canon:LensType", "129", EF, 2, None, "136", "129", EF),
-            ("Canon:LensType", "129", EF, 0, None, "136", "136", TAMRON),
-            (
-                "Canon:RFLensType",
-                "257",
-                RF50,
-                2,
-                Some(324),
-                "324",
-                "257",
-                RF50,
-            ),
-            (
-                "Canon:RFLensType",
-                "257",
-                RF50,
-                0,
-                Some(324),
-                "324",
-                "324",
-                RFS,
-            ),
-        ] {
+            ("Canon:LensType", "129", EF, 0, None, "136", "136", tamron),
+        ];
+        if let Some(rf324) = rf324 {
+            cases.extend([
+                (
+                    "Canon:RFLensType",
+                    "257",
+                    RF50,
+                    2,
+                    Some(324),
+                    "324",
+                    "257",
+                    RF50,
+                ),
+                (
+                    "Canon:RFLensType",
+                    "257",
+                    RF50,
+                    0,
+                    Some(324),
+                    "324",
+                    "324",
+                    rf324,
+                ),
+            ]);
+        }
+        for (key, seed_raw, seed_label, seed_priority, rf, incoming_raw, expected_raw, expected) in
+            cases
+        {
             let mut map = MetadataMap::new();
             map.insert_occurrence_with_raw(
                 key,

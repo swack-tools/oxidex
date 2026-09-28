@@ -8918,7 +8918,13 @@ mod canon_lens_identity_tests {
     use super::*;
 
     const LABEL: &str = "Canon EF 300mm f/2.8L USM";
-    const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+    fn tamron_label() -> &'static str {
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => "Tamron SP 15-30mm f/2.8 Di VC USD",
+            "12.64" | "13.59" => "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        }
+    }
 
     fn makernote(lens: u16, rf: Option<u16>) -> Vec<u8> {
         let count = if rf.is_some() { 2u16 } else { 1 };
@@ -8966,7 +8972,8 @@ mod canon_lens_identity_tests {
 
     #[test]
     fn canon_lens_raw_ids_preserve_distinct_upstream_results() {
-        for (raw, expected) in [(129, LABEL), (136, TAMRON)] {
+        let tamron = tamron_label();
+        for (raw, expected) in [(129, LABEL), (136, tamron)] {
             let mut map = MetadataMap::new();
             parse(raw, None, &mut map);
             assert_eq!(map.get_string("Canon:LensType"), Some(LABEL));
@@ -8984,7 +8991,7 @@ mod canon_lens_identity_tests {
         crate::composite::apply(&mut map);
         assert_eq!(
             map.get_string("Composite:LensID"),
-            Some(format!("{LABEL} or {TAMRON}").as_str())
+            Some(format!("{LABEL} or {tamron}").as_str())
         );
     }
 
@@ -9014,17 +9021,47 @@ mod canon_lens_identity_tests {
 
     #[test]
     fn canon_rf_lens_substitution_swaps_its_own_label_and_identity() {
-        for (lens, rf, expected) in [
-            (129, 257, "Canon RF 50mm F1.2L USM"),
-            (136, 324, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
-            (129, 0, LABEL),
-            (129, 136, "Unknown (136)"),
-        ] {
+        let cases: &[(u16, u16, Option<&str>, &str)] = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => &[
+                (129, 257, None, LABEL),
+                (136, 324, None, "Tamron SP 15-30mm f/2.8 Di VC USD"),
+            ],
+            "12.64" => &[
+                (
+                    129,
+                    257,
+                    Some("Canon RF 50mm F1.2L USM"),
+                    "Canon RF 50mm F1.2L USM",
+                ),
+                (136, 324, Some("Unknown (324)"), "Unknown (324)"),
+                (129, 0, Some("n/a"), LABEL),
+                (129, 136, Some("Unknown (136)"), "Unknown (136)"),
+            ],
+            "13.59" => &[
+                (
+                    129,
+                    257,
+                    Some("Canon RF 50mm F1.2L USM"),
+                    "Canon RF 50mm F1.2L USM",
+                ),
+                (
+                    136,
+                    324,
+                    Some("Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+                    "Canon RF-S 14-30mm F4-6.3 IS STM PZ",
+                ),
+                (129, 0, Some("n/a"), LABEL),
+                (129, 136, Some("Unknown (136)"), "Unknown (136)"),
+            ],
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        for &(lens, rf, rf_label, expected) in cases {
             let mut map = MetadataMap::new();
             parse(lens, Some(rf), &mut map);
+            assert_eq!(map.get_string("Canon:RFLensType"), rf_label);
             assert_eq!(
                 map.value_form("Canon:RFLensType"),
-                Some(rf.to_string().as_str())
+                rf_label.map(|_| rf.to_string()).as_deref()
             );
             map.insert("EXIF:FocalLength", TagValue::new_string("20"));
             crate::composite::apply(&mut map);
