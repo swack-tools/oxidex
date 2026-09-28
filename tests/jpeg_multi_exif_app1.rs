@@ -94,6 +94,28 @@ fn exif_app1_payloads(data: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+fn sample_with_duplicated_exif_app1() -> Vec<u8> {
+    let source = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jpeg/sample_with_exif.jpg"),
+    )
+    .unwrap();
+    let mut at = 2;
+    loop {
+        assert_eq!(source[at], 0xff);
+        let marker = source[at + 1];
+        assert!(!matches!(marker, 0xda | 0xd9));
+        let length = u16::from_be_bytes([source[at + 2], source[at + 3]]) as usize;
+        let end = at + 2 + length;
+        if marker == 0xe1 && source[at + 4..end].starts_with(b"Exif\0\0") {
+            let mut dual = source.clone();
+            dual.splice(end..end, source[at..end].iter().copied());
+            assert_eq!(exif_app1_payloads(&dual).len(), 2);
+            return dual;
+        }
+        at = end;
+    }
+}
+
 /// What pinned ExifTool 13.59 does with a request on either fixture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Oracle {
@@ -1484,6 +1506,79 @@ fn date_writes_refuse_multi_app1_and_preserve_every_byte() {
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
+}
+
+/// A requested date absent from both APP1 records is an unchanged shift in
+/// pinned 13.59. The direct helper and public route must prove absence from
+/// every block before the multi-record write guard refuses a real edit.
+#[test]
+fn absent_date_shift_is_unchanged_on_two_exif_app1_blocks() {
+    use oxidex::core::date_shift::{
+        ExifDateTag, ShiftOperation, build_shift_spec, shift_metadata_dates,
+    };
+    use oxidex::writers::exif_inplace::shift_jpeg_exif_dates;
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let dual = sample_with_duplicated_exif_app1();
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.jpg");
+    std::fs::write(&native, &dual).unwrap();
+    let output = oracle
+        .command()
+        .args(["-overwrite_original", "-DateTimeOriginal+=1:00:00"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(&native).unwrap(), dual);
+    let spec = build_shift_spec("1:00:00", ShiftOperation::Add).unwrap();
+    let direct = dir.path().join("direct.jpg");
+    std::fs::write(&direct, &dual).unwrap();
+    assert_eq!(
+        shift_jpeg_exif_dates(&direct, &[ExifDateTag::DateTimeOriginal], &spec).unwrap(),
+        0
+    );
+    assert_eq!(std::fs::read(&direct).unwrap(), dual);
+    let public = dir.path().join("public.jpg");
+    std::fs::write(&public, &dual).unwrap();
+    shift_metadata_dates(&public, "DateTimeOriginal", "1:00:00", ShiftOperation::Add).unwrap();
+    assert_eq!(std::fs::read(&public).unwrap(), dual);
+    let cli = dir.path().join("cli.jpg");
+    std::fs::write(&cli, &dual).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-DateTimeOriginal+=1:00:00")
+        .arg(&cli)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(&cli).unwrap(), dual);
+}
+
+/// A non-ASCII date entry still names the requested tag physically. The
+/// date locator skips it, but the multi-block absence proof must not.
+#[test]
+fn non_ascii_date_entries_do_not_bypass_multi_app1_guard() {
+    use oxidex::core::date_shift::{ExifDateTag, ShiftOperation, build_shift_spec};
+    use oxidex::writers::exif_inplace::shift_jpeg_exif_dates;
+    let mut dual = sample_with_duplicated_exif_app1();
+    let marker = [0x32, 0x01, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00];
+    let positions: Vec<usize> = dual
+        .windows(marker.len())
+        .enumerate()
+        .filter_map(|(at, bytes)| (bytes == marker).then_some(at))
+        .collect();
+    assert_eq!(positions.len(), 2);
+    for at in positions {
+        dual[at + 2] = 7; // TIFF UNDEFINED instead of ASCII.
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hidden-date.jpg");
+    std::fs::write(&path, &dual).unwrap();
+    let spec = build_shift_spec("1:00:00", ShiftOperation::Add).unwrap();
+    let error = shift_jpeg_exif_dates(&path, &[ExifDateTag::ModifyDate], &spec).unwrap_err();
+    assert!(error.to_string().contains(REASON), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), dual);
 }
 
 /// A later group deletion cancels values authored earlier on the C handle.

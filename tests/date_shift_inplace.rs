@@ -12,6 +12,240 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+fn oracle_png_with_create_date() -> Vec<u8> {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let source = fixtures::required_t_images_fixture_path("PNG.png");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dated.png");
+    std::fs::copy(source, &path).unwrap();
+    let output = oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-ExifIFD:CreateDate=2002:02:02 02:02:02",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read(path).unwrap()
+}
+
+fn png_with_bad_ihdr_crc() -> Vec<u8> {
+    let mut bytes = oracle_png_with_create_date();
+    assert_eq!(&bytes[12..16], b"IHDR");
+    let length = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let at = 16 + length;
+    let computed = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&bytes[12..at]);
+    assert_eq!(
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()),
+        computed
+    );
+    bytes[at] ^= 1;
+    assert_ne!(
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()),
+        computed
+    );
+    bytes
+}
+
+#[cfg(unix)]
+fn inode(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).unwrap().ino()
+}
+
+/// Pinned 13.59 refuses a checked IHDR CRC before it shifts a present date.
+/// The public shift route and direct in-place helper must both fail closed.
+#[test]
+fn png_date_shift_refuses_bad_checked_ihdr_crc_before_edit() {
+    let Some(_) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = png_with_bad_ihdr_crc();
+    let dir = tempfile::tempdir().unwrap();
+    for direct in [true, false] {
+        let path = dir
+            .path()
+            .join(if direct { "helper.png" } else { "public.png" });
+        std::fs::write(&path, &bytes).unwrap();
+        #[cfg(unix)]
+        let before_inode = inode(&path);
+        let error = if direct {
+            let spec = build_shift_spec("1:0:0 0:0:0", ShiftOperation::Add).unwrap();
+            oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
+                &path,
+                &[ExifDateTag::CreateDate],
+                &spec,
+            )
+            .unwrap_err()
+        } else {
+            oxidex::core::date_shift::shift_metadata_dates(
+                &path,
+                "EXIF:CreateDate",
+                "1:0:0 0:0:0",
+                ShiftOperation::Add,
+            )
+            .unwrap_err()
+        };
+        assert!(
+            error.to_string().contains("Bad CRC for IHDR chunk"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        #[cfg(unix)]
+        assert_eq!(inode(&path), before_inode);
+    }
+}
+
+/// ExifTool checks a bad IHDR even when the requested date is absent: the
+/// unchanged shortcut must not bypass the same refusal.
+#[test]
+fn png_absent_date_shift_refuses_bad_checked_ihdr_crc() {
+    let Some(_) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = png_with_bad_ihdr_crc();
+    // The requested date is absent, but the TIFF/PNG EXIF shift route still
+    // needs to validate the containing PNG before returning unchanged.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent.png");
+    std::fs::write(&path, &bytes).unwrap();
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let read = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-EXIF:DateTimeOriginal"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(read.status.success());
+    assert!(read.stdout.is_empty(), "the requested date must be absent");
+    let native = dir.path().join("native-absent.png");
+    std::fs::write(&native, &bytes).unwrap();
+    #[cfg(unix)]
+    let native_inode = inode(&native);
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:DateTimeOriginal+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(!native_write.status.success());
+    assert!(String::from_utf8_lossy(&native_write.stderr).contains("Bad CRC for IHDR chunk"));
+    assert_eq!(std::fs::read(&native).unwrap(), bytes);
+    #[cfg(unix)]
+    assert_eq!(inode(&native), native_inode);
+    #[cfg(unix)]
+    let before_inode = inode(&path);
+    let error = oxidex::core::date_shift::shift_metadata_dates(
+        &path,
+        "EXIF:DateTimeOriginal",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("Bad CRC for IHDR chunk"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    #[cfg(unix)]
+    assert_eq!(inode(&path), before_inode);
+}
+
+/// IEND's CRC is deliberately not checked by pinned 13.59; shifting a good
+/// eXIf date over that exception remains possible and keeps IEND's bytes.
+#[test]
+fn png_date_shift_keeps_the_existing_iend_crc_exception() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let mut bytes = oracle_png_with_create_date();
+    let iend = bytes.len() - 8;
+    assert_eq!(&bytes[iend..iend + 4], b"IEND");
+    bytes[iend + 4] ^= 1;
+    let bad_iend = bytes[iend + 4..].to_vec();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("iend.png");
+    let native = dir.path().join("native-iend.png");
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(&native, &bytes).unwrap();
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:CreateDate+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(
+        native_write.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native_write.stderr)
+    );
+    oxidex::core::date_shift::shift_metadata_dates(
+        &path,
+        "EXIF:CreateDate",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap();
+    let after = std::fs::read(&path).unwrap();
+    assert_ne!(after, bytes);
+    assert_eq!(&after[after.len() - 4..], bad_iend);
+    assert_eq!(
+        oracle_png_create_date_rows(&path),
+        oracle_png_create_date_rows(&native)
+    );
+}
+
+fn oracle_png_create_date_rows(path: &Path) -> String {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let output = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-EXIF:CreateDate"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn png_ordinary_date_shift_matches_pinned_oracle() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = oracle_png_with_create_date();
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.png");
+    let candidate = dir.path().join("candidate.png");
+    std::fs::write(&native, &bytes).unwrap();
+    std::fs::write(&candidate, &bytes).unwrap();
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:CreateDate+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success());
+    oxidex::core::date_shift::shift_metadata_dates(
+        &candidate,
+        "EXIF:CreateDate",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap();
+    let rows = oracle_png_create_date_rows(&native);
+    assert!(rows.contains("2003:02:02 02:02:02"), "{rows}");
+    assert_eq!(oracle_png_create_date_rows(&candidate), rows);
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jpeg")
@@ -380,4 +614,301 @@ fn cli_shift_of_an_absent_date_is_unchanged() {
         "    0 image files updated\n    1 image files unchanged\n"
     );
     assert!(diff_indices(&src, dst.path()).is_empty());
+}
+
+/// A date may share its out-of-line bytes with a reachable SubIFD value.
+/// Pinned 13.59 splits the storage on shift; the in-place writer must either
+/// preserve that separate value or refuse before it changes any file byte.
+#[test]
+fn public_shift_does_not_change_subifd_value_aliasing_date() {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    for array in [false, true] {
+        let date_at = if array { 80_u32 } else { 64_u32 };
+        let mut original = b"II\x2a\0\x08\0\0\0".to_vec();
+        original.extend_from_slice(&2_u16.to_le_bytes());
+        for (tag, field_type, count, value) in [
+            (0x014a_u16, 4_u16, if array { 2_u32 } else { 1_u32 }, 40_u32),
+            (0x9003, 2, 20, date_at),
+        ] {
+            original.extend_from_slice(&tag.to_le_bytes());
+            original.extend_from_slice(&field_type.to_le_bytes());
+            original.extend_from_slice(&count.to_le_bytes());
+            original.extend_from_slice(&value.to_le_bytes());
+        }
+        original.extend_from_slice(&0_u32.to_le_bytes());
+        original.resize(40, 0);
+        if array {
+            original.extend_from_slice(&48_u32.to_le_bytes());
+            original.extend_from_slice(&66_u32.to_le_bytes());
+        }
+        original.extend_from_slice(&1_u16.to_le_bytes());
+        original.extend_from_slice(&0x0131_u16.to_le_bytes());
+        original.extend_from_slice(&2_u16.to_le_bytes());
+        original.extend_from_slice(&20_u32.to_le_bytes());
+        original.extend_from_slice(&date_at.to_le_bytes());
+        original.extend_from_slice(&0_u32.to_le_bytes());
+        if array {
+            original.extend_from_slice(&0_u16.to_le_bytes());
+            original.extend_from_slice(&0_u32.to_le_bytes());
+        }
+        original.resize(date_at as usize, 0);
+        original.extend_from_slice(b"2020:01:02 03:04:05\0");
+        let dir = tempfile::tempdir().unwrap();
+        let native = dir.path().join("native.tif");
+        let ours = dir.path().join("ours.tif");
+        std::fs::write(&native, &original).unwrap();
+        std::fs::write(&ours, &original).unwrap();
+        let request = "-DateTimeOriginal+=0:0:1 0:0:0";
+        let native_write = oracle
+            .command()
+            .args(["-config", "", "-overwrite_original", request])
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(
+            native_write.status.success(),
+            "array={array}: {}",
+            String::from_utf8_lossy(&native_write.stderr)
+        );
+        let native_read = oracle
+            .command()
+            .args([
+                "-config",
+                "",
+                "-a",
+                "-G1",
+                "-s",
+                "-DateTimeOriginal",
+                "-Software",
+            ])
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(native_read.status.success());
+        let native_rows = String::from_utf8(native_read.stdout).unwrap();
+        assert!(native_rows.contains("2020:01:03 03:04:05"), "{native_rows}");
+        assert!(
+            native_rows
+                .lines()
+                .any(|line| line.contains("Software") && line.contains("2020:01:02 03:04:05")),
+            "{native_rows}"
+        );
+        let our_write = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .arg(request)
+            .arg(&ours)
+            .output()
+            .unwrap();
+        if our_write.status.success() {
+            let our_read = oracle
+                .command()
+                .args([
+                    "-config",
+                    "",
+                    "-a",
+                    "-G1",
+                    "-s",
+                    "-DateTimeOriginal",
+                    "-Software",
+                ])
+                .arg(&ours)
+                .output()
+                .unwrap();
+            assert!(our_read.status.success());
+            assert_eq!(String::from_utf8(our_read.stdout).unwrap(), native_rows);
+        } else {
+            assert_eq!(std::fs::read(&ours).unwrap(), original, "array={array}");
+            assert!(
+                String::from_utf8_lossy(&our_write.stderr).contains("also back another EXIF value"),
+                "array={array}: {}",
+                String::from_utf8_lossy(&our_write.stderr)
+            );
+        }
+    }
+}
+
+/// The TIFF/PNG date fast path must retain the PNG writer's refusal of a
+/// second eXIf carrier instead of editing just the first copy.
+#[test]
+fn public_shift_refuses_two_png_exif_chunks_atomically() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let first = oracle_png_with_create_date();
+    let mut at = 8_usize;
+    let (start, end) = loop {
+        let length = u32::from_be_bytes(first[at..at + 4].try_into().unwrap()) as usize;
+        let end = at + length + 12;
+        assert!(end <= first.len());
+        if &first[at + 4..at + 8] == b"eXIf" {
+            break (at, end);
+        }
+        at = end;
+    };
+    let mut original = first[..end].to_vec();
+    original.extend_from_slice(&first[start..end]);
+    original.extend_from_slice(&first[end..]);
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.png");
+    let ours = dir.path().join("ours.png");
+    std::fs::write(&native, &original).unwrap();
+    std::fs::write(&ours, &original).unwrap();
+    let request = "-CreateDate+=0:0:1 0:0:0";
+    let native_write = oracle
+        .command()
+        .args(["-config", "", "-overwrite_original", request])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(!native_write.status.success());
+    assert_eq!(std::fs::read(&native).unwrap(), original);
+    let our_write = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg(request)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(!our_write.status.success());
+    assert_eq!(std::fs::read(&ours).unwrap(), original);
+    assert!(
+        String::from_utf8_lossy(&our_write.stderr).contains("more than one eXIf chunk"),
+        "{}",
+        String::from_utf8_lossy(&our_write.stderr)
+    );
+}
+
+/// The offset/length pair for image strips names bytes outside any TIFF tag
+/// value. A date aliasing those bytes must not rewrite the image in place.
+#[test]
+fn public_shift_does_not_change_strip_aliasing_date() {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let mut original = b"II\x2a\0\x08\0\0\0".to_vec();
+    let entries: &[(u16, u16, u32, u32)] = &[
+        (0x0100, 3, 1, 20),
+        (0x0101, 3, 1, 1),
+        (0x0102, 3, 1, 8),
+        (0x0103, 3, 1, 1),
+        (0x0106, 3, 1, 1),
+        (0x0111, 4, 1, 128),
+        (0x0116, 4, 1, 1),
+        (0x0117, 4, 1, 20),
+        (0x9003, 2, 20, 128),
+    ];
+    original.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for &(tag, field_type, count, value) in entries {
+        original.extend_from_slice(&tag.to_le_bytes());
+        original.extend_from_slice(&field_type.to_le_bytes());
+        original.extend_from_slice(&count.to_le_bytes());
+        if field_type == 3 {
+            original.extend_from_slice(&(value as u16).to_le_bytes());
+            original.extend_from_slice(&0_u16.to_le_bytes());
+        } else {
+            original.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    original.extend_from_slice(&0_u32.to_le_bytes());
+    original.resize(128, 0);
+    let image = b"2020:01:02 03:04:05\0";
+    original.extend_from_slice(image);
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.tif");
+    let ours = dir.path().join("ours.tif");
+    std::fs::write(&native, &original).unwrap();
+    std::fs::write(&ours, &original).unwrap();
+    let request = "-DateTimeOriginal+=0:0:1 0:0:0";
+    let native_write = oracle
+        .command()
+        .args(["-config", "", "-overwrite_original", request])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success());
+    let native_bytes = std::fs::read(&native).unwrap();
+    let ifd0 = u32::from_le_bytes(native_bytes[4..8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(native_bytes[ifd0..ifd0 + 2].try_into().unwrap()) as usize;
+    let strip_at = (0..count)
+        .find_map(|i| {
+            let row = ifd0 + 2 + i * 12;
+            (u16::from_le_bytes(native_bytes[row..row + 2].try_into().unwrap()) == 0x0111).then(
+                || u32::from_le_bytes(native_bytes[row + 8..row + 12].try_into().unwrap()) as usize,
+            )
+        })
+        .unwrap();
+    assert_eq!(&native_bytes[strip_at..strip_at + image.len()], image);
+    let our_write = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg(request)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(!our_write.status.success());
+    assert_eq!(std::fs::read(&ours).unwrap(), original);
+    assert!(
+        String::from_utf8_lossy(&our_write.stderr).contains("also back another EXIF value"),
+        "{}",
+        String::from_utf8_lossy(&our_write.stderr)
+    );
+}
+
+/// ExifTool shifts both a TIFF's outer date and the same date in its MIE
+/// trailer. Until the MIE writer can do both, the public shift is atomic.
+#[test]
+fn public_tiff_shift_refuses_mie_date_copy_atomically() {
+    fn date_tiff(date: &str) -> Vec<u8> {
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&1_u16.to_le_bytes());
+        tiff.extend_from_slice(&0x9003_u16.to_le_bytes());
+        tiff.extend_from_slice(&2_u16.to_le_bytes());
+        tiff.extend_from_slice(&20_u32.to_le_bytes());
+        tiff.extend_from_slice(&26_u32.to_le_bytes());
+        tiff.extend_from_slice(&0_u32.to_le_bytes());
+        tiff.extend_from_slice(date.as_bytes());
+        tiff.push(0);
+        assert_eq!(tiff.len(), 46);
+        tiff
+    }
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let outer = date_tiff("2020:01:02 03:04:05");
+    let inner = date_tiff("2003:12:04 06:46:52");
+    let mut mie = b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\x04\xfeEXIF".to_vec();
+    mie.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+    mie.extend_from_slice(&inner);
+    mie.extend_from_slice(b"~\0\0\0~\0\x04\0zmie~\0\0\x06");
+    mie.extend_from_slice(&((mie.len() + 6) as u32).to_be_bytes());
+    mie.extend_from_slice(&[0x10, 0x04]);
+    let original = [outer, mie].concat();
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.tif");
+    let ours = dir.path().join("ours.tif");
+    std::fs::write(&native, &original).unwrap();
+    std::fs::write(&ours, &original).unwrap();
+    let request = "-DateTimeOriginal+=0:0:1 0:0:0";
+    let native_write = oracle
+        .command()
+        .args(["-config", "", "-overwrite_original", request])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success());
+    let native_read = oracle
+        .command()
+        .args(["-config", "", "-a", "-G1", "-s", "-DateTimeOriginal"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_read.status.success());
+    let rows = String::from_utf8(native_read.stdout).unwrap();
+    assert!(rows.contains("2020:01:03 03:04:05"), "{rows}");
+    assert!(rows.contains("2003:12:05 06:46:52"), "{rows}");
+    let our_write = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg(request)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(!our_write.status.success());
+    assert_eq!(std::fs::read(&ours).unwrap(), original);
+    assert!(
+        String::from_utf8_lossy(&our_write.stderr).contains("MIE"),
+        "{}",
+        String::from_utf8_lossy(&our_write.stderr)
+    );
 }

@@ -84,7 +84,7 @@ pub(crate) const NAMED_POINTER_TAGS: &[u16] = &[0x5028];
 /// 0x0201/0x0202 preview pair, SamsungRawPointers, ImageOffset,
 /// AlphaOffset) and ThumbnailStripOffsets/ByteCounts. IFD1's thumbnail
 /// pair is structural and checked on its own (the thumbnail check).
-const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
+pub(crate) const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
     (0x0111, 0x0117),
     (0x0120, 0x0121),
     (0x0144, 0x0145),
@@ -264,6 +264,28 @@ pub(crate) fn group_has_content(
     }
 }
 
+/// Whether `scan` walked a directory the group-wide removal `group`
+/// deletes, empty or not: pinned ExifTool 13.59 deletes an empty GPS IFD
+/// or ExifIFD with its IFD0 pointer (Writer.jpg + a MIE whose EXIF's IFD0
+/// points at an empty GPS IFD: `-GPS:All=` 357 -> 335 bytes; an empty
+/// ExifIFD and `-ExifIFD:All=` the same), which [`group_has_content`],
+/// counting entries, does not see.
+pub(crate) fn group_directory_walked(group: GroupRemoval, scan: &ExifScan) -> bool {
+    let walked = |ifds: &[IfdKind]| {
+        scan.raw_entry_counts
+            .iter()
+            .any(|(ifd, _)| ifds.contains(ifd))
+    };
+    match group {
+        GroupRemoval::Carrier => true,
+        GroupRemoval::ExifIfd => walked(&[IfdKind::ExifIfd, IfdKind::Interop]),
+        GroupRemoval::Gps => walked(&[IfdKind::Gps]),
+        GroupRemoval::Ifd1 => walked(&[IfdKind::Ifd1]),
+        GroupRemoval::Interop => walked(&[IfdKind::Interop]),
+        GroupRemoval::MakerNotes => false,
+    }
+}
+
 /// The EXIF rows a write sets: the planned rows of `desired` whose value is
 /// not `original_map`'s. After a carrier- or group-wide removal these, and
 /// only these, are written back (delete first, then set).
@@ -378,6 +400,20 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002e;
 /// IFD0 0xc634 DNGPrivateData, whose Adobe `MakN` record carries a maker
 /// note ExifTool files under MakerNotes.
 const DNG_PRIVATE_DATA: u16 = 0xc634;
+
+/// Whether `entry` is an IFD0 `DNGPrivateData` with an Adobe `MakN` record:
+/// a maker note ExifTool files under MakerNotes (`MakerNotes:All` deletes
+/// it).
+fn is_dng_makernote(entry: &RawEntry) -> bool {
+    entry.ifd == IfdKind::Ifd0
+        && entry.tag_id == DNG_PRIVATE_DATA
+        && crate::parsers::raw::metadata::dng_adobe_makernote_count(&entry.value).unwrap_or(1) > 0
+}
+
+/// Whether `scan` carries a `DNGPrivateData` maker note ([`is_dng_makernote`]).
+pub(crate) fn has_dng_makernote(scan: &ExifScan) -> bool {
+    scan.entries.iter().any(is_dng_makernote)
+}
 
 /// Resolves the group-wide `<group>:All` removals of a write to a
 /// TIFF-structured file (`file_bytes`, read by the reader into `baseline`)
@@ -1219,6 +1255,7 @@ pub(crate) fn tag_value_to_field_for_key(
         ));
     }
     let hint = match key.rsplit(':').next() {
+        Some(leaf) if leaf.eq_ignore_ascii_case("AmbientTemperature") => Some(10),
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),
         _ => hint,
@@ -2142,6 +2179,33 @@ fn plan_exif_write_inner(
     // reaches IFD1 -- so while an IFD1 a group-wide removal is about to
     // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
     let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
+
+    // An ExifIFD this write creates gets WriteExif's mandatory entries
+    // (WriteExif.pl 13.59:714-719; `exif_ifd_creation`), as the TIFF
+    // writer's does: without them pinned ExifTool's `-validate` reports
+    // "Missing required JPEG ExifIFD tag 0x9000 ExifVersion" (and 0x9101,
+    // 0xa001) on a JPEG it would have written complete.
+    if !plan.exif_ifd.is_empty() && !scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd) {
+        let set: Vec<u16> = plan.exif_ifd.iter().map(|entry| entry.tag_id).collect();
+        for edit in
+            crate::writers::exif_ifd_creation::created_exif_ifd_entries(scan.byte_order, &set)?
+        {
+            if let crate::writers::tiff_surgical::entry_edits::EntryMutation::Set {
+                field_type,
+                count,
+                bytes,
+            } = edit.mutation
+            {
+                plan.exif_ifd.push(OutEntry {
+                    tag_id: edit.tag_id,
+                    field_type,
+                    count,
+                    value: bytes,
+                    native_endian: false,
+                });
+            }
+        }
+    }
 
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the

@@ -45,14 +45,15 @@ use crate::core::FileReader;
 use crate::core::metadata_map::{MetadataMap, SourceIdentity, handle_identity};
 use crate::core::operations::{
     bare_removal_is_no_op_with_reader, exif_group_in_pdf_with_reader, field_spellings,
-    group_removal_takes_effect_with_reader, plan_group_deletion_with_reader, read_metadata,
-    removal_is_no_op_with_reader, remove_field, resolve_write_key_for_with_reader,
-    resolve_write_key_in_request_with_reader, write_metadata_transaction,
+    group_removal_takes_effect_with_reader, mie_census_with_reader,
+    plan_group_deletion_with_reader, read_metadata, removal_is_no_op_with_reader, remove_field,
+    resolve_write_key_for_with_reader, resolve_write_key_in_request_with_reader,
+    write_metadata_transaction_among,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::io::MMapReader;
-use crate::writers::write_request::group_deletion;
+use crate::writers::write_request::{MieCensus, ensure_no_mie_copy, group_deletion};
 use std::fs;
 use std::path::Path;
 
@@ -163,13 +164,25 @@ pub(crate) fn apply_tag_changes_with_receipt(
     apply_with_planning_hook(path, changes, || {})
 }
 
+/// Count proven sets while protecting dates shifted by the enclosing CLI
+/// command. Planning, no-op decisions and copying retain the same opened file.
+pub(crate) fn apply_tag_changes_counted_among(
+    path: &Path,
+    changes: &[TagChange],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize)> {
+    let original = super::filesystem_metadata::open_destination(path)?;
+    let receipt = apply_on_opened_with_hook(path, changes, original, siblings, || {})?;
+    Ok((receipt.outcome, receipt.sets))
+}
+
 fn apply_with_planning_hook(
     path: &Path,
     changes: &[TagChange],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     let original = super::filesystem_metadata::open_destination(path)?;
-    apply_on_opened_with_hook(path, changes, original, after_plan)
+    apply_on_opened_with_hook(path, changes, original, &[], after_plan)
 }
 
 pub(crate) fn apply_tag_changes_on_opened(
@@ -177,13 +190,14 @@ pub(crate) fn apply_tag_changes_on_opened(
     changes: &[TagChange],
     original: fs::File,
 ) -> Result<AppliedWrite> {
-    apply_on_opened_with_hook(path, changes, original, || {})
+    apply_on_opened_with_hook(path, changes, original, &[], || {})
 }
 
 fn apply_on_opened_with_hook(
     path: &Path,
     changes: &[TagChange],
     original: fs::File,
+    siblings: &[String],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     // Every request is resolved, and every no-op decided, against the file
@@ -213,7 +227,7 @@ fn apply_on_opened_with_hook(
         path,
         original,
         |scratch| {
-            (proven_sets, caller_fields) = execute_plan(scratch, &plan)?;
+            (proven_sets, caller_fields) = execute_plan(scratch, &plan, siblings)?;
             Ok(())
         },
         || Ok(()),
@@ -450,6 +464,7 @@ impl GroupDeletions {
     pub(crate) fn plan<'a>(
         path: &Path,
         deletions: impl IntoIterator<Item = (usize, &'a str)>,
+        mie: Option<&MieCensus>,
     ) -> Self {
         let Ok(reader) = MMapReader::new(path) else {
             return Self::default();
@@ -457,21 +472,33 @@ impl GroupDeletions {
         let Ok(baseline) = read_metadata(path) else {
             return Self::default();
         };
-        Self::plan_with_reader(&baseline, &reader, deletions)
+        let owned;
+        let mie = match mie {
+            Some(mie) => mie,
+            None => {
+                owned = mie_census_with_reader(&reader).ok();
+                let Some(mie) = owned.as_ref() else {
+                    return Self::default();
+                };
+                mie
+            }
+        };
+        Self::plan_with_reader(&baseline, &reader, deletions, mie)
     }
 
     fn plan_with_reader<'a>(
         baseline: &MetadataMap,
         reader: &MMapReader,
         deletions: impl IntoIterator<Item = (usize, &'a str)>,
+        mie: &MieCensus,
     ) -> Self {
         Self(
             deletions
                 .into_iter()
                 .filter_map(|(at, tag)| {
                     let group = group_deletion(tag)?;
-                    let key =
-                        plan_group_deletion_with_reader(tag, group, baseline, reader).ok()??;
+                    let key = plan_group_deletion_with_reader(tag, group, baseline, reader, mie)
+                        .ok()??;
                     let effective = group_removal_takes_effect_with_reader(&key, baseline, reader);
                     Some((at, key, effective))
                 })
@@ -594,6 +621,7 @@ fn plan_changes<'a>(
     } else {
         &[]
     };
+    let mie = mie_census_with_reader(reader)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     // Refusals of one request, by its position: a later group deletion can
     // still cancel the request (see below), and its refusal with it.
@@ -610,6 +638,7 @@ fn plan_changes<'a>(
             .enumerate()
             .filter(|(_, change)| change.value().is_none())
             .map(|(at, change)| (at, change.tag())),
+        &mie,
     );
     let gone = deletions.effective();
     // Resolve CIFF presence from its APP0 bytes only if a surviving request
@@ -656,7 +685,7 @@ fn plan_changes<'a>(
                     && !group_covers(group, &earlier.request.key)
             });
             request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-            match plan_group_deletion_with_reader(change.tag(), group, &baseline, reader) {
+            match plan_group_deletion_with_reader(change.tag(), group, &baseline, reader, &mie) {
                 Ok(Some(key)) => groups.push((at, key)),
                 // Provably nothing of the group in the file.
                 Ok(None) => {}
@@ -691,6 +720,17 @@ fn plan_changes<'a>(
             }
             Err(other) => return Err(other),
         }
+        if change.value().is_some()
+            && let Err(error) =
+                crate::writers::exif_cross_delete::date_set_keys(&baseline, change.tag())
+        {
+            request_refusals.push((
+                at,
+                change.tag(),
+                TagNotWritten::new(change.tag(), error.to_string()),
+            ));
+            continue;
+        }
         // A maker-note request in a request whose group deletion takes the
         // maker note away is a no-op: ExifTool never creates a maker-note
         // tag, and a tag or entry of a note that is gone is nothing to
@@ -711,7 +751,12 @@ fn plan_changes<'a>(
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
-                    key,
+                    key: if change.value().is_none() {
+                        crate::writers::write_request::unit_suffix_family_key(change.tag())
+                            .unwrap_or(key)
+                    } else {
+                        key
+                    },
                     value: change.value(),
                 },
                 addressed,
@@ -750,6 +795,28 @@ fn plan_changes<'a>(
     let mut fields: Vec<(usize, Resolved<'a>)> = Vec::new();
     let mut absent_deletions = Vec::new();
     for candidate in last {
+        // A request pinned 13.59 also applies to a MIE trailer's EXIF copy,
+        // which oxidex does not write, is refused -- asked only now, of the
+        // request that survived the same-field reduction (a set a later
+        // deletion overrides is never written), and before the no-op
+        // decision below, which sees the main EXIF alone (a deletion MIE's
+        // copy holds is no no-op). `write_request::ensure_no_mie_copy`, on
+        // the census taken once above.
+        let requested = candidate.request.requested;
+        match ensure_no_mie_copy(
+            requested.strip_suffix('#').unwrap_or(requested),
+            &candidate.request.key,
+            &baseline,
+            candidate.request.value.is_none(),
+            &mie,
+        ) {
+            Ok(()) => {}
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                refused.extend(tags);
+                continue;
+            }
+            Err(other) => return Err(other),
+        }
         // #945 / #943: a deletion that names nothing -- no row under any
         // spelling, and no entry of any EXIF block (`exif_surgical::
         // exif_request_is_no_op`) -- is a no-op, decided before the writer's
@@ -924,7 +991,20 @@ pub(crate) fn group_covers(group: &str, tag: &str) -> bool {
 /// request). The writer's own no-op decision and post-write check
 /// (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`, #943) run
 /// inside every pass (`write_metadata_transaction`).
-fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, String)>)> {
+fn execute_plan(
+    path: &Path,
+    plan: &Plan<'_>,
+    protected: &[String],
+) -> Result<(usize, Vec<(String, String)>)> {
+    let mut siblings: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Field(request) if request.value.is_some() => Some(request.key.clone()),
+            _ => None,
+        })
+        .collect();
+    siblings.extend_from_slice(protected);
     let mut index = 0;
     while index < plan.steps.len() {
         let is_group = matches!(plan.steps[index], Step::Group(_));
@@ -962,7 +1042,8 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
                 }
             }
         }
-        write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
+        write_metadata_transaction_among(path, &desired, &removed, &siblings)
+            .map_err(typed_refusal)?;
         index = end;
     }
     // The read-back proves every field request no later group removal
@@ -1606,6 +1687,37 @@ mod tests {
 
     fn s(text: &str) -> TagValue {
         TagValue::new_string(text)
+    }
+
+    /// PR #966 review 4112736391: a transaction walks the file's MIE
+    /// trailers once, whatever its number of requests -- not once per
+    /// surviving request and group deletion (each walk is file-sized).
+    #[test]
+    fn a_transaction_takes_one_mie_census() {
+        let Some(source) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mie.jpg");
+        std::fs::copy(&source, &path).unwrap();
+        let changes = [
+            TagChange::delete("IFD0:Artist"),
+            TagChange::delete("IFD0:Software"),
+            TagChange::delete("ExifIFD:UserComment"),
+            TagChange::delete("IFD0:Copyright"),
+            TagChange::delete("GPS:All"),
+            TagChange::delete("IFD1:All"),
+        ];
+        crate::parsers::mie::TRAILER_WALKS.with(|walks| walks.set(0));
+        let original = super::super::filesystem_metadata::open_destination(&path).unwrap();
+        let reader = MMapReader::from_file(original.try_clone().unwrap()).unwrap();
+        let _ = plan_changes(&path, &changes, &reader, &original);
+        assert_eq!(
+            crate::parsers::mie::TRAILER_WALKS.with(std::cell::Cell::get),
+            1,
+            "one MIE census for {} requests",
+            changes.len()
+        );
     }
 
     /// A map read from the file, then edited: the rows the caller

@@ -24,6 +24,7 @@
 //! `-all=`) is not a request for named tags and keeps the carrier writer's
 //! own refusal.
 
+use crate::core::date_shift::ExifDateTag;
 use crate::core::{FileFormat, FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::io::MMapReader;
@@ -109,6 +110,59 @@ pub(crate) fn refuse_multi_exif_app1_rewrite(
     let assigned = desired.assigned_keys();
     let keys = exif_family_request_keys(baseline, desired, removed, &assigned);
     refuse_keys(blocks, keys)
+}
+
+/// The direct date shifter has already loaded these exact bytes and can
+/// return unchanged only when every native-counted EXIF block proves every
+/// requested date absent. A hidden, malformed, or nonstandard APP1 record
+/// cannot justify patching only the first block.
+pub(crate) fn refuse_multi_exif_app1_date_shift(
+    file_bytes: &[u8],
+    targets: &[ExifDateTag],
+) -> Result<()> {
+    let count = exif_app1_records(file_bytes);
+    if count <= 1 || targets.is_empty() {
+        return Ok(());
+    }
+    let absent = (|| {
+        let ranges = super::exif_surgical::jpeg_exif_blocks(file_bytes).ok()?;
+        if ranges.len() != count {
+            return None;
+        }
+        let blocks: Vec<&[u8]> = ranges
+            .iter()
+            .map(|&(at, len)| file_bytes.get(at..at.checked_add(len)?))
+            .collect::<Option<_>>()?;
+        let removed: Vec<String> = targets
+            .iter()
+            .map(|target| {
+                let (_, name) = target.key().split_once(':').expect("grouped date key");
+                format!("EXIF:{name}")
+            })
+            .collect();
+        let empty = MetadataMap::new();
+        Some(super::exif_surgical::exif_request_is_no_op(
+            &blocks,
+            &blocks,
+            super::exif_surgical::EXIF_BLOCK_MAGICS,
+            false,
+            &empty,
+            &empty,
+            &removed,
+        ))
+    })()
+    .unwrap_or(false);
+    if absent {
+        Ok(())
+    } else {
+        refuse_keys(
+            count,
+            targets
+                .iter()
+                .map(|target| target.key().to_string())
+                .collect(),
+        )
+    }
 }
 
 fn refuse_keys(blocks: usize, keys: Vec<String>) -> Result<()> {
