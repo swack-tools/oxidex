@@ -48,7 +48,7 @@
 
 use super::exif_surgical::MakerNoteCensus;
 use super::generated_setnewvalue_address_rules::{
-    SET_NEW_VALUE_LOOKUP, StaticNativeLookupCandidate,
+    SET_NEW_VALUE_LOOKUP, StaticCandidatePrintConv, StaticNativeLookupCandidate,
 };
 use super::generated_tag_exists::{SHORTCUTS, TAG_EXISTS};
 use crate::core::FileFormat;
@@ -58,6 +58,130 @@ use crate::error::{ExifToolError, Result};
 /// `Exif::Main`'s table-level `WRITE_GROUP` (Exif.pm:415), the write group of
 /// every candidate that declares none of its own.
 const EXIF_MAIN_WRITE_GROUP: &str = "ExifIFD";
+
+/// A closed, source-captured PrintConv hash proves a request cannot convert
+/// only when no eligible native candidate can interpret its text. Hashes with
+/// callbacks, inverse expressions or unsupported variants remain unknown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CandidateConversion {
+    NotInPrintConv,
+    Ambiguous,
+    Possible,
+    Unknown,
+}
+
+impl CandidateConversion {
+    fn rejected(self) -> bool {
+        matches!(self, Self::NotInPrintConv | Self::Ambiguous)
+    }
+}
+
+fn candidate_conversion(
+    candidate: &StaticNativeLookupCandidate,
+    value: &str,
+) -> CandidateConversion {
+    let StaticCandidatePrintConv::PlainHash(labels) = candidate.print_conv else {
+        return CandidateConversion::Unknown;
+    };
+    // ReverseLookup accepts Unknown (X) before looking at the hash. Its
+    // subsequent matching tiers include case-insensitive substring matches.
+    // The source rejects ambiguous partial matches. Non-ASCII folding stays
+    // unknown so it cannot prove that every candidate rejects the value.
+    let unknown_form = value.strip_suffix('\n').unwrap_or(value);
+    let lower = unknown_form.to_ascii_lowercase();
+    if lower.starts_with("unknown")
+        && lower[7..].trim_start().starts_with('(')
+        && lower.ends_with(')')
+        && !lower
+            .split_once('(')
+            .is_some_and(|(_, inner)| inner.contains('\n'))
+    {
+        return CandidateConversion::Possible;
+    }
+    if !value.is_ascii() || labels.iter().any(|label| !label.is_ascii()) {
+        return CandidateConversion::Unknown;
+    }
+    let query = value.trim_end().to_ascii_lowercase();
+    // Writer.pl ReverseLookup tries exact, case-insensitive exact, prefix,
+    // then substring. A non-exact tier with multiple matches stops there;
+    // it does not use a later tier to choose one of them.
+    if labels.iter().any(|label| *label == value.trim_end())
+        || labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(&query))
+    {
+        return CandidateConversion::Possible;
+    }
+    for count in [
+        labels
+            .iter()
+            .filter(|label| label.to_ascii_lowercase().starts_with(&query))
+            .count(),
+        labels
+            .iter()
+            .filter(|label| label.to_ascii_lowercase().contains(&query))
+            .count(),
+    ] {
+        match count {
+            0 => continue,
+            1 => return CandidateConversion::Possible,
+            _ => return CandidateConversion::Ambiguous,
+        }
+    }
+    CandidateConversion::NotInPrintConv
+}
+
+/// The EXIF destination for a bare request rejected by every writable native
+/// candidate. `applicable` may narrow candidates using a file's physical
+/// evidence; without it this is the command-wide SetNewValue decision.
+pub(crate) fn rejected_bare_conversion(
+    name: &str,
+    value: &str,
+    applicable: impl Fn(&StaticNativeLookupCandidate) -> bool,
+) -> Option<(&'static str, &'static str)> {
+    let candidates: Vec<_> = SET_NEW_VALUE_LOOKUP
+        .iter()
+        .filter(|candidate| {
+            candidate.name.eq_ignore_ascii_case(name) && candidate.candidate_writable
+        })
+        .collect();
+    let exif = candidates.iter().find(|candidate| {
+        is_exif_main(candidate)
+            && matches!(candidate.print_conv, StaticCandidatePrintConv::PlainHash(_))
+    })?;
+    if candidates
+        .iter()
+        .filter(|candidate| applicable(candidate))
+        .all(|candidate| candidate_conversion(candidate, value).rejected())
+    {
+        let reason = match candidate_conversion(exif, value) {
+            CandidateConversion::Ambiguous => "matches more than one PrintConv",
+            CandidateConversion::NotInPrintConv => "not in PrintConv",
+            _ => return None,
+        };
+        Some((exif.write_group.unwrap_or(EXIF_MAIN_WRITE_GROUP), reason))
+    } else {
+        None
+    }
+}
+
+/// Whether one candidate can still be selected in this file. The only
+/// absence proofs used here are the physical maker-note census and absence of
+/// a MIE row. Other families stay possible when their creation rules are not
+/// captured; that deliberately prevents a false conversion warning.
+pub(crate) fn candidate_applies_to_file(
+    candidate: &StaticNativeLookupCandidate,
+    name: &str,
+    baseline: &MetadataMap,
+    census: MakerNoteCensus,
+) -> bool {
+    match family0(candidate) {
+        Some("MakerNotes") => family1(candidate)
+            .is_none_or(|group| makernote_group_may_hold(name, group, baseline, &|| census)),
+        Some("MIE") => mie_row(baseline).is_some(),
+        _ => true,
+    }
+}
 
 /// Whether ExifTool writes an ungrouped `name` to a PNG as a PNG text tag:
 /// pinned 13.59 answers `-Software=NEW` on a PNG with `[PNG] Software`, not
@@ -937,11 +1061,30 @@ pub(crate) fn makernote_may_hold(
     baseline: &MetadataMap,
     makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Option<String> {
-    use super::generated_makernote_groups::{MAKERNOTE_CANDIDATES, MAKERNOTE_ROOTS};
+    use super::generated_makernote_groups::MAKERNOTE_CANDIDATES;
     let lowered = name.to_ascii_lowercase();
     let groups: &[&str] = MAKERNOTE_CANDIDATES
         .binary_search_by(|(candidate, _)| (*candidate).cmp(lowered.as_str()))
         .map_or(&[], |at| MAKERNOTE_CANDIDATES[at].1);
+    makernote_may_hold_in_groups(name, groups, baseline, makernote_block)
+}
+
+pub(crate) fn makernote_group_may_hold(
+    name: &str,
+    group: &str,
+    baseline: &MetadataMap,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
+) -> bool {
+    makernote_may_hold_in_groups(name, &[group], baseline, makernote_block).is_some()
+}
+
+fn makernote_may_hold_in_groups(
+    name: &str,
+    groups: &[&str],
+    baseline: &MetadataMap,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
+) -> Option<String> {
+    use super::generated_makernote_groups::MAKERNOTE_ROOTS;
     if groups.is_empty() {
         return None;
     }

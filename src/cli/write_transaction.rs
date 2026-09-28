@@ -25,8 +25,8 @@ use crate::cli::args::CliArgs;
 use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{
-    CopyReport, clear_all_metadata, copy_metadata_report_retaining, read_metadata,
-    resolve_write_tag_in_request,
+    CopyReport, clear_all_metadata, conversion_makernote_census, copy_metadata_report_retaining,
+    read_metadata, resolve_write_tag_in_request,
 };
 use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
@@ -34,8 +34,8 @@ use crate::core::write_transaction::{
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
-    canonical_request_tag, expand_write_shortcut, group_deletion, sorry_not_writable,
-    undefined_tag_warning,
+    candidate_applies_to_file, canonical_request_tag, expand_write_shortcut, group_deletion,
+    rejected_bare_conversion, sorry_not_writable, undefined_tag_warning,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -219,11 +219,12 @@ impl WritePlan {
             let defined: Vec<(String, OsString)> = defined
                 .into_iter()
                 .filter(|(tag, value)| {
-                    match tag
-                        .contains(':')
-                        .then(|| unconvertible_value_warning(tag, value, raw_values))
-                        .flatten()
-                    {
+                    let warning = if tag.contains(':') {
+                        unconvertible_value_warning(tag, value, raw_values)
+                    } else {
+                        bare_conversion_warning(tag, value, raw_values, |_| true)
+                    };
+                    match warning {
                         Some(warning) => {
                             warnings.push(warning);
                             false
@@ -344,6 +345,7 @@ impl WritePlan {
                 .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
         );
         let baseline = read_metadata(path).ok();
+        let census = conversion_makernote_census(path);
         let classify = |at: usize, tag: &str, value: &OsString, with_deletions: bool| {
             if value.is_empty() {
                 return None;
@@ -351,6 +353,14 @@ impl WritePlan {
             let bare = tag.strip_suffix('#').unwrap_or(tag);
             if bare.contains(':') {
                 return None; // already classified in from_args
+            }
+            if let Some(metadata) = baseline.as_ref()
+                && let Some(warning) =
+                    bare_conversion_warning(tag, value, self.raw_values, |candidate| {
+                        candidate_applies_to_file(candidate, bare, metadata, census)
+                    })
+            {
+                return Some(warning);
             }
             let typed = baseline.as_ref().and_then(|metadata| {
                 resolve_write_tag_in_request(
@@ -736,6 +746,22 @@ fn unconvertible_value_warning(tag: &str, value: &OsString, raw_values: bool) ->
     err.invalid_tag_value_reason()
         .filter(|reason| is_not_in_print_conv_reason(reason))
         .map(str::to_string)
+}
+
+fn bare_conversion_warning(
+    tag: &str,
+    value: &OsString,
+    raw_values: bool,
+    applicable: impl Fn(
+        &crate::writers::generated_setnewvalue_address_rules::StaticNativeLookupCandidate,
+    ) -> bool,
+) -> Option<String> {
+    if raw_values || value.is_empty() || tag.ends_with('#') {
+        return None;
+    }
+    let text = value.to_str()?;
+    let (group, reason) = rejected_bare_conversion(tag, text, applicable)?;
+    Some(format!("Can't convert {group}:{tag} ({reason})"))
 }
 
 /// Whether `reason` is a refusal ExifTool's `SetNewValue` reports as a
