@@ -102,62 +102,70 @@ fn d810_encrypted_lens_data_has_generated_occurrences() {
 }
 
 #[test]
-fn nef_lens_data_uses_the_same_generated_owner_as_jpeg() {
-    let carrier = d810_carrier(".nef");
-    let metadata = read_metadata(carrier.path()).expect("read pinned D810 NEF carrier");
-    for (name, printed) in [
-        ("ExitPupilPosition", "97.5 mm"),
-        ("AFAperture", "2.8"),
-        ("FocusPosition", "0x04"),
-        ("LensFStops", "6.00"),
-    ] {
-        let key = format!("Nikon:{name}");
-        let rows: Vec<_> = metadata
-            .project_occurrences(ValueChannel::PrintConv)
-            .filter(|(candidate, _, _)| *candidate == key)
-            .collect();
-        assert_eq!(rows.len(), 1, "{key}: one public RAW occurrence");
-        assert_eq!(rows[0].1.origin.module, Some("Nikon"));
-        assert_eq!(rows[0].1.origin.table, Some("LensData0204"));
-        assert_eq!(rows[0].2.as_ref(), &TagValue::String(printed.to_owned()));
-        assert_eq!(metadata.get_string(&key), Some(printed));
+fn nef_and_nrw_lens_data_use_the_same_generated_owner_as_jpeg() {
+    for extension in [".nef", ".nrw"] {
+        let carrier = d810_carrier(extension);
+        let metadata = read_metadata(carrier.path()).expect("read pinned D810 RAW carrier");
+        for (name, printed) in [
+            ("ExitPupilPosition", "97.5 mm"),
+            ("AFAperture", "2.8"),
+            ("FocusPosition", "0x04"),
+            ("LensFStops", "6.00"),
+        ] {
+            let key = format!("Nikon:{name}");
+            let rows: Vec<_> = metadata
+                .project_occurrences(ValueChannel::PrintConv)
+                .filter(|(candidate, _, _)| *candidate == key)
+                .collect();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{extension} {key}: one public RAW occurrence"
+            );
+            assert_eq!(rows[0].1.origin.module, Some("Nikon"));
+            assert_eq!(rows[0].1.origin.table, Some("LensData0204"));
+            assert_eq!(rows[0].2.as_ref(), &TagValue::String(printed.to_owned()));
+            assert_eq!(metadata.get_string(&key), Some(printed));
+        }
+        assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
     }
-    assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
 }
 
 #[test]
-fn engine_silence_suppresses_nef_generated_fields_without_hiding_residuals() {
-    let carrier = d810_carrier(".nef");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
-        .args([
-            "-j",
-            "-G1",
-            "-s",
-            "-Nikon:ExitPupilPosition",
-            "-Nikon:AFAperture",
-            "-Nikon:FocusPosition",
-            "-Nikon:LensFStops",
-            "-Nikon:MinFocalLength",
-        ])
-        .arg(carrier.path())
-        .env("OXIDEX_GENSHARE_SILENCE", "engine")
-        .output()
-        .expect("run RAW engine knockout");
-    assert!(output.status.success(), "{output:?}");
-    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let row = &rows[0];
-    for name in [
-        "ExitPupilPosition",
-        "AFAperture",
-        "FocusPosition",
-        "LensFStops",
-    ] {
-        assert!(
-            row.get(format!("Nikon:{name}")).is_none(),
-            "{name}: no hand fallback"
-        );
+fn engine_silence_suppresses_raw_generated_fields_without_hiding_residuals() {
+    for extension in [".nef", ".nrw"] {
+        let carrier = d810_carrier(extension);
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args([
+                "-j",
+                "-G1",
+                "-s",
+                "-Nikon:ExitPupilPosition",
+                "-Nikon:AFAperture",
+                "-Nikon:FocusPosition",
+                "-Nikon:LensFStops",
+                "-Nikon:MinFocalLength",
+            ])
+            .arg(carrier.path())
+            .env("OXIDEX_GENSHARE_SILENCE", "engine")
+            .output()
+            .expect("run RAW engine knockout");
+        assert!(output.status.success(), "{extension}: {output:?}");
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let row = &rows[0];
+        for name in [
+            "ExitPupilPosition",
+            "AFAperture",
+            "FocusPosition",
+            "LensFStops",
+        ] {
+            assert!(
+                row.get(format!("Nikon:{name}")).is_none(),
+                "{extension} {name}: no hand fallback"
+            );
+        }
+        assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
     }
-    assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
 }
 
 #[test]
