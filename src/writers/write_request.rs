@@ -1100,7 +1100,18 @@ fn makernote_may_hold_in_groups(
     // unless the deletion is `MakerNotes:All`, which takes CIFF too.
     let deletions = census.deletions;
     let ciff = census.ciff;
-    let surviving_direct = deletions.exif_ifd_only() && census.surviving_exif_ifd_clear > 0;
+    let surviving_direct = if deletions.exif_ifd_only() {
+        let surviving = if deletions.ifd1 && census.surviving_exif_ifd_clear != usize::MAX {
+            census
+                .surviving_exif_ifd_clear
+                .saturating_sub(census.ifd1_tag_bearing)
+        } else {
+            census.surviving_exif_ifd_clear
+        };
+        surviving > 0
+    } else {
+        false
+    };
     // Rows do not identify which physical note supplied them. After an
     // ExifIFD clear, a surviving direct note must stay an unknown candidate
     // even if the removed ExifIFD note supplied a decoded vendor row.
@@ -1136,6 +1147,8 @@ fn makernote_may_hold_in_groups(
     }
     let tag_bearing = if deletions.makernotes {
         0
+    } else if deletions.ifd1 && census.tag_bearing != usize::MAX {
+        census.tag_bearing.saturating_sub(census.ifd1_tag_bearing)
     } else {
         census.tag_bearing
     };
