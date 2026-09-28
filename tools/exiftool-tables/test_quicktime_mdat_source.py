@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 
 class MainMdatSource(unittest.TestCase):
     def test_selected_native_declarations_drive_generated_operands(self):
+        selected_pin = (caps.ROOT / ".exiftool-version").read_text().strip()
         for version, names in (("11.78", ("MovieDataSize", "MovieDataOffset")),
                                ("12.64", ("MediaDataSize", "MediaDataOffset")),
                                ("13.59", ("MediaDataSize", "MediaDataOffset"))):
@@ -31,7 +32,7 @@ class MainMdatSource(unittest.TestCase):
                 rendered = caps.render_rust(result)
                 for operand, name in zip(("SIZE", "OFFSET"), names):
                     self.assertIn(f'const MDAT_{operand}_TAG: &str = "QuickTime:{name}";', rendered)
-                if version == "13.59":
+                if version == selected_pin:
                     self.assertEqual(rendered, caps.RUST.read_text())
 
     def test_unknown_controls_and_mixed_source_names_fail_closed(self):
