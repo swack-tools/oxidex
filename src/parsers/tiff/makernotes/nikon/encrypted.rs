@@ -233,6 +233,7 @@ use super::binary_data::{Ctx, Root, process, select_root};
 use super::encrypted_tables::{
     COLOR_BALANCE_ROOTS, LENS_DATA_ROOTS, SHOT_INFO_ROOTS, XLAT0, XLAT1,
 };
+use crate::exiftool_tables::{self, Dir, Emitted};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// The two pre-scanned key tags, already reduced to ExifTool's key integers.
@@ -286,8 +287,8 @@ pub fn parse_lens_data(
     order: ByteOrder,
     ctx: &mut Ctx,
     out: &mut HashMap<String, String>,
-) {
-    parse_encrypted(LENS_DATA_ROOTS, value, entry_count, keys, order, ctx, out);
+) -> Vec<Emitted> {
+    parse_encrypted(LENS_DATA_ROOTS, value, entry_count, keys, order, ctx, out)
 }
 
 /// Select the sub-directory variant, decrypt, and walk the resulting table.
@@ -299,18 +300,18 @@ fn parse_encrypted(
     order: ByteOrder,
     ctx: &mut Ctx,
     out: &mut HashMap<String, String>,
-) {
+) -> Vec<Emitted> {
     let Some(root) = select_root(roots, value, entry_count) else {
-        return;
+        return Vec::new();
     };
     // A variant with no DecryptStart is one of the plaintext layouts, which
     // the hand-written parsers already cover.
     let Some(enc) = root.encrypted else {
-        return;
+        return Vec::new();
     };
     // No usable key means ExifTool warns and extracts nothing here.
     let Some(keys) = keys else {
-        return;
+        return Vec::new();
     };
 
     let mut data = value.to_vec();
@@ -323,11 +324,50 @@ fn parse_encrypted(
         0
     };
     if dir_start > data.len() {
-        return;
+        return Vec::new();
     }
     let big = enc.byte_order.unwrap_or(order == ByteOrder::BigEndian);
     let dir_len = data.len() - dir_start;
     process(enc.table, &data, dir_start, dir_len, big, ctx, out, 0);
+
+    // Nikon.pm's LensData0204 is a ProcessBinaryData table. Keep the source
+    // selector, serial/shutter key acquisition and decryption above; only the
+    // field walk changes. The hand interpreter remains available for fields
+    // that have not yet been independently credited to the generated walk.
+    if root.name != "LensData0204" {
+        return Vec::new();
+    }
+    let Some(table) = exiftool_tables::find_table("Nikon", "LensData0204") else {
+        return Vec::new();
+    };
+    if !exiftool_tables::is_enabled(table) {
+        return Vec::new();
+    }
+    let mut members = HashMap::new();
+    if let Some(model) = ctx.model.as_deref() {
+        members.insert("Model", exiftool_tables::MemberValue::Str(model.to_owned()));
+    }
+    let mut generated_ctx = exiftool_tables::Ctx::new(&mut members);
+    let mut emitted = Vec::new();
+    exiftool_tables::process_binary_data(
+        table,
+        Dir {
+            data: &data,
+            data_domain: 0,
+            dir_start,
+            dir_len: Some(dir_len),
+            base: 0,
+            data_pos: 0,
+            byte_order: if big {
+                crate::io::ByteOrder::Big
+            } else {
+                crate::io::ByteOrder::Little
+            },
+        },
+        &mut generated_ctx,
+        &mut emitted,
+    );
+    emitted
 }
 
 #[cfg(test)]
@@ -377,6 +417,67 @@ mod dispatch_tests {
             .is_some_and(|root| root.encrypted.is_some());
         assert_eq!(supported, tested_source() != TestedSource::V1178);
         supported
+    }
+
+    fn lens_data_0204(serial: u32, count: u32) -> Vec<u8> {
+        let mut data = vec![0; 20];
+        data[..4].copy_from_slice(b"0204");
+        data[4] = 21; // ExitPupilPosition: 2048/21 -> 97.5 mm
+        data[5] = 36; // AFAperture: 2**(36/24) -> 2.8
+        data[8] = 4; // FocusPosition: 0x04
+        data[13] = 72; // LensFStops: 72/12 -> 6.00
+        Decryptor::new(serial, count).decrypt_from(&mut data, 4);
+        data
+    }
+
+    fn generated_lens_rows(data: &[u8], keys: Option<Keys>) -> Vec<Emitted> {
+        let mut ctx = Ctx::new(Some("NIKON D810"), None);
+        let mut out = HashMap::new();
+        parse_lens_data(
+            data,
+            data.len(),
+            keys,
+            ByteOrder::LittleEndian,
+            &mut ctx,
+            &mut out,
+        )
+    }
+
+    #[test]
+    fn generated_lens_route_refuses_missing_key_unknown_version_and_truncated_tail() {
+        let data = lens_data_0204(3126, 485);
+        let keys = Some(Keys {
+            serial: 3126,
+            count: 485,
+        });
+        let rows = generated_lens_rows(&data, keys);
+        assert!(rows.iter().any(|row| row.name == "ExitPupilPosition"));
+        assert!(generated_lens_rows(&data, None).is_empty());
+        assert!(
+            generated_lens_rows(&data[..4], keys)
+                .iter()
+                .all(|row| row.name != "ExitPupilPosition")
+        );
+        let mut unknown = data.clone();
+        unknown[..4].copy_from_slice(b"9999");
+        assert!(generated_lens_rows(&unknown, keys).is_empty());
+
+        // Nikon's stream has no authentication bytes: a wrong key is
+        // structurally parseable, but it must not satisfy the pinned expected
+        // values. Do not interpret this control as a wrong-key detector.
+        let wrong = generated_lens_rows(
+            &data,
+            Some(Keys {
+                serial: 3126,
+                count: 486,
+            }),
+        );
+        let pupil = |rows: &[Emitted]| {
+            rows.iter()
+                .find(|row| row.name == "ExitPupilPosition")
+                .map(|row| row.stored.clone())
+        };
+        assert_ne!(pupil(&rows), pupil(&wrong));
     }
 
     #[test]

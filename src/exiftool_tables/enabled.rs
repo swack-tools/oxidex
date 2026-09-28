@@ -154,6 +154,15 @@ pub static ENABLED: &[(&str, &str)] = &[
     // MPF::MPImage -- `src/parsers/jpeg/mpf_parser.rs:591`. The most heavily
     // exercised of the five: 689 corpus files report `MPImage1:*`.
     ("MPF", "MPImage"),
+    // Nikon::LensData0204 -- the encrypted Nikon::Main 0x0098 value after
+    // source-selected decryption. `scripts/compare_file.py` on the required
+    // combined NikonD810.jpg carrier reports the same 273 compared, 2 MISSING,
+    // 0 WRONG on the pinned 5bc608f1 binary and on this route; direct
+    // group-qualified ExifTool assertions cover the four credited fields.
+    // The generated occurrence path owns ExitPupilPosition, AFAperture,
+    // FocusPosition and LensFStops. All other field output remains with the
+    // existing hand interpreter until separately credited.
+    ("Nikon", "LensData0204"),
     // Olympus::AFInfo, Olympus::AFTargetInfo, Olympus::SubjectDetectInfo --
     // ProcessBinaryData targets of SubDirectory edges leaving tables that
     // are already enabled and wired: AFTargetInfo (0x030a) and

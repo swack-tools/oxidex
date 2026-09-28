@@ -1,5 +1,57 @@
 [
   {
+    "field": {"kind": "index", "value": "4"},
+    "fixture": {"relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonD810.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "03ec78ef39ea83d4e81715dae96a24ffcf57df48a4d6091a7b07dca06ba10c57"},
+    "module": "Nikon",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Nikon::LensData0204", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "ExitPupilPosition", "raw_key": "4", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "b34a03e0d40d1b111aaca6a2ffa2cc466a84704b55d08a10502ce8bcb071ee0e",
+    "symbol": "src/parsers/tiff/makernotes/nikon/encrypted.rs::parse_encrypted",
+    "table": "LensData0204"
+  },
+  {
+    "field": {"kind": "index", "value": "5"},
+    "fixture": {"relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonD810.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "03ec78ef39ea83d4e81715dae96a24ffcf57df48a4d6091a7b07dca06ba10c57"},
+    "module": "Nikon",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Nikon::LensData0204", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "AFAperture", "raw_key": "5", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "d4810727d29f80d64eeef666248aa5c88995050a3dc10fe7ada7072f519ffc31",
+    "symbol": "src/parsers/tiff/makernotes/nikon/encrypted.rs::parse_encrypted",
+    "table": "LensData0204"
+  },
+  {
+    "field": {"kind": "index", "value": "8"},
+    "fixture": {"relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonD810.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "03ec78ef39ea83d4e81715dae96a24ffcf57df48a4d6091a7b07dca06ba10c57"},
+    "module": "Nikon",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Nikon::LensData0204", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "FocusPosition", "raw_key": "8", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "4dba8a26a9138b472cb2797d248be84895b7d0c286573b5a7e4b29084a8f43d6",
+    "symbol": "src/parsers/tiff/makernotes/nikon/encrypted.rs::parse_encrypted",
+    "table": "LensData0204"
+  },
+  {
+    "field": {"kind": "index", "value": "13"},
+    "fixture": {"relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonD810.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "03ec78ef39ea83d4e81715dae96a24ffcf57df48a4d6091a7b07dca06ba10c57"},
+    "module": "Nikon",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Nikon::LensData0204", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "LensFStops", "raw_key": "13", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "729b74f79c5af458ae1b78644d2c54bac56de9224697cd2654b1b76c0f90fe27",
+    "symbol": "src/parsers/tiff/makernotes/nikon/encrypted.rs::parse_encrypted",
+    "table": "LensData0204"
+  },
+  {
     "field": {"kind": "numeric", "value": "0x0000"},
     "fixture": {"relative_path": "cache/exiftool/13.59/combined-samples/Nikon/NikonZ8.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "dcdb1024eabb370cd34e5cf8301ff2ab9ac912db1604a75d4480b663a2031fe6"},
     "module": "Nikon",
