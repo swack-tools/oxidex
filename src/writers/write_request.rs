@@ -1124,6 +1124,35 @@ impl<'a> MieCensus<'a> {
     }
 }
 
+/// The pinned MakerNotes::Main entry named by a grouped request. ExifTool
+/// accepts these physical names under MakerNotes, ExifIFD, and EXIF, with a
+/// numeric `#` suffix; CIFF is a separate APP0 root, not an EXIF entry.
+/// The existing generic-MakerNotes MIE path used the literal name, including
+/// CIFF; retain that lookup for its set behavior while extending the two
+/// EXIF aliases and the main-file guard with the source-derived root names.
+fn named_makernote_root(
+    key: &str,
+    legacy_generic_mie: bool,
+) -> Option<&'static super::generated_makernote_groups::MakerNoteRoot> {
+    let (group, name) = key.split_once(':')?;
+    if !["MakerNotes", "ExifIFD", "EXIF"]
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(group))
+    {
+        return None;
+    }
+    let name = if legacy_generic_mie {
+        name
+    } else {
+        name.strip_suffix('#').unwrap_or(name)
+    };
+    super::generated_makernote_groups::MAKERNOTE_ROOTS
+        .iter()
+        .find(|root| {
+            (legacy_generic_mie || root.entry != "CIFF") && root.entry.eq_ignore_ascii_case(name)
+        })
+}
+
 /// Refuses a request -- grouped or not -- resolved to the EXIF-family `key`
 /// in a file that carries MIE, wherever pinned 13.59 also edits MIE-Meta's
 /// own EXIF copy, which oxidex does not write. `mie` is the file's
@@ -1176,8 +1205,19 @@ pub(crate) fn ensure_no_mie_copy(
     };
     let group = key.split_once(':').map_or("", |(group, _)| group);
     let removed_group = if removal { group_removal(key) } else { None };
+    // Generic MakerNotes keeps its original root lookup for sets and
+    // removals. For the two EXIF aliases, physical-root absence is only a
+    // deletion proof; sets take the unconditional EXIF-set refusal below.
+    let generic_makernotes = group.eq_ignore_ascii_case("MakerNotes");
+    let physical_root = if generic_makernotes {
+        named_makernote_root(key, true)
+    } else if removal {
+        named_makernote_root(key, false)
+    } else {
+        None
+    };
     let makernote = removed_group.is_none()
-        && (group.eq_ignore_ascii_case("MakerNotes") || is_makernote_group(group));
+        && (physical_root.is_some() || generic_makernotes || is_makernote_group(group));
     let exif = matches!(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "SubIFD"
@@ -1198,7 +1238,7 @@ pub(crate) fn ensure_no_mie_copy(
     };
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
-            if group.eq_ignore_ascii_case("MakerNotes") {
+            if physical_root.is_some() || generic_makernotes {
                 // A named generic request selects only the pinned maker-note
                 // candidate groups for this name. A Nikon block cannot hold
                 // Canon-only OwnerName, but may hold WhiteBalance even when
@@ -1208,11 +1248,8 @@ pub(crate) fn ensure_no_mie_copy(
                     let Some(rows) = block.rows() else {
                         return false;
                     };
-                    let physical = super::generated_makernote_groups::MAKERNOTE_ROOTS
-                        .iter()
-                        .find(|root| root.entry.eq_ignore_ascii_case(name));
                     let note = || block.note_census();
-                    if let Some(root) = physical {
+                    if let Some(root) = physical_root {
                         let census = note();
                         // A named MakerNotes::Main entry selects the physical
                         // note root. Writable child-field candidates do not
@@ -1385,18 +1422,7 @@ pub(crate) fn ensure_makernote_entry_not_named(
     key: &str,
     makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Result<()> {
-    use super::generated_makernote_groups::MAKERNOTE_ROOTS;
-    let Some((group, name)) = key.split_once(':') else {
-        return Ok(());
-    };
-    let name = name.strip_suffix('#').unwrap_or(name);
-    let named = ["ExifIFD", "EXIF", "MakerNotes"]
-        .iter()
-        .any(|known| known.eq_ignore_ascii_case(group))
-        && MAKERNOTE_ROOTS
-            .iter()
-            .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
-    let census = named.then(makernote_block);
+    let census = named_makernote_root(key, false).map(|_| makernote_block());
     if census.is_some_and(|census| {
         census.notes > 0 || census.uncertain_outside_ifd1 || census.uncertain_ifd1
     }) {
@@ -2306,8 +2332,11 @@ mod tests {
     fn a_named_maker_note_entry_is_refused() {
         for key in [
             "ExifIFD:MakerNoteCanon",
+            "ExifIFD:MakerNoteCanon#",
             "EXIF:MakerNoteCanon",
+            "exif:makernotecanon#",
             "MakerNotes:MakerNoteNikon",
+            "MakerNotes:MakerNoteNikon#",
         ] {
             assert!(
                 ensure_makernote_entry_not_named(key, key, &one_note).is_err(),
@@ -2319,6 +2348,8 @@ mod tests {
             );
         }
         assert!(ensure_makernote_entry_not_named("X", "ExifIFD:WhiteBalance", &one_note).is_ok());
+        assert!(ensure_makernote_entry_not_named("X", "IFD0:MakerNoteCanon", &one_note).is_ok());
+        assert!(ensure_makernote_entry_not_named("X", "EXIF:CIFF", &one_note).is_ok());
     }
 
     /// Only a same-named row a candidate can be is one ExifTool also
@@ -2430,7 +2461,21 @@ mod tests {
         let block = &census.blocks()[0];
         assert!(block.rows.get().is_none());
         let empty = MetadataMap::new();
-        assert!(ensure_no_mie_copy("IFD0:Artist", "IFD0:Artist", &empty, false, &census).is_err());
+        for key in [
+            "IFD0:Artist",
+            "ExifIFD:MakerNoteCanon",
+            "EXIF:MakerNoteNikon",
+        ] {
+            assert!(
+                ensure_no_mie_copy(key, key, &empty, false, &census).is_err(),
+                "{key}"
+            );
+            assert!(block.rows.get().is_none(), "{key}: set must not decode MIE");
+            assert!(
+                ensure_no_mie_copy(key, key, &empty, false, &MieCensus::Unknown).is_err(),
+                "{key}: unknown MIE remains a refusal"
+            );
+        }
         assert!(block.rows.get().is_none());
     }
 
