@@ -564,17 +564,26 @@ mod tests {
         }
 
         // Rule 3.
-        for id in CANON_MAIN_UNSUPPLIED {
+        for id in CANON_MAIN_UNSUPPLIED
+            .iter()
+            .copied()
+            .filter(|&id| id != 0x4026 || super::super::selected_source_pin() != "11.78")
+        {
             assert!(
-                withheld.contains(id),
+                withheld.contains(&id),
                 "{id:#06x} is in CANON_MAIN_UNSUPPLIED but the generated table does not withhold it (stale entry)"
             );
             assert!(
-                !CANON_MAIN_RESIDUAL_IDS.contains(id) && !hand_subtable(*id),
+                !CANON_MAIN_RESIDUAL_IDS.contains(&id) && !hand_subtable(id),
                 "{id:#06x} is in CANON_MAIN_UNSUPPLIED and also has a producer"
             );
         }
         for id in (0..=u16::MAX).filter(|&id| hand_subtable(id)) {
+            // FocusBracketingInfo and LevelInfo first appear in 13.59.
+            if [0x4053, 0x4059].contains(&id) && super::super::selected_source_pin() != "13.59" {
+                assert!(!is_edge(table, id));
+                continue;
+            }
             assert!(
                 is_edge(table, id),
                 "{id:#06x} is dispatched as a Canon sub-table by hand but is not a Canon::Main edge"
@@ -798,7 +807,13 @@ mod tests {
                 tag.id, tag.name, edge.module, edge.table
             );
         }
-        assert!(checked > 100, "only {checked} Canon::Main edges found");
+        let minimum = match super::super::selected_source_pin() {
+            "11.78" => 96,
+            "12.64" => 100,
+            "13.59" => 101,
+            _ => unreachable!(),
+        };
+        assert!(checked >= minimum, "only {checked} Canon::Main edges found");
     }
 
     /// Plain `insert` is exact only if no `Canon::Main` row is low priority
@@ -979,7 +994,16 @@ mod tests {
         let cases: [(u16, u16, &str, &str); 11] = [
             (0x00b4, 1, "Canon:ColorSpace", "sRGB"),
             (0x00b4, 2, "Canon:ColorSpace", "Adobe RGB"),
-            (0x00b4, 65535, "Canon:ColorSpace", "n/a"),
+            (
+                0x00b4,
+                65535,
+                "Canon:ColorSpace",
+                if super::super::selected_source_pin() == "11.78" {
+                    "Unknown (65535)"
+                } else {
+                    "n/a"
+                },
+            ),
             (0x00b4, 99, "Canon:ColorSpace", "Unknown (99)"),
             (0x001c, 0, "Canon:DateStampMode", "Off"),
             (0x001c, 1, "Canon:DateStampMode", "Date"),

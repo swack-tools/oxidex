@@ -16,6 +16,16 @@ mod custom_functions2_tables;
 pub mod filter_info;
 mod generated_subtables;
 mod main_engine;
+
+#[cfg(test)]
+pub(super) fn selected_source_pin() -> &'static str {
+    match include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim() {
+        "11.78" => "11.78",
+        "12.64" => "12.64",
+        "13.59" => "13.59",
+        pin => panic!("unprobed Canon source pin {pin}"),
+    }
+}
 pub mod original_decision_data;
 
 use crate::core::formatters::perl_number as format_perl_number;
@@ -6734,6 +6744,13 @@ fn parse_canon_makernote_directory(
                         (FILE_INFO_FLASH_EXPOSURE_LOCK, "FlashExposureLock"),
                         (FILE_INFO_ANTI_FLICKER, "AntiFlicker"),
                     ] {
+                        // A slot in the record is not a tag declaration. Older
+                        // FileInfo tables lack ShutterMode and AntiFlicker.
+                        if !crate::exiftool_tables::find_table("Canon", "FileInfo").is_some_and(
+                            |table| table.fields.iter().any(|field| field.name == name),
+                        ) {
+                            continue;
+                        }
                         if let Some(&value) = array.get(index) {
                             tags.insert(
                                 format!("Canon:{name}"),
@@ -6760,7 +6777,11 @@ fn parse_canon_makernote_directory(
                         }
                     }
 
-                    if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE) {
+                    if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE)
+                        && crate::exiftool_tables::find_table("Canon", "FileInfo").is_some_and(
+                            |table| table.fields.iter().any(|field| field.name == "RFLensType"),
+                        )
+                    {
                         tags.insert(
                             "Canon:RFLensType".to_string(),
                             decode_file_info_enum("RFLensType", i64::from(rf_lens_type as u16)),
@@ -9411,7 +9432,7 @@ mod tests {
         );
         assert_eq!(
             tags.get("Canon:ShutterMode").map(String::as_str),
-            Some("Electronic First Curtain")
+            (selected_source_pin() != "11.78").then_some("Electronic First Curtain")
         );
         assert_eq!(
             tags.get("Canon:FlashExposureLock").map(String::as_str),
@@ -9419,11 +9440,11 @@ mod tests {
         );
         assert_eq!(
             tags.get("Canon:AntiFlicker").map(String::as_str),
-            Some("Off")
+            (selected_source_pin() == "13.59").then_some("Off")
         );
         assert_eq!(
             tags.get("Canon:RFLensType").map(String::as_str),
-            Some("n/a")
+            (selected_source_pin() != "11.78").then_some("n/a")
         );
     }
 
@@ -9483,7 +9504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_file_info_rf_lens_type_uses_pinned_1359_enum_and_unsigned_fallback() {
+    fn test_parse_file_info_rf_lens_type_uses_selected_enum_and_unsigned_fallback() {
         let cases = [
             (324u16, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
             (0x8001u16, "Unknown (32769)"),
@@ -9499,7 +9520,13 @@ mod tests {
 
             assert_eq!(
                 tags.get("Canon:RFLensType").map(String::as_str),
-                Some(expected),
+                (selected_source_pin() != "11.78").then_some(
+                    if raw == 324 && selected_source_pin() == "12.64" {
+                        "Unknown (324)"
+                    } else {
+                        expected
+                    }
+                ),
                 "raw RFLensType {raw}"
             );
         }
@@ -11233,6 +11260,12 @@ mod tests {
                     if name != case || table != tag {
                         continue;
                     }
+                    let expected = match (selected_source_pin(), key) {
+                        ("11.78", "Canon:ShutterMode" | "Canon:RFLensType")
+                        | ("11.78" | "12.64", "Canon:AntiFlicker") => None,
+                        ("12.64", "Canon:RFLensType") if raw == 324 => Some("Unknown (324)"),
+                        _ => expected,
+                    };
                     assert_eq!(
                         printed.get(key).map(String::as_str),
                         expected,

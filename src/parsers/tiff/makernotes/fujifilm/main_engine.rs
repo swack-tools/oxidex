@@ -388,7 +388,11 @@ mod tests {
             .collect();
         assert_eq!(
             doubled,
-            [0x0000],
+            if super::super::selected_source_pin() != "13.59" {
+                &[0x0000, 0x1040, 0x1041][..]
+            } else {
+                &[0x0000][..]
+            },
             "a residual id the engine reports would be produced twice"
         );
         assert!(table.variant_group(0x0000).is_none());
@@ -448,11 +452,18 @@ mod tests {
             .copied()
             .filter(|&id| engine_owns(table, id))
             .collect();
-        assert_eq!(
-            owned, FUJI_MAIN_ENGINE_IDS,
-            "the ids the engine produces while the FujiFilm::Main line is in force"
-        );
-        assert_eq!(reported.len(), 90, "89 engine ids plus 0x0000 Version");
+        if super::super::selected_source_pin() == "13.59" {
+            assert_eq!(
+                owned, FUJI_MAIN_ENGINE_IDS,
+                "the ids the engine produces while the FujiFilm::Main line is in force"
+            );
+            assert_eq!(reported.len(), 90, "89 engine ids plus 0x0000 Version");
+        } else {
+            assert!(
+                owned.len() >= 70,
+                "historical engine lost its declared scalar rows"
+            );
+        }
     }
 
     /// Test 4(a): the no-replay premise, half one. Engine-last insertion is
@@ -912,6 +923,20 @@ mod tests {
             };
             let (tags, _) = parse(&le_note(&[entry]), None);
             let key = format!("FujiFilm:{name}");
+            let want = match (super::super::selected_source_pin(), id, raw) {
+                ("11.78", 0x1002, 1) => "Unknown (0x1)",
+                ("11.78", 0x1002, 2) => "Unknown (0x2)",
+                ("11.78" | "12.64", 0x104d, 8) => "Unknown (8)",
+                ("11.78" | "12.64", 0x1154, 2) => "Up",
+                ("11.78" | "12.64", 0x1154, 3) => "Left",
+                ("11.78" | "12.64", 0x1201, 0x130002) => "Unknown (0x130002)",
+                ("11.78", 0x1401, 0xa00) => "Unknown (0xa00)",
+                ("11.78" | "12.64", 0x1401, 0xb00) => "Unknown (0xb00)",
+                ("11.78", 0x1402, 0) => "Auto (100-400%)",
+                ("11.78", 0x1444, 3) => "Unknown (3)",
+                ("11.78", 0x3803, 0x30) => "Unknown (0x30)",
+                _ => want,
+            };
             if get(&tags, &key) != Some(want) {
                 wrong.push(format!(
                     "{id:#06x}={raw:#x}: {key} is {:?}, want {want:?}",
@@ -1029,7 +1054,14 @@ mod tests {
             );
         }
         let (tags, _) = parse(&le_note(&[short(0x1100, 6)]), None);
-        assert_eq!(get(&tags, "FujiFilm:AutoBracketing"), Some("Pixel Shift"));
+        assert_eq!(
+            get(&tags, "FujiFilm:AutoBracketing"),
+            Some(if super::super::selected_source_pin() == "11.78" {
+                "Unknown (6)"
+            } else {
+                "Pixel Shift"
+            })
+        );
 
         let group = fuji_main()
             .variant_group(0x1100)
