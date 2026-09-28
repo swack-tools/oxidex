@@ -228,14 +228,15 @@ fn test_leica2_fix_leica_base_shift() {
     assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"-0.95".to_string()));
 }
 
-/// `MakerNoteLeica9` (M10/M11/S): `Base` is unset, so value offsets count
-/// from the enclosing TIFF header, not the payload. Only reachable through
-/// [`MakerNoteParser::parse_with_context`] with a located context.
+/// `MakerNoteLeica9` (M10/M11/S): 11.78 declares `Base => '$start - 8'`,
+/// so value offsets count from the MakerNote payload; 12.64 and 13.59 remove
+/// `Base`, so they count from the enclosing TIFF header. Both require a
+/// located [`MakerNoteParser::parse_with_context`] context.
 ///
 /// Ground truth: `exiftool -G1 -s LeicaM10-R.jpg` reports
 /// `ExternalSensorBrightnessValue = 0.56`, `MeasuredLV = -19.93`.
 #[test]
-fn test_leica9_measured_lv_needs_tiff_relative_base() {
+fn test_leica9_measured_lv_uses_selected_native_base() {
     use oxidex::parsers::tiff::ifd_parser::ByteOrder;
     use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
     use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -245,14 +246,15 @@ fn test_leica9_measured_lv_needs_tiff_relative_base() {
     let parser = LeicaMakerNoteParser;
     let mut tags = HashMap::new();
 
-    let mut tiff = vec![0u8; 80];
+    let mut tiff = vec![0u8; 100];
     let payload_offset = 20usize;
 
     tiff[payload_offset..payload_offset + 8].copy_from_slice(b"LEICA\0\x02\0");
     tiff[payload_offset + 8..payload_offset + 10].copy_from_slice(&2u16.to_le_bytes());
 
-    // Value offsets are absolute TIFF offsets (60, 70) -- unreachable from the
-    // 34-byte payload alone, which is why this needs `parse_with_context`.
+    // The entries name offsets 60 and 70. Put distinct rationals at those
+    // TIFF-relative positions and at the payload-relative positions 80 and
+    // 90, so either source-declared base has a positive, discriminating read.
     let e0 = payload_offset + 10;
     tiff[e0..e0 + 2].copy_from_slice(&0x0311u16.to_le_bytes());
     tiff[e0 + 2..e0 + 4].copy_from_slice(&10u16.to_le_bytes()); // type 10: SRATIONAL
@@ -269,17 +271,30 @@ fn test_leica9_measured_lv_needs_tiff_relative_base() {
     tiff[64..68].copy_from_slice(&100i32.to_le_bytes());
     tiff[70..74].copy_from_slice(&(-1993i32).to_le_bytes());
     tiff[74..78].copy_from_slice(&100i32.to_le_bytes());
+    tiff[80..84].copy_from_slice(&125i32.to_le_bytes());
+    tiff[84..88].copy_from_slice(&100i32.to_le_bytes());
+    tiff[90..94].copy_from_slice(&(-250i32).to_le_bytes());
+    tiff[94..98].copy_from_slice(&100i32.to_le_bytes());
 
     let payload_len = 34; // header(8) + count(2) + 2 entries * 12
     let ctx = MakerNoteContext::in_tiff(&tiff, payload_offset, payload_len, 0);
 
     let result = parser.parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags);
     assert!(result.is_ok());
+    let expected = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => ("1.25", "-2.50"),
+        "12.64" | "13.59" => ("0.56", "-19.93"),
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     assert_eq!(
-        tags.get("Leica:ExternalSensorBrightnessValue"),
-        Some(&"0.56".to_string())
+        tags.get("Leica:ExternalSensorBrightnessValue")
+            .map(String::as_str),
+        Some(expected.0)
     );
-    assert_eq!(tags.get("Leica:MeasuredLV"), Some(&"-19.93".to_string()));
+    assert_eq!(
+        tags.get("Leica:MeasuredLV").map(String::as_str),
+        Some(expected.1)
+    );
 }
 
 /// `MakerNoteLeica9`, but parsed detached (no enclosing TIFF known): the two

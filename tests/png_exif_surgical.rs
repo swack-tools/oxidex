@@ -1381,9 +1381,9 @@ fn a_family_alias_removal_of_a_carried_entry_is_refused() {
 #[test]
 fn an_rw2_edit_passes_the_post_write_check() {
     let dir = tempfile::tempdir().unwrap();
-    // Synthetic RW2 header (`IIU\0`, magic 85, little-endian as Panasonic
-    // writes it): IFD0 {Make "Panasonic", Artist "me"}.
-    for order in [Order::Ii] {
+    // Synthetic RW2 headers (TIFF magic 85, both byte orders): IFD0 holds
+    // Make "Panasonic" and Artist "me", with no embedded JpgFromRaw.
+    for order in [Order::Ii, Order::Mm] {
         let mut t = match order {
             Order::Ii => b"II".to_vec(),
             Order::Mm => b"MM".to_vec(),
@@ -1403,25 +1403,29 @@ fn an_rw2_edit_passes_the_post_write_check() {
         let original = std::fs::read(&path).unwrap();
         let outcome = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
             .unwrap_or_else(|e| panic!("{order:?} synthetic RW2: {e}"));
-        if exiftool_oracle::repo_pin() == "11.78" {
-            // PanasonicRaw::Main 11.78 has no Artist row. Its native write
-            // reports unchanged even though this synthetic file carries
-            // physical 0x013b; the reader must not borrow Exif::Main's name.
-            assert_eq!(
-                outcome,
-                oxidex::core::write_transaction::WriteOutcome::Unchanged
-            );
-            assert_eq!(std::fs::read(&path).unwrap(), original);
-            assert_eq!(
-                read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-                None
-            );
-        } else {
-            assert_eq!(
-                read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-                Some("x"),
-                "{order:?}"
-            );
+        match exiftool_oracle::repo_pin() {
+            "11.78" => {
+                // PanasonicRaw::Main 11.78 has no Artist row. With no embedded
+                // JpgFromRaw, native writes of this synthetic LE/BE carrier are
+                // unchanged despite its physical 0x013b entry.
+                assert_eq!(
+                    outcome,
+                    oxidex::core::write_transaction::WriteOutcome::Unchanged
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+                assert_eq!(
+                    read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                    None
+                );
+            }
+            "12.64" | "13.59" => {
+                assert_eq!(
+                    read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                    Some("x"),
+                    "{order:?}"
+                );
+            }
+            pin => panic!("unreviewed ExifTool pin {pin}"),
         }
     }
     let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
@@ -1430,15 +1434,13 @@ fn an_rw2_edit_passes_the_post_write_check() {
     let path = dir.path().join("Panasonic.rw2");
     std::fs::copy(&sample, &path).unwrap();
     let original = std::fs::read(&path).unwrap();
-    if exiftool_oracle::repo_pin() == "11.78" {
-        assert_eq!(
-            modify_tag(&path, "IFD0:Artist", TagValue::new_string("x")).unwrap(),
-            oxidex::core::write_transaction::WriteOutcome::Unchanged
-        );
-    } else {
-        let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
-            .expect_err("t/images/Panasonic.rw2: IFD0:Artist written outside the JpgFromRaw");
-        assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" | "13.59" => {
+            let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                .expect_err("t/images/Panasonic.rw2: IFD0:Artist written inside JpgFromRaw");
+            assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+        }
+        pin => panic!("unreviewed ExifTool pin {pin}"),
     }
     assert!(std::fs::read(&path).unwrap() == original, "file touched");
 }
