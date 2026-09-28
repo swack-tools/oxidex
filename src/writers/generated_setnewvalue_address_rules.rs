@@ -14,6 +14,11 @@ pub(crate) struct StaticNativeLookupFamily {
     pub family: u8,
     pub value: &'static str,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum StaticCandidatePrintConv {
+    Unknown,
+    PlainHash(&'static [&'static str]),
+}
 pub(crate) struct StaticNativeLookupCandidate {
     pub name: &'static str,
     pub row_index: Option<usize>,
@@ -23,9 +28,11 @@ pub(crate) struct StaticNativeLookupCandidate {
     pub full_name: Option<&'static str>,
     pub raw_id: &'static str,
     pub writable: Option<&'static str>,
+    pub candidate_writable: bool,
     pub permanent: bool,
     pub write_group: Option<&'static str>,
     pub groups: &'static [StaticNativeLookupFamily],
+    pub print_conv: StaticCandidatePrintConv,
 }
 pub(crate) struct StaticSetNewValueQualifierScope {
     pub family: u8,
@@ -2179,6 +2186,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37892",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2203,6 +2211,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "acceleration",
@@ -2213,6 +2222,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Acceleration",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2237,6 +2247,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "activearea",
@@ -2247,6 +2258,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50829",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -2271,6 +2283,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2281,6 +2294,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37888",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2305,6 +2319,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2315,6 +2330,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "20",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2339,6 +2355,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2349,6 +2366,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "80",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2373,6 +2391,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2383,6 +2402,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "58",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2407,6 +2427,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2417,6 +2438,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "96",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2441,6 +2463,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2451,6 +2474,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
         raw_id: "70",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2475,6 +2499,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2485,6 +2510,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9402"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2509,6 +2535,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
@@ -2519,6 +2546,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Temperature",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2543,6 +2571,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "analogbalance",
@@ -2553,6 +2582,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50727",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -2577,6 +2607,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "antialiasstrength",
@@ -2587,6 +2618,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50738",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -2611,6 +2643,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "aperturevalue",
@@ -2621,6 +2654,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
         raw_id: "2",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2645,6 +2679,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "aperturevalue",
@@ -2655,6 +2690,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37378",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2679,6 +2715,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "aperturevalue",
@@ -2689,6 +2726,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4098",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2713,6 +2751,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "aperturevalue",
@@ -2723,6 +2762,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1025",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2747,6 +2787,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "aperturevalue",
@@ -2757,6 +2798,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ApertureValue",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2781,6 +2823,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "applicationnotes",
@@ -2791,6 +2834,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "700",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -2815,6 +2859,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "applicationnotes",
@@ -2825,6 +2870,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "700",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2849,6 +2895,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -2859,6 +2906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "315",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -2883,6 +2931,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -2893,6 +2942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "Artist",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2917,6 +2967,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -2927,6 +2978,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "315",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("IFD0"),
         groups: &[
@@ -2951,6 +3003,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -2961,6 +3014,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "558",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -2985,6 +3039,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -2995,6 +3050,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::ItemList"),
         raw_id: "©ART",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3019,6 +3075,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -3029,6 +3086,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "artist",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3053,6 +3111,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -3063,6 +3122,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "©ART",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3087,6 +3147,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -3097,6 +3158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Artist",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3121,6 +3183,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "artist",
@@ -3131,6 +3194,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmpDM"),
         raw_id: "artist",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3155,6 +3219,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "asshoticcprofile",
@@ -3165,6 +3230,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50831",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3189,6 +3255,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "asshotneutral",
@@ -3199,6 +3266,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50728",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3223,6 +3291,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "asshotpreprofilematrix",
@@ -3233,6 +3302,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50832",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3257,6 +3327,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "asshotprofilename",
@@ -3267,6 +3338,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50934",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3291,6 +3363,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "asshotwhitexy",
@@ -3301,6 +3374,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50729",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3325,6 +3399,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "baselineexposure",
@@ -3335,6 +3410,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50730",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3359,6 +3435,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "baselineexposureoffset",
@@ -3369,6 +3446,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51109",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3393,6 +3471,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "baselinenoise",
@@ -3403,6 +3482,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50731",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3427,6 +3507,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "baselinesharpness",
@@ -3437,6 +3518,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50732",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3461,6 +3543,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3471,6 +3554,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "56",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3495,6 +3579,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Full",
+            "Medium",
+            "n/a",
+            "Low",
+            "Near Empty",
+            "Near Full",
+            "Medium Low",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3505,6 +3598,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "81",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3529,6 +3623,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3539,6 +3634,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::ExtraInfo"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3563,6 +3659,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3573,6 +3670,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::ExtraInfo2"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3597,6 +3695,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3607,6 +3706,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::ExtraInfo3"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3631,6 +3731,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3641,6 +3742,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9406"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3665,6 +3767,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "batterylevel",
@@ -3675,6 +3778,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9406b"),
         raw_id: "5",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3699,6 +3803,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "bayergreensplit",
@@ -3709,6 +3814,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50733",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -3733,6 +3839,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "bestqualityscale",
@@ -3743,6 +3850,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50780",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -3767,6 +3875,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "bitspersample",
@@ -3777,6 +3886,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "258",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -3801,6 +3911,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "bitspersample",
@@ -3811,6 +3922,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "10",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3835,6 +3947,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "bitspersample",
@@ -3845,6 +3958,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "BitsPerSample",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3869,6 +3983,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -3879,6 +3994,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "29456",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -3903,6 +4019,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -3913,6 +4030,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50714",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -3937,6 +4055,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -3947,6 +4066,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::ColorBalanceC"),
         raw_id: "32",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -3971,6 +4091,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -3981,6 +4102,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "61",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4005,6 +4127,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -4015,6 +4138,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "1025",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4039,6 +4163,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -4049,6 +4174,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4114",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4073,6 +4199,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -4083,6 +4210,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "541",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4107,6 +4235,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -4117,6 +4246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
         raw_id: "29440",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4141,6 +4271,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
@@ -4151,6 +4282,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
         raw_id: "29456",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4175,6 +4307,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blackleveldeltah",
@@ -4185,6 +4318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50715",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -4209,6 +4343,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blackleveldeltav",
@@ -4219,6 +4354,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50716",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -4243,6 +4379,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "blacklevelrepeatdim",
@@ -4253,6 +4390,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50713",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -4277,6 +4415,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4287,6 +4426,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65107",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4311,6 +4451,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4321,6 +4462,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Brightness",
         writable: Some("int8s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4345,6 +4487,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4355,6 +4498,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::MP1"),
         raw_id: "Brightness",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4379,6 +4523,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4389,6 +4534,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "44",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4413,6 +4559,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4423,6 +4570,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl"),
         raw_id: "52",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4447,6 +4595,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4457,6 +4606,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
         raw_id: "57",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4481,6 +4631,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4491,6 +4642,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
         raw_id: "65",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4515,6 +4667,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4525,6 +4678,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "player.movie.visual.brightness",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4549,6 +4703,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4559,6 +4714,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "37",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4583,6 +4739,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4593,6 +4750,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "84",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4617,6 +4775,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4627,6 +4786,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "62",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4651,6 +4811,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4661,6 +4822,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "100",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4685,6 +4847,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4695,6 +4858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "34",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4719,6 +4883,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4729,6 +4894,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8199",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4753,6 +4919,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4763,6 +4930,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Brightness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4787,6 +4955,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightness",
@@ -4797,6 +4966,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Brightness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4821,6 +4991,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -4831,6 +5002,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37379",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4855,6 +5027,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -4865,6 +5038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "1681",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4889,6 +5063,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -4899,6 +5074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "18883",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4923,6 +5099,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -4933,6 +5110,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4099",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4957,6 +5135,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -4967,6 +5146,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -4991,6 +5171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5001,6 +5182,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010a"),
         raw_id: "4416",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5025,6 +5207,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5035,6 +5218,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010b"),
         raw_id: "4416",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5059,6 +5243,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5069,6 +5254,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010c"),
         raw_id: "4380",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5093,6 +5279,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5103,6 +5290,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010d"),
         raw_id: "4504",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5127,6 +5315,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5137,6 +5326,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "4468",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5161,6 +5351,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5171,6 +5362,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010f"),
         raw_id: "4140",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5195,6 +5387,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5205,6 +5398,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "548",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5229,6 +5423,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5239,6 +5434,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "548",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5263,6 +5459,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5273,6 +5470,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "537",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5297,6 +5495,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
@@ -5307,6 +5506,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "BrightnessValue",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5331,6 +5531,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cacheversion",
@@ -5341,6 +5542,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51114",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD2"),
         groups: &[
@@ -5365,6 +5567,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant1",
@@ -5375,6 +5578,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50778",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5399,6 +5603,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Standard Light A",
+            "Standard Light B",
+            "Standard Light C",
+            "Fluorescent",
+            "D55",
+            "D65",
+            "D75",
+            "D50",
+            "ISO Studio Tungsten",
+            "Daylight",
+            "Other",
+            "Day White",
+            "Cool White",
+            "White",
+            "Warm White",
+            "Tungsten (Incandescent)",
+            "Daylight LED",
+            "Day White LED",
+            "Cool White LED",
+            "White LED",
+            "Warm White LED",
+            "Flash",
+            "Fine Weather",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant2",
@@ -5409,6 +5647,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50779",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5433,6 +5672,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Standard Light A",
+            "Standard Light B",
+            "Standard Light C",
+            "Fluorescent",
+            "D55",
+            "D65",
+            "D75",
+            "D50",
+            "ISO Studio Tungsten",
+            "Daylight",
+            "Other",
+            "Day White",
+            "Cool White",
+            "White",
+            "Warm White",
+            "Tungsten (Incandescent)",
+            "Daylight LED",
+            "Day White LED",
+            "Cool White LED",
+            "White LED",
+            "Warm White LED",
+            "Flash",
+            "Fine Weather",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant3",
@@ -5443,6 +5716,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52529",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5467,6 +5741,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Standard Light A",
+            "Standard Light B",
+            "Standard Light C",
+            "Fluorescent",
+            "D55",
+            "D65",
+            "D75",
+            "D50",
+            "ISO Studio Tungsten",
+            "Daylight",
+            "Other",
+            "Day White",
+            "Cool White",
+            "White",
+            "Warm White",
+            "Tungsten (Incandescent)",
+            "Daylight LED",
+            "Day White LED",
+            "Cool White LED",
+            "White LED",
+            "Warm White LED",
+            "Flash",
+            "Fine Weather",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration1",
@@ -5477,6 +5785,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50723",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5501,6 +5810,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration2",
@@ -5511,6 +5821,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50724",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5535,6 +5846,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration3",
@@ -5545,6 +5857,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52530",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5569,6 +5882,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameracalibrationsig",
@@ -5579,6 +5893,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50931",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5603,6 +5918,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameraelevationangle",
@@ -5613,6 +5929,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37893",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5637,6 +5954,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameraelevationangle",
@@ -5647,6 +5965,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CameraElevationAngle",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5671,6 +5990,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "camerafirmware",
@@ -5681,6 +6001,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42041",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5705,6 +6026,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "camerafirmware",
@@ -5715,6 +6037,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CameraFirmware",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5739,6 +6062,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameralabel",
@@ -5749,6 +6073,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51105",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5773,6 +6098,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameralabel",
@@ -5783,6 +6109,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmpDM"),
         raw_id: "cameraLabel",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5807,6 +6134,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
@@ -5817,6 +6145,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50735",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5841,6 +6170,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
@@ -5851,6 +6181,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::XMP"),
         raw_id: "CameraSerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5875,6 +6206,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
@@ -5885,6 +6217,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::GettyImages"),
         raw_id: "CameraSerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -5909,6 +6242,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "celllength",
@@ -5919,6 +6253,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "265",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5943,6 +6278,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cellwidth",
@@ -5953,6 +6289,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "264",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -5977,6 +6314,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cfapattern",
@@ -5987,6 +6325,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41730",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6011,6 +6350,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cfapattern",
@@ -6021,6 +6361,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "9",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6045,6 +6386,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "n/a",
+            "[Red,Green][Green,Blue]",
+            "[Green,Red][Blue,Green]",
+            "[Green,Blue][Red,Green]",
+            "[Blue,Green][Green,Red]",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "cfapattern",
@@ -6055,6 +6403,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "CFAPattern",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6079,6 +6428,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cfapattern2",
@@ -6089,6 +6439,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33422",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -6113,6 +6464,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "cfarepeatpatterndim",
@@ -6123,6 +6475,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33421",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -6147,6 +6500,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromablurradius",
@@ -6157,6 +6511,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50737",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -6181,6 +6536,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
@@ -6191,6 +6547,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28724",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -6215,6 +6572,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Off",
+            "Auto",
+            "No correction params available",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
@@ -6225,6 +6587,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42000",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6249,6 +6612,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["No", "Yes"]),
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
@@ -6259,6 +6623,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::LensCorr"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6283,6 +6648,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
@@ -6293,6 +6659,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::SonyIDC::Main"),
         raw_id: "36877",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: true,
         write_group: None,
         groups: &[
@@ -6317,6 +6684,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["On", "Off"]),
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6327,6 +6695,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28725",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -6351,6 +6720,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6361,6 +6731,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405a"),
         raw_id: "1642",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6385,6 +6756,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6395,6 +6767,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "892",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6419,6 +6792,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6429,6 +6803,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "900",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6453,6 +6828,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6463,6 +6839,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "924",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6487,6 +6864,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6497,6 +6875,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "944",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6521,6 +6900,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
@@ -6531,6 +6911,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "952",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6555,6 +6936,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colorimetricreference",
@@ -6565,6 +6947,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50879",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -6589,6 +6972,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Scene-referred",
+            "Output-referred (ICC Profile Dynamic Range)",
+            "Output-referred (High Dyanmic Range)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "colormatrix1",
@@ -6599,6 +6987,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50721",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -6623,6 +7012,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colormatrix1",
@@ -6633,6 +7023,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "262",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6657,6 +7048,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colormatrix2",
@@ -6667,6 +7059,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50722",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -6691,6 +7084,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colormatrix2",
@@ -6701,6 +7095,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::RawInfo"),
         raw_id: "512",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6725,6 +7120,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colormatrix2",
@@ -6735,6 +7131,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "550",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6759,6 +7156,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colormatrix3",
@@ -6769,6 +7167,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52531",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -6793,6 +7192,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colorsequence",
@@ -6803,6 +7203,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::IPTC::NewsPhoto"),
         raw_id: "65",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6827,6 +7228,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -6837,6 +7239,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ColorInfo"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6861,6 +7264,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -6871,6 +7275,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "180",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6895,6 +7300,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "n/a"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -6905,6 +7311,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "4276",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6929,6 +7336,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "Uncalibrated"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -6939,6 +7347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40961",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6963,6 +7372,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "sRGB",
+            "Adobe RGB",
+            "Wide Gamut RGB",
+            "ICC Profile",
+            "Uncalibrated",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -6973,6 +7389,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Jpeg2000::ColorSpec"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -6997,6 +7414,27 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Bi-level",
+            "YCbCr(1)",
+            "CMY",
+            "CMYK",
+            "YCCK",
+            "CIELab",
+            "Bi-level(2)",
+            "sRGB",
+            "Grayscale",
+            "sYCC",
+            "CIEJab",
+            "e-sRGB",
+            "ROMM-RGB",
+            "YPbPr(1125/60)",
+            "YPbPr(1250/50)",
+            "e-sYCC",
+            "YCbCr(2)",
+            "YCbCr(3)",
+            "PhotoYCC",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7007,6 +7445,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Image"),
         raw_id: "ColorSpace",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7031,6 +7470,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7041,6 +7481,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "47",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7065,6 +7506,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Natural sRGB",
+            "Natural+ sRGB",
+            "Monochrome",
+            "Adobe RGB (ICC)",
+            "Adobe RGB",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7075,6 +7523,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "37",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7099,6 +7548,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Natural sRGB",
+            "Natural+ sRGB",
+            "Adobe RGB",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7109,6 +7563,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "23",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7133,6 +7588,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "B&W", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7143,6 +7599,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "30",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7167,6 +7624,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "BT.2100"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7177,6 +7635,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
         raw_id: "1287",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7201,6 +7660,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "Pro Photo RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7211,6 +7671,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "55",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7235,6 +7696,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7245,6 +7707,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40977",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7269,6 +7732,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7279,6 +7743,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7303,6 +7768,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7313,6 +7779,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "27",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7337,6 +7804,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "Adobe RGB (A700)"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7347,6 +7815,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "131",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7371,6 +7840,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Adobe RGB", "sRGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7381,6 +7851,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7405,6 +7876,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7415,6 +7887,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7439,6 +7912,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB"]),
     },
     StaticNativeLookupCandidate {
         name: "colorspace",
@@ -7449,6 +7923,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ColorSpace",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7473,6 +7948,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["sRGB", "Adobe RGB", "Uncalibrated"]),
     },
     StaticNativeLookupCandidate {
         name: "columninterleavefactor",
@@ -7483,6 +7959,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52547",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -7507,6 +7984,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "componentsconfiguration",
@@ -7517,6 +7995,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37121",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7541,6 +8020,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "componentsconfiguration",
@@ -7551,6 +8031,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Image"),
         raw_id: "Components",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7575,6 +8056,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "componentsconfiguration",
@@ -7585,6 +8067,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ComponentsConfiguration",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7609,6 +8092,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compositeimage",
@@ -7619,6 +8103,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42080",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7643,6 +8128,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Not a Composite Image",
+            "General Composite Image",
+            "Composite Image Captured While Shooting",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "compositeimage",
@@ -7653,6 +8144,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CompositeImage",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7677,6 +8169,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Not a Composite Image",
+            "General Composite Image",
+            "Composite Image Captured While Shooting",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "compositeimagecount",
@@ -7687,6 +8185,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42081",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7711,6 +8210,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compositeimagecount",
@@ -7721,6 +8221,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CompositeImageCount",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7745,6 +8246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compositeimageexposuretimes",
@@ -7755,6 +8257,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42082",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7779,6 +8282,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compositeimageexposuretimes",
@@ -7789,6 +8293,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CompositeImageExposureTimes",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7813,6 +8318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compressedbitsperpixel",
@@ -7823,6 +8329,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37122",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7847,6 +8354,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compressedbitsperpixel",
@@ -7857,6 +8365,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "CompressedBitsPerPixel",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7881,6 +8390,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "compression",
@@ -7891,6 +8401,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "259",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -7915,6 +8426,61 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Uncompressed",
+            "JBIG Color",
+            "CCITT 1D",
+            "Kodak 262",
+            "T4/Group 3 Fax",
+            "NeXt or Sony ARW Compressed 2",
+            "Sony ARW Compressed",
+            "Packed RAW",
+            "Samsung SRW Compressed",
+            "CCIRLEW",
+            "Samsung SRW Compressed 2",
+            "PackBits",
+            "Thunderscan",
+            "Kodak KDC Compressed",
+            "IT8CTPAD",
+            "IT8LW",
+            "IT8MP",
+            "IT8BL",
+            "PixarFilm",
+            "PixarLog",
+            "Deflate",
+            "DCS",
+            "Aperio JPEG 2000 YCbCr",
+            "Aperio JPEG 2000 RGB",
+            "JBIG",
+            "SGILog",
+            "SGILog24",
+            "JPEG 2000",
+            "Nikon NEF Compressed",
+            "JBIG2 TIFF FX",
+            "Microsoft Document Imaging (MDI) Binary Level Codec",
+            "Microsoft Document Imaging (MDI) Progressive Transform Codec",
+            "Microsoft Document Imaging (MDI) Vector",
+            "ESRI Lerc",
+            "Lossy JPEG",
+            "LZMA2",
+            "Zstd (old)",
+            "WebP (old)",
+            "PNG",
+            "JPEG XR",
+            "T6/Group 4 Fax",
+            "LZW",
+            "Zstd",
+            "WebP",
+            "JPEG XL (old)",
+            "JPEG XL",
+            "JPEG (old-style)",
+            "Kodak DCR Compressed",
+            "Pentax PEF Compressed",
+            "JPEG",
+            "Adobe Deflate",
+            "JBIG B&W or VC-5",
+            "JPEG",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "compression",
@@ -7925,6 +8491,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "11",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7949,6 +8516,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Panasonic RAW 1",
+            "Panasonic RAW 2",
+            "Panasonic RAW 3",
+            "Panasonic RAW 4",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "compression",
@@ -7959,6 +8532,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Compression",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -7983,6 +8557,61 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Uncompressed",
+            "JBIG Color",
+            "CCITT 1D",
+            "Kodak 262",
+            "T4/Group 3 Fax",
+            "NeXt or Sony ARW Compressed 2",
+            "Sony ARW Compressed",
+            "Packed RAW",
+            "Samsung SRW Compressed",
+            "CCIRLEW",
+            "Samsung SRW Compressed 2",
+            "PackBits",
+            "Thunderscan",
+            "Kodak KDC Compressed",
+            "IT8CTPAD",
+            "IT8LW",
+            "IT8MP",
+            "IT8BL",
+            "PixarFilm",
+            "PixarLog",
+            "Deflate",
+            "DCS",
+            "Aperio JPEG 2000 YCbCr",
+            "Aperio JPEG 2000 RGB",
+            "JBIG",
+            "SGILog",
+            "SGILog24",
+            "JPEG 2000",
+            "Nikon NEF Compressed",
+            "JBIG2 TIFF FX",
+            "Microsoft Document Imaging (MDI) Binary Level Codec",
+            "Microsoft Document Imaging (MDI) Progressive Transform Codec",
+            "Microsoft Document Imaging (MDI) Vector",
+            "ESRI Lerc",
+            "Lossy JPEG",
+            "LZMA2",
+            "Zstd (old)",
+            "WebP (old)",
+            "PNG",
+            "JPEG XR",
+            "T6/Group 4 Fax",
+            "LZW",
+            "Zstd",
+            "WebP",
+            "JPEG XL (old)",
+            "JPEG XL",
+            "JPEG (old-style)",
+            "Kodak DCR Compressed",
+            "Pentax PEF Compressed",
+            "JPEG",
+            "Adobe Deflate",
+            "JBIG B&W or VC-5",
+            "JPEG",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -7993,6 +8622,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "115",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8017,6 +8647,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8027,6 +8658,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "117",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8051,6 +8683,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8061,6 +8694,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraSettings"),
         raw_id: "13",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8085,6 +8719,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8095,6 +8730,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Main"),
         raw_id: "12",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8119,6 +8755,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Normal", "Low", "Normal", "+1", "-1", "High",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8129,6 +8768,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "12306",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8153,6 +8793,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8163,6 +8804,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "32",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8187,6 +8829,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Low", "Normal", "High"]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8197,6 +8840,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41992",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8221,6 +8865,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8231,6 +8876,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65108",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8255,6 +8901,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8265,6 +8912,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4100",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8289,6 +8937,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Normal",
+            "Medium High",
+            "High",
+            "Film Simulation",
+            "Medium Low",
+            "Low",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8299,6 +8955,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4102",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8323,6 +8980,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "High", "Low"]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8333,6 +8991,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Contrast",
         writable: Some("int8s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8357,6 +9016,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8367,6 +9027,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::MP1"),
         raw_id: "Contrast",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8391,6 +9052,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8401,6 +9063,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "32",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8425,6 +9088,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8435,6 +9099,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "49",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8459,6 +9124,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8469,6 +9135,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "39",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8493,6 +9160,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8503,6 +9171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "25",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8527,6 +9196,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8537,6 +9207,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
         raw_id: "2",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8561,6 +9232,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8571,6 +9243,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl"),
         raw_id: "51",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8595,6 +9268,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8605,6 +9279,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
         raw_id: "55",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8629,6 +9304,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8639,6 +9315,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
         raw_id: "63",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8663,6 +9340,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8673,6 +9351,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4137",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8697,6 +9376,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["High", "Normal", "Low"]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8707,6 +9387,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "57",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8731,6 +9412,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8741,6 +9423,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Subdir"),
         raw_id: "12298",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8765,6 +9448,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Low",
+            "Medium Low",
+            "Normal",
+            "Medium High",
+            "High",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8775,6 +9465,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "32",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8799,6 +9490,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8809,6 +9501,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Type2"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8833,6 +9526,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Low", "High"]),
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8843,6 +9537,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "player.movie.visual.contrast",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8867,6 +9562,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8877,6 +9573,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "36",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8901,6 +9598,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8911,6 +9609,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "82",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8935,6 +9634,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8945,6 +9645,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -8969,6 +9670,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -8979,6 +9681,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "98",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9003,6 +9706,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9013,6 +9717,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4114",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9037,6 +9742,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9047,6 +9753,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "13",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9071,6 +9778,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9081,6 +9789,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "13",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9105,6 +9814,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9115,6 +9825,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "29",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9139,6 +9850,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9149,6 +9861,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "26",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9173,6 +9886,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9183,6 +9897,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8196",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9207,6 +9922,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9217,6 +9933,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Contrast",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9241,6 +9958,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9251,6 +9969,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Contrast",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9275,6 +9994,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "contrast",
@@ -9285,6 +10005,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "Contrast",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9309,6 +10030,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "converter",
@@ -9319,6 +10041,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65101",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9343,6 +10066,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "converter",
@@ -9353,6 +10077,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Type2"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9377,6 +10102,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "converter",
@@ -9387,6 +10113,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Converter",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9411,6 +10138,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "converter",
@@ -9421,6 +10149,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Converter",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9445,6 +10174,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9455,6 +10185,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::APP12::Ducky"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9479,6 +10210,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9489,6 +10221,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33432",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -9513,6 +10246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9523,6 +10257,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Doc"),
         raw_id: "Copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9547,6 +10282,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9557,6 +10293,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "Copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9581,6 +10318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9591,6 +10329,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "33432",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("IFD0"),
         groups: &[
@@ -9615,6 +10354,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9625,6 +10365,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "559",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9649,6 +10390,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9659,6 +10401,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PostScript::Main"),
         raw_id: "Copyright",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9683,6 +10426,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9693,6 +10437,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::ItemList"),
         raw_id: "cprt",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9717,6 +10462,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9727,6 +10473,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::ItemList"),
         raw_id: "©cpy",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9751,6 +10498,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9761,6 +10509,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9785,6 +10534,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9795,6 +10545,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "cprt",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9819,6 +10570,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9829,6 +10581,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "©cpy",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9853,6 +10606,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9863,6 +10617,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9887,6 +10642,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9897,6 +10653,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9921,6 +10678,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9931,6 +10689,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::pdf"),
         raw_id: "Copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9955,6 +10714,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9965,6 +10725,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::pur"),
         raw_id: "copyright",
         writable: Some("lang-alt"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -9989,6 +10750,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -9999,6 +10761,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Copyright",
         writable: Some("lang-alt"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10023,6 +10786,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "copyright",
@@ -10033,6 +10797,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmpDM"),
         raw_id: "copyright",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10057,6 +10822,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10067,6 +10833,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36868",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10091,6 +10858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10101,6 +10869,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Doc"),
         raw_id: "CreateDate",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10125,6 +10894,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10135,6 +10905,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PDF::Info"),
         raw_id: "CreationDate",
         writable: Some("date"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10159,6 +10930,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10169,6 +10941,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "create-date",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10193,6 +10966,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10203,6 +10977,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PostScript::Main"),
         raw_id: "CreationDate",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10227,6 +11002,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10237,6 +11013,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::MovieHeader"),
         raw_id: "1",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: true,
         write_group: None,
         groups: &[
@@ -10261,6 +11038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "createdate",
@@ -10271,6 +11049,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "CreateDate",
         writable: Some("date"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10295,6 +11074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "currenticcprofile",
@@ -10305,6 +11085,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50833",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -10329,6 +11110,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "currentpreprofilematrix",
@@ -10339,6 +11121,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50834",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -10363,6 +11146,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "customrendered",
@@ -10373,6 +11157,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41985",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10397,6 +11182,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Normal",
+            "Custom",
+            "HDR (no original saved)",
+            "HDR (original saved)",
+            "Original (for HDR)",
+            "Panorama",
+            "Portrait HDR",
+            "Portrait",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "customrendered",
@@ -10407,6 +11202,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Motorola::Main"),
         raw_id: "25632",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10431,6 +11227,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "customrendered",
@@ -10441,6 +11238,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "CustomRendered",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10465,6 +11263,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Custom"]),
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10475,6 +11274,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::TimeStamp"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10499,6 +11299,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10509,6 +11310,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36867",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10533,6 +11335,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10543,6 +11346,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type9"),
         raw_id: "20",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10567,6 +11371,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10577,6 +11382,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Doc"),
         raw_id: "OriginalDate",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10601,6 +11407,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10611,6 +11418,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Main"),
         raw_id: "IDIT",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: true,
         write_group: None,
         groups: &[
@@ -10635,6 +11443,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10645,6 +11454,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "date",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10669,6 +11479,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10679,6 +11490,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10703,6 +11515,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10713,6 +11526,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "62",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10737,6 +11551,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10747,6 +11562,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "47",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10771,6 +11587,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10781,6 +11598,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "78",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10805,6 +11623,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10815,6 +11634,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
         raw_id: "59",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10839,6 +11659,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
@@ -10849,6 +11670,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "DateTimeOriginal",
         writable: Some("date"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -10873,6 +11695,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "defaultblackrender",
@@ -10883,6 +11706,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51110",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -10907,6 +11731,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Auto", "None"]),
     },
     StaticNativeLookupCandidate {
         name: "defaultcroporigin",
@@ -10917,6 +11742,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50719",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -10941,6 +11767,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "defaultcropsize",
@@ -10951,6 +11778,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50720",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -10975,6 +11803,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "defaultscale",
@@ -10985,6 +11814,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50718",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -11009,6 +11839,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "defaultusercrop",
@@ -11019,6 +11850,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51125",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -11043,6 +11875,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "depthfar",
@@ -11053,6 +11886,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51179",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -11077,6 +11911,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "depthformat",
@@ -11087,6 +11922,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51177",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -11111,6 +11947,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unknown", "Linear", "Inverse"]),
     },
     StaticNativeLookupCandidate {
         name: "depthmeasuretype",
@@ -11121,6 +11958,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51181",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -11145,6 +11983,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Optical Axis",
+            "Optical Ray",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "depthnear",
@@ -11155,6 +11998,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51178",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -11179,6 +12023,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "depthunits",
@@ -11189,6 +12034,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51180",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -11213,6 +12059,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unknown", "Meters"]),
     },
     StaticNativeLookupCandidate {
         name: "developmenttype",
@@ -11223,6 +12070,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41997",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11247,6 +12095,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "developmenttypedescription",
@@ -11257,6 +12106,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41998",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11281,6 +12131,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "devicesettingdescription",
@@ -11291,6 +12142,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "DeviceSettingDescription",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11315,6 +12167,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
@@ -11325,6 +12178,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41988",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11349,6 +12203,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
@@ -11359,6 +12214,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010c"),
         raw_id: "512",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11383,6 +12239,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
@@ -11393,6 +12250,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "540",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11417,6 +12275,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
@@ -11427,6 +12286,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "DigitalZoomRatio",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11451,6 +12311,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11461,6 +12322,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::VignettingCorr"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11485,6 +12347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11495,6 +12358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonVRD::DR4"),
         raw_id: "132869",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11519,6 +12383,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11529,6 +12394,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonVRD::Ver2"),
         raw_id: "103",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11553,6 +12419,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11563,6 +12430,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28726",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -11587,6 +12455,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Off",
+            "Auto",
+            "Auto fixed by lens",
+            "No correction params available",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11597,6 +12471,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41999",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11621,6 +12496,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["No", "Yes"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11631,6 +12507,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::DistortionInfo"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11655,6 +12532,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "No Lens Attached",
+            "On (Optional)",
+            "Off",
+            "On (Required)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11665,6 +12548,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
         raw_id: "1291",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11689,6 +12573,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11699,6 +12584,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::DistortionInfo"),
         raw_id: "7.1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11723,6 +12609,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11733,6 +12620,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::LensCorr"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11757,6 +12645,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11767,6 +12656,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405a"),
         raw_id: "1537",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11791,6 +12681,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "Applied"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
@@ -11801,6 +12692,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "91",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11825,6 +12717,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "Applied"]),
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -11835,6 +12728,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28727",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -11859,6 +12753,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -11869,6 +12764,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010b"),
         raw_id: "6691",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11893,6 +12789,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -11903,6 +12800,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "6256",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11927,6 +12825,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -11937,6 +12836,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "6300",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11961,6 +12861,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -11971,6 +12872,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "6348",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -11995,6 +12897,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -12005,6 +12908,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "6096",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12029,6 +12933,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -12039,6 +12944,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405a"),
         raw_id: "1738",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12063,6 +12969,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
@@ -12073,6 +12980,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "100",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12097,6 +13005,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "dngbackwardversion",
@@ -12107,6 +13016,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50707",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -12131,6 +13041,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "dnglensinfo",
@@ -12141,6 +13052,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50736",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -12165,6 +13077,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "dngversion",
@@ -12175,6 +13088,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50706",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -12199,6 +13113,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "documentname",
@@ -12209,6 +13124,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "269",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -12233,6 +13149,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "enhanceparams",
@@ -12243,6 +13160,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51182",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -12267,6 +13185,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifimageheight",
@@ -12277,6 +13196,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40963",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12301,6 +13221,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifimageheight",
@@ -12311,6 +13232,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "PixelYDimension",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12335,6 +13257,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifimagewidth",
@@ -12345,6 +13268,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40962",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12369,6 +13293,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifimagewidth",
@@ -12379,6 +13304,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "PixelXDimension",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12403,6 +13329,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifversion",
@@ -12413,6 +13340,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36864",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12437,6 +13365,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exifversion",
@@ -12447,6 +13376,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExifVersion",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12471,6 +13401,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposure",
@@ -12481,6 +13412,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65105",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12505,6 +13437,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposure",
@@ -12515,6 +13448,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Exposure",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12539,6 +13473,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposure",
@@ -12549,6 +13484,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Exposure",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12573,6 +13509,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12583,6 +13520,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ShotInfo"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12607,6 +13545,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12617,6 +13556,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12641,6 +13581,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12651,6 +13592,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37380",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12675,6 +13617,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12685,6 +13628,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "36",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12709,6 +13653,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12719,6 +13664,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "ExposureComp",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12743,6 +13689,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12753,6 +13700,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::MP1"),
         raw_id: "ExposureCompensation",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12777,6 +13725,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12787,6 +13736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "13",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12811,6 +13761,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12821,6 +13772,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "83",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12845,6 +13797,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12855,6 +13808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12879,6 +13833,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12889,6 +13844,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "18880",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12913,6 +13869,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12923,6 +13880,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4102",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12947,6 +13905,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12957,6 +13916,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "22",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -12981,6 +13941,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -12991,6 +13952,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "22",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13015,6 +13977,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13025,6 +13988,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1026",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13049,6 +14013,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13059,6 +14024,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40979",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13083,6 +14049,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13093,6 +14060,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13117,6 +14085,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13127,6 +14096,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "53",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13151,6 +14121,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13161,6 +14132,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "71",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13185,6 +14157,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13195,6 +14168,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "77",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13219,6 +14193,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13229,6 +14204,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010a"),
         raw_id: "4428",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13253,6 +14229,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13263,6 +14240,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010b"),
         raw_id: "4428",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13287,6 +14265,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13297,6 +14276,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010c"),
         raw_id: "4392",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13321,6 +14301,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13331,6 +14312,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "4480",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13355,6 +14337,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13365,6 +14348,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010f"),
         raw_id: "4152",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13389,6 +14373,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13399,6 +14384,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "560",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13423,6 +14409,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13433,6 +14420,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "560",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13457,6 +14445,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13467,6 +14456,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "547",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13491,6 +14481,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
@@ -13501,6 +14492,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExposureBiasValue",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13525,6 +14517,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposureindex",
@@ -13535,6 +14528,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41493",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13559,6 +14553,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposureindex",
@@ -13569,6 +14564,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExposureIndex",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13593,6 +14589,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13603,6 +14600,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41986",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13627,6 +14625,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Auto", "Manual", "Auto bracket"]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13637,6 +14636,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "ExposureMode",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13661,6 +14661,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13671,6 +14672,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13695,6 +14697,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program",
+            "Aperture Priority",
+            "Shutter Priority",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13705,6 +14713,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "10",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13729,6 +14738,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program",
+            "Aperture Priority",
+            "Shutter Priority",
+            "Manual",
+            "Auto?",
+            "Connected Copying?",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13739,6 +14756,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13763,6 +14781,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program",
+            "Aperture Priority",
+            "Shutter Priority",
+            "Manual",
+            "Auto",
+            "Program-shift A",
+            "Program-shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13773,6 +14800,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13797,6 +14825,21 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program",
+            "Aperture Priority",
+            "Shutter Priority",
+            "Manual",
+            "Auto",
+            "Portrait",
+            "Sports",
+            "Sunset",
+            "Night View/Portrait",
+            "Landscape",
+            "Macro",
+            "Program Shift A",
+            "Program Shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13807,6 +14850,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "52",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13831,6 +14875,21 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program",
+            "Aperture Priority",
+            "Shutter Priority",
+            "Manual",
+            "Auto",
+            "Portrait",
+            "Sports",
+            "Sunset",
+            "Night View/Portrait",
+            "Landscape",
+            "Macro",
+            "Program Shift A",
+            "Program Shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13841,6 +14900,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
         raw_id: "512",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13865,6 +14925,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Manual",
+            "Program",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Program-shift",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13875,6 +14942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica5"),
         raw_id: "1037",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13899,6 +14967,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Aperture-priority AE (1)",
+            "Shutter speed priority AE",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13909,6 +14984,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "8",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13933,6 +15009,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Aperture-priority AE",
+            "Manual",
+            "Program AE",
+            "Shutter speed priority AE",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13943,6 +15025,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "45121",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -13967,6 +15050,39 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Portrait",
+            "Hi-Speed Shutter",
+            "Twilight Portrait",
+            "Soft Snap/Portrait",
+            "Fireworks",
+            "Smile Shutter",
+            "Manual",
+            "High Sensitivity",
+            "Macro",
+            "Beach",
+            "Advanced Sports Shooting",
+            "Underwater",
+            "Sports",
+            "Food",
+            "Sweep Panorama",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "Pet",
+            "Backlight Correction HDR",
+            "Superior Auto",
+            "Snow",
+            "Background Defocus",
+            "Soft Skin",
+            "3D Image",
+            "Landscape",
+            "Auto",
+            "n/a",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Night Scene / Twilight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuremode",
@@ -13977,6 +15093,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExposureMode",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14001,6 +15118,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Auto", "Manual", "Auto bracket"]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14011,6 +15129,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34850",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14035,6 +15154,18 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Not Defined",
+            "Manual",
+            "Program AE",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Creative (Slow speed)",
+            "Action (High speed)",
+            "Portrait",
+            "Landscape",
+            "Bulb",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14045,6 +15176,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4097",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14069,6 +15201,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Program AE",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Shutter/aperture priority AE",
+            "Manual",
+            "Movie",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14079,6 +15220,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::AFInfo"),
         raw_id: "382",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14103,6 +15245,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14113,6 +15290,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::AFInfo"),
         raw_id: "67",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14137,6 +15315,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14147,6 +15360,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14171,6 +15385,22 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Manual",
+            "Portrait",
+            "Sports",
+            "Sunset",
+            "Night Portrait",
+            "Program AE",
+            "Landscape",
+            "Macro",
+            "Aperture-priority AE",
+            "Auto No Flash",
+            "Shutter speed priority AE",
+            "Program Shift A",
+            "Program Shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14181,6 +15411,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14205,6 +15436,22 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Manual",
+            "Portrait",
+            "Sports",
+            "Sunset",
+            "Night Portrait",
+            "Program AE",
+            "Landscape",
+            "Macro",
+            "Aperture-priority AE",
+            "Auto No Flash",
+            "Shutter speed priority AE",
+            "Program Shift A",
+            "Program Shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14215,6 +15462,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "5",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14239,6 +15487,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Toy Camera",
+            "Pop Color",
+            "Posterization",
+            "Posterization B/W",
+            "Retro Photo",
+            "High-key",
+            "Partial Color Red",
+            "Partial Color Green",
+            "Partial Color Blue",
+            "Partial Color Yellow",
+            "High Contrast Monochrome",
+            "Auto",
+            "Auto (no flash)",
+            "Auto+",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Manual",
+            "Portrait",
+            "Cont. Priority AE",
+            "Landscape",
+            "Macro",
+            "Sports",
+            "Sunset",
+            "Night view",
+            "Night view/portrait",
+            "Handheld Night Shot",
+            "3D Sweep Panorama",
+            "Auto 2",
+            "Auto 2 (no flash)",
+            "Sweep Panorama",
+            "Anti Motion Blur",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14249,6 +15531,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::ExtraInfo3"),
         raw_id: "20",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14273,6 +15556,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Landscape",
+            "Aperture-priority AE",
+            "Portrait",
+            "Auto",
+            "Program AE",
+            "Macro",
+            "Sunset",
+            "Sports",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14283,6 +15577,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::FocusInfo"),
         raw_id: "63",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14307,6 +15602,22 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Manual",
+            "Portrait",
+            "Sports",
+            "Sunset",
+            "Night Portrait",
+            "Program AE",
+            "Landscape",
+            "Macro",
+            "Aperture-priority AE",
+            "Auto No Flash",
+            "Shutter speed priority AE",
+            "Program Shift A",
+            "Program Shift S",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14317,6 +15628,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "2",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14341,6 +15653,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Toy Camera",
+            "Pop Color",
+            "Posterization",
+            "Posterization B/W",
+            "Retro Photo",
+            "High-key",
+            "Partial Color Red",
+            "Partial Color Green",
+            "Partial Color Blue",
+            "Partial Color Yellow",
+            "High Contrast Monochrome",
+            "Auto",
+            "Auto (no flash)",
+            "Auto+",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Manual",
+            "Portrait",
+            "Cont. Priority AE",
+            "Landscape",
+            "Macro",
+            "Sports",
+            "Sunset",
+            "Night view",
+            "Night view/portrait",
+            "Handheld Night Shot",
+            "3D Sweep Panorama",
+            "Auto 2",
+            "Auto 2 (no flash)",
+            "Sweep Panorama",
+            "Anti Motion Blur",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14351,6 +15697,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010a"),
         raw_id: "4469",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14375,6 +15722,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14385,6 +15767,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010b"),
         raw_id: "4473",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14409,6 +15792,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14419,6 +15837,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010c"),
         raw_id: "4437",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14443,6 +15862,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14453,6 +15907,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010d"),
         raw_id: "4561",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14477,6 +15932,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14487,6 +15977,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "4525",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14511,6 +16002,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14521,6 +16047,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010f"),
         raw_id: "4197",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14545,6 +16072,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14555,6 +16117,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "605",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14579,6 +16142,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14589,6 +16187,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "605",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14613,6 +16212,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14623,6 +16257,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "588",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14647,6 +16282,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14657,6 +16327,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9404a"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14681,6 +16352,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14691,6 +16397,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9404b"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14715,6 +16422,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14725,6 +16467,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9404c"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14749,6 +16492,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14759,6 +16537,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "72",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14783,6 +16562,41 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Program AE",
+            "Aperture-priority AE",
+            "Twilight",
+            "Twilight Portrait",
+            "Sunset",
+            "Action (High speed)",
+            "Sports",
+            "Handheld Night Shot",
+            "Anti Motion Blur",
+            "High Sensitivity",
+            "Shutter speed priority AE",
+            "Beach",
+            "Snow",
+            "Fireworks",
+            "Underwater",
+            "Gourmet",
+            "Pet",
+            "Macro",
+            "Manual",
+            "Backlight Correction HDR",
+            "Sweep Panorama",
+            "Background Defocus",
+            "Soft Skin",
+            "Auto",
+            "3D Image",
+            "Cont. Priority AE",
+            "Document",
+            "Party",
+            "iAuto",
+            "Superior Auto",
+            "iAuto+",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposureprogram",
@@ -14793,6 +16607,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExposureProgram",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14817,6 +16632,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Not Defined",
+            "Manual",
+            "Program AE",
+            "Aperture-priority AE",
+            "Shutter speed priority AE",
+            "Creative (Slow speed)",
+            "Action (High speed)",
+            "Portrait",
+            "Landscape",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14827,6 +16653,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14851,6 +16678,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14861,6 +16689,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14885,6 +16714,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14895,6 +16725,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14919,6 +16750,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14929,6 +16761,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14953,6 +16786,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14963,6 +16797,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -14987,6 +16822,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -14997,6 +16833,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15021,6 +16858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15031,6 +16869,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15055,6 +16894,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15065,6 +16905,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15089,6 +16930,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15099,6 +16941,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15123,6 +16966,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15133,6 +16977,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15157,6 +17002,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15167,6 +17013,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15191,6 +17038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15201,6 +17049,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15225,6 +17074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15235,6 +17085,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15259,6 +17110,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15269,6 +17121,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15293,6 +17146,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15303,6 +17157,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15327,6 +17182,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15337,6 +17193,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15361,6 +17218,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15371,6 +17229,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15395,6 +17254,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15405,6 +17265,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15429,6 +17290,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15439,6 +17301,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15463,6 +17326,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15473,6 +17337,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15497,6 +17362,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15507,6 +17373,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15531,6 +17398,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15541,6 +17409,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15565,6 +17434,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15575,6 +17445,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15599,6 +17470,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15609,6 +17481,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15633,6 +17506,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15643,6 +17517,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15667,6 +17542,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15677,6 +17553,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ShotInfo"),
         raw_id: "22",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15701,6 +17578,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15711,6 +17589,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ShotInfo"),
         raw_id: "22",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15735,6 +17614,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15745,6 +17625,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33434",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15769,6 +17650,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15779,6 +17661,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
         raw_id: "64773",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15803,6 +17686,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15813,6 +17697,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "32",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15837,6 +17722,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15847,6 +17733,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64036",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15871,6 +17758,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15881,6 +17769,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
         raw_id: "61700",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15905,6 +17794,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15915,6 +17805,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type10"),
         raw_id: "18",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15939,6 +17830,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15949,6 +17841,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type3"),
         raw_id: "56",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -15973,6 +17866,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -15983,6 +17877,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type5"),
         raw_id: "20",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16007,6 +17902,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16017,6 +17913,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type6"),
         raw_id: "16",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16041,6 +17938,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16051,6 +17949,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type9"),
         raw_id: "16",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16075,6 +17974,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16085,6 +17985,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "ExposureTime",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16109,6 +18010,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16119,6 +18021,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "9",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16143,6 +18046,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16153,6 +18057,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "53",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16177,6 +18082,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16187,6 +18093,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "72",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16211,6 +18118,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16221,6 +18129,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "8",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16245,6 +18154,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16255,6 +18165,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "18872",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16279,6 +18190,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16289,6 +18201,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "18",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16313,6 +18226,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16323,6 +18237,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40984",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16347,6 +18262,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16357,6 +18273,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "50",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16381,6 +18298,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16391,6 +18309,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "74",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16415,6 +18334,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16425,6 +18345,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16449,6 +18370,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16459,6 +18381,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16483,6 +18406,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16493,6 +18417,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "33",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16517,6 +18442,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16527,6 +18453,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16551,6 +18478,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16561,6 +18489,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "39",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16585,6 +18514,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16595,6 +18525,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "16",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16619,6 +18550,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "exposuretime",
@@ -16629,6 +18561,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ExposureTime",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16653,6 +18586,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "filesource",
@@ -16663,6 +18597,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41728",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16687,6 +18622,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Sigma Digital Camera",
+            "Film Scanner",
+            "Reflection Print Scanner",
+            "Digital Camera",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "filesource",
@@ -16697,6 +18638,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "32768",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16721,6 +18663,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "filesource",
@@ -16731,6 +18674,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FileSource",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16755,6 +18699,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Film Scanner",
+            "Reflection Print Scanner",
+            "Digital Camera",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "fillorder",
@@ -16765,6 +18714,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "266",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -16789,6 +18739,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Reversed"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16799,6 +18750,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: None,
         raw_id: "XMP-Flash",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16823,6 +18775,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16833,6 +18786,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37385",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16857,6 +18811,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16867,6 +18822,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type6"),
         raw_id: "34",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16891,6 +18847,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["No Flash", "Fired"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16901,6 +18858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "31",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16925,6 +18883,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Did not fire", "Fired"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16935,6 +18894,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "21",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16959,6 +18919,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -16969,6 +18930,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "90",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -16993,6 +18955,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -17003,6 +18966,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "68",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17027,6 +18991,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -17037,6 +19002,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "106",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17061,6 +19027,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "flash",
@@ -17071,6 +19038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "Flash",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17095,6 +19063,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flashenergy",
@@ -17105,6 +19074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41483",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17129,6 +19099,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flashenergy",
@@ -17139,6 +19110,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FlashEnergy",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17163,6 +19135,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flashpixversion",
@@ -17173,6 +19146,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40960",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17197,6 +19171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "flashpixversion",
@@ -17207,6 +19182,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FlashpixVersion",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17231,6 +19207,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17241,6 +19218,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17265,6 +19243,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17275,6 +19254,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17299,6 +19279,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17309,6 +19290,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17333,6 +19315,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17343,6 +19326,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17367,6 +19351,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17377,6 +19362,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17401,6 +19387,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17411,6 +19398,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17435,6 +19423,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17445,6 +19434,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17469,6 +19459,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17479,6 +19470,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17503,6 +19495,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17513,6 +19506,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17537,6 +19531,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17547,6 +19542,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17571,6 +19567,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17581,6 +19578,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17605,6 +19603,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17615,6 +19614,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17639,6 +19639,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17649,6 +19650,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17673,6 +19675,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17683,6 +19686,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17707,6 +19711,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17717,6 +19722,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17741,6 +19747,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17751,6 +19758,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17775,6 +19783,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17785,6 +19794,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17809,6 +19819,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17819,6 +19830,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17843,6 +19855,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17853,6 +19866,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17877,6 +19891,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17887,6 +19902,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17911,6 +19927,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17921,6 +19938,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
         raw_id: "5",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17945,6 +19963,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17955,6 +19974,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -17979,6 +19999,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -17989,6 +20010,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ShotInfo"),
         raw_id: "21",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18013,6 +20035,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18023,6 +20046,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33437",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18047,6 +20071,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18057,6 +20082,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
         raw_id: "64772",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18081,6 +20107,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18091,6 +20118,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18115,6 +20143,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18125,6 +20154,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64035",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18149,6 +20179,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18159,6 +20190,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
         raw_id: "61699",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18183,6 +20215,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18193,6 +20226,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type10"),
         raw_id: "19",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18217,6 +20251,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18227,6 +20262,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type3"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18251,6 +20287,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18261,6 +20298,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type5"),
         raw_id: "28",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18285,6 +20323,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18295,6 +20334,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type6"),
         raw_id: "24",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18319,6 +20359,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18329,6 +20370,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type9"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18353,6 +20395,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18363,6 +20406,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type9"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18387,6 +20431,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18397,6 +20442,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Lens"),
         raw_id: "FNumber",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18421,6 +20467,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18431,6 +20478,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "10",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18455,6 +20503,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18465,6 +20514,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "54",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18489,6 +20539,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18499,6 +20550,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "71",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18523,6 +20575,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18533,6 +20586,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "9",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18557,6 +20611,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18567,6 +20622,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "18887",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18591,6 +20647,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18601,6 +20658,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0800"),
         raw_id: "56",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18625,6 +20683,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18635,6 +20694,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica9"),
         raw_id: "858",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18659,6 +20719,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18669,6 +20730,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "19",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18693,6 +20755,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18703,6 +20766,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40985",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18727,6 +20791,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18737,6 +20802,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "49",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18761,6 +20827,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18771,6 +20838,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "73",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18795,6 +20863,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18805,6 +20874,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18829,6 +20899,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18839,6 +20910,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18863,6 +20935,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18873,6 +20946,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "32",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18897,6 +20971,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18907,6 +20982,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "34",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18931,6 +21007,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18941,6 +21018,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "38",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18965,6 +21043,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "fnumber",
@@ -18975,6 +21054,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FNumber",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -18999,6 +21079,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19009,6 +21090,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "29",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19033,6 +21115,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19043,6 +21126,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "10",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19067,6 +21151,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19077,6 +21162,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19101,6 +21187,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19111,6 +21198,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "9",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19135,6 +21223,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19145,6 +21234,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
         raw_id: "29",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19169,6 +21259,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19179,6 +21270,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "9",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19203,6 +21295,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19213,6 +21306,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19237,6 +21331,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19247,6 +21342,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "29",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19271,6 +21367,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19281,6 +21378,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "29",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19305,6 +21403,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19315,6 +21414,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19339,6 +21439,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19349,6 +21450,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19373,6 +21475,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19383,6 +21486,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19407,6 +21511,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19417,6 +21522,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
         raw_id: "40",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19441,6 +21547,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19451,6 +21558,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19475,6 +21583,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19485,6 +21594,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19509,6 +21619,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19519,6 +21630,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19543,6 +21655,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19553,6 +21666,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19577,6 +21691,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19587,6 +21702,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19611,6 +21727,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19621,6 +21738,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19645,6 +21763,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19655,6 +21774,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19679,6 +21799,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19689,6 +21810,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19713,6 +21835,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19723,6 +21846,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19747,6 +21871,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19757,6 +21882,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
         raw_id: "35",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19781,6 +21907,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19791,6 +21918,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::FocalLength"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19815,6 +21943,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19825,6 +21954,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::LevelInfo"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19849,6 +21979,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19859,6 +21990,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "29",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19883,6 +22015,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19893,6 +22026,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37386",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19917,6 +22051,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19927,6 +22062,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type10"),
         raw_id: "29",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19951,6 +22087,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19961,6 +22098,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Lens"),
         raw_id: "FocalLength",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -19985,6 +22123,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -19995,6 +22134,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "18",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20019,6 +22159,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20029,6 +22170,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData01"),
         raw_id: "10",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20053,6 +22195,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20063,6 +22206,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0204"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20087,6 +22231,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20097,6 +22242,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0800"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20121,6 +22267,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20131,6 +22278,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0800"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20155,6 +22303,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20165,6 +22314,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::FocusInfo"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20189,6 +22339,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20199,6 +22350,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "29",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20223,6 +22375,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20233,6 +22386,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "29",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20257,6 +22411,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20267,6 +22422,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1027",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20291,6 +22447,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20301,6 +22458,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "5376",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20325,6 +22483,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20335,6 +22494,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraInfo3"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20359,6 +22519,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20369,6 +22530,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "4728",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20393,6 +22555,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20403,6 +22566,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010f"),
         raw_id: "4404",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20427,6 +22591,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20437,6 +22602,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "812",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20461,6 +22627,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20471,6 +22638,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "812",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20495,6 +22663,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20505,6 +22674,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "778",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20529,6 +22699,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallength",
@@ -20539,6 +22710,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FocalLength",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20563,6 +22735,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
@@ -20573,6 +22746,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41989",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20597,6 +22771,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
@@ -20607,6 +22782,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::VideoKeys"),
         raw_id: "camera.focal_length.35mm_equivalent",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20631,6 +22807,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
@@ -20641,6 +22818,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40986",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20665,6 +22843,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
@@ -20675,6 +22854,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FocalLengthIn35mmFilm",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20699,6 +22879,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focalplaneresolutionunit",
@@ -20709,6 +22890,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41488",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20733,6 +22915,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "inches", "cm", "mm", "um"]),
     },
     StaticNativeLookupCandidate {
         name: "focalplaneresolutionunit",
@@ -20743,6 +22926,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FocalPlaneResolutionUnit",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20767,6 +22951,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "inches", "cm", "mm", "um"]),
     },
     StaticNativeLookupCandidate {
         name: "focalplanexresolution",
@@ -20777,6 +22962,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41486",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20801,6 +22987,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focalplanexresolution",
@@ -20811,6 +22998,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FocalPlaneXResolution",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20835,6 +23023,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focalplaneyresolution",
@@ -20845,6 +23034,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41487",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20869,6 +23059,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "focalplaneyresolution",
@@ -20879,6 +23070,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "FocalPlaneYResolution",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -20903,6 +23095,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix1",
@@ -20913,6 +23106,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50964",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -20937,6 +23131,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix2",
@@ -20947,6 +23142,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50965",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -20971,6 +23167,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix3",
@@ -20981,6 +23178,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52532",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21005,6 +23203,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "framerate",
@@ -21015,6 +23214,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::MovieInfo"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21039,6 +23239,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "framerate",
@@ -21049,6 +23250,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::MovieInfo"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21073,6 +23275,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "framerate",
@@ -21083,6 +23286,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51044",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21107,6 +23311,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "framerate",
@@ -21117,6 +23322,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "14368",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21141,6 +23347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gaincontrol",
@@ -21151,6 +23358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41991",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21175,6 +23383,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "None",
+            "Low gain up",
+            "High gain up",
+            "Low gain down",
+            "High gain down",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "gaincontrol",
@@ -21185,6 +23400,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "GainControl",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21209,6 +23425,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "None",
+            "Low gain up",
+            "High gain up",
+            "Low gain down",
+            "High gain down",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21219,6 +23442,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42240",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21243,6 +23467,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21253,6 +23478,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::IFD"),
         raw_id: "2302",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21277,6 +23503,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21287,6 +23514,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::Main"),
         raw_id: "gAMA",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21311,6 +23539,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21321,6 +23550,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "284",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21345,6 +23575,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21355,6 +23586,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Gamma",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21379,6 +23611,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gamma",
@@ -21389,6 +23622,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::hdrgm"),
         raw_id: "Gamma",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21413,6 +23647,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gdalmetadata",
@@ -21423,6 +23658,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42112",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21447,6 +23683,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "gdalnodata",
@@ -21457,6 +23694,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42113",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21481,6 +23719,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "geotiffasciiparams",
@@ -21491,6 +23730,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34737",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21515,6 +23755,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "geotiffdirectory",
@@ -21525,6 +23766,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34735",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21549,6 +23791,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "geotiffdoubleparams",
@@ -21559,6 +23802,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34736",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21583,6 +23827,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "googleplusuploadcode",
@@ -21593,6 +23838,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36873",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21617,6 +23863,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "grayresponseunit",
@@ -21627,6 +23874,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "290",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21651,6 +23899,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "0.1", "0.001", "0.0001", "1e-05", "1e-06",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "halftonehints",
@@ -21661,6 +23912,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "321",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21685,6 +23937,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "hostcomputer",
@@ -21695,6 +23948,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "316",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21719,6 +23973,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "humidity",
@@ -21729,6 +23984,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37889",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21753,6 +24009,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "humidity",
@@ -21763,6 +24020,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Humidity",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21787,6 +24045,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "icc_profile",
@@ -21797,6 +24056,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: None,
         raw_id: "ICC_Profile",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21821,6 +24081,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "icc_profile",
@@ -21831,6 +24092,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::GIF::Extensions"),
         raw_id: "ICCRGBG1/012",
         writable: Some("2"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -21855,6 +24117,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata1",
@@ -21865,6 +24128,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52533",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21889,6 +24153,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata2",
@@ -21899,6 +24164,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52534",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21923,6 +24189,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata3",
@@ -21933,6 +24200,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52535",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21957,6 +24225,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagedescription",
@@ -21967,6 +24236,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "270",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -21991,6 +24261,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagedescription",
@@ -22001,6 +24272,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "ImageDescription",
         writable: Some("lang-alt"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22025,6 +24297,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageeditingsoftware",
@@ -22035,6 +24308,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42043",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22059,6 +24333,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageeditingsoftware",
@@ -22069,6 +24344,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ImageEditingSoftware",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22093,6 +24369,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageeditor",
@@ -22103,6 +24380,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42040",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22127,6 +24405,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageeditor",
@@ -22137,6 +24416,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ImageEditor",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22161,6 +24441,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageheight",
@@ -22171,6 +24452,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "257",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -22195,6 +24477,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageheight",
@@ -22205,6 +24488,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Google::GDepth"),
         raw_id: "ImageHeight",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22229,6 +24513,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageheight",
@@ -22239,6 +24524,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::PRD"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22263,6 +24549,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageheight",
@@ -22273,6 +24560,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "269",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22297,6 +24585,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageheight",
@@ -22307,6 +24596,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "ImageLength",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22331,6 +24621,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagehistory",
@@ -22341,6 +24632,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37395",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22365,6 +24657,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagehistory",
@@ -22375,6 +24668,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::digiKam"),
         raw_id: "ImageHistory",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22399,6 +24693,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22409,6 +24704,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37393",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22433,6 +24729,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22443,6 +24740,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "ImageNumber",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22467,6 +24765,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22477,6 +24776,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "174",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22501,6 +24801,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22511,6 +24812,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "94",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22535,6 +24837,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22545,6 +24848,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "275",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22569,6 +24873,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22579,6 +24884,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "155",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22603,6 +24909,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22613,6 +24920,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "1024",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22637,6 +24945,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22647,6 +24956,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "276.1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22671,6 +24981,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22681,6 +24992,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "788",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22705,6 +25017,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagenumber",
@@ -22715,6 +25028,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aux"),
         raw_id: "ImageNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22739,6 +25053,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagesequenceinfo",
@@ -22749,6 +25064,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52548",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -22773,6 +25089,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagesourcedata",
@@ -22783,6 +25100,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37724",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -22807,6 +25125,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagestats",
@@ -22817,6 +25136,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52550",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -22841,6 +25161,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagetitle",
@@ -22851,6 +25172,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42038",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22875,6 +25197,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagetitle",
@@ -22885,6 +25208,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ImageTitle",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22909,6 +25233,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagetype",
@@ -22919,6 +25244,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::IPTC::ApplicationRecord"),
         raw_id: "130",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22943,6 +25269,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagetype",
@@ -22953,6 +25280,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PLUS::XMP"),
         raw_id: "ImageType",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -22977,6 +25305,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Illustrated Image",
+            "Multimedia or Composited Image",
+            "Other",
+            "Photographic Image",
+            "Video",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -22987,6 +25322,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Apple::Main"),
         raw_id: "21",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23011,6 +25347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -23021,6 +25358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "40",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23045,6 +25383,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -23055,6 +25394,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42016",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23079,6 +25419,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -23089,6 +25430,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::digiKam"),
         raw_id: "ImageUniqueID",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23113,6 +25455,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -23123,6 +25466,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ImageUniqueID",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23147,6 +25491,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
@@ -23157,6 +25502,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ImageUniqueID",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23181,6 +25527,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagewidth",
@@ -23191,6 +25538,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "256",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -23215,6 +25563,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagewidth",
@@ -23225,6 +25574,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Google::GDepth"),
         raw_id: "ImageWidth",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23249,6 +25599,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagewidth",
@@ -23259,6 +25610,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::PRD"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23283,6 +25635,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagewidth",
@@ -23293,6 +25646,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "268",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23317,6 +25671,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "imagewidth",
@@ -23327,6 +25682,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "ImageWidth",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23351,6 +25707,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "inkset",
@@ -23361,6 +25718,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "332",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -23385,6 +25743,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["CMYK", "Not CMYK"]),
     },
     StaticNativeLookupCandidate {
         name: "intergraphmatrix",
@@ -23395,6 +25754,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33920",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -23419,6 +25779,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "interopindex",
@@ -23429,6 +25790,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "1",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("InteropIFD"),
         groups: &[
@@ -23453,6 +25815,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "R03 - DCF option file (Adobe RGB)",
+            "R98 - DCF basic file (sRGB)",
+            "THM - DCF thumbnail file",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "interopindex",
@@ -23463,6 +25830,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "InteroperabilityIndex",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23487,6 +25855,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "R03 - DCF option file (Adobe RGB)",
+            "R98 - DCF basic file (sRGB)",
+            "THM - DCF thumbnail file",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "interopversion",
@@ -23497,6 +25870,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "2",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("InteropIFD"),
         groups: &[
@@ -23521,6 +25895,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23531,6 +25906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23555,6 +25931,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23565,6 +25942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23589,6 +25967,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23599,6 +25978,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "117",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23623,6 +26003,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23633,6 +26014,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23657,6 +26039,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23667,6 +26050,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "121",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23691,6 +26075,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23701,6 +26086,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23725,6 +26111,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23735,6 +26122,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23759,6 +26147,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23769,6 +26158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23793,6 +26183,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23803,6 +26194,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23827,6 +26219,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23837,6 +26230,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23861,6 +26255,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23871,6 +26266,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23895,6 +26291,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23905,6 +26302,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23929,6 +26327,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23939,6 +26338,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23963,6 +26363,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -23973,6 +26374,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -23997,6 +26399,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24007,6 +26410,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24031,6 +26435,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24041,6 +26446,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24065,6 +26471,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24075,6 +26482,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24099,6 +26507,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24109,6 +26518,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24133,6 +26543,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24143,6 +26554,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24167,6 +26579,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24177,6 +26590,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24201,6 +26615,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24211,6 +26626,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24235,6 +26651,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24245,6 +26662,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24269,6 +26687,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24279,6 +26698,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24303,6 +26723,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24313,6 +26734,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24337,6 +26759,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24347,6 +26770,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Main"),
         raw_id: "20",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24371,6 +26795,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24381,6 +26806,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "12308",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24405,6 +26831,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24415,6 +26842,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "20",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24439,6 +26867,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["50", "64", "100", "200"]),
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24449,6 +26878,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34855",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24473,6 +26903,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24483,6 +26914,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
         raw_id: "64774",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24507,6 +26939,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24517,6 +26950,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::IFD"),
         raw_id: "6020",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24541,6 +26975,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24551,6 +26986,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "96",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24575,6 +27011,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24585,6 +27022,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64046",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24609,6 +27047,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24619,6 +27058,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64070",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24643,6 +27083,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24653,6 +27094,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD1"),
         raw_id: "39",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24677,6 +27119,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24687,6 +27130,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD1"),
         raw_id: "40",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24711,6 +27155,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24721,6 +27166,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
         raw_id: "61701",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24745,6 +27191,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24755,6 +27202,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type10"),
         raw_id: "20",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24779,6 +27227,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24789,6 +27238,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type3"),
         raw_id: "78",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24813,6 +27263,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24823,6 +27274,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type5"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24847,6 +27299,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24857,6 +27310,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type6"),
         raw_id: "26",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24881,6 +27335,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24891,6 +27346,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type9"),
         raw_id: "52",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24915,6 +27371,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24925,6 +27382,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "ISO",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24949,6 +27407,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24959,6 +27418,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "8",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -24983,6 +27443,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -24993,6 +27454,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
         raw_id: "18874",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25017,6 +27479,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25027,6 +27490,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::ISOInfo"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25051,6 +27515,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25061,6 +27526,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "2",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25085,6 +27551,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25095,6 +27562,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "209",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25119,6 +27587,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25129,6 +27598,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "23",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25153,6 +27623,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25163,6 +27634,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "55",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25187,6 +27659,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25197,6 +27670,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "139",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25221,6 +27695,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25231,6 +27706,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "20",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25255,6 +27731,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "250", "100", "320", "400", "500", "640", "800", "1000", "1600", "1250", "1600",
+            "2000", "2500", "200", "3200", "4000", "5000", "6400", "8000", "50", "70", "10000",
+            "100", "140", "200", "280", "400", "560", "800", "1100", "1600", "2200", "12800",
+            "3200", "4500", "6400", "9000", "12800", "18000", "25600", "36000", "51200", "72000",
+            "16000", "102400", "144000", "204800", "288000", "409600", "576000", "819200", "20000",
+            "50", "25600", "32000", "40000", "3200", "51200", "64000", "80000", "102400", "128000",
+            "160000", "204800", "64", "256000", "400", "320000", "409600", "512000", "640000",
+            "819200", "80", "50", "100", "Auto 2", "Auto", "125", "160", "800", "200",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25265,6 +27751,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Type2"),
         raw_id: "20",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25289,6 +27776,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "100", "100", "200", "1600", "200", "3200", "400", "50", "Auto 2", "Auto", "800",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25299,6 +27789,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "261",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25323,6 +27814,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25333,6 +27825,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40980",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25357,6 +27850,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25367,6 +27861,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "134",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25391,6 +27886,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25401,6 +27897,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::FocusInfo"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25425,6 +27922,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25435,6 +27933,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "31",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25459,6 +27958,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25469,6 +27969,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "33",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25493,6 +27994,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25503,6 +28005,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "37",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25527,6 +28030,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "iso",
@@ -25537,6 +28041,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ISOSpeedRatings",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25561,6 +28066,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeed",
@@ -25571,6 +28077,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34867",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25595,6 +28102,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeed",
@@ -25605,6 +28113,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ISOSpeed",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25629,6 +28138,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeedlatitudeyyy",
@@ -25639,6 +28149,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34868",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25663,6 +28174,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeedlatitudeyyy",
@@ -25673,6 +28185,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ISOSpeedLatitudeyyy",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25697,6 +28210,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeedlatitudezzz",
@@ -25707,6 +28221,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34869",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25731,6 +28246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "isospeedlatitudezzz",
@@ -25741,6 +28257,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "ISOSpeedLatitudezzz",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25765,6 +28282,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "jpegquality",
@@ -25775,6 +28293,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "102",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25799,6 +28318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "jpegquality",
@@ -25809,6 +28329,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "67",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25833,6 +28354,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "n/a (Movie)",
+            "High",
+            "n/a (RAW only)",
+            "Standard",
+            "Very High",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "jpegquality",
@@ -25843,6 +28371,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Subdir"),
         raw_id: "12340",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25867,6 +28396,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Basic", "Fine"]),
     },
     StaticNativeLookupCandidate {
         name: "jpegquality",
@@ -25877,6 +28407,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "45127",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -25901,6 +28432,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Standard", "Fine", "Extra Fine", "n/a"]),
     },
     StaticNativeLookupCandidate {
         name: "jxldecodespeed",
@@ -25911,6 +28443,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52555",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -25935,6 +28468,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "jxldistance",
@@ -25945,6 +28479,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52553",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -25969,6 +28504,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "jxleffort",
@@ -25979,6 +28515,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52554",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -26003,6 +28540,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "learningoptoutin",
@@ -26013,6 +28551,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37511",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26037,6 +28576,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensinfo",
@@ -26047,6 +28587,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42034",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26071,6 +28612,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensinfo",
@@ -26081,6 +28623,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::LensInfoQ"),
         raw_id: "42",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26105,6 +28648,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensinfo",
@@ -26115,6 +28659,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aux"),
         raw_id: "LensInfo",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26139,6 +28684,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensinfo",
@@ -26149,6 +28695,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "LensSpecification",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26173,6 +28720,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmake",
@@ -26183,6 +28731,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42035",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26207,6 +28756,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmake",
@@ -26217,6 +28767,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Lens"),
         raw_id: "Make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26241,6 +28792,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmake",
@@ -26251,6 +28803,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "LensMake",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26275,6 +28828,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26285,6 +28839,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "2359",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26309,6 +28864,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26319,6 +28875,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "2347",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26343,6 +28900,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26353,6 +28911,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "2355",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26377,6 +28936,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26387,6 +28947,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "149",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26411,6 +28972,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26421,6 +28983,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42036",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26445,6 +29008,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26455,6 +29019,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Lens"),
         raw_id: "Model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26479,6 +29044,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26489,6 +29055,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::XMP"),
         raw_id: "LensModel",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26513,6 +29080,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26523,6 +29091,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0400"),
         raw_id: "394",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26547,6 +29116,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26557,6 +29127,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0402"),
         raw_id: "395",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26581,6 +29152,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26591,6 +29163,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::LensData0403"),
         raw_id: "684",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26615,6 +29188,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26625,6 +29199,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Equipment"),
         raw_id: "515",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26649,6 +29224,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26659,6 +29235,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::LensInfoQ"),
         raw_id: "12",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26683,6 +29260,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26693,6 +29271,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1042",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26717,6 +29296,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26727,6 +29307,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::VideoKeys"),
         raw_id: "camera.lens_model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26751,6 +29332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensmodel",
@@ -26761,6 +29343,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "LensModel",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26785,6 +29368,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26795,6 +29379,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "356",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26819,6 +29404,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26829,6 +29415,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfoUnknown"),
         raw_id: "363",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26853,6 +29440,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26863,6 +29451,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::LensInfo"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26887,6 +29476,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26897,6 +29487,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42037",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26921,6 +29512,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26931,6 +29523,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Lens"),
         raw_id: "SerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26955,6 +29548,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26965,6 +29559,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Equipment"),
         raw_id: "514",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -26989,6 +29584,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -26999,6 +29595,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica6"),
         raw_id: "801",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27023,6 +29620,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -27033,6 +29631,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "82",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27057,6 +29656,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -27067,6 +29667,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "LENS",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27091,6 +29692,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -27101,6 +29703,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::SerialInfo"),
         raw_id: "48",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27125,6 +29728,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -27135,6 +29739,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aux"),
         raw_id: "LensSerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27159,6 +29764,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
@@ -27169,6 +29775,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "LensSerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27193,6 +29800,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lightsource",
@@ -27203,6 +29811,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37384",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27227,6 +29836,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Standard Light A",
+            "Standard Light B",
+            "Standard Light C",
+            "Fluorescent",
+            "D55",
+            "D65",
+            "D75",
+            "D50",
+            "ISO Studio Tungsten",
+            "Daylight",
+            "Other",
+            "Day White",
+            "Cool White",
+            "White",
+            "Warm White",
+            "Tungsten (Incandescent)",
+            "Daylight LED",
+            "Day White LED",
+            "Cool White LED",
+            "White LED",
+            "Warm White LED",
+            "Flash",
+            "Fine Weather",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "lightsource",
@@ -27237,6 +29880,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "144",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27261,6 +29905,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "lightsource",
@@ -27271,6 +29916,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::RawInfo"),
         raw_id: "4096",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27295,6 +29941,20 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Shade",
+            "Cloudy",
+            "Fine Weather",
+            "Tungsten (Incandescent)",
+            "Evening Sunlight",
+            "One Touch White Balance",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Custom 1-4",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "lightsource",
@@ -27305,6 +29965,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "LightSource",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27329,6 +29990,40 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "Cool White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Standard Light A",
+            "Standard Light B",
+            "Standard Light C",
+            "Fluorescent",
+            "D55",
+            "D65",
+            "D75",
+            "D50",
+            "ISO Studio Tungsten",
+            "Daylight",
+            "Other",
+            "Day White",
+            "Cool White",
+            "White",
+            "Warm White",
+            "Tungsten (Incandescent)",
+            "Daylight LED",
+            "Day White LED",
+            "Cool White LED",
+            "White LED",
+            "Warm White LED",
+            "Flash",
+            "Fine Weather",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "linearizationtable",
@@ -27339,6 +30034,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50712",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -27363,6 +30059,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "linearresponselimit",
@@ -27373,6 +30070,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50734",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -27397,6 +30095,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "localizedcameramodel",
@@ -27407,6 +30106,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50709",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -27431,6 +30131,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27441,6 +30142,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::MakeModel"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27465,6 +30167,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27475,6 +30178,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::DJI::Main"),
         raw_id: "1",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27499,6 +30203,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27509,6 +30214,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "271",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -27533,6 +30239,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27543,6 +30250,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27567,6 +30275,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27577,6 +30286,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "Make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27601,6 +30311,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27611,6 +30322,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "271",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27635,6 +30347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27645,6 +30358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27669,6 +30383,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27679,6 +30394,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "@mak",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27703,6 +30419,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27713,6 +30430,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "©mak",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27737,6 +30455,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27747,6 +30466,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::pmi"),
         raw_id: "make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27771,6 +30491,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "make",
@@ -27781,6 +30502,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Make",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27805,6 +30527,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "makernotesafety",
@@ -27815,6 +30538,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50741",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -27839,6 +30563,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unsafe", "Safe"]),
     },
     StaticNativeLookupCandidate {
         name: "maskedareas",
@@ -27849,6 +30574,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50830",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -27873,6 +30599,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "maxaperturevalue",
@@ -27883,6 +30610,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37381",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27907,6 +30635,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "maxaperturevalue",
@@ -27917,6 +30646,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1044",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27941,6 +30671,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "maxaperturevalue",
@@ -27951,6 +30682,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "MaxApertureValue",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -27975,6 +30707,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "maxsamplevalue",
@@ -27985,6 +30718,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "281",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -28009,6 +30743,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "metadataeditingsoftware",
@@ -28019,6 +30754,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42044",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28043,6 +30779,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "metadataeditingsoftware",
@@ -28053,6 +30790,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "MetadataEditingSoftware",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28077,6 +30815,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28087,6 +30826,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraSettings"),
         raw_id: "17",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28111,6 +30851,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Default",
+            "Spot",
+            "Average",
+            "Evaluative",
+            "Partial",
+            "Center-weighted average",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28121,6 +30869,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37383",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28145,6 +30894,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Average",
+            "Center-weighted average",
+            "Other",
+            "Spot",
+            "Multi-spot",
+            "Multi-segment",
+            "Partial",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28155,6 +30914,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "28",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28179,6 +30939,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28189,6 +30954,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28213,6 +30979,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28223,6 +30994,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "37",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28247,6 +31019,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28257,6 +31034,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "18",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28281,6 +31059,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28291,6 +31074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
         raw_id: "514",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28315,6 +31099,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Spot+Shadow control",
+            "Center-weighted average",
+            "Pattern+AF",
+            "Spot",
+            "ESP",
+            "Spot+Highlight control",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28325,6 +31117,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "23",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28349,6 +31142,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28359,6 +31158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "9",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28383,6 +31183,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Average",
+            "Center-weighted average",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28393,6 +31198,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "21",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28417,6 +31223,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28427,6 +31238,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "19",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28451,6 +31263,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28461,6 +31278,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28485,6 +31303,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28495,6 +31318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::MoreSettings"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28519,6 +31343,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28529,6 +31358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010a"),
         raw_id: "4468",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28553,6 +31383,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28563,6 +31400,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010b"),
         raw_id: "4472",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28587,6 +31425,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28597,6 +31442,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010c"),
         raw_id: "4436",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28621,6 +31467,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28631,6 +31484,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010d"),
         raw_id: "4560",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28655,6 +31509,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28665,6 +31526,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010e"),
         raw_id: "4524",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28689,6 +31551,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28699,6 +31568,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010f"),
         raw_id: "4196",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28723,6 +31593,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28733,6 +31610,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010g"),
         raw_id: "604",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28757,6 +31635,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28767,6 +31652,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010h"),
         raw_id: "604",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28791,6 +31677,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28801,6 +31694,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag2010i"),
         raw_id: "587",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28825,6 +31719,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Multi-segment",
+            "Center-weighted average",
+            "Spot",
+            "Average",
+            "Highlight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "meteringmode",
@@ -28835,6 +31736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "MeteringMode",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28859,6 +31761,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Average",
+            "Center-weighted average",
+            "Other",
+            "Spot",
+            "Multi-spot",
+            "Multi-segment",
+            "Partial",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "minsamplevalue",
@@ -28869,6 +31780,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "280",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -28893,6 +31805,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -28903,6 +31816,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::MakeModel"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28927,6 +31841,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -28937,6 +31852,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "272",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -28961,6 +31877,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -28971,6 +31888,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Google::GDepth"),
         raw_id: "Model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -28995,6 +31913,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29005,6 +31924,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29029,6 +31949,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29039,6 +31960,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "Model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29063,6 +31985,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29073,6 +31996,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "272",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29097,6 +32021,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29107,6 +32032,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "575",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29131,6 +32057,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29141,6 +32068,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29165,6 +32093,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29175,6 +32104,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "@mod",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29199,6 +32129,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29209,6 +32140,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "CNMN",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29233,6 +32165,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29243,6 +32176,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "cmnm",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29267,6 +32201,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29277,6 +32212,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "©mdl",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29301,6 +32237,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29311,6 +32248,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "©mod",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29335,6 +32273,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29345,6 +32284,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "132",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29369,6 +32309,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29379,6 +32320,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::pmi"),
         raw_id: "model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29403,6 +32345,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "model",
@@ -29413,6 +32356,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Model",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29437,6 +32381,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modeltiepoint",
@@ -29447,6 +32392,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33922",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -29471,6 +32417,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modeltransform",
@@ -29481,6 +32428,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34264",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -29505,6 +32453,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29515,6 +32464,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "306",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -29539,6 +32489,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29549,6 +32500,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Doc"),
         raw_id: "ModifyDate",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29573,6 +32525,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29583,6 +32536,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PDF::Info"),
         raw_id: "ModDate",
         writable: Some("date"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29607,6 +32561,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29617,6 +32572,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::Main"),
         raw_id: "tIME",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29641,6 +32597,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29651,6 +32608,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PostScript::Main"),
         raw_id: "ModDate",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29675,6 +32633,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29685,6 +32644,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::MovieHeader"),
         raw_id: "2",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: true,
         write_group: None,
         groups: &[
@@ -29709,6 +32669,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "modifydate",
@@ -29719,6 +32680,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "ModifyDate",
         writable: Some("date"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29743,6 +32705,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "moirefilter",
@@ -29753,6 +32716,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65112",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29777,6 +32741,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "moirefilter",
@@ -29787,6 +32752,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "MoireFilter",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29811,6 +32777,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "moirefilter",
@@ -29821,6 +32788,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "MoireFilter",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29845,6 +32813,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "newrawimagedigest",
@@ -29855,6 +32824,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51111",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -29879,6 +32849,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "noiseprofile",
@@ -29889,6 +32860,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51041",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -29913,6 +32885,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -29923,6 +32896,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42002",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29947,6 +32921,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["No", "Yes"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -29957,6 +32932,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4107",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -29981,6 +32957,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "n/a", "Low"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -29991,6 +32968,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4110",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30015,6 +32993,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "0 (normal)",
+            "+2 (strong)",
+            "+1 (medium strong)",
+            "+3 (very strong)",
+            "+4 (strongest)",
+            "-2 (weak)",
+            "-1 (medium weak)",
+            "-3 (very weak)",
+            "-4 (weakest)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30025,6 +33014,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "176",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30049,6 +33039,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30059,6 +33050,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "96",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30083,6 +33075,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30093,6 +33086,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "63",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30117,6 +33111,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30127,6 +33122,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "149",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30151,6 +33147,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30161,6 +33158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::NikonCapture::Main"),
         raw_id: "1966984128",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30185,6 +33183,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30195,6 +33194,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::NikonCapture::NoiseReduction"),
         raw_id: "23",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30219,6 +33219,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30229,6 +33230,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
         raw_id: "1290",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30253,6 +33255,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30263,6 +33266,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4154",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30287,6 +33291,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30297,6 +33302,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "45",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30321,6 +33327,20 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Standard",
+            "Low (-1)",
+            "High (+1)",
+            "Lowest (-2)",
+            "Highest (+2)",
+            "+5",
+            "+6",
+            "-5",
+            "-4",
+            "-3",
+            "-2",
+            "-1",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30331,6 +33351,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "73",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30355,6 +33376,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "On"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30365,6 +33387,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4111",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30389,6 +33412,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "Weak", "Medium", "Strong"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereduction",
@@ -30399,6 +33423,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Subdir"),
         raw_id: "42",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30423,6 +33448,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "Weak", "Strong", "Max"]),
     },
     StaticNativeLookupCandidate {
         name: "noisereductionapplied",
@@ -30433,6 +33459,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50935",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -30457,6 +33484,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "offsetschema",
@@ -30467,6 +33495,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "59933",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30491,6 +33520,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "offsettime",
@@ -30501,6 +33531,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36880",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30525,6 +33556,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "offsettimedigitized",
@@ -30535,6 +33567,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36882",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30559,6 +33592,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "offsettimeoriginal",
@@ -30569,6 +33603,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "36881",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30593,6 +33628,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "oldsubfiletype",
@@ -30603,6 +33639,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "255",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -30627,6 +33664,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Full-resolution image",
+            "Reduced-resolution image",
+            "Single page of multi-page image",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "opcodelist1",
@@ -30637,6 +33679,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51008",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -30661,6 +33704,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "opcodelist2",
@@ -30671,6 +33715,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51009",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -30695,6 +33740,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "opcodelist3",
@@ -30705,6 +33751,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51022",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -30729,6 +33776,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "orientation",
@@ -30739,6 +33787,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "274",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -30763,6 +33812,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Horizontal (normal)",
+            "Mirror horizontal",
+            "Rotate 180",
+            "Mirror vertical",
+            "Mirror horizontal and rotate 270 CW",
+            "Rotate 90 CW",
+            "Mirror horizontal and rotate 90 CW",
+            "Rotate 270 CW",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "orientation",
@@ -30773,6 +33832,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "274",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30797,6 +33857,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Horizontal (normal)",
+            "Mirror horizontal",
+            "Rotate 180",
+            "Mirror vertical",
+            "Mirror horizontal and rotate 270 CW",
+            "Rotate 90 CW",
+            "Mirror horizontal and rotate 90 CW",
+            "Rotate 270 CW",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "orientation",
@@ -30807,6 +33877,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::pmi"),
         raw_id: "orientation",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30831,6 +33902,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Horizontal", "Vertical"]),
     },
     StaticNativeLookupCandidate {
         name: "orientation",
@@ -30841,6 +33913,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Orientation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -30865,6 +33938,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Horizontal (normal)",
+            "Mirror horizontal",
+            "Rotate 180",
+            "Mirror vertical",
+            "Mirror horizontal and rotate 270 CW",
+            "Rotate 90 CW",
+            "Mirror horizontal and rotate 90 CW",
+            "Rotate 270 CW",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "originalbestqualitysize",
@@ -30875,6 +33958,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51090",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -30899,6 +33983,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originaldefaultcropsize",
@@ -30909,6 +33994,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51091",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -30933,6 +34019,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originaldefaultfinalsize",
@@ -30943,6 +34030,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51089",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -30967,6 +34055,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalfilename",
@@ -30977,6 +34066,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "2070",
         writable: Some("string[32]"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31001,6 +34091,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalfilename",
@@ -31011,6 +34102,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::IFD"),
         raw_id: "1001",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31035,6 +34127,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalfilename",
@@ -31045,6 +34138,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type4"),
         raw_id: "32",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31069,6 +34163,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalfilename",
@@ -31079,6 +34174,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica5"),
         raw_id: "1031",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31103,6 +34199,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalfilename",
@@ -31113,6 +34210,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::GettyImages"),
         raw_id: "OriginalFilename",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31137,6 +34235,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalrawfiledata",
@@ -31147,6 +34246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50828",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31171,6 +34271,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalrawfiledigest",
@@ -31181,6 +34282,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50973",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31205,6 +34307,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "originalrawfilename",
@@ -31215,6 +34318,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50827",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31239,6 +34343,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31249,6 +34354,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "271",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31273,6 +34379,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31283,6 +34390,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "398",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31307,6 +34415,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31317,6 +34426,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "9",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31341,6 +34451,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31351,6 +34462,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "2064",
         writable: Some("string[32]"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31375,6 +34487,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31385,6 +34498,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42032",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31409,6 +34523,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31419,6 +34534,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65000",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31443,6 +34559,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31453,6 +34570,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "OwnerName",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31477,6 +34595,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31487,6 +34606,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aux"),
         raw_id: "OwnerName",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31511,6 +34631,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ownername",
@@ -31521,6 +34642,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "CameraOwnerName",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31545,6 +34667,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "padding",
@@ -31555,6 +34678,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "59932",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31579,6 +34703,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pagename",
@@ -31589,6 +34714,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "285",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31613,6 +34739,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pagenumber",
@@ -31623,6 +34750,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "297",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31647,6 +34775,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "panasonictitle",
@@ -31657,6 +34786,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50898",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31681,6 +34811,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "panasonictitle2",
@@ -31691,6 +34822,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50899",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31715,6 +34847,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "photographer",
@@ -31725,6 +34858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42039",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31749,6 +34883,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "photographer",
@@ -31759,6 +34894,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Photographer",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31783,6 +34919,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "photometricinterpretation",
@@ -31793,6 +34930,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "262",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31817,6 +34955,25 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "WhiteIsZero",
+            "BlackIsZero",
+            "ITULab",
+            "RGB",
+            "RGB Palette",
+            "Color Filter Array",
+            "Pixar LogL",
+            "Pixar LogLuv",
+            "Sequential Color Filter",
+            "Linear Raw",
+            "Transparency Mask",
+            "CMYK",
+            "Depth Map",
+            "Semantic Mask",
+            "YCbCr",
+            "CIELab",
+            "ICCLab",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "photometricinterpretation",
@@ -31827,6 +34984,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "PhotometricInterpretation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31851,6 +35009,25 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "WhiteIsZero",
+            "BlackIsZero",
+            "ITULab",
+            "RGB",
+            "RGB Palette",
+            "Color Filter Array",
+            "Pixar LogL",
+            "Pixar LogLuv",
+            "Sequential Color Filter",
+            "Linear Raw",
+            "Transparency Mask",
+            "CMYK",
+            "Depth Map",
+            "Semantic Mask",
+            "YCbCr",
+            "CIELab",
+            "ICCLab",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "pixelscale",
@@ -31861,6 +35038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "33550",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -31885,6 +35063,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pixelsperunitx",
@@ -31895,6 +35074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31919,6 +35099,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pixelsperunity",
@@ -31929,6 +35110,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31953,6 +35135,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pixelunits",
@@ -31963,6 +35146,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
         raw_id: "8",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -31987,6 +35171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unknown", "meters"]),
     },
     StaticNativeLookupCandidate {
         name: "planarconfiguration",
@@ -31997,6 +35182,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "284",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32021,6 +35207,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Chunky", "Planar"]),
     },
     StaticNativeLookupCandidate {
         name: "planarconfiguration",
@@ -32031,6 +35218,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "PlanarConfiguration",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -32055,6 +35243,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Chunky", "Planar"]),
     },
     StaticNativeLookupCandidate {
         name: "predictor",
@@ -32065,6 +35254,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "317",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32089,6 +35279,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "None",
+            "Horizontal differencing",
+            "Floating point",
+            "Horizontal difference X2",
+            "Horizontal difference X4",
+            "Floating point X2",
+            "Floating point X4",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "pressure",
@@ -32099,6 +35298,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37890",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -32123,6 +35323,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "pressure",
@@ -32133,6 +35334,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "Pressure",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -32157,6 +35359,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "previewapplicationname",
@@ -32167,6 +35370,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50966",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32191,6 +35395,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "previewapplicationversion",
@@ -32201,6 +35406,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50967",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32225,6 +35431,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "previewcolorspace",
@@ -32235,6 +35442,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50970",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32259,6 +35467,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Gray Gamma 2.2",
+            "sRGB",
+            "Adobe RGB",
+            "ProPhoto RGB",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "previewdatetime",
@@ -32269,6 +35484,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50971",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32293,6 +35509,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "previewsettingsdigest",
@@ -32303,6 +35520,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50969",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32327,6 +35545,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "previewsettingsname",
@@ -32337,6 +35556,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50968",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32361,6 +35581,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "primarychromaticities",
@@ -32371,6 +35592,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "319",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32395,6 +35617,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "primarychromaticities",
@@ -32405,6 +35628,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "PrimaryChromaticities",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -32429,6 +35653,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "printim",
@@ -32439,6 +35664,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50341",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32463,6 +35689,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "processingsoftware",
@@ -32473,6 +35700,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "11",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32497,6 +35725,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilecalibrationsig",
@@ -32507,6 +35736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50932",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32531,6 +35761,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilecopyright",
@@ -32541,6 +35772,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50942",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32565,6 +35797,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profiledynamicrange",
@@ -32575,6 +35808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52551",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32599,6 +35833,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profileembedpolicy",
@@ -32609,6 +35844,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50941",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32633,6 +35869,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Allow Copying",
+            "Embed if Used",
+            "Never Embed",
+            "No Restrictions",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "profilegaintablemap",
@@ -32643,6 +35885,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52525",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -32667,6 +35910,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilegaintablemap2",
@@ -32677,6 +35921,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52544",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32701,6 +35946,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilegroupname",
@@ -32711,6 +35957,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52552",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32735,6 +35982,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapdata1",
@@ -32745,6 +35993,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50938",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32769,6 +36018,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapdata2",
@@ -32779,6 +36029,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50939",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32803,6 +36054,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapdata3",
@@ -32813,6 +36065,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52537",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32837,6 +36090,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapdims",
@@ -32847,6 +36101,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50937",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32871,6 +36126,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapencoding",
@@ -32881,6 +36137,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51107",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32905,6 +36162,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Linear", "sRGB"]),
     },
     StaticNativeLookupCandidate {
         name: "profilelooktabledata",
@@ -32915,6 +36173,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50982",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32939,6 +36198,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilelooktabledims",
@@ -32949,6 +36209,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50981",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -32973,6 +36234,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilelooktableencoding",
@@ -32983,6 +36245,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51108",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33007,6 +36270,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Linear", "sRGB"]),
     },
     StaticNativeLookupCandidate {
         name: "profilename",
@@ -33017,6 +36281,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50936",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33041,6 +36306,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profilename",
@@ -33051,6 +36317,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::Main"),
         raw_id: "iCCP-name",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33075,6 +36342,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profiletonecurve",
@@ -33085,6 +36353,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50940",
         writable: Some("float"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33109,6 +36378,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "profiletype",
@@ -33119,6 +36389,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Google::Device"),
         raw_id: "ProfilesProfileType",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33143,6 +36414,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33153,6 +36425,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonVRD::DR4"),
         raw_id: "65792",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33177,6 +36450,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unrated", "1", "2", "3", "4", "Rejected", "5",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33187,6 +36463,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "18246",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33211,6 +36488,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33221,6 +36499,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "5169",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33245,6 +36524,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33255,6 +36535,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhotoMechanic::SoftEdit"),
         raw_id: "223",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33279,6 +36560,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33289,6 +36571,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::ItemList"),
         raw_id: "rtng",
         writable: Some("int8s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33313,6 +36596,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "none",
+            "Explicit",
+            "Clean",
+            "Explicit (old)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33323,6 +36612,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "rtng",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33347,6 +36637,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33357,6 +36648,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8194",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33381,6 +36673,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33391,6 +36684,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::acdsee"),
         raw_id: "rating",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33415,6 +36709,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33425,6 +36720,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::dex"),
         raw_id: "rating",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33449,6 +36745,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33459,6 +36756,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::iptcExt"),
         raw_id: "Rating",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33483,6 +36781,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33493,6 +36792,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::prism"),
         raw_id: "rating",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33517,6 +36817,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rating",
@@ -33527,6 +36828,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "Rating",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33551,6 +36853,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ratingpercent",
@@ -33561,6 +36864,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "18249",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33585,6 +36889,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ratingpercent",
@@ -33595,6 +36900,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Microsoft::XMP"),
         raw_id: "Rating",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33619,6 +36925,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ratingpercent",
@@ -33629,6 +36936,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::ItemList"),
         raw_id: "rate",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33653,6 +36961,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ratingpercent",
@@ -33663,6 +36972,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "RatingPercent",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33687,6 +36997,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawdatauniqueid",
@@ -33697,6 +37008,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50781",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33721,6 +37033,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawdevelopingsoftware",
@@ -33731,6 +37044,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42042",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33755,6 +37069,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawdevelopingsoftware",
@@ -33765,6 +37080,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "RAWDevelopingSoftware",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33789,6 +37105,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawfile",
@@ -33799,6 +37116,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65100",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33823,6 +37141,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawimagedigest",
@@ -33833,6 +37152,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50972",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33857,6 +37177,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rawtopreviewgain",
@@ -33867,6 +37188,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51112",
         writable: Some("double"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33891,6 +37213,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "recommendedexposureindex",
@@ -33901,6 +37224,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34866",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33925,6 +37249,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "recommendedexposureindex",
@@ -33935,6 +37260,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "RecommendedExposureIndex",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -33959,6 +37285,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix1",
@@ -33969,6 +37296,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50725",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -33993,6 +37321,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix2",
@@ -34003,6 +37332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50726",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34027,6 +37357,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix3",
@@ -34037,6 +37368,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52538",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34061,6 +37393,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "reelname",
@@ -34071,6 +37404,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51081",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34095,6 +37429,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "reelname",
@@ -34105,6 +37440,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "reel",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34129,6 +37465,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "referenceblackwhite",
@@ -34139,6 +37476,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "532",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34163,6 +37501,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "referenceblackwhite",
@@ -34173,6 +37512,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "ReferenceBlackWhite",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34197,6 +37537,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "relatedimagefileformat",
@@ -34207,6 +37548,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "4096",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("InteropIFD"),
         groups: &[
@@ -34231,6 +37573,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "relatedimageheight",
@@ -34241,6 +37584,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "4098",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("InteropIFD"),
         groups: &[
@@ -34265,6 +37609,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "relatedimagewidth",
@@ -34275,6 +37620,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "4097",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("InteropIFD"),
         groups: &[
@@ -34299,6 +37645,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "relatedsoundfile",
@@ -34309,6 +37656,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40964",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34333,6 +37681,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "relatedsoundfile",
@@ -34343,6 +37692,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "RelatedSoundFile",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34367,6 +37717,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "resolutionunit",
@@ -34377,6 +37728,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "296",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34401,6 +37753,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "inches", "cm"]),
     },
     StaticNativeLookupCandidate {
         name: "resolutionunit",
@@ -34411,6 +37764,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::JFIF::Main"),
         raw_id: "2",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34435,6 +37789,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "inches", "cm"]),
     },
     StaticNativeLookupCandidate {
         name: "resolutionunit",
@@ -34445,6 +37800,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "ResolutionUnit",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34469,6 +37825,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["None", "inches", "cm"]),
     },
     StaticNativeLookupCandidate {
         name: "rgbtables",
@@ -34479,6 +37836,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52543",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34503,6 +37861,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "rowsperstrip",
@@ -34513,6 +37872,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "278",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34537,6 +37897,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "samplesperpixel",
@@ -34547,6 +37908,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "277",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -34571,6 +37933,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "samplesperpixel",
@@ -34581,6 +37944,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
         raw_id: "8",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34605,6 +37969,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "samplesperpixel",
@@ -34615,6 +37980,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "SamplesPerPixel",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34639,6 +38005,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34649,6 +38016,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "110",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34673,6 +38041,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34683,6 +38052,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "118",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34707,6 +38077,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34717,6 +38088,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraSettings"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34741,6 +38113,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34751,6 +38124,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ColorInfo"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34775,6 +38149,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34785,6 +38160,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::LogInfo"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34809,6 +38185,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34819,6 +38196,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Main"),
         raw_id: "13",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34843,6 +38221,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Normal", "Low", "Normal", "+1", "-1", "High",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34853,6 +38234,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "12307",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34877,6 +38259,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34887,6 +38270,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "31",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34911,6 +38295,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Low", "Normal", "High"]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34921,6 +38306,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41993",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34945,6 +38331,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34955,6 +38342,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65109",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -34979,6 +38367,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -34989,6 +38378,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4099",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35013,6 +38403,28 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "0 (normal)",
+            "-2 (low)",
+            "-3 (very low)",
+            "-4 (lowest)",
+            "+1 (medium high)",
+            "Acros",
+            "Acros Red Filter",
+            "Acros Yellow Filter",
+            "Acros Green Filter",
+            "+3 (very high)",
+            "+4 (highest)",
+            "+2 (high)",
+            "Film Simulation",
+            "-1 (medium low)",
+            "Low",
+            "None (B&W)",
+            "B&W Red Filter",
+            "B&W Yellow Filter",
+            "B&W Green Filter",
+            "B&W Sepia",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35023,6 +38435,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Saturation",
         writable: Some("int8s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35047,6 +38460,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35057,6 +38471,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "31",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35081,6 +38496,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35091,6 +38507,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "50",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35115,6 +38532,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35125,6 +38543,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "40",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35149,6 +38568,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35159,6 +38579,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "26",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35183,6 +38604,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35193,6 +38615,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35217,6 +38640,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35227,6 +38651,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "170",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35251,6 +38676,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35261,6 +38687,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl"),
         raw_id: "53",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35285,6 +38712,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35295,6 +38723,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
         raw_id: "59",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35319,6 +38748,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35329,6 +38759,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
         raw_id: "67",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35353,6 +38784,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35363,6 +38795,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "64",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35387,6 +38820,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35397,6 +38831,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Subdir"),
         raw_id: "12301",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35421,6 +38856,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Low",
+            "Medium Low",
+            "Normal",
+            "Medium High",
+            "High",
+            "Black & White",
+            "Vintage B&W",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35431,6 +38875,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "31",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35455,6 +38900,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35465,6 +38911,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Type2"),
         raw_id: "13",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35489,6 +38936,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Low", "High"]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35499,6 +38947,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "39",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35523,6 +38972,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35533,6 +38983,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "88",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35557,6 +39008,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35567,6 +39019,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "66",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35591,6 +39044,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35601,6 +39055,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "104",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35625,6 +39080,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35635,6 +39091,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
         raw_id: "40",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35659,6 +39116,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "High",
+            "Normal",
+            "Natural",
+            "Low",
+            "B&W",
+            "Toning Effect",
+            "Vivid",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35669,6 +39135,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4115",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35693,6 +39160,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35703,6 +39171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "16",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35727,6 +39196,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35737,6 +39207,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "16",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35761,6 +39232,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35771,6 +39243,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "30",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35795,6 +39268,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35805,6 +39279,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "27",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35829,6 +39304,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35839,6 +39315,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8197",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35863,6 +39340,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35873,6 +39351,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Saturation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35897,6 +39376,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35907,6 +39387,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Saturation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35931,6 +39412,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "saturation",
@@ -35941,6 +39423,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "Saturation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35965,6 +39448,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "scenecapturetype",
@@ -35975,6 +39459,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41990",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -35999,6 +39484,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Standard",
+            "Landscape",
+            "Portrait",
+            "Night",
+            "Other",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "scenecapturetype",
@@ -36009,6 +39501,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SceneCaptureType",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36033,6 +39526,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Standard",
+            "Landscape",
+            "Portrait",
+            "Night",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "scenetype",
@@ -36043,6 +39542,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41729",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36067,6 +39567,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Directly photographed"]),
     },
     StaticNativeLookupCandidate {
         name: "scenetype",
@@ -36077,6 +39578,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SceneType",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36101,6 +39603,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Directly photographed"]),
     },
     StaticNativeLookupCandidate {
         name: "seal",
@@ -36111,6 +39614,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "52897",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -36135,6 +39639,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "securityclassification",
@@ -36145,6 +39650,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37394",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36169,6 +39675,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Confidential",
+            "Restricted",
+            "Secret",
+            "Top Secret",
+            "Unclassified",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "selftimermode",
@@ -36179,6 +39692,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34859",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36203,6 +39717,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "seminfo",
@@ -36213,6 +39728,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34118",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -36237,6 +39753,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sensingmethod",
@@ -36247,6 +39764,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41495",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36271,6 +39789,15 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Not defined",
+            "One-chip color area",
+            "Two-chip color area",
+            "Three-chip color area",
+            "Color sequential area",
+            "Trilinear",
+            "Color sequential linear",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "sensingmethod",
@@ -36281,6 +39808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SensingMethod",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36305,6 +39833,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Monochrome area",
+            "One-chip color area",
+            "Two-chip color area",
+            "Three-chip color area",
+            "Color sequential area",
+            "Monochrome linear",
+            "Trilinear",
+            "Color sequential linear",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "sensitivitytype",
@@ -36315,6 +39853,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34864",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36339,6 +39878,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Standard Output Sensitivity",
+            "Recommended Exposure Index",
+            "ISO Speed",
+            "Standard Output Sensitivity and Recommended Exposure Index",
+            "Standard Output Sensitivity and ISO Speed",
+            "Recommended Exposure Index and ISO Speed",
+            "Standard Output Sensitivity, Recommended Exposure Index and ISO Speed",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "sensitivitytype",
@@ -36349,6 +39898,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "SensitivityType",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36373,6 +39923,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Unknown",
+            "Standard Output Sensitivity",
+            "Recommended Exposure Index",
+            "ISO Speed",
+            "Standard Output Sensitivity and Recommended Exposure Index",
+            "Standard Output Sensitivity and ISO Speed",
+            "Recommended Exposure Index and ISO Speed",
+            "Standard Output Sensitivity, Recommended Exposure Index and ISO Speed",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36383,6 +39943,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "12",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36407,6 +39968,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36417,6 +39979,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "12",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36441,6 +40004,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36451,6 +40015,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Main"),
         raw_id: "12",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36475,6 +40040,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36485,6 +40051,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "6155",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36509,6 +40076,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36519,6 +40087,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "6155",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36543,6 +40112,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36553,6 +40123,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42033",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36577,6 +40148,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36587,6 +40159,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65001",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36611,6 +40184,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36621,6 +40195,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
         raw_id: "64004",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36645,6 +40220,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36655,6 +40231,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::KDC_IFD"),
         raw_id: "64000",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36679,6 +40256,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36689,6 +40267,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Meta"),
         raw_id: "50004",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36713,6 +40292,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36723,6 +40303,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64025",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36747,6 +40328,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36757,6 +40339,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type7"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36781,6 +40364,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36791,6 +40375,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "SerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36815,6 +40400,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36825,6 +40411,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Motorola::Main"),
         raw_id: "21761",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36849,6 +40436,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36859,6 +40447,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "160",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36883,6 +40472,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36893,6 +40483,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "29",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36917,6 +40508,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36927,6 +40519,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Equipment"),
         raw_id: "257",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36951,6 +40544,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36961,6 +40555,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "1028",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -36985,6 +40580,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -36995,6 +40591,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4122",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37019,6 +40616,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37029,6 +40627,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica2"),
         raw_id: "771",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37053,6 +40652,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37063,6 +40663,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica5"),
         raw_id: "773",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37087,6 +40688,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37097,6 +40699,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Subdir"),
         raw_id: "12547",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37121,6 +40724,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37131,6 +40735,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "553",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37155,6 +40760,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37165,6 +40771,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "258",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37189,6 +40796,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37199,6 +40807,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::SensorCalibration"),
         raw_id: "1031",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37223,6 +40832,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37233,6 +40843,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "SNum",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37257,6 +40868,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37267,6 +40879,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::UserData"),
         raw_id: "slno",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37291,6 +40904,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37301,6 +40915,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "21",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37325,6 +40940,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37335,6 +40951,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "126",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37359,6 +40976,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37369,6 +40987,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "132",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37393,6 +41012,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37403,6 +41023,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "140",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37427,6 +41048,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37437,6 +41059,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
         raw_id: "75",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37461,6 +41084,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37471,6 +41095,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "5",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37495,6 +41120,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37505,6 +41131,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "40962",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37529,6 +41156,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37539,6 +41167,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "2",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37563,6 +41192,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37573,6 +41203,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8241",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37597,6 +41228,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37607,6 +41239,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aux"),
         raw_id: "SerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37631,6 +41264,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "serialnumber",
@@ -37641,6 +41275,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "BodySerialNumber",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37665,6 +41300,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadingcorrection",
@@ -37675,6 +41311,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "42001",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37699,6 +41336,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["No", "Yes"]),
     },
     StaticNativeLookupCandidate {
         name: "shadows",
@@ -37709,6 +41347,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65106",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37733,6 +41372,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadows",
@@ -37743,6 +41383,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8242",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37767,6 +41408,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadows",
@@ -37777,6 +41419,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::aas"),
         raw_id: "Shadows",
         writable: Some("real"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37801,6 +41444,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadows",
@@ -37811,6 +41455,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Shadows",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37835,6 +41480,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadows",
@@ -37845,6 +41491,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Shadows",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37869,6 +41516,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shadowscale",
@@ -37879,6 +41527,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50739",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -37903,6 +41552,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -37913,6 +41563,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "66",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37937,6 +41588,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -37947,6 +41599,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "72",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -37971,6 +41624,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -37981,6 +41635,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "114",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38005,6 +41660,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38015,6 +41671,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "116",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38039,6 +41696,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38049,6 +41707,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraSettings"),
         raw_id: "15",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38073,6 +41732,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38083,6 +41743,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::LogInfo"),
         raw_id: "6",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38107,6 +41768,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38117,6 +41779,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Processing"),
         raw_id: "2",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38141,6 +41804,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38151,6 +41815,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Main"),
         raw_id: "11",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38175,6 +41840,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Normal", "Soft", "Normal", "+1", "-1", "Hard",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38185,6 +41853,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "12305",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38209,6 +41878,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38219,6 +41889,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "33",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38243,6 +41914,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Soft", "Normal", "Hard"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38253,6 +41925,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41994",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38277,6 +41950,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38287,6 +41961,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65110",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38311,6 +41986,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38321,6 +41997,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4097",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38345,6 +42022,19 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "-4 (softest)",
+            "-3 (very soft)",
+            "-1 (medium soft)",
+            "+1 (medium hard)",
+            "-2 (soft)",
+            "0 (normal)",
+            "Film Simulation",
+            "+2 (hard)",
+            "+3 (very hard)",
+            "+4 (hardest)",
+            "n/a",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38355,6 +42045,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "107",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38379,6 +42070,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38389,6 +42081,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type3"),
         raw_id: "55",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38413,6 +42106,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38423,6 +42117,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Camera"),
         raw_id: "Sharpness",
         writable: Some("int8s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38447,6 +42142,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38457,6 +42153,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "33",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38481,6 +42178,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Hard", "Normal", "Soft"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38491,6 +42189,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "48",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38515,6 +42214,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38525,6 +42225,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "38",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38549,6 +42250,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38559,6 +42261,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "24",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38583,6 +42286,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38593,6 +42297,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38617,6 +42322,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38627,6 +42333,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "6",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38651,6 +42358,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38661,6 +42369,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl"),
         raw_id: "50",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38685,6 +42394,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38695,6 +42405,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
         raw_id: "51",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38719,6 +42430,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38729,6 +42441,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
         raw_id: "57",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38753,6 +42466,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38763,6 +42477,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4111",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38787,6 +42502,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Hard", "Soft"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38797,6 +42513,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "65",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38821,6 +42538,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38831,6 +42549,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "33",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38855,6 +42574,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38865,6 +42585,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Type2"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38889,6 +42610,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Normal", "Soft", "Hard"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38899,6 +42621,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
         raw_id: "38",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38923,6 +42646,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38933,6 +42657,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
         raw_id: "86",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38957,6 +42682,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -38967,6 +42693,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
         raw_id: "64",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -38991,6 +42718,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39001,6 +42729,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
         raw_id: "102",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39025,6 +42754,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39035,6 +42765,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
         raw_id: "34",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39059,6 +42790,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Sharp", "Normal", "Soft"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39069,6 +42801,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4099",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39093,6 +42826,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Sharp", "Normal", "Soft"]),
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39103,6 +42837,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4116",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39127,6 +42862,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39137,6 +42873,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "17",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39161,6 +42898,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39171,6 +42909,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "17",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39195,6 +42934,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39205,6 +42945,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "28",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39229,6 +42970,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39239,6 +42981,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "25",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39263,6 +43006,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39273,6 +43017,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8198",
         writable: Some("int32s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39297,6 +43042,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39307,6 +43053,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "82",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39331,6 +43078,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39341,6 +43089,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Sharpness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39365,6 +43114,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39375,6 +43125,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Sharpness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39399,6 +43150,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sharpness",
@@ -39409,6 +43161,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "Sharpness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39433,6 +43186,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
@@ -39443,6 +43197,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
         raw_id: "1",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39467,6 +43222,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
@@ -39477,6 +43233,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37377",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39501,6 +43258,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
@@ -39511,6 +43269,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Olympus::Main"),
         raw_id: "4096",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39535,6 +43294,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
@@ -39545,6 +43305,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "1024",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39569,6 +43330,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
@@ -39579,6 +43341,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "ShutterSpeedValue",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39603,6 +43366,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "smoothness",
@@ -39613,6 +43377,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65111",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39637,6 +43402,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "smoothness",
@@ -39647,6 +43413,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "Smoothness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39671,6 +43438,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "smoothness",
@@ -39681,6 +43449,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "Smoothness",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39705,6 +43474,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39715,6 +43485,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "305",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -39739,6 +43510,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39749,6 +43521,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Google::GDepth"),
         raw_id: "Software",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39773,6 +43546,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39783,6 +43557,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Doc"),
         raw_id: "Software",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39807,6 +43582,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39817,6 +43593,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PNG::TextualData"),
         raw_id: "Software",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39841,6 +43618,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39851,6 +43629,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::PhaseOne::Main"),
         raw_id: "515",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39875,6 +43654,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39885,6 +43665,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::QuickTime::Keys"),
         raw_id: "software",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39909,6 +43690,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39919,6 +43701,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "24",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39943,6 +43726,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "software",
@@ -39953,6 +43737,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "Software",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -39977,6 +43762,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sonycropsize",
@@ -39987,6 +43773,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "29896",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -40011,6 +43798,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sonycroptopleft",
@@ -40021,6 +43809,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "29895",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -40045,6 +43834,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "sonyrawimagesize",
@@ -40055,6 +43845,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28728",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -40079,6 +43870,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "spatialfrequencyresponse",
@@ -40089,6 +43881,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SpatialFrequencyResponse",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40113,6 +43906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "spectralsensitivity",
@@ -40123,6 +43917,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34852",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40147,6 +43942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "spectralsensitivity",
@@ -40157,6 +43953,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SpectralSensitivity",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40181,6 +43978,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "standardoutputsensitivity",
@@ -40191,6 +43989,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34865",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40215,6 +44014,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "standardoutputsensitivity",
@@ -40225,6 +44025,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "StandardOutputSensitivity",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40249,6 +44050,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subfiletype",
@@ -40259,6 +44061,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "254",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -40283,6 +44086,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subfiletype",
@@ -40293,6 +44097,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MIE::Main"),
         raw_id: "0Type",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40317,6 +44122,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectarea",
@@ -40327,6 +44133,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37396",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40351,6 +44158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectarea",
@@ -40361,6 +44169,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SubjectArea",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40385,6 +44194,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectdistance",
@@ -40395,6 +44205,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37382",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40419,6 +44230,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectdistance",
@@ -40429,6 +44241,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "62",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40453,6 +44266,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectdistance",
@@ -40463,6 +44277,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SubjectDistance",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40487,6 +44302,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectdistancerange",
@@ -40497,6 +44313,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41996",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40521,6 +44338,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unknown", "Macro", "Close", "Distant"]),
     },
     StaticNativeLookupCandidate {
         name: "subjectdistancerange",
@@ -40531,6 +44349,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SubjectDistanceRange",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40555,6 +44374,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Unknown", "Macro", "Close", "Distant"]),
     },
     StaticNativeLookupCandidate {
         name: "subjectlocation",
@@ -40565,6 +44385,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41492",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40589,6 +44410,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subjectlocation",
@@ -40599,6 +44421,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "SubjectLocation",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40623,6 +44446,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subsectime",
@@ -40633,6 +44457,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37520",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40657,6 +44482,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subsectimedigitized",
@@ -40667,6 +44493,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37522",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40691,6 +44518,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "subsectimeoriginal",
@@ -40701,6 +44529,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37521",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40725,6 +44554,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "targetprinter",
@@ -40735,6 +44565,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "337",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -40759,6 +44590,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thresholding",
@@ -40769,6 +44601,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "263",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -40793,6 +44626,11 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "No dithering or halftoning",
+            "Ordered dither or halftone",
+            "Randomized dither",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "thumbnailformat",
@@ -40803,6 +44641,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "ThumbnailsFormat",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40827,6 +44666,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnailheight",
@@ -40837,6 +44677,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64085",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40861,6 +44702,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnailheight",
@@ -40871,6 +44713,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "ThumbnailsHeight",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -40895,6 +44738,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnaillength",
@@ -40905,6 +44749,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "514",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD1"),
         groups: &[
@@ -40929,6 +44774,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnaillength",
@@ -40939,6 +44785,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "514",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("IFD0"),
         groups: &[
@@ -40963,6 +44810,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnaillength",
@@ -40973,6 +44821,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "514",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -40997,6 +44846,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnailwidth",
@@ -41007,6 +44857,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
         raw_id: "64084",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41031,6 +44882,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "thumbnailwidth",
@@ -41041,6 +44893,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::xmp"),
         raw_id: "ThumbnailsWidth",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41065,6 +44918,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "tilelength",
@@ -41075,6 +44929,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "323",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41099,6 +44954,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "tilewidth",
@@ -41109,6 +44965,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "322",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41133,6 +44990,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "timecodes",
@@ -41143,6 +45001,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51043",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41167,6 +45026,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "timezoneoffset",
@@ -41177,6 +45037,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "34858",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41201,6 +45062,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "transferfunction",
@@ -41211,6 +45073,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "301",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41235,6 +45098,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "transferfunction",
@@ -41245,6 +45109,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "TransferFunction",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41269,6 +45134,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "transformation",
@@ -41279,6 +45145,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::panorama"),
         raw_id: "Transformation",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41303,6 +45170,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "tstop",
@@ -41313,6 +45181,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "51058",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41337,6 +45206,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "uniquecameramodel",
@@ -41347,6 +45217,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50708",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -41371,6 +45242,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "usercomment",
@@ -41381,6 +45253,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::CanonRaw::Main"),
         raw_id: "2053",
         writable: Some("string[256]"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41405,6 +45278,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "usercomment",
@@ -41415,6 +45289,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37510",
         writable: Some("undef"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41439,6 +45314,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "usercomment",
@@ -41449,6 +45325,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "UserComment",
         writable: Some("lang-alt"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41473,6 +45350,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrection",
@@ -41483,6 +45361,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28721",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -41507,6 +45386,12 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Off",
+            "Auto",
+            "Auto (ILCE-1)",
+            "No correction params available",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrection",
@@ -41517,6 +45402,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Samsung::Type2"),
         raw_id: "41043",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41541,6 +45427,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrection",
@@ -41551,6 +45438,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "8209",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41575,6 +45463,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Off", "Auto", "n/a"]),
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41585,6 +45474,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "28722",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -41609,6 +45499,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41619,6 +45510,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405a"),
         raw_id: "1610",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41643,6 +45535,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41653,6 +45546,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "842",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41677,6 +45571,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41687,6 +45582,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "848",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41711,6 +45607,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41721,6 +45618,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "860",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41745,6 +45643,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
@@ -41755,6 +45654,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Tag9405b"),
         raw_id: "872",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41779,6 +45679,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "waterdepth",
@@ -41789,6 +45690,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "37891",
         writable: Some("rational64s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41813,6 +45715,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "waterdepth",
@@ -41823,6 +45726,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exifEX"),
         raw_id: "WaterDepth",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41847,6 +45751,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -41857,6 +45762,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "29459",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: true,
         write_group: Some("SubIFD"),
         groups: &[
@@ -41881,6 +45787,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -41891,6 +45798,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::MinoltaRaw::WBG"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41915,6 +45823,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -41925,6 +45834,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::ColorBalance2"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41949,6 +45859,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -41959,6 +45870,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::ColorBalanceB"),
         raw_id: "5096",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -41983,6 +45895,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -41993,6 +45906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::ColorBalanceC"),
         raw_id: "56",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42017,6 +45931,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
@@ -42027,6 +45942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
         raw_id: "29459",
         writable: Some("int16s"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42051,6 +45967,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42061,6 +45978,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42085,6 +46003,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42095,6 +46037,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "68",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42119,6 +46062,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42129,6 +46096,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
         raw_id: "74",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42153,6 +46121,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42163,6 +46155,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
         raw_id: "188",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42187,6 +46180,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42197,6 +46214,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
         raw_id: "54",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42221,6 +46239,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42231,6 +46273,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
         raw_id: "94",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42255,6 +46298,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42265,6 +46332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
         raw_id: "54",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42289,6 +46357,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42299,6 +46391,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
         raw_id: "120",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42323,6 +46416,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42333,6 +46450,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42357,6 +46475,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42367,6 +46509,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42391,6 +46534,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42401,6 +46568,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
         raw_id: "115",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42425,6 +46593,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42435,6 +46627,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42459,6 +46652,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42469,6 +46686,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
         raw_id: "120",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42493,6 +46711,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42503,6 +46745,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
         raw_id: "84",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42527,6 +46770,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42537,6 +46804,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
         raw_id: "111",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42561,6 +46829,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42571,6 +46863,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
         raw_id: "188",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42595,6 +46888,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42605,6 +46922,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
         raw_id: "123",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42629,6 +46947,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42639,6 +46981,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
         raw_id: "188",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42663,6 +47006,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42673,6 +47040,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
         raw_id: "194",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42697,6 +47065,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42707,6 +47099,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
         raw_id: "305",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42731,6 +47124,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42741,6 +47158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
         raw_id: "119",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42765,6 +47183,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42775,6 +47217,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::Processing"),
         raw_id: "8",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42799,6 +47242,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42809,6 +47276,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Canon::ShotInfo"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42833,6 +47301,30 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "PC Set1",
+            "PC Set2",
+            "PC Set3",
+            "Daylight Fluorescent",
+            "Custom 1",
+            "Custom 2",
+            "Underwater",
+            "Custom 3",
+            "Custom 4",
+            "Cloudy",
+            "PC Set4",
+            "PC Set5",
+            "Auto (ambience priority)",
+            "Tungsten",
+            "Fluorescent",
+            "Flash",
+            "Custom",
+            "Black & White",
+            "Shade",
+            "Manual Temperature (Kelvin)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42843,6 +47335,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Main"),
         raw_id: "7",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42867,6 +47360,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Manual",
+            "Tungsten",
+            "Daylight",
+            "Fluorescent",
+            "Shade",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42877,6 +47378,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "25",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42901,6 +47403,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Shade",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42911,6 +47421,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Casio::Type2"),
         raw_id: "8210",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42935,6 +47446,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Manual",
+            "Daylight",
+            "Tungsten",
+            "Flash",
+            "Cloudy",
+            "Shade",
+            "Flash?",
+            "Fluorescent",
+            "Tungsten?",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42945,6 +47467,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "41987",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -42969,6 +47492,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Auto", "Manual"]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -42979,6 +47503,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "65102",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43003,6 +47528,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43013,6 +47539,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::FujiFilm::Main"),
         raw_id: "4098",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43037,6 +47564,27 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Auto (white priority)",
+            "Incandescent",
+            "Flash",
+            "Underwater",
+            "Auto (ambiance priority)",
+            "Daylight",
+            "Custom",
+            "Custom2",
+            "Custom3",
+            "Custom4",
+            "Custom5",
+            "Kelvin",
+            "Cloudy",
+            "Daylight Fluorescent",
+            "Day White Fluorescent",
+            "White Fluorescent",
+            "Warm White Fluorescent",
+            "Living Room Warm White Fluorescent",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43047,6 +47595,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::IFD"),
         raw_id: "1020",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43071,6 +47620,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43081,6 +47631,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::KDC_IFD"),
         raw_id: "64013",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43105,6 +47656,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Fluorescent",
+            "Tungsten",
+            "Daylight",
+            "Shade",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43115,6 +47673,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Main"),
         raw_id: "64",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43139,6 +47698,9 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto", "Flash?", "Tungsten", "Daylight",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43149,6 +47711,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Kodak::Type5"),
         raw_id: "26",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43173,6 +47736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Daylight", "Flash", "Tungsten"]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43183,6 +47747,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
         raw_id: "3",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43207,6 +47772,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43217,6 +47783,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43241,6 +47808,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Cloudy",
+            "Kelvin",
+            "Shade",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43251,6 +47829,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43275,6 +47854,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Shade",
+            "Kelvin",
+            "Cloudy",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43285,6 +47874,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
         raw_id: "11",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43309,6 +47899,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Cloudy",
+            "Kelvin",
+            "Shade",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43319,6 +47920,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Minolta::Main"),
         raw_id: "277",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43343,6 +47945,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Color Temperature/Color Filter",
+            "Custom",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Tungsten",
+            "Flash",
+            "Fluorescent",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43353,6 +47966,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Main"),
         raw_id: "5",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43377,6 +47991,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43387,6 +48002,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Nikon::Type2"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43411,6 +48027,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43421,6 +48038,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica2"),
         raw_id: "772",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43445,6 +48063,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43455,6 +48074,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Main"),
         raw_id: "3",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43479,6 +48099,21 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Black & White",
+            "Manual 2",
+            "Shade",
+            "Kelvin",
+            "Manual 3",
+            "Manual 4",
+            "Auto (cool)",
+            "Daylight",
+            "Cloudy",
+            "Incandescent",
+            "Manual",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43489,6 +48124,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Subdir"),
         raw_id: "12339",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43513,6 +48149,18 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Tungsten",
+            "Fluorescent",
+            "Daylight Fluorescent",
+            "Daylight",
+            "Flash",
+            "Cloudy",
+            "Shade",
+            "Manual",
+            "Kelvin",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43523,6 +48171,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "25",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43547,6 +48196,25 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Cloudy",
+            "Warm White Fluorescent",
+            "Multi Auto",
+            "Color Temperature Enhancement",
+            "Kelvin",
+            "Shade",
+            "Fluorescent",
+            "Tungsten",
+            "Manual",
+            "Daylight Fluorescent",
+            "Unknown",
+            "User-Selected",
+            "Day White Fluorescent",
+            "White Fluorescent",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43557,6 +48225,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Type2"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43581,6 +48250,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Shade",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43591,6 +48268,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
         raw_id: "38",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43615,6 +48293,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Daylight",
+            "Cloudy",
+            "Tungsten",
+            "Fluorescent",
+            "Manual",
+            "Detail",
+            "Multi-pattern Auto",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43625,6 +48313,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Ricoh::Main"),
         raw_id: "4099",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43649,6 +48338,21 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Multi-P Auto",
+            "Manual",
+            "Kelvin",
+            "Shade",
+            "Daylight",
+            "Cloudy",
+            "Incandescent 1",
+            "Incandescent 2",
+            "Daylight Fluorescent",
+            "Neutral White Fluorescent",
+            "Cool White Fluorescent",
+            "Warm White Fluorescent",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43659,6 +48363,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "136",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43683,6 +48388,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43693,6 +48399,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "60",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43717,6 +48424,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43727,6 +48435,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "7",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43751,6 +48460,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43761,6 +48471,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sigma::Main"),
         raw_id: "88",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43785,6 +48496,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43795,6 +48507,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings"),
         raw_id: "15",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43819,6 +48532,18 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Color Temperature",
+            "Color Filter",
+            "Custom",
+            "Cloudy",
+            "Shade",
+            "Auto",
+            "Daylight",
+            "Fluorescent",
+            "Tungsten",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43829,6 +48554,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
         raw_id: "14",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43853,6 +48579,18 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Color Temperature",
+            "Color Filter",
+            "Custom",
+            "Cloudy",
+            "Shade",
+            "Auto",
+            "Daylight",
+            "Fluorescent",
+            "Tungsten",
+            "Flash",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43863,6 +48601,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "277",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43887,6 +48626,18 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Color Temperature/Color Filter",
+            "Custom",
+            "Underwater",
+            "Daylight",
+            "Cloudy",
+            "Shade",
+            "Tungsten",
+            "Flash",
+            "Fluorescent",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43897,6 +48648,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::Main"),
         raw_id: "45140",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43921,6 +48673,22 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "Auto",
+            "Incandescent2",
+            "Warm White Fluorescent",
+            "Incandescent",
+            "Flash",
+            "Underwater 1 (Blue Water)",
+            "Underwater 2 (Green Water)",
+            "Underwater Auto",
+            "Custom",
+            "Daylight",
+            "Cloudy",
+            "Cool White Fluorescent",
+            "Day White Fluorescent",
+            "Daylight Fluorescent",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43931,6 +48699,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crd"),
         raw_id: "WhiteBalance",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43955,6 +48724,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "As Shot",
+            "Auto",
+            "Cloudy",
+            "Custom",
+            "Daylight",
+            "Flash",
+            "Fluorescent",
+            "Shade",
+            "Tungsten",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43965,6 +48745,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::crs"),
         raw_id: "WhiteBalance",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -43989,6 +48770,17 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "As Shot",
+            "Auto",
+            "Cloudy",
+            "Custom",
+            "Daylight",
+            "Flash",
+            "Fluorescent",
+            "Shade",
+            "Tungsten",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "whitebalance",
@@ -43999,6 +48791,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::exif"),
         raw_id: "WhiteBalance",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44023,6 +48816,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Auto", "Manual"]),
     },
     StaticNativeLookupCandidate {
         name: "whitelevel",
@@ -44033,6 +48827,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "50717",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("SubIFD"),
         groups: &[
@@ -44057,6 +48852,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitelevel",
@@ -44067,6 +48863,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "126",
         writable: Some("int32u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44091,6 +48888,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitelevel",
@@ -44101,6 +48899,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
         raw_id: "30847",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44125,6 +48924,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitepoint",
@@ -44135,6 +48935,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "318",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44159,6 +48960,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitepoint",
@@ -44169,6 +48971,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Panasonic::Leica9"),
         raw_id: "861",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44193,6 +48996,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitepoint",
@@ -44203,6 +49007,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Pentax::Main"),
         raw_id: "513",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44227,6 +49032,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "whitepoint",
@@ -44237,6 +49043,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "WhitePoint",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44261,6 +49068,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xiaomimodel",
@@ -44271,6 +49079,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "39424",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44295,6 +49104,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xiaomisettings",
@@ -44305,6 +49115,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "39321",
         writable: Some("string"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44329,6 +49140,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xpauthor",
@@ -44339,6 +49151,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40093",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44363,6 +49176,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xpcomment",
@@ -44373,6 +49187,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40092",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44397,6 +49212,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xpkeywords",
@@ -44407,6 +49223,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40094",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44431,6 +49248,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xposition",
@@ -44441,6 +49259,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "286",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44465,6 +49284,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xpsubject",
@@ -44475,6 +49295,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40095",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44499,6 +49320,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xptitle",
@@ -44509,6 +49331,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "40091",
         writable: Some("int8u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44533,6 +49356,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xresolution",
@@ -44543,6 +49367,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "282",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44567,6 +49392,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xresolution",
@@ -44577,6 +49403,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::JFIF::Main"),
         raw_id: "3",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44601,6 +49428,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xresolution",
@@ -44611,6 +49439,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Photoshop::Resolution"),
         raw_id: "0",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44635,6 +49464,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "xresolution",
@@ -44645,6 +49475,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "XResolution",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44669,6 +49500,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ycbcrcoefficients",
@@ -44679,6 +49511,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "529",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44703,6 +49536,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ycbcrcoefficients",
@@ -44713,6 +49547,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "YCbCrCoefficients",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44737,6 +49572,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "ycbcrpositioning",
@@ -44747,6 +49583,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "531",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44771,6 +49608,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Centered", "Co-sited"]),
     },
     StaticNativeLookupCandidate {
         name: "ycbcrpositioning",
@@ -44781,6 +49619,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "YCbCrPositioning",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44805,6 +49644,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&["Centered", "Co-sited"]),
     },
     StaticNativeLookupCandidate {
         name: "ycbcrsubsampling",
@@ -44815,6 +49655,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "530",
         writable: Some("int16u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44839,6 +49680,16 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::PlainHash(&[
+            "YCbCr4:4:4 (1 1)",
+            "YCbCr4:4:0 (1 2)",
+            "YCbCr4:4:1 (1 4)",
+            "YCbCr4:2:2 (2 1)",
+            "YCbCr4:2:0 (2 2)",
+            "YCbCr4:2:1 (2 4)",
+            "YCbCr4:1:1 (4 1)",
+            "YCbCr4:1:0 (4 2)",
+        ]),
     },
     StaticNativeLookupCandidate {
         name: "ycbcrsubsampling",
@@ -44849,6 +49700,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "YCbCrSubSampling",
         writable: Some("integer"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44873,6 +49725,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "yposition",
@@ -44883,6 +49736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "287",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44907,6 +49761,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "yresolution",
@@ -44917,6 +49772,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Exif::Main"),
         raw_id: "283",
         writable: Some("rational64u"),
+        candidate_writable: true,
         permanent: false,
         write_group: Some("IFD0"),
         groups: &[
@@ -44941,6 +49797,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "yresolution",
@@ -44951,6 +49808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::JFIF::Main"),
         raw_id: "5",
         writable: Some("1"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -44975,6 +49833,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "yresolution",
@@ -44985,6 +49844,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::Photoshop::Resolution"),
         raw_id: "4",
         writable: None,
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -45009,6 +49869,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
     StaticNativeLookupCandidate {
         name: "yresolution",
@@ -45019,6 +49880,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         full_name: Some("Image::ExifTool::XMP::tiff"),
         raw_id: "YResolution",
         writable: Some("rational"),
+        candidate_writable: true,
         permanent: false,
         write_group: None,
         groups: &[
@@ -45043,6 +49905,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
                 value: "",
             },
         ],
+        print_conv: StaticCandidatePrintConv::Unknown,
     },
 ];
 pub(crate) const SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE: &[StaticSetNewValueQualifierScope] = &[
