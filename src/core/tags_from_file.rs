@@ -14,7 +14,7 @@
 //!
 //! oxidex writes every such destination its writers can write, with the
 //! value the same `-TAG=VALUE` conversion gives it, and names every other
-//! one -- by family-1 group and tag -- in [`CopyReport::uncopied_tags`] and
+//! one -- by family 1 group and tag -- in [`CopyReport::uncopied_tags`] and
 //! [`CopyReport::uncopied_groups`]. Nothing 13.59 would write is skipped
 //! silently.
 
@@ -105,7 +105,7 @@ impl CopySelectors {
                 None => (None, source_spec),
             };
             // Keep a wildcard source group for named/wildcard tags: its
-            // destination must retain the matched physical family-1 group.
+            // destination must retain the matched physical family 1 group.
             // Preserve the existing whole-all selector special cases.
             let group = group.filter(|group| {
                 !group.eq_ignore_ascii_case("all")
@@ -205,7 +205,7 @@ impl CopySelectors {
             {
                 continue;
             }
-            // Wildcard groups preserve the source's own family-1 group.
+            // Wildcard groups preserve the source's own family 1 group.
             let group = pattern.group.as_deref().map(|group| {
                 if group.contains(['*', '?']) {
                     group1.to_string()
@@ -258,8 +258,8 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
     matched[text.len()]
 }
 
-/// Whether a copy selector's group names a source row's: its family-0 key
-/// group or its family-1 group (`XMP-dc` for an `XMP:Title` row), or `EXIF`
+/// Whether a copy selector's group names a source row's: its family 0 key
+/// group or its family 1 group (`XMP-dc` for an `XMP:Title` row), or `EXIF`
 /// / `XMP` for any of their directories -- without regard to case, with
 /// wildcards.
 fn copy_group_matches(wanted: &str, key_group: &str, group1: &str) -> bool {
@@ -275,7 +275,7 @@ fn copy_group_matches(wanted: &str, key_group: &str, group1: &str) -> bool {
     glob_matches(wanted, key_group) || glob_matches(wanted, group1)
 }
 
-/// Whether a source row's family-0 key group is one of the EXIF family's
+/// Whether a source row's family 0 key group is one of the EXIF family's
 /// directories, which an `EXIF:all` selection spans: IFD0, IFD1, ExifIFD,
 /// GPS, InteropIFD, `EXIF` itself, and a SubIFD -- `SubIFD`, or the numbered
 /// `SubIFD0`/`SubIFD1`/... a DNG's chain is keyed under (pinned 13.59 prints
@@ -360,8 +360,9 @@ fn parse(key: &str, text: &str) -> Result<TagValue> {
 /// value it takes.
 struct Planned<'a> {
     destination: Destination,
-    /// The source row's map key and occurrence.
-    source_key: &'a str,
+    /// The source row's map key. A physical maker block has no captured
+    /// scalar value; its occurrence proves presence but must never be copied.
+    source_key: Option<&'a str>,
     occurrence: &'a TagOccurrence,
     /// A named tag: a destination it cannot reach refuses the whole copy.
     strict: bool,
@@ -494,7 +495,7 @@ pub(crate) fn copy_tags(
     // whose value it takes: (request, source key, occurrence, strict, filter).
     let mut requests: Vec<CopyRequest> = Vec::new();
     let mut request_positions = Vec::new();
-    let mut sources: Vec<(&str, &TagOccurrence, bool, Option<&str>)> = Vec::new();
+    let mut sources: Vec<(Option<&str>, &TagOccurrence, bool, Option<&str>)> = Vec::new();
 
     // Selections, grouped by (destination group, name): 13.59 sets each
     // selected source tag in turn, so for one name the tag it sets last --
@@ -535,7 +536,7 @@ pub(crate) fn copy_tags(
             group: group.as_deref(),
             structure: is_structure(winner),
         });
-        sources.push((source_key, winner, false, None));
+        sources.push((Some(source_key), winner, false, None));
     }
 
     // Named requests retain their positions among the other selectors.
@@ -558,13 +559,15 @@ pub(crate) fn copy_tags(
                     })
             })
             .collect();
-        let Some((source_key, winner)) = arbitrate_rows(rows) else {
+        let (source_key, winner) = if let Some((key, occurrence)) = arbitrate_rows(rows) {
+            (Some(key), occurrence)
+        } else {
             // ExifTool exposes the physical ExifIFD:MakerNote<vendor> source
             // block even when a reader exposes only its decoded MakerNotes
             // rows. A named request for that block is strict: its absence
             // from MetadataMap must not turn a native block copy into a
-            // successful no-match. Keep group and ordered exclusion rules on
-            // the synthetic ExifIFD source, not on decoded vendor rows.
+            // successful no-match. Resolve its destination and reduce later
+            // requests before refusing a surviving unsupported block.
             let physical_block = source_name
                 .get(..9)
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("MakerNote"))
@@ -572,19 +575,20 @@ pub(crate) fn copy_tags(
                 && source_group
                     .as_deref()
                     .is_none_or(|group| copy_group_matches(group, "ExifIFD", "ExifIFD"))
-                && !selectors.excluded_after(*position, "ExifIFD", "ExifIFD", source_name)
-                && source_metadata.keyed_occurrences().any(|(_, occurrence)| {
+                && !selectors.excluded_after(*position, "ExifIFD", "ExifIFD", source_name);
+            if !physical_block {
+                continue;
+            }
+            let Some((_, occurrence)) =
+                source_metadata.keyed_occurrences().find(|(_, occurrence)| {
                     family0_label(occurrence) == "MakerNotes"
                         && format!("MakerNote{}", family1_label(occurrence))
                             .eq_ignore_ascii_case(source_name)
-                });
-            if physical_block && retain(&format!("ExifIFD:{source_name}")) {
-                return Err(ExifToolError::tag_not_written(
-                    filter,
-                    "the source carries this physical maker note block, which oxidex cannot copy",
-                ));
-            }
-            continue; // the source does not carry it
+                })
+            else {
+                continue; // the source does not carry this physical block
+            };
+            (None, occurrence)
         };
         let (dest_group, dest_name) = match dest_spec.rsplit_once(':') {
             Some((group, name)) => (Some(group), name),
@@ -743,7 +747,13 @@ pub(crate) fn copy_tags(
             ))
         } else {
             crate::writers::write_request::ensure_writer_addresses(&key, &key, format, surgical)
-                .and_then(|()| copied_value(plan.source_key, plan.occurrence, &key))
+                .and_then(|()| match plan.source_key {
+                    Some(source_key) => copied_value(source_key, plan.occurrence, &key),
+                    None => Err(ExifToolError::tag_not_written(
+                        &key,
+                        "the source carries a physical maker note block, which oxidex cannot copy",
+                    )),
+                })
         };
         match resolved {
             Ok(value) => {

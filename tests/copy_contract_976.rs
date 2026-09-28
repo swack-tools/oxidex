@@ -8,6 +8,7 @@ mod fixtures;
 use oxidex::core::operations::{copy_metadata, copy_metadata_report};
 use oxidex::core::write_transaction::WriteOutcome;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,9 +26,12 @@ fn filters(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
 
-fn unchanged(path: &Path, before: &[u8], inode: u64) {
+fn unchanged(path: &Path, before: &[u8], metadata: &fs::Metadata) {
     assert_eq!(fs::read(path).unwrap(), before);
-    assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+    #[cfg(unix)]
+    assert_eq!(fs::metadata(path).unwrap().ino(), metadata.ino());
+    #[cfg(not(unix))]
+    let _ = metadata; // Windows still checks bytes and backup behavior below.
     assert!(!PathBuf::from(format!("{}_original", path.display())).exists());
 }
 
@@ -37,7 +41,7 @@ fn explicit_empty_filter_copies_nothing_while_none_keeps_copy_all() {
     let source = Path::new(JPEG);
     let destination = duplicate(&dir, source, "empty.jpg");
     let before = fs::read(&destination).unwrap();
-    let inode = fs::metadata(&destination).unwrap().ino();
+    let metadata = fs::metadata(&destination).unwrap();
     let report = copy_metadata_report(source, &destination, Some(&[])).unwrap();
     assert_eq!((report.requested, report.copied), (0, 0));
     assert!(report.uncopied_tags.is_empty());
@@ -46,7 +50,7 @@ fn explicit_empty_filter_copies_nothing_while_none_keeps_copy_all() {
         copy_metadata(source, &destination, Some(&[])).unwrap(),
         WriteOutcome::Unchanged
     );
-    unchanged(&destination, &before, inode);
+    unchanged(&destination, &before, &metadata);
 
     // An empty explicit selection has no need to open or detect a destination.
     let missing = dir.path().join("missing.webp");
@@ -109,11 +113,11 @@ fn physical_canon_block_follows_exif_selection_and_valid_exclusions() {
     ] {
         let destination = duplicate(&dir, Path::new(JPEG), &format!("{label}.jpg"));
         let before = fs::read(&destination).unwrap();
-        let inode = fs::metadata(&destination).unwrap().ino();
+        let metadata = fs::metadata(&destination).unwrap();
         let error =
             copy_metadata_report(&canon, &destination, Some(&filters(&[selector]))).unwrap_err();
         assert!(error.to_string().contains(selector), "{error}");
-        unchanged(&destination, &before, inode);
+        unchanged(&destination, &before, &metadata);
     }
     let no_block = duplicate(&dir, Path::new(JPEG), "no-source-block.jpg");
     let report = copy_metadata_report(
@@ -148,15 +152,15 @@ fn unmodelled_webp_refuses_selected_copy_but_allows_no_source_match() {
     ] {
         let destination = duplicate(&dir, &webp, &format!("{label}.webp"));
         let before = fs::read(&destination).unwrap();
-        let inode = fs::metadata(&destination).unwrap().ino();
+        let metadata = fs::metadata(&destination).unwrap();
         let error = copy_metadata_report(Path::new(JPEG), &destination, Some(&filters(&selector)))
             .unwrap_err();
         assert!(error.to_string().contains("WebP"), "{label}: {error}");
-        unchanged(&destination, &before, inode);
+        unchanged(&destination, &before, &metadata);
     }
     let destination = duplicate(&dir, &webp, "absent.webp");
     let before = fs::read(&destination).unwrap();
-    let inode = fs::metadata(&destination).unwrap().ino();
+    let metadata = fs::metadata(&destination).unwrap();
     let report = copy_metadata_report(
         Path::new(JPEG),
         &destination,
@@ -165,7 +169,7 @@ fn unmodelled_webp_refuses_selected_copy_but_allows_no_source_match() {
     .unwrap();
     assert_eq!((report.requested, report.copied), (0, 0));
     assert_eq!(report.outcome, WriteOutcome::Unchanged);
-    unchanged(&destination, &before, inode);
+    unchanged(&destination, &before, &metadata);
 }
 
 #[test]
@@ -215,4 +219,64 @@ fn cli_reports_only_a_maker_block_surviving_later_requests() {
             "{label}: {warning}"
         );
     }
+}
+
+#[test]
+fn canceled_physical_block_copy_uses_its_resolved_destination() {
+    let canon = fixtures::required_t_images_fixture_path("Canon.jpg");
+    let dir = TempDir::new().unwrap();
+    for (label, requests, expected) in [
+        (
+            "qualified",
+            vec!["-MakerNoteCanon>IFD0:Artist", "-IFD0:Artist=final"],
+            "final",
+        ),
+        (
+            "bare-copy",
+            vec!["-MakerNoteCanon>Artist", "-IFD0:Artist=final"],
+            "final",
+        ),
+        (
+            "bare-set",
+            vec!["-MakerNoteCanon>IFD0:Artist", "-Artist=final"],
+            "final",
+        ),
+        (
+            "later-copy",
+            vec!["-MakerNoteCanon>IFD0:Artist", "-Make>IFD0:Artist"],
+            "Canon",
+        ),
+    ] {
+        let destination = duplicate(&dir, Path::new(JPEG), &format!("{label}.jpg"));
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-overwrite_original", "-TagsFromFile"])
+            .arg(&canon)
+            .args(requests)
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{label}: {output:?}");
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-j", "-G1", "-Artist"])
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{label}: {output:?}");
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(rows[0]["IFD0:Artist"], expected, "{label}: {rows}");
+    }
+
+    // A block that survives destination reduction still refuses atomically.
+    let destination = duplicate(&dir, Path::new(JPEG), "surviving.jpg");
+    let before = fs::read(&destination).unwrap();
+    let metadata = fs::metadata(&destination).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-overwrite_original", "-TagsFromFile"])
+        .arg(&canon)
+        .args(["-Make>IFD0:Artist", "-MakerNoteCanon>IFD0:Artist"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    unchanged(&destination, &before, &metadata);
 }
