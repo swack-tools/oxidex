@@ -25,6 +25,17 @@ EXPECTED_PROCESSOR = {
     "__opaque": True,
 }
 EXPECTED_PROCESSOR_DEPARSE_SHA256 = "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be8bb9eaa81fb47d43c5005"
+# The 12.64 ProcessMOV ItemList `data` branch has the same flag dispatch,
+# text decoding, width adjustment, ReadValue call, and language guard as
+# 13.59. Its different FoundTag bookkeeping and track group override do not
+# affect this reader's movie-level scalar subset. Keep each complete source
+# body digest as a change detector after that branch review, not as a claim
+# that every ProcessMOV route is implemented. 11.78 is deliberately absent:
+# its QuickTimeFormat and language/text routes differ.
+REVIEWED_PROCESSOR_SHA256 = {
+    "12.64": "3121d19e978bbaf944c0d9698ce597234bb5dbb889dc2c1e4d3e42b11c02b58d",
+    "13.59": EXPECTED_PROCESSOR_DEPARSE_SHA256,
+}
 EXPECTED_TABLE_CONTRACT = {"FORMAT": "string", "GROUPS.0": "QuickTime", "GROUPS.1": "ItemList",
                            "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo"}
 EXPECTED_READER_PROTOCOL = {
@@ -75,7 +86,8 @@ def processor_reason(document):
     if any(processor.get(key) != value for key, value in EXPECTED_PROCESSOR.items()):
         return "missing_or_changed_processor_contract:PROCESS_PROC"
     body = processor.get("__deparse")
-    if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != EXPECTED_PROCESSOR_DEPARSE_SHA256:
+    expected = REVIEWED_PROCESSOR_SHA256.get(document.get("exiftool_version"))
+    if not isinstance(body, str) or expected is None or hashlib.sha256(body.encode()).hexdigest() != expected:
         return "missing_or_changed_processor_contract:PROCESS_PROC"
     meta = document["modules"]["QuickTime"]["tables"]["ItemList"].get("meta", {})
     if (meta.get("FORMAT") != EXPECTED_TABLE_CONTRACT["FORMAT"]
@@ -190,6 +202,14 @@ def compile_document(document):
         "identity_counts": {"source_records": len(ledger), "generated": len(specs),
                             "omitted": len(ledger) - len(specs)},
     }
+
+
+def require_nonempty_supported(result, label):
+    """Do not publish a compileable empty reader for a populated source table."""
+    counts = result["identity_counts"]
+    if counts["source_records"] and not counts["generated"]:
+        reason = result["protocol"].get("reason") or "all_source_rows_refused"
+        raise ValueError(f"{label}: {counts['source_records']} source rows but no generated specs ({reason})")
 
 
 def rust_string(value):
@@ -314,6 +334,7 @@ def main():
         tool="quicktime_generated_specs.py", git=state, dirty_overridden=overridden,
         extra=["scope: generated declarations only; no runtime support claim", f"source: {args.dump}"])
     result = compile_document(json.loads(args.dump.read_text()))
+    require_nonempty_supported(result, "ItemList")
     outputs = [(args.ledger, serialized(result)), (args.rust, render_rust(result))]
     if args.check:
         for path, contents in outputs:

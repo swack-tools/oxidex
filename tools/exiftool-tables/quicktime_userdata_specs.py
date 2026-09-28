@@ -14,7 +14,8 @@ import json
 from pathlib import Path
 import quicktime_atom_tables as selector
 from quicktime_generated_specs import (EXPECTED_PROCESSOR, EXPECTED_PROCESSOR_DEPARSE_SHA256,
-    EXPECTED_READER_PROTOCOL, source_format, rust_string, render_format, itemlist_use)
+    EXPECTED_READER_PROTOCOL, source_format, rust_string, render_format, itemlist_use,
+    require_nonempty_supported)
 
 ROOT = selector.ROOT
 SNAPSHOT = ROOT / 'tools/exiftool-tables/fixtures/quicktime_source_13_59.json'
@@ -25,6 +26,10 @@ RUST = ROOT / 'src/parsers/quicktime/generated_userdata_specs.rs'
 # Bounded capture differs only in ampersands on two trailer helper calls
 # whose prototypes have not yet loaded; both complete native bodies reviewed.
 PROCESSOR_HASHES = (EXPECTED_PROCESSOR_DEPARSE_SHA256, '75e2459dd90d641982d657ad29835470e9753f17c144ce1332f86f00c7e33522')
+PROCESSOR_HASHES_BY_VERSION = {
+    '12.64': ('3121d19e978bbaf944c0d9698ce597234bb5dbb889dc2c1e4d3e42b11c02b58d',),
+    '13.59': PROCESSOR_HASHES,
+}
 CORE_SHA = '95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508'
 CHARSET_SHA = '2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e'
 XMP_SHA = '1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b'
@@ -36,15 +41,38 @@ HELPERS.update({
     'Image::ExifTool::FoundTag': (('b6bbdc0ace76a1a371da446a8c5b880e6ef75c5630d23b7e3571e018f74e08e4',), 'Image/ExifTool.pm', CORE_SHA),
     'Image::ExifTool::XMP::FixUTF8': (('bbc6ea4b68b3c59f5834a74696b1523ae0eda2ae8800e07fd9d72227acf91f16',), 'Image/ExifTool/XMP.pm', XMP_SHA),
 })
+# The direct movie-level UserData Format branch passes the complete atom to
+# ReadValue in both 12.64 and 13.59. Its text path still uses IsUTF8, Decode,
+# the loaded MacRoman map and FoundTag. 12.64 FoundTag differs in IgnoreGroups
+# and document-number/duplicate bookkeeping; this subset uses neither
+# IgnoreGroups nor DOC_NUM, and priority is supplied by the selected row.
+# Bind every helper to its version's selected-library bytes and reviewed body.
+HISTORICAL_1264_SOURCE_SHA = {
+    'Image/ExifTool.pm': 'c2d4fb2246bb0d0c27adaedc1d2eb109967224ea4c1ee5d23009c5186cb3faf2',
+    'Image/ExifTool/Charset.pm': 'a323c2e1a7188250e3d6ffdf30c901862787390aaf78deaa8d763d8be83cbd48',
+    'Image/ExifTool/XMP.pm': '120b31867a35a45f68b25ce9212be36cbf08c6f0be9b0870d5e3a06aeb6b01ea',
+}
+HISTORICAL_1264_FOUNDTAG_SHA = '556d3e68356a16a4c4b226cdc2960913963db8519293ce8f2ac686269d8a1718'
+
+def helpers_for_version(version):
+    if version == '13.59':
+        return HELPERS
+    if version != '12.64':
+        return {}
+    return {name: ((HISTORICAL_1264_FOUNDTAG_SHA,) if name == 'Image::ExifTool::FoundTag' else hashes,
+                   file, HISTORICAL_1264_SOURCE_SHA[file])
+            for name, (hashes, file, _) in HELPERS.items()}
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
 
 def protocol_reason(doc, table):
     proc = table['meta'].get('PROCESS_PROC', {})
+    version = doc.get('exiftool_version')
+    processor_hashes = PROCESSOR_HASHES_BY_VERSION.get(version, ())
     if (any(proc.get(k) != v for k,v in EXPECTED_PROCESSOR.items())
         or not isinstance(proc.get('__deparse'), str)
-        or hashlib.sha256(proc['__deparse'].encode()).hexdigest() not in PROCESSOR_HASHES
+        or hashlib.sha256(proc['__deparse'].encode()).hexdigest() not in processor_hashes
         or proc.get('source_file') != 'Image/ExifTool/QuickTime.pm'
         or not isinstance(proc.get('source_sha256'), str) or len(proc['source_sha256']) != 64):
         return 'unsupported_userdata_processor'
@@ -65,15 +93,16 @@ def protocol_reason(doc, table):
             or fact.get('resolved') is not True
             or fact.get('source_file') != proc['source_file'] or fact.get('source_sha256') != proc['source_sha256']
             or not isinstance(fact.get('__deparse'),str)
-            or hashlib.sha256(fact['__deparse'].encode()).hexdigest() not in PROCESSOR_HASHES):
+            or hashlib.sha256(fact['__deparse'].encode()).hexdigest() not in processor_hashes):
             return 'unsupported_userdata_caller_processor:'+name
     for name, target in [('main_movie_edge','Movie'), ('movie_userdata_edge','UserData')]:
         if p.get(name) != {'Name':target, 'SubDirectory':{'TagTable':'Image::ExifTool::QuickTime::'+target}}:
             return 'unsupported_userdata_caller:'+name
     deps = p.get('dependencies', {})
-    if set(deps) != set(HELPERS):
+    helpers = helpers_for_version(version)
+    if set(deps) != set(helpers):
         return 'unsupported_userdata_dependencies'
-    for name,(hashes,file,sha) in HELPERS.items():
+    for name,(hashes,file,sha) in helpers.items():
         f = deps[name]
         if (not isinstance(f,dict) or f.get('__name') != name or f.get('__perl') != 'CODE'
             or f.get('__opaque') is not True or f.get('resolved') is not True
@@ -162,6 +191,7 @@ def render_rust(r):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--dump',type=Path,default=SNAPSHOT);p.add_argument('--ledger',type=Path,default=LEDGER);p.add_argument('--rust',type=Path,default=RUST);p.add_argument('--replace',action='store_true');p.add_argument('--check',action='store_true');a=p.parse_args()
     r=compile_document(json.loads(a.dump.read_text()))
+    require_nonempty_supported(r, 'UserData')
     for path,text in [(a.ledger,json.dumps(r,sort_keys=True,indent=2,ensure_ascii=False)+'\n'),(a.rust,render_rust(r))]:
         if a.check:
             if not path.is_file() or path.read_text()!=text:p.error('stale UserData artifact: '+str(path))
