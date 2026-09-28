@@ -13,6 +13,26 @@ fn entry(tag: u16, field_type: u16, count: u32, value: u32) -> [u8; 12] {
 }
 
 #[test]
+fn rw2_source_declared_offsets_survive_generated_table_refusals() {
+    // PanasonicRaw::Main declares all three IDs in 11.78, 12.64, and 13.59.
+    // The generated IfdTable omits them because their offset semantics cannot
+    // be transcribed, but the handwritten read already knows their names.
+    let mut data = b"II\x55\0\x08\0\0\0".to_vec();
+    data.extend_from_slice(&3u16.to_le_bytes());
+    data.extend_from_slice(&entry(0x0111, 4, 1, 100));
+    data.extend_from_slice(&entry(0x0117, 4, 1, 200));
+    data.extend_from_slice(&entry(0x0118, 4, 1, 300));
+    data.extend_from_slice(&0u32.to_le_bytes());
+
+    let file = Builder::new().suffix(".rw2").tempfile().unwrap();
+    std::fs::write(file.path(), data).unwrap();
+    let metadata = read_metadata(file.path()).unwrap();
+    assert_eq!(metadata.get_integer("IFD0:StripOffsets"), Some(100));
+    assert_eq!(metadata.get_integer("IFD0:StripByteCounts"), Some(200));
+    assert_eq!(metadata.get_integer("IFD0:RawDataOffset"), Some(300));
+}
+
+#[test]
 fn rw2_outer_ifd_names_follow_selected_panasonic_raw_main() {
     // Native 11.78/12.64 report ISO=100 from 0x0017 but omit 0x0037.
     // Native 13.59 reports both occurrences. Artist is declared in 12.64+.

@@ -235,6 +235,28 @@ fn panasonic_raw_ifd0_tag_name(tag_id: u16) -> Option<&'static str> {
     })
 }
 
+/// Source membership for the selected PanasonicRaw::Main, including native
+/// entries the IFD generator deliberately refuses to transcribe. In
+/// particular, an offset pair is still a native tag even though
+/// `IfdTable::tag` has no row for it. These residual IDs were checked against
+/// the 11.78, 12.64, and 13.59 PanasonicRaw.pm Main tables; the generated
+/// IFD identity ledger test below checks the complete selected inventory.
+fn panasonic_raw_main_declares(tag_id: u16) -> bool {
+    let Some(table) = crate::exiftool_tables::find_ifd_table("PanasonicRaw", "Main") else {
+        return false;
+    };
+    if table.tag(tag_id).is_some() || table.variant_group(tag_id).is_some() {
+        return true;
+    }
+    match crate::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => matches!(tag_id, 0x002e | 0x0111 | 0x0117 | 0x0118),
+        "12.64" | "13.59" => {
+            matches!(tag_id, 0x002e | 0x0111 | 0x0117 | 0x0118 | 0x0127)
+        }
+        _ => false,
+    }
+}
+
 /// Display values for the Panasonic RAW IFD0 tags whose stored representation
 /// differs from ExifTool's printed form.
 ///
@@ -935,8 +957,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // PanasonicRaw::Main may authorize an outer IFD0 name.
                     if format == RawFormat::PanasonicRW2
                         && ifd_index == 0
-                        && !crate::exiftool_tables::find_ifd_table("PanasonicRaw", "Main")
-                            .is_some_and(|table| table.tag(*tag_id).is_some())
+                        && !panasonic_raw_main_declares(*tag_id)
                     {
                         continue;
                     }
@@ -4844,6 +4865,43 @@ mod dng_thumbnail_tiff_tests {
 #[cfg(test)]
 mod panasonic_rw2_tests {
     use super::*;
+
+    #[test]
+    fn selected_panasonic_raw_main_source_inventory_is_exactly_admitted() {
+        // The producer's selected-source ledger retains refused rows that
+        // `IfdTable::tag` omits. Compare the entire native ID inventory to the
+        // runtime gate, so a future regeneration cannot quietly lose a known
+        // Panasonic RAW tag or claim one absent from the selected source.
+        let ledger: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/exiftool-tables/ifd_identity_ledger.json"
+        )))
+        .expect("selected IFD identity ledger");
+        assert_eq!(
+            ledger["exiftool_version"].as_str(),
+            Some(crate::exiftool_tables::EXIFTOOL_VERSION)
+        );
+        let declared: std::collections::HashSet<u16> = ledger["rows"]
+            .as_array()
+            .expect("IFD rows")
+            .iter()
+            .filter(|row| row["module"] == "PanasonicRaw" && row["table"] == "Main")
+            .map(|row| {
+                row["raw_key"]
+                    .as_str()
+                    .expect("numeric Panasonic RAW ID")
+                    .parse::<u16>()
+                    .expect("u16 Panasonic RAW ID")
+            })
+            .collect();
+        for id in 0..=u16::MAX {
+            assert_eq!(
+                panasonic_raw_main_declares(id),
+                declared.contains(&id),
+                "PanasonicRaw::Main source membership differs at {id:#06x}"
+            );
+        }
+    }
 
     #[test]
     fn extracts_black_level_blue_from_panasonic_raw_tag() {
