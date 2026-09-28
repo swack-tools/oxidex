@@ -1104,7 +1104,8 @@ mod tests {
             ("11.78" | "12.64", "edges") => {
                 &[0x9999, 0xc519, 0xc51b, 0xcd41, 0xcd44, 0xcd47, 0xcea1]
             }
-            _ => &[],
+            ("13.59", "withheld" | "taken" | "edges") => &[],
+            _ => panic!("unsupported native Exif::Main snapshot: {release} / {kind}"),
         };
         expected.retain(|id| !removed.contains(id));
         if matches!(release, "11.78" | "12.64") && kind == "withheld" {

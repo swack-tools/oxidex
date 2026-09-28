@@ -1981,7 +1981,8 @@ mod tests {
                 )
             }),
             "12.64" => expected.retain(|name| *name != "ImageTitle"),
-            _ => {}
+            "13.59" => {}
+            release => panic!("unsupported native Exif::Main profile: {release}"),
         }
         assert_eq!(names, expected);
         let plain = *IFD_EXIF_MAIN.tag(0x010d).unwrap();
