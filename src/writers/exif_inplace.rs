@@ -78,29 +78,34 @@ pub fn locate_exif_datetimes(tiff: &[u8]) -> Result<Vec<LocatedDateTag>> {
     Ok(found)
 }
 
-/// The byte span (offset, length) of every out-of-line value in the EXIF
-/// directory chain of `tiff` -- IFD0 and the IFDs it links (IFD1, ...),
-/// the ExifIFD, GPS and InteropIFD -- other than the `located` date values
-/// themselves. A date value one of these spans overlaps also backs another
-/// tag (a `Software` entry pointing at the same bytes, say, or a MakerNote
-/// blob that contains it), which pinned ExifTool 13.59 writes apart from
-/// the shifted date; patching the bytes would change that tag too (codex
-/// pre-review of #964).
+/// The byte span (offset, length) of every other value in the reachable
+/// EXIF directory graph. A date's bytes may also back a SubIFD value, even
+/// when that SubIFD is not part of the ordinary date reader's walk. We must
+/// prove the whole graph's storage before patching a date in place.
 fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usize, usize)>> {
     const POINTERS: [u16; 3] = [EXIF_IFD_POINTER, 0x8825, 0xa005];
+    const SUB_IFDS: u16 = 0x014a;
+    fn incomplete() -> ExifToolError {
+        ExifToolError::unsupported_format(
+            "Cannot safely shift dates through an incomplete EXIF directory graph; nothing was written",
+        )
+    }
     let byte_order = if tiff.starts_with(b"II") {
         ByteOrder::LittleEndian
     } else {
         ByteOrder::BigEndian
     };
-    let ifd0 = read_u32(&tiff[4..8], byte_order) as usize;
+    let ifd0 = read_u32(tiff.get(4..8).ok_or_else(incomplete)?, byte_order) as usize;
     let exif_ifd = scan_ifd(tiff, ifd0, byte_order, Ifd::Ifd0, &mut Vec::new())?;
     // Inline values, entry descriptors and pointers are storage too.
     let mut spans = vec![(0, 8)];
     let mut pending = vec![ifd0];
     let mut visited = Vec::new();
     while let Some(offset) = pending.pop() {
-        if offset == 0 || visited.contains(&offset) {
+        if offset == 0 {
+            return Err(incomplete());
+        }
+        if visited.contains(&offset) {
             continue;
         }
         if visited.len() >= 64 {
@@ -109,31 +114,111 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
             ));
         }
         visited.push(offset);
-        let Some(count) = tiff.get(offset..offset + 2) else {
-            continue;
-        };
-        let count = read_u16(count, byte_order) as usize;
-        spans.push((offset, 2 + count * 12 + 4));
-        for i in 0..count {
-            let at = offset + 2 + i * 12;
-            let Some(entry) = tiff.get(at..at + 12) else {
-                break;
-            };
+        let count_end = offset.checked_add(2).ok_or_else(incomplete)?;
+        let count = read_u16(
+            tiff.get(offset..count_end).ok_or_else(incomplete)?,
+            byte_order,
+        ) as usize;
+        let table_end = count_end
+            .checked_add(count.checked_mul(12).ok_or_else(incomplete)?)
+            .ok_or_else(incomplete)?;
+        let next_end = table_end.checked_add(4).ok_or_else(incomplete)?;
+        tiff.get(offset..next_end).ok_or_else(incomplete)?;
+        spans.push((offset, next_end - offset));
+        let mut pair_values: Vec<(u16, Vec<usize>)> = Vec::new();
+        for entry in tiff[count_end..table_end].chunks_exact(12) {
             let tag_id = read_u16(&entry[0..2], byte_order);
             let value_type = read_u16(&entry[2..4], byte_order);
             let value_count = read_u32(&entry[4..8], byte_order) as usize;
             let value = read_u32(&entry[8..12], byte_order) as usize;
+            // Unknown TIFF widths cannot prove that the date's storage is
+            // unaliased; the ordinary scanner's opaque-byte fallback is not
+            // sufficient for an in-place safety decision.
+            if !(1..=12).contains(&value_type) {
+                return Err(incomplete());
+            }
+            let len = crate::writers::exif_surgical::type_size(value_type)
+                .checked_mul(value_count)
+                .ok_or_else(incomplete)?;
+            let bytes = if len <= 4 {
+                &entry[8..8 + len]
+            } else {
+                let end = value.checked_add(len).ok_or_else(incomplete)?;
+                tiff.get(value..end).ok_or_else(incomplete)?
+            };
             if POINTERS.contains(&tag_id) {
+                // The ordinary reader follows one scalar offset. An array
+                // or another type leaves reachable directories ambiguous.
+                if value_count != 1 || !matches!(value_type, 1 | 3 | 4 | 9) {
+                    return Err(incomplete());
+                }
                 pending.push(crate::writers::exif_surgical::inline_unsigned(
                     value_type,
-                    value_count as u32,
+                    1,
                     &entry[8..12],
                     byte_order,
                 ));
                 continue;
             }
-            let len =
-                crate::writers::exif_surgical::type_size(value_type).saturating_mul(value_count);
+            if crate::writers::exif_surgical::OFFSET_LENGTH_PAIRS
+                .iter()
+                .any(|(offset_tag, length_tag)| tag_id == *offset_tag || tag_id == *length_tag)
+            {
+                let width = match value_type {
+                    3 => 2,
+                    4 => 4,
+                    _ => return Err(incomplete()),
+                };
+                if value_count == 0 || bytes.len() != width * value_count {
+                    return Err(incomplete());
+                }
+                if pair_values.iter().any(|(id, _)| *id == tag_id) {
+                    return Err(incomplete());
+                }
+                let values = bytes
+                    .chunks_exact(width)
+                    .map(|chunk| {
+                        if width == 2 {
+                            read_u16(chunk, byte_order) as usize
+                        } else {
+                            read_u32(chunk, byte_order) as usize
+                        }
+                    })
+                    .collect();
+                pair_values.push((tag_id, values));
+            }
+            if tag_id == SUB_IFDS {
+                let width = match value_type {
+                    3 => 2,
+                    4 => 4,
+                    _ => return Err(incomplete()),
+                };
+                if value_count == 0 || value_count > 64 || bytes.len() != width * value_count {
+                    return Err(incomplete());
+                }
+                if len > 4 {
+                    spans.push((value, len));
+                }
+                for child in bytes.chunks_exact(width) {
+                    let at = if width == 2 {
+                        read_u16(child, byte_order) as usize
+                    } else {
+                        read_u32(child, byte_order) as usize
+                    };
+                    pending.push(at);
+                }
+                continue;
+            }
+            if (crate::writers::exif_surgical::UNMODELLED_POINTER_TAGS.contains(&tag_id)
+                || crate::writers::exif_surgical::NAMED_POINTER_TAGS.contains(&tag_id))
+                && !crate::writers::exif_surgical::OFFSET_LENGTH_PAIRS
+                    .iter()
+                    .any(|(offset_tag, _)| *offset_tag == tag_id)
+            {
+                // ExifTool's source declares more offset-bearing tags than
+                // pairs whose byte extent can be proven here.
+                return Err(incomplete());
+            }
             let date_tag = match tag_id {
                 0x0132 => Some(ExifDateTag::ModifyDate),
                 0x9003 => Some(ExifDateTag::DateTimeOriginal),
@@ -150,9 +235,28 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
                 spans.push((value, len));
             }
         }
-        let next = offset + 2 + count * 12;
-        if let Some(link) = tiff.get(next..next + 4) {
-            pending.push(read_u32(link, byte_order) as usize);
+        for &(offset_tag, length_tag) in crate::writers::exif_surgical::OFFSET_LENGTH_PAIRS {
+            let Some((_, offsets)) = pair_values.iter().find(|(id, _)| *id == offset_tag) else {
+                if pair_values.iter().any(|(id, _)| *id == length_tag) {
+                    return Err(incomplete());
+                }
+                continue;
+            };
+            let Some((_, lengths)) = pair_values.iter().find(|(id, _)| *id == length_tag) else {
+                return Err(incomplete());
+            };
+            if offsets.len() != lengths.len() {
+                return Err(incomplete());
+            }
+            for (&at, &len) in offsets.iter().zip(lengths) {
+                let end = at.checked_add(len).ok_or_else(incomplete)?;
+                tiff.get(at..end).ok_or_else(incomplete)?;
+                spans.push((at, len));
+            }
+        }
+        let next = read_u32(&tiff[table_end..next_end], byte_order) as usize;
+        if next != 0 {
+            pending.push(next);
         }
     }
     Ok(spans)
@@ -389,13 +493,46 @@ pub fn shift_tiff_png_exif_dates(
     // Classic TIFF only (magic 42, not RW2's 85 or BigTIFF).
     let classic_tiff = matches!(file_bytes.get(0..4), Some(b"II\x2a\x00" | b"MM\x00\x2a"));
     let modified = if classic_tiff {
+        // This exported helper can be called without the shared transaction
+        // planner. A date shift is an EXIF set to ExifTool, which also writes
+        // a TIFF's MIE trailer. Reuse the planner's MIE census before any
+        // in-place edit of the outer TIFF.
+        let mie = crate::core::operations::mie_census(path)?;
+        for target in targets {
+            crate::writers::write_request::ensure_no_mie_copy(
+                target.key(),
+                target.key(),
+                &crate::core::MetadataMap::new(),
+                false,
+                &mie,
+            )?;
+        }
         let len = file_bytes.len();
         shift_block_dates(&mut file_bytes, 0, len, targets, spec)?
     } else if file_bytes.starts_with(PNG_SIGNATURE) {
         // This public helper can be called without date_shift's surrounding
         // validation. Check the original container before a missing-eXIf
         // no-op or an in-place date edit, using the PNG writer's same policy.
-        crate::writers::png_writer::refuse_bad_chunk_crcs(&SliceReader(&file_bytes))?;
+        let reader = SliceReader(&file_bytes);
+        crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
+        // The shared PNG writer rejects a second eXIf carrier and raw EXIF
+        // profile text chunks before an edit. Keep that same carrier boundary
+        // on this direct date path, which otherwise finds only the first
+        // eXIf chunk and could report success after changing one copy.
+        match crate::writers::png_writer::png_exif_payloads(&reader)? {
+            Some(payloads) if payloads.len() > 1 => {
+                return Err(ExifToolError::unsupported_format(
+                    "Cannot edit EXIF in a PNG with more than one eXIf chunk \
+                     (ExifTool also refuses: IFD0 pointer references previous IFD0 directory)",
+                ));
+            }
+            None => {
+                return Err(ExifToolError::unsupported_format(
+                    "Cannot edit EXIF stored in a PNG raw-profile text chunk; nothing was written",
+                ));
+            }
+            Some(_) => {}
+        }
         let mut at = PNG_SIGNATURE.len();
         let mut chunk = None;
         while let Some(header) = file_bytes.get(at..at + 8) {

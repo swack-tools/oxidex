@@ -84,7 +84,7 @@ pub(crate) const NAMED_POINTER_TAGS: &[u16] = &[0x5028];
 /// 0x0201/0x0202 preview pair, SamsungRawPointers, ImageOffset,
 /// AlphaOffset) and ThumbnailStripOffsets/ByteCounts. IFD1's thumbnail
 /// pair is structural and checked on its own (the thumbnail check).
-const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
+pub(crate) const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
     (0x0111, 0x0117),
     (0x0120, 0x0121),
     (0x0144, 0x0145),

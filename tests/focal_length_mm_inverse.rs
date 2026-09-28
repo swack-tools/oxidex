@@ -1077,7 +1077,15 @@ fn reader_hidden_ifd0_copy_is_moved_or_refused_atomically() {
                 },
             );
             if let Err(error) = result {
-                assert!(error.to_string().contains("IFD0:FocalLength"), "{error}");
+                // An unknown TIFF type also prevents the maker-note census
+                // from proving that a bare FocalLength has no other owner.
+                // That earlier refusal must leave the physical row intact.
+                assert!(
+                    error
+                        .to_string()
+                        .contains("maker note oxidex cannot identify"),
+                    "{error}"
+                );
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
             } else {
                 assert_hidden_sibling_moved(&path);
@@ -1089,7 +1097,14 @@ fn reader_hidden_ifd0_copy_is_moved_or_refused_atomically() {
                 assert_hidden_sibling_moved(&path);
             } else {
                 let error = String::from_utf8_lossy(&out.stderr);
-                assert!(error.contains("IFD0:FocalLength"), "{error}");
+                if tag.eq_ignore_ascii_case("FocalLength") || tag == "focallength#" {
+                    assert!(
+                        error.contains("maker note oxidex cannot identify"),
+                        "{error}"
+                    );
+                } else {
+                    assert!(error.contains("IFD0:FocalLength"), "{error}");
+                }
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
             }
         }
