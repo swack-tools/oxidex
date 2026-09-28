@@ -376,6 +376,581 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
+/// ExifTool's family-2 group names (`ExifTool.pod`, `GetGroup`, "Family 2
+/// (Category)"), plus the family-3/4/6/8 names below. OxiDex does not carry
+/// these families for every tag (`TagOccurrence::group2` is only partly
+/// populated; families 3-8 are not modeled), so a selector naming one is
+/// refused rather than silently matching fewer tags than ExifTool's
+/// `GroupMatches` (`ExifTool.pm` 13.59), which checks a bare group name
+/// against *every* family.
+const UNMODELED_FAMILY2_GROUPS: &[&str] = &[
+    "audio", "author", "camera", "device", "document", "exiftool", "image", "location", "other",
+    "preview", "printing", "time", "unknown", "video",
+];
+
+/// ExifTool's family-6 names (EXIF/TIFF formats, `ExifTool.pod` "Family 6").
+const UNMODELED_FAMILY6_GROUPS: &[&str] = &[
+    "int8u",
+    "string",
+    "int16u",
+    "int32u",
+    "rational64u",
+    "int8s",
+    "undef",
+    "int16s",
+    "int32s",
+    "rational64s",
+    "float",
+    "double",
+    "ifd",
+    "unicode",
+    "complex",
+    "int64u",
+    "int64s",
+    "ifd64",
+];
+
+/// ExifTool's built-in shortcut tags (`Image::ExifTool::Shortcuts::Main`,
+/// 13.59), which `ExpandShortcuts` replaces with a tag list before any
+/// matching. OxiDex does not expand them, so it refuses them by name.
+const EXIFTOOL_SHORTCUTS: &[&str] = &[
+    "AllDates",
+    "Common",
+    "Canon",
+    "Nikon",
+    "MakerNotes",
+    "Unsafe",
+    "ColorSpaceTags",
+    "CommonIFD0",
+    "LargeTags",
+    "ImageDataMD5",
+];
+
+/// One `:`-separated part of a selector's group qualifier, as
+/// `GroupMatches` reads it: an optional leading family number and a
+/// case-insensitive name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GroupPart {
+    /// `Some(0)`/`Some(1)` for `0EXIF`/`1IFD0`; `None` for a bare name, which
+    /// matches either family.
+    family: Option<u8>,
+    name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GroupSelector {
+    /// No qualifier (`-ISO`).
+    None,
+    /// `*:` or `all:` -- every group (`$allGrp` in `SetFoundTags`).
+    All,
+    /// Every part must match (`-EXIF:IFD0:Make`).
+    Parts(Vec<GroupPart>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TagPattern {
+    /// `all` or `*`.
+    All,
+    /// A name containing `*` or `?` wildcards.
+    Glob(String),
+    /// A plain tag name.
+    Name(String),
+}
+
+/// One `-TAG` request or `--TAG` exclusion, parsed the way `SetFoundTags`
+/// (`ExifTool.pm` 13.59) parses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagSelector {
+    group: GroupSelector,
+    tag: TagPattern,
+}
+
+/// The `-TAG` requests and `--TAG` exclusions of one command line, validated.
+///
+/// Everything here models `SetFoundTags` (`ExifTool.pm` 13.59), which is what
+/// decides the row set and order for a requested tag list:
+///
+/// * `-GROUP:all`, `-GROUP:*`, `-all`, `-*` and wildcard names (`-Exp*`)
+///   select every matching tag in file order. Without `-a` they select only
+///   each tag name's priority winner, so `-EXIF:all` omits `WhiteBalance`
+///   when the Canon maker note's copy wins it.
+/// * `-all:TAG` / `-*:TAG` keep every copy of `TAG`, with or without `-a`.
+/// * Any `--TAG` exclusion puts `SetFoundTags` in duplicate mode (`$doDups
+///   = $duplicates || $exclude`): every copy is matched, the exclusions are
+///   removed, and then -- unless `-a` -- each tag name is reduced to one
+///   survivor: the priority winner if it is still in the list, otherwise its
+///   most recently displaced copy. So `-EXIF:all --ISO` shows the EXIF copy
+///   of `WhiteBalance` that plain `-EXIF:all` hides.
+///
+/// A selector OxiDex cannot resolve exactly is refused, by name, by
+/// [`TagSelection::parse`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TagSelection {
+    requests: Vec<TagSelector>,
+    exclusions: Vec<TagSelector>,
+}
+
+fn is_tag_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Parses one group-qualifier part; `Ok(None)` for an `all` part, which
+/// `GroupMatches` skips (`next if $grp eq '*' or $grp eq 'all'`), so
+/// `-EXIF:all:all` is `-EXIF:all` and `-1all:Make` is `-Make` over every
+/// copy.
+fn parse_group_part(selector: &str, part: &str) -> Result<Option<GroupPart>, String> {
+    let digits = part.chars().take_while(char::is_ascii_digit).count();
+    let (family, name) = part.split_at(digits);
+    let refuse = |why: &str| Err(format!("unsupported tag selector {selector}: {why}"));
+    if name.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+    // `get`, never a byte slice: a multibyte name (`-éé:all`) must be
+    // refused below, not panic on a non-boundary index.
+    if name
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("id-"))
+    {
+        return refuse("family-7 (tag ID) groups are not supported");
+    }
+    if name.is_empty() {
+        return refuse("empty group name");
+    }
+    if !name.chars().all(is_tag_char) {
+        return refuse("invalid group name");
+    }
+    let family = if family.is_empty() {
+        None
+    } else {
+        match family.parse::<u32>() {
+            Ok(0) => Some(0),
+            Ok(1) => Some(1),
+            _ => return refuse("only family 0 and 1 group names are supported"),
+        }
+    };
+    let lower = name.to_ascii_lowercase();
+    if family.is_none() {
+        let numbered = |prefix: &str| {
+            lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        };
+        let doc = lower.strip_prefix("doc").is_some_and(|rest| {
+            !rest.is_empty()
+                && rest
+                    .split('-')
+                    .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        });
+        if UNMODELED_FAMILY2_GROUPS.contains(&lower.as_str())
+            || UNMODELED_FAMILY6_GROUPS.contains(&lower.as_str())
+            || lower == "main"
+            || doc
+            || numbered("copy")
+            || numbered("file")
+        {
+            return refuse(&format!(
+                "'{name}' is an ExifTool family 2-8 group name, and OxiDex only resolves \
+                 family 0 and 1 groups"
+            ));
+        }
+    }
+    Ok(Some(GroupPart {
+        family,
+        name: lower,
+    }))
+}
+
+/// Parses one selector (without its leading dashes). `exclusion` selects
+/// the `Exclude` option's reading: a trailing `#` is dropped
+/// (`ExpandShortcuts($exclude, 1)`), and `all:`/`*:` means "no group".
+fn parse_selector(token: &str, exclusion: bool) -> Result<TagSelector, String> {
+    let shown = if exclusion {
+        format!("--{token}")
+    } else {
+        format!("-{token}")
+    };
+    let refuse = |why: &str| Err(format!("unsupported tag selector {shown}: {why}"));
+    let mut body = token;
+    if let Some(stripped) = body.strip_suffix('#') {
+        if !exclusion {
+            return refuse(
+                "the '#' (ValueConv) suffix is not supported; use --no-print-conv instead",
+            );
+        }
+        body = stripped;
+    }
+    // `SetFoundTags`' own split, `/^(.*):(.+)/`: the last colon with at
+    // least one character after it.
+    let (group, tag) = match body.rfind(':') {
+        Some(index) if index + 1 < body.len() => (Some(&body[..index]), &body[index + 1..]),
+        Some(_) => return refuse("empty tag name"),
+        None => (None, body),
+    };
+    if tag.is_empty() || !tag.chars().all(|c| is_tag_char(c) || c == '*' || c == '?') {
+        return refuse("invalid tag name");
+    }
+    if EXIFTOOL_SHORTCUTS
+        .iter()
+        .any(|shortcut| shortcut.eq_ignore_ascii_case(tag))
+    {
+        return refuse(&format!(
+            "'{tag}' is an ExifTool shortcut, which OxiDex does not expand"
+        ));
+    }
+    let group = match group {
+        None => GroupSelector::None,
+        Some(g) if g == "*" || g.eq_ignore_ascii_case("all") => {
+            if exclusion {
+                GroupSelector::None
+            } else {
+                GroupSelector::All
+            }
+        }
+        Some(g) => GroupSelector::Parts(
+            g.split(':')
+                .map(|part| parse_group_part(&shown, part))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
+        ),
+    };
+    let tag = if tag == "*" || tag.eq_ignore_ascii_case("all") {
+        TagPattern::All
+    } else if tag.contains(['*', '?']) {
+        TagPattern::Glob(tag.to_ascii_lowercase())
+    } else {
+        TagPattern::Name(tag.to_string())
+    };
+    Ok(TagSelector { group, tag })
+}
+
+impl TagSelection {
+    /// Parses and validates `requests` (`-TAG`) and `exclusions` (`--TAG`),
+    /// each given without its dashes, refusing by name any selector OxiDex
+    /// cannot resolve exactly as pinned ExifTool 13.59 does:
+    ///
+    /// * a group name from an unmodeled family -- family 2 (`Camera`,
+    ///   `Time`, ...), 3 (`Main`, `Doc1`), 4 (`Copy1`), 6 (`int16u`), 7
+    ///   (`ID-271`), 8 (`File1`), or a family number other than 0 and 1;
+    /// * an ExifTool shortcut (`AllDates`, `Common`, ...), which ExifTool
+    ///   expands and OxiDex does not;
+    /// * a `#` (ValueConv) suffix on a request;
+    /// * a malformed tag or group name.
+    pub fn parse(requests: &[String], exclusions: &[String]) -> Result<Self, String> {
+        // `exiftool`:1815: a read whose exclusions include `*` or `*:*`
+        // (`--*`, `-x all`) stops before reading anything. A literal
+        // `--all` is allowed and simply excludes every row.
+        if exclusions
+            .iter()
+            .any(|token| token == "*" || token == "*:*")
+        {
+            return Err("All tags excluded -- nothing to do.".to_string());
+        }
+        for token in exclusions {
+            // `ExifTool.pm` 13.59 `ParseArguments`: an exclusion matching
+            // `/(xmp-.*:[-\w]+)#?/i` also enters `EXCL_XMP_LOOKUP`, which
+            // makes the XMP reader skip that property -- and everything
+            // nested in it -- by *property* name, with `XMP-all` standing for
+            // every namespace. OxiDex filters rows after reading and cannot
+            // reproduce that, so it refuses the selector instead of keeping
+            // rows ExifTool drops.
+            let lower = token.to_ascii_lowercase();
+            if lower
+                .rfind(':')
+                .is_some_and(|colon| lower[..colon].contains("xmp-"))
+            {
+                return Err(format!(
+                    "unsupported tag selector --{token}: an XMP-namespace exclusion also skips \
+                     XMP properties while reading, which OxiDex does not model"
+                ));
+            }
+        }
+        Ok(Self {
+            requests: requests
+                .iter()
+                .map(|token| parse_selector(token, false))
+                .collect::<Result<_, _>>()?,
+            exclusions: exclusions
+                .iter()
+                .map(|token| parse_selector(token, true))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    /// The selection `args` asks for, or `None` for the plain full listing
+    /// (no `-TAG` request and no `--TAG` exclusion).
+    pub fn from_args(args: &CliArgs) -> Result<Option<Self>, String> {
+        // `main` dispatches these modes before any read, so their arguments
+        // (`-FileName<IFD0:ModifyDate`, `-AllDates+=1`, `-all=`) are never
+        // tag selections.
+        if args.filename_pattern().is_some()
+            || args.is_clear_all_metadata()
+            || !args.date_shift_operations().is_empty()
+        {
+            return Ok(None);
+        }
+        let requests = args.specific_tags().unwrap_or_default();
+        let exclusions = args.excluded_tags();
+        if requests.is_empty() && exclusions.is_empty() {
+            return Ok(None);
+        }
+        Self::parse(&requests, &exclusions).map(Some)
+    }
+
+    /// The plain requested names (no wildcard), for [`ReadOptions`]'
+    /// request awareness: an explicitly named tag is shown even when it is
+    /// in OxiDex's extended-only namespace, as it always was.
+    fn plain_request_names(&self) -> Vec<String> {
+        self.requests
+            .iter()
+            .filter_map(|selector| match &selector.tag {
+                TagPattern::Name(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// `GroupMatches` for the families OxiDex models: every part must name the
+/// occurrence's family-0 or family-1 group (or the one family its number
+/// selects).
+fn group_parts_match(parts: &[GroupPart], occurrence: &TagOccurrence) -> bool {
+    parts.iter().all(|part| {
+        let family0 = || part.name.eq_ignore_ascii_case(family0_label(occurrence));
+        let family1 = || part.name.eq_ignore_ascii_case(family1_label(occurrence));
+        match part.family {
+            Some(0) => family0(),
+            Some(_) => family1(),
+            None => family0() || family1(),
+        }
+    })
+}
+
+/// A `*`/`?` wildcard match over a tag name, case-insensitively, as
+/// `SetFoundTags` builds it (`*` -> `[-\w]*`, `?` -> `[-\w]`).
+///
+/// Bottom-up over (pattern position, name position), so repeated stars
+/// cost `O(pattern x name)` rather than backtracking exponentially
+/// (`-*********Z` against every tag of a file).
+fn glob_matches(pattern: &[u8], name: &[u8]) -> bool {
+    let is_tag_byte = |c: u8| is_tag_char(c as char);
+    // `next[j]`: does `pattern[i + 1..]` match `name[j..]`?
+    let mut next: Vec<bool> = (0..=name.len()).map(|j| j == name.len()).collect();
+    for &p in pattern.iter().rev() {
+        let mut row = vec![false; name.len() + 1];
+        for j in (0..=name.len()).rev() {
+            row[j] = match p {
+                b'*' => next[j] || (j < name.len() && is_tag_byte(name[j]) && row[j + 1]),
+                b'?' => j < name.len() && is_tag_byte(name[j]) && next[j + 1],
+                _ => j < name.len() && name[j].eq_ignore_ascii_case(&p) && next[j + 1],
+            };
+        }
+        next = row;
+    }
+    next[0]
+}
+
+fn name_matches(pattern: &TagPattern, name: &str) -> bool {
+    match pattern {
+        TagPattern::All => true,
+        TagPattern::Glob(glob) => glob_matches(glob.as_bytes(), name.as_bytes()),
+        TagPattern::Name(wanted) => wanted.eq_ignore_ascii_case(name),
+    }
+}
+
+/// One of ExifTool's tag keys (`$$self{VALUE}`) as `FoundTag` would have
+/// named it: the tag name, and `copy` 0 for the priority winner (the bare
+/// key, `ISO`) or the `N` of `ISO (N)` for a displaced or losing copy.
+struct EtKey<'m> {
+    lookup_key: &'m str,
+    occurrence: &'m TagOccurrence,
+    copy: u32,
+}
+
+/// Replays `FoundTag`'s duplicate-key numbering (`ExifTool.pm` 13.59,
+/// "handle duplicate tag names") over `metadata`'s occurrences in file
+/// order, keeping only those `visible` admits. Each arrival either
+/// displaces the current winner -- by the same rule [`arbitrate`] folds,
+/// so the copy-0 key of each name is exactly that fold's winner -- which
+/// moves the old winner to the next `Tag (N)` key, or itself takes the next
+/// `Tag (N)`.
+fn exiftool_keys<'m>(
+    metadata: &'m MetadataMap,
+    mut visible: impl FnMut(&str) -> bool,
+) -> Vec<EtKey<'m>> {
+    let mut keys: Vec<EtKey<'m>> = Vec::new();
+    // name -> (index of the current copy-0 key, next copy number)
+    let mut by_name: HashMap<&'m str, (usize, u32)> = HashMap::new();
+    for (lookup_key, occurrence) in metadata.keyed_occurrences() {
+        if !visible(lookup_key) {
+            continue;
+        }
+        let index = keys.len();
+        match by_name.get_mut(occurrence.name.as_ref()) {
+            None => {
+                keys.push(EtKey {
+                    lookup_key,
+                    occurrence,
+                    copy: 0,
+                });
+                by_name.insert(occurrence.name.as_ref(), (index, 1));
+            }
+            Some((winner, next)) => {
+                let old = keys[*winner].occurrence;
+                let effective_old_priority = if old.priority == 0 { 1 } else { old.priority };
+                let instance_ok = occurrence.instance == Instance::default()
+                    || occurrence.instance == old.instance;
+                let copy = if occurrence.priority >= effective_old_priority && instance_ok {
+                    keys[*winner].copy = *next;
+                    *winner = index;
+                    0
+                } else {
+                    *next
+                };
+                *next += 1;
+                keys.push(EtKey {
+                    lookup_key,
+                    occurrence,
+                    copy,
+                });
+            }
+        }
+    }
+    keys
+}
+
+/// `SetFoundTags` (`ExifTool.pm` 13.59) over OxiDex's occurrences: the rows
+/// `selection` names, in the order ExifTool returns them. See
+/// [`TagSelection`] for the rules. `visible` admits the literal keys the
+/// display may show at all ([`ReadOptions::shows_key`]); `group_sort` is the `-G` family list when ExifTool sorts the
+/// result by group (a full listing -- no `-TAG` request -- under `-G`).
+fn select_occurrences<'m>(
+    metadata: &'m MetadataMap,
+    selection: &TagSelection,
+    duplicates: bool,
+    visible: impl FnMut(&str) -> bool,
+    group_sort: Option<&[u8]>,
+) -> Vec<ResolvedOccurrence<'m>> {
+    let keys = exiftool_keys(metadata, visible);
+    let do_dups = duplicates || !selection.exclusions.is_empty();
+
+    // Indices into `keys`, in ExifTool's return order.
+    let mut found: Vec<usize> = Vec::new();
+    if selection.requests.is_empty() {
+        found.extend((0..keys.len()).filter(|&i| do_dups || keys[i].copy == 0));
+    }
+    for request in &selection.requests {
+        let all_group = request.group == GroupSelector::All;
+        let wildcard = !matches!(request.tag, TagPattern::Name(_));
+        let mut matches: Vec<usize> = (0..keys.len())
+            .filter(|&i| name_matches(&request.tag, &keys[i].occurrence.name))
+            .filter(|&i| {
+                // A wildcard without `-a`/`all:` sees only the bare keys; a
+                // plain name without a group, likewise only its winner
+                // (`$$tagHash{$reqTag}`).
+                do_dups
+                    || all_group
+                    || keys[i].copy == 0
+                    || (!wildcard && request.group != GroupSelector::None)
+            })
+            .collect();
+        if let GroupSelector::Parts(parts) = &request.group {
+            matches.retain(|&i| group_parts_match(parts, keys[i].occurrence));
+        }
+        matches.sort_by_key(|&i| keys[i].occurrence.order);
+        if matches.len() > 1 && !(do_dups || wildcard || all_group) {
+            // A group-qualified plain name without `-a`: one winner among the
+            // group's copies, by the same fold every other `-TAG` uses.
+            let winner = arbitrate_keyed(
+                matches
+                    .iter()
+                    .map(|&i| (keys[i].lookup_key, keys[i].occurrence)),
+            )
+            .map(|(_, occurrence)| occurrence);
+            matches.retain(|&i| winner.is_some_and(|w| std::ptr::eq(w, keys[i].occurrence)));
+        }
+        found.extend(matches);
+    }
+
+    if !selection.exclusions.is_empty() {
+        let excluded: HashSet<usize> = found
+            .iter()
+            .copied()
+            .filter(|&i| {
+                selection.exclusions.iter().any(|exclusion| {
+                    name_matches(&exclusion.tag, &keys[i].occurrence.name)
+                        && match &exclusion.group {
+                            GroupSelector::Parts(parts) => {
+                                group_parts_match(parts, keys[i].occurrence)
+                            }
+                            _ => true,
+                        }
+                })
+            })
+            .collect();
+        found.retain(|i| !excluded.contains(i));
+        if !duplicates {
+            // One survivor per tag name: the bare (winning) key if it is
+            // still listed, else the highest-numbered copy.
+            let mut best: HashMap<&str, usize> = HashMap::new();
+            for &i in &found {
+                let name = keys[i].occurrence.name.as_ref();
+                let keep = match best.get(name) {
+                    None => true,
+                    Some(&b) => {
+                        keys[i].copy == 0 || (keys[b].copy != 0 && keys[b].copy <= keys[i].copy)
+                    }
+                };
+                if keep {
+                    best.insert(name, i);
+                }
+            }
+            let kept: HashSet<usize> = best.into_values().collect();
+            found.retain(|i| kept.contains(i));
+        }
+    }
+
+    if selection.requests.is_empty() {
+        found.sort_by_key(|&i| keys[i].occurrence.order);
+        if let Some(families) = group_sort {
+            // `GetTagList`'s `Group` sort: groups ranked by first appearance
+            // in file order, file order within a group.
+            let mut rank: HashMap<String, usize> = HashMap::new();
+            let ranks: Vec<usize> = found
+                .iter()
+                .map(|&i| {
+                    let label = joined_family_label(keys[i].occurrence, families);
+                    let next = rank.len();
+                    *rank.entry(label).or_insert(next)
+                })
+                .collect();
+            let mut ranked: Vec<(usize, usize)> = ranks.into_iter().zip(found).collect();
+            ranked.sort_by_key(|&(rank, _)| rank);
+            found = ranked.into_iter().map(|(_, i)| i).collect();
+        }
+    }
+
+    found
+        .into_iter()
+        .map(|i| ResolvedOccurrence {
+            occurrence: keys[i].occurrence,
+            lookup_key: keys[i].lookup_key.to_string(),
+        })
+        .collect()
+}
+
+/// Drops repeated rows for the same occurrence, keeping the first: ExifTool's
+/// JSON and CSV writers print a tag key once however many requests named it
+/// (`-j -ISO -ISO` has one `ISO`), while its text writers repeat it.
+fn dedupe_repeated_rows(resolved: Vec<ResolvedOccurrence<'_>>) -> Vec<ResolvedOccurrence<'_>> {
+    let mut seen: HashSet<*const TagOccurrence> = HashSet::new();
+    resolved
+        .into_iter()
+        .filter(|entry| seen.insert(std::ptr::from_ref(entry.occurrence)))
+        .collect()
+}
+
 /// The value to display for `occurrence`: PrintConv-formatted (matching
 /// `exiftool_compat`'s per-tag rules, without final output escaping)
 /// per occurrence when `no_print_conv` is
@@ -634,6 +1209,30 @@ pub fn render_short_lines(
     out
 }
 
+/// Renders a tag selection at the default text level without `-G`, in
+/// `resolved`'s own order, one `"{key}: {value}"` line per row.
+///
+/// `HumanReadableFormatter` sorts its map alphabetically and gives a repeated
+/// key a `" (N)"` suffix. A selection retains request order and repeated
+/// rows. Its key-based labels and value rendering match OxiDex's existing
+/// human formatter; ExifTool's descriptive labels remain a separate gap.
+pub fn render_human_lines(resolved: &[ResolvedOccurrence<'_>], no_print_conv: bool) -> String {
+    let mut out = String::new();
+    for entry in resolved {
+        let value = resolved_display_value(entry.occurrence, no_print_conv);
+        if super::output_formatter::hidden_from_ungrouped_short_listing(&entry.lookup_key, &value) {
+            continue;
+        }
+        let rendered = super::output_formatter::format_tag_value_with_mode(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+        );
+        out.push_str(&format!("{}: {rendered}\n", entry.lookup_key));
+    }
+    out
+}
+
 /// Step 21: the display-ready result of resolving one file's raw read
 /// against a set of CLI flags -- either an already-rendered block of text
 /// (the `-Gn` + human/short special case [`render_group_display_lines`]'s
@@ -676,7 +1275,6 @@ pub enum ResolvedFileOutput {
 ///   pre-PrintConv selection or the per-tag PrintConv rules. Final output
 ///   escaping belongs to the selected formatter.
 pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> ResolvedFileOutput {
-    let tag_filter = args.specific_tags();
     let no_print_conv = !args.exiftool_compat();
 
     // ExifTool's short text levels (`-s`, `-s2`/`-S`, `-s3`) render straight
@@ -684,8 +1282,36 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     // `render_short_lines` -- with or without `-G`.
     let short_text = args.short_level > 0 && !args.json && !args.csv;
 
-    if let Some(requested) = &tag_filter {
-        let resolved = resolve_requested_tags(raw_metadata, requested, args.all_tags);
+    let selection = match TagSelection::from_args(args) {
+        Ok(selection) => selection,
+        Err(error) => panic!(
+            "resolve_file_output needs a validated tag selection \
+             (CliArgs::parse_from refuses this one): {error}"
+        ),
+    };
+    if let Some(selection) = selection {
+        // Tags outside ExifTool's namespace (OxiDex's extended-only
+        // diagnostics) stay hidden from wildcards, exactly as from the full
+        // listing; a tag requested by name is shown, as it always was.
+        let options = ReadOptions::new(&selection.plain_request_names(), args.extended_output);
+        // ExifTool sorts by group only a full listing (`exiftool`:1853: `-G`
+        // without a tag list), which with a selection means exclusions only.
+        // Same rule, and same CSV carve-out, as the full listing below.
+        let group_sort = if selection.requests.is_empty() && !args.csv {
+            args.group_display.as_deref()
+        } else {
+            None
+        };
+        let mut resolved = select_occurrences(
+            raw_metadata,
+            &selection,
+            args.all_tags,
+            |key| options.shows_key(key),
+            group_sort,
+        );
+        if args.json || args.csv {
+            resolved = dedupe_repeated_rows(resolved);
+        }
         if short_text {
             return ResolvedFileOutput::Lines(render_short_lines(
                 &resolved,
@@ -700,6 +1326,9 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         {
             let lines = render_group_display_lines(&resolved, families, no_print_conv);
             return ResolvedFileOutput::Lines(lines);
+        }
+        if !args.json && !args.csv {
+            return ResolvedFileOutput::Lines(render_human_lines(&resolved, no_print_conv));
         }
         let metadata = build_display_map(
             &resolved,
