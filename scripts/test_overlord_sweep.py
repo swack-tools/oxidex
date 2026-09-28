@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import overlord_sweep
+import parallel_model_fix_loop
 import squad_merge_loop
 
 GIT_ENV_OVERRIDES = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
@@ -1068,6 +1069,284 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 path.write_text(text.replace("( )", "()"))
         return True, ""
 
+    def _open_pr_fixture(self, *, unrelated_main=False, same_file_main=False,
+                         unformatted_worker=False, branch_only=False,
+                         earlier_content="fn a() {}\n",
+                         open_prs_fn=None):
+        repo = self.make_repo()
+        if same_file_main:
+            middle = "".join(f"// filler {i}\n" for i in range(10))
+            self.commit_file(repo, "src/a.rs", "fn base() {}\n" + middle + "fn tail() {}\n", "base file")
+            earlier_content = "fn a() {}\n" + middle + "fn tail() {}\n"
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", earlier_content, "earlier sweep fix")
+        git(repo, "checkout", "-q", "main")
+        if unrelated_main:
+            self.commit_file(repo, "scripts/unrelated.py", "# newer main\n", "unrelated main change")
+        if same_file_main:
+            self.commit_file(repo, "src/a.rs", "fn base() {}\n" + middle + "fn newer() {}\n", "newer main hunk")
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", ("fn a( ) {}\n" if unformatted_worker else "fn a() {}\n")
+            + (middle + "fn newer() {}\n" if same_file_main else ""),
+            "fix JPEG:Foo", trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+        config = self._config_toml(self.tmp, ["canon"])
+        if not branch_only:
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, "canon"), "workerhead",
+                status="consumed", patch_id="p1", format_name="JPEG", squad_sha=canon_sha,
+                now_fn=lambda: 100,
+            )
+        calls = []
+        result = overlord_sweep.run_sweep(
+            repo_root=repo, home=home, cache_dir="/unused",
+            comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+            config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+            dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+            cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+            push_branch_fn=lambda repo_root, branch: calls.append("push") or (True, "pushed"),
+            create_pr_fn=lambda *args: calls.append("pr") or {"ok": True, "url": "u"},
+            fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
+            open_sweep_prs_fn=open_prs_fn or (lambda: [{"headRefName": "sweep/tags-earlier",
+                                                        "url": "https://example/pull/42"}]),
+            log_fn=lambda *args: None,
+        )
+        return repo, home, result, calls
+
+    def test_open_pr_duplicate_keeps_stamp_retryable_without_publishing(self):
+        repo, home, result, calls = self._open_pr_fixture()
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(result["duplicate_of"], "https://example/pull/42")
+        self.assertEqual(calls, [])
+        state = overlord_sweep.load_sweep_state(home / "sweep-state.json")
+        self.assertNotIn("canon", state["squads"])
+        self.assertNotIn("canon", state.get("branch_parks", {}))
+
+    def test_closed_unmerged_duplicate_is_retried_after_multiple_rounds(self):
+        repo, home, first, calls = self._open_pr_fixture()
+        self.assertEqual(first["status"], "duplicate_of_open_pr")
+        config = self.tmp / "config.toml"
+        def sweep(open_prs):
+            return overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: calls.append("push") or (True, "pushed"),
+                create_pr_fn=lambda *args: calls.append("pr") or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
+                open_sweep_prs_fn=lambda: open_prs, log_fn=lambda *args: None,
+            )
+        prior = [{"headRefName": "sweep/tags-earlier", "url": "https://example/pull/42"}]
+        for _ in range(3):
+            self.assertEqual(sweep(prior)["status"], "duplicate_of_open_pr")
+        self.assertEqual(sweep([])["status"], "ok")
+        self.assertEqual(calls, ["workspace", "push", "pr"])
+
+    def test_open_pr_duplicate_ignores_unrelated_main_change(self):
+        _, _, result, calls = self._open_pr_fixture(unrelated_main=True)
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(calls, [])
+
+    def test_open_pr_duplicate_merges_stale_same_file_tip_onto_current_main(self):
+        _, _, result, calls = self._open_pr_fixture(same_file_main=True)
+        self.assertEqual(result["status"], "duplicate_of_open_pr", result)
+        self.assertEqual(calls, [])
+
+    def test_open_pr_duplicate_compares_formatted_content(self):
+        repo, _, result, calls = self._open_pr_fixture(unformatted_worker=True)
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(calls, [])
+        self.assertEqual(git_out(repo, "show", f"{result['branch']}:src/a.rs"), "fn a( ) {}\n")
+        self.assertEqual(git_out(repo, "status", "--porcelain"), "")
+
+    def test_different_open_pr_on_same_path_does_not_block_publication(self):
+        _, _, result, calls = self._open_pr_fixture(earlier_content="fn different() {}\n")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(calls, ["workspace", "push", "pr"])
+
+    def test_open_pr_lookup_failure_does_not_publish_or_consume_stamp(self):
+        def unavailable():
+            raise OSError("gh unavailable")
+
+        _, home, result, calls = self._open_pr_fixture(open_prs_fn=unavailable)
+        self.assertEqual(result["status"], "open_pr_lookup_failed")
+        self.assertEqual(calls, [])
+        self.assertNotIn("canon", overlord_sweep.load_sweep_state(home / "sweep-state.json")["squads"])
+
+    def test_branch_only_work_retries_after_three_open_pr_query_failures(self):
+        def unavailable():
+            raise OSError("gh unavailable")
+
+        repo, home, first, calls = self._open_pr_fixture(branch_only=True, open_prs_fn=unavailable)
+        self.assertEqual(first["status"], "open_pr_lookup_failed")
+        config = self.tmp / "config.toml"
+
+        def sweep(query):
+            return overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+                push_branch_fn=lambda repo_root, branch: calls.append("push") or (True, "pushed"),
+                create_pr_fn=lambda *args: calls.append("pr") or {"ok": True, "url": "u"},
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
+                open_sweep_prs_fn=query, log_fn=lambda *args: None,
+            )
+
+        self.assertEqual(sweep(unavailable)["status"], "open_pr_lookup_failed")
+        self.assertEqual(sweep(unavailable)["status"], "open_pr_lookup_failed")
+        self.assertEqual(sweep(lambda: [])["status"], "ok")
+        self.assertEqual(calls, ["workspace", "push", "pr"])
+
+    def test_final_tree_is_deduped_after_lint_bisection_removes_second_squad(self):
+        repo = self.make_repo()
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", "fn a() {}\n", "earlier sweep A")
+        git(repo, "checkout", "-q", "main")
+        for squad, path, body in (("canon", "src/a.rs", "fn a() {}\n"),
+                                  ("nikon", "src/b.rs", "fn b() {}\n")):
+            git(repo, "branch", f"squad/{squad}", "main")
+            git(repo, "checkout", "-q", f"squad/{squad}")
+            sha = self.commit_file(
+                repo, path, body, f"fix {squad}",
+                trailers=[("Format", "JPEG"), ("Verified", "recheck-pass gaps=3->2")],
+            )
+            git(repo, "checkout", "-q", "main")
+            if squad == "canon":
+                canon_sha = sha
+            else:
+                nikon_sha = sha
+        home = self.tmp / "home"
+        config = self._config_toml(self.tmp, ["canon", "nikon"])
+        for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, squad), "workerhead",
+                status="consumed", patch_id=f"p-{squad}", format_name="JPEG",
+                squad_sha=sha, now_fn=lambda: 100,
+            )
+        calls = []
+        result = overlord_sweep.run_sweep(
+            repo_root=repo, home=home, cache_dir="/unused",
+            comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+            config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+            dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+            quarantine_path=home / "quarantine.jsonl",
+            cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+            push_branch_fn=lambda repo_root, branch: calls.append("push") or (True, "pushed"),
+            create_pr_fn=lambda *args: calls.append("pr") or {"ok": True, "url": "u"},
+            fmt_fn=lambda repo_root: (True, ""),
+            lint_fn=lambda repo_root: (not (Path(repo_root) / "src/b.rs").exists(), "bad B"),
+            open_sweep_prs_fn=lambda: [{"headRefName": "sweep/tags-earlier", "url": "u"}],
+            log_fn=lambda *args: None,
+        )
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(calls, ["workspace"])
+        self.assertFalse((repo / "src/b.rs").exists())
+
+    def test_final_zero_delta_after_lint_bisection_advances_landed_stamp(self):
+        repo = self.make_repo()
+        canon_sha = self.commit_file(repo, "src/a.rs", "fn a() {}\n", "A already on main")
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "branch", "squad/nikon", "main")
+        git(repo, "checkout", "-q", "squad/nikon")
+        nikon_sha = self.commit_file(
+            repo, "src/b.rs", "fn b() {}\n", "fix B",
+            trailers=[("Format", "JPEG"), ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+        config = self._config_toml(self.tmp, ["canon", "nikon"])
+        for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, squad), "workerhead",
+                status="consumed", patch_id=f"p-{squad}", format_name="JPEG",
+                squad_sha=sha, now_fn=lambda: 100,
+            )
+        calls = []
+        result = overlord_sweep.run_sweep(
+            repo_root=repo, home=home, cache_dir="/unused",
+            comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+            config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+            dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+            quarantine_path=home / "quarantine.jsonl",
+            cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+            push_branch_fn=lambda *args: self.fail("zero-delta branch must not push"),
+            create_pr_fn=lambda *args: self.fail("zero-delta branch must not open PR"),
+            fmt_fn=lambda repo_root: (True, ""),
+            lint_fn=lambda repo_root: (not (Path(repo_root) / "src/b.rs").exists(), "bad B"),
+            open_sweep_prs_fn=lambda: [], log_fn=lambda *args: None,
+        )
+        self.assertEqual(result["status"], "zero_delta", result)
+        self.assertEqual(calls, ["workspace"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD^{tree}").strip(),
+                         git_out(repo, "rev-parse", "main^{tree}").strip())
+        state = overlord_sweep.load_sweep_state(home / "sweep-state.json")
+        self.assertIn("canon", state["squads"])
+
+    def test_failed_early_formatter_restores_branch_and_keeps_stamp(self):
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, config, state = self._one_squad_fixture(repo, tmpdir)
+            def failing_fmt(repo_root):
+                self._reformatting_fmt_fn(repo_root)
+                return False, "formatter failed after editing"
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config, sweep_state_path=state, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                fmt_fn=failing_fmt, open_sweep_prs_fn=lambda: [],
+                push_branch_fn=lambda *a: self.fail("failed format must not push"),
+                log_fn=lambda *a: None,
+            )
+            self.assertEqual(result["status"], "format_failed")
+            self.assertEqual(git_out(repo, "status", "--porcelain"), "")
+            self.assertEqual(git_out(repo, "show", f"{result['branch']}:src/a.rs"), "fn a( ) {}\n")
+            self.assertNotIn("canon", overlord_sweep.load_sweep_state(state)["squads"])
+
+    def test_dispatcher_open_pr_query_is_strict(self):
+        with patch.object(overlord_sweep, "run_sweep") as run_sweep:
+            parallel_model_fix_loop.default_sweep_fn(repo_root=self.tmp)
+            query = run_sweep.call_args.kwargs["open_sweep_prs_fn"]
+        with patch.object(parallel_model_fix_loop, "list_open_sweep_prs",
+                          side_effect=RuntimeError("gh pr list failed")) as listing:
+            with self.assertRaisesRegex(RuntimeError, "gh pr list failed"):
+                query()
+            self.assertTrue(listing.call_args.kwargs["strict"])
+        self.assertIn("duplicate_of_open_pr", parallel_model_fix_loop.PUBLISH_OK_STATUSES)
+        self.assertIn("duplicate_of_open_pr", parallel_model_fix_loop.IDLE_STATUSES)
+        self.assertNotIn("open_pr_lookup_failed", parallel_model_fix_loop.PUBLISH_OK_STATUSES)
+
+    def test_dispatcher_strict_query_uses_pinned_gh_runner(self):
+        pinned = lambda args, repo: (0, "[]", "")
+        with patch.object(overlord_sweep, "run_sweep") as run_sweep:
+            parallel_model_fix_loop.default_sweep_fn(repo_root=self.tmp, run_gh=pinned)
+            query = run_sweep.call_args.kwargs["open_sweep_prs_fn"]
+        with patch.object(parallel_model_fix_loop, "list_open_sweep_prs", return_value=[]) as listing:
+            query()
+            self.assertIs(listing.call_args.kwargs["run_gh"], pinned)
+
+    def test_strict_open_pr_lister_rejects_gh_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "gh pr list failed"):
+            parallel_model_fix_loop.list_open_sweep_prs(
+                self.tmp, run_gh=lambda args, repo: (1, "", "auth required"), strict=True)
+
+    def test_strict_open_pr_lister_rejects_incomplete_results(self):
+        with self.assertRaisesRegex(RuntimeError, "incomplete PR record"):
+            parallel_model_fix_loop.list_open_sweep_prs(
+                self.tmp, run_gh=lambda args, repo: (0, '[{"headRefName":"sweep/tags-1"}]', ""),
+                strict=True,
+            )
+
     def test_no_news_short_circuits_before_cutting_a_branch(self):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1157,6 +1436,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         # branch ref -- the only thing `git push origin <branch>` and
         # `gh pr create --head <branch>` ever see -- stays behind.
         branch = result["branch"]
+        # Formatting is committed only after the lint bisection point.
         self.assertTrue(result["fmt"]["committed"])
         self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(),
                          git_out(repo, "rev-parse", branch).strip())
@@ -1509,6 +1789,28 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
             self.assertNotIn("canon", cursor.get("squads", {}),
                              "stamps must survive for the next round")
+
+    def test_lint_bisection_can_revert_squad_after_formatting_changed_its_lines(self):
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, config, state = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                config_path=config, sweep_state_path=state, origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                fmt_fn=self._reformatting_fmt_fn,
+                lint_fn=lambda repo_root: (not (Path(repo_root) / "src/a.rs").exists(),
+                                           "error: squad code fails lint"),
+                push_branch_fn=lambda *a: self.fail("lint failure must not push"),
+                log_fn=lambda *a: None,
+            )
+            self.assertEqual(result["status"], "lint_failed")
+            self.assertFalse((repo / "src/a.rs").exists(),
+                             "bisection must remove the offending contribution")
+            self.assertIn("canon", overlord_sweep.load_sweep_state(state)["squads"])
+            self.assertTrue(squad_merge_loop.quarantine_ledger_path(home).exists())
 
     def test_a_push_failure_is_retried_whole_by_the_next_round(self):
         """The end-to-end consequence, driven twice against one repo: a
