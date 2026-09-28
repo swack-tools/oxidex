@@ -964,35 +964,39 @@ impl FormatParser for PCAPParser {
     /// * `Ok(MetadataMap)` - Extracted metadata including capture statistics
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify this is a valid PCAP or PCAP-NG file
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid PCAP/PCAP-NG signature"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify this is a valid PCAP or PCAP-NG file
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid PCAP/PCAP-NG signature"));
+            }
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Detect format and endianness
-        let (format_name, little_endian, is_nanosecond) = Self::detect_format(reader)?;
+            // Detect format and endianness
+            let (format_name, little_endian, is_nanosecond) = Self::detect_format(reader)?;
 
-        // Basic file information
-        metadata.insert(
-            "FileType".to_string(),
-            TagValue::String(format_name.to_string()),
-        );
+            // Basic file information
+            metadata.insert(
+                "FileType".to_string(),
+                TagValue::String(format_name.to_string()),
+            );
 
-        // Parse format-specific metadata
-        let format_metadata = if format_name == "PCAP-NG" {
-            Self::parse_pcapng(reader, little_endian)?
-        } else {
-            Self::parse_pcap(reader, little_endian, is_nanosecond)?
-        };
+            // Parse format-specific metadata
+            let format_metadata = if format_name == "PCAP-NG" {
+                Self::parse_pcapng(reader, little_endian)?
+            } else {
+                Self::parse_pcap(reader, little_endian, is_nanosecond)?
+            };
 
-        // Merge format-specific metadata
-        for (key, value) in format_metadata {
-            metadata.insert(key, value);
-        }
+            // Merge format-specific metadata
+            for (key, value) in format_metadata {
+                metadata.insert(key, value);
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format
@@ -1039,8 +1043,12 @@ impl FormatParser for PCAPParser {
 /// # }
 /// ```
 pub fn parse_pcap_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = PCAPParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PCAPParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

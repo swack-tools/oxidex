@@ -91,43 +91,47 @@ fn read_u16(bytes: &[u8], byte_order: ByteOrder) -> Option<u16> {
 
 /// `ProcessBTF` (BigTIFF.pm:234-264).
 pub fn parse_bigtiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let header = reader.read(0, HEADER_LEN)?;
-    if !is_bigtiff(header) {
-        return Err(ExifToolError::parse_error("Invalid BigTIFF header"));
-    }
-    let byte_order = if header.starts_with(HEADER_LE) {
-        ByteOrder::LittleEndian
-    } else {
-        ByteOrder::BigEndian
-    };
-    // BigTIFF.pm:248, `Get64u(\$buff, 8)`.
-    let mut ifd_offset = read_u64(&header[8..], byte_order)
-        .ok_or_else(|| ExifToolError::parse_error("short header"))?;
-
-    let mut metadata = MetadataMap::new();
-    let mut index = 0usize;
-    while ifd_offset != 0 && index < MAX_IFDS {
-        // BigTIFF.pm:43-46: offsets past 2 GB need LargeFileSupport, which is
-        // off by default, and ExifTool stops rather than reading them.
-        if ifd_offset > MAX_OFFSET {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let header = reader.read(0, HEADER_LEN)?;
+        if !is_bigtiff(header) {
+            return Err(ExifToolError::parse_error("Invalid BigTIFF header"));
         }
-        let Some((entries, next)) = read_big_ifd(reader, ifd_offset, byte_order) else {
-            break;
+        let byte_order = if header.starts_with(HEADER_LE) {
+            ByteOrder::LittleEndian
+        } else {
+            ByteOrder::BigEndian
         };
-        // The exif/gps/makernote pointers this returns are deliberately not
-        // followed -- see the module docs.
-        let _ = process_tiff_ifd_tags(
-            &entries,
-            get_ifd_name(index),
-            byte_order,
-            None,
-            &mut metadata,
-        );
-        ifd_offset = next;
-        index += 1;
-    }
-    Ok(metadata)
+        // BigTIFF.pm:248, `Get64u(\$buff, 8)`.
+        let mut ifd_offset = read_u64(&header[8..], byte_order)
+            .ok_or_else(|| ExifToolError::parse_error("short header"))?;
+
+        let mut metadata = MetadataMap::new();
+        let mut index = 0usize;
+        while ifd_offset != 0 && index < MAX_IFDS {
+            // BigTIFF.pm:43-46: offsets past 2 GB need LargeFileSupport, which is
+            // off by default, and ExifTool stops rather than reading them.
+            if ifd_offset > MAX_OFFSET {
+                break;
+            }
+            let Some((entries, next)) = read_big_ifd(reader, ifd_offset, byte_order) else {
+                break;
+            };
+            // The exif/gps/makernote pointers this returns are deliberately not
+            // followed -- see the module docs.
+            let _ = process_tiff_ifd_tags(
+                &entries,
+                get_ifd_name(index),
+                byte_order,
+                None,
+                &mut metadata,
+            );
+            ifd_offset = next;
+            index += 1;
+        }
+        Ok(metadata)
+    })
 }
 
 /// One BigTIFF directory: its entries in the shape the ordinary TIFF

@@ -821,59 +821,63 @@ impl LytroParser {
 
 impl FormatParser for LytroParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        if !Self::verify_signature(reader)? {
-            return Err(ExifToolError::parse_error("Invalid LFP signature"));
-        }
-
-        let size = reader.size() as usize;
-        let data = reader.read(0, size)?;
-        let mut metadata = MetadataMap::new();
-        let mut collector = Collector::default();
-
-        // The 16-byte file header is followed directly by the first section.
-        let mut offset = SECTION_HEADER_LEN;
-        while offset + SECTION_HEADER_LEN <= data.len() {
-            let Some(header) = data.get(offset..offset + SECTION_HEADER_LEN) else {
-                break;
-            };
-            if !header.starts_with(SECTION_MAGIC) {
-                // ExifTool warns 'LFP format error' and stops.
-                break;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            if !Self::verify_signature(reader)? {
+                return Err(ExifToolError::parse_error("Invalid LFP signature"));
             }
-            let length = u32::from_be_bytes([header[12], header[13], header[14], header[15]]);
-            if length & 0x8000_0000 != 0 {
-                // 'Invalid LFP segment size' (Lytro.pm:149).
-                break;
-            }
-            offset += SECTION_HEADER_LEN;
 
-            // The 80-byte SHA-1 identifier is read and discarded.
-            if offset + SECTION_ID_LEN > data.len() {
-                break;
-            }
-            offset += SECTION_ID_LEN;
+            let size = reader.size() as usize;
+            let data = reader.read(0, size)?;
+            let mut metadata = MetadataMap::new();
+            let mut collector = Collector::default();
 
-            // ExifTool seeks past an oversized section rather than buffering
-            // it (Lytro.pm:155); such a section is image data, never metadata.
-            let buffered = length <= MAX_BUFFERED_SECTION;
-            let length = length as usize;
-            if buffered {
-                let Some(payload) = data.get(offset..offset + length) else {
+            // The 16-byte file header is followed directly by the first section.
+            let mut offset = SECTION_HEADER_LEN;
+            while offset + SECTION_HEADER_LEN <= data.len() {
+                let Some(header) = data.get(offset..offset + SECTION_HEADER_LEN) else {
                     break;
                 };
-                read_section(payload, &mut collector);
-            }
-            offset += length;
+                if !header.starts_with(SECTION_MAGIC) {
+                    // ExifTool warns 'LFP format error' and stops.
+                    break;
+                }
+                let length = u32::from_be_bytes([header[12], header[13], header[14], header[15]]);
+                if length & 0x8000_0000 != 0 {
+                    // 'Invalid LFP segment size' (Lytro.pm:149).
+                    break;
+                }
+                offset += SECTION_HEADER_LEN;
 
-            // Sections are padded up to the next 16-byte boundary.
-            let pad = SECTION_HEADER_LEN - (length % SECTION_HEADER_LEN);
-            if pad != SECTION_HEADER_LEN {
-                offset += pad;
-            }
-        }
+                // The 80-byte SHA-1 identifier is read and discarded.
+                if offset + SECTION_ID_LEN > data.len() {
+                    break;
+                }
+                offset += SECTION_ID_LEN;
 
-        collector.finish(&mut metadata);
-        Ok(metadata)
+                // ExifTool seeks past an oversized section rather than buffering
+                // it (Lytro.pm:155); such a section is image data, never metadata.
+                let buffered = length <= MAX_BUFFERED_SECTION;
+                let length = length as usize;
+                if buffered {
+                    let Some(payload) = data.get(offset..offset + length) else {
+                        break;
+                    };
+                    read_section(payload, &mut collector);
+                }
+                offset += length;
+
+                // Sections are padded up to the next 16-byte boundary.
+                let pad = SECTION_HEADER_LEN - (length % SECTION_HEADER_LEN);
+                if pad != SECTION_HEADER_LEN {
+                    offset += pad;
+                }
+            }
+
+            collector.finish(&mut metadata);
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -912,7 +916,11 @@ fn read_section(payload: &[u8], collector: &mut Collector) {
 /// Returns an error string if the file does not carry the LFP signature or
 /// cannot be read.
 pub fn parse_lytro_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    LytroParser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        LytroParser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

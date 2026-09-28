@@ -106,6 +106,16 @@ pub fn convert_tag_value_to_entry(
         let field_type = ExifType::from_u16(field_type).expect("int8u is a TIFF type");
         return Ok(Some(IfdEntryData::new(tag_id, field_type, count, bytes)));
     }
+    // UserComment (ExifIFD 0x9286) and GPSProcessingMethod /
+    // GPSAreaInformation (GPS 0x001b / 0x001c): `EncodeExifText`, packed in
+    // this block's byte order (`writers::exif_text`). No `Exif::Main` tag
+    // shares those GPS ids.
+    if matches!(tag_id, 0x9286 | 0x001b | 0x001c) {
+        let (field_type, count, bytes) =
+            crate::writers::exif_text::exif_text_field(tag_value, byte_order)?;
+        let field_type = ExifType::from_u16(field_type).expect("undef is a TIFF type");
+        return Ok(Some(IfdEntryData::new(tag_id, field_type, count, bytes)));
+    }
 
     if tag_id == 0x8827
         && let TagValue::Array(values) = tag_value

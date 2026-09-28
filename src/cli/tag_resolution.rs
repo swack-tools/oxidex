@@ -469,6 +469,9 @@ pub fn build_display_map(
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         out.insert(key, value);
     }
+    // A display projection of rows the read produced, never a caller's
+    // assignment.
+    out.mark_read_complete();
     out
 }
 
@@ -950,6 +953,7 @@ mod tests {
             readonly: true,
             exiftool_compat: !numeric,
             tags_from_file: None,
+            tags_from_file_position: None,
             date_format: None,
             dry_run: false,
             literal_paths: Vec::new(),
@@ -1208,6 +1212,7 @@ mod tests {
                     readonly: true,
                     exiftool_compat: !no_print_conv,
                     tags_from_file: None,
+                    tags_from_file_position: None,
                     date_format: None,
                     dry_run: false,
                     literal_paths: Vec::new(),
@@ -1573,6 +1578,7 @@ mod tests {
                     readonly: true,
                     exiftool_compat: !raw,
                     tags_from_file: None,
+                    tags_from_file_position: None,
                     date_format: None,
                     dry_run: false,
                     literal_paths: Vec::new(),

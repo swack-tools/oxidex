@@ -21,14 +21,18 @@ const LONG_TRAILER_MARKER: &[u8] = b"~\0\x04\0zmie~\0\0\x0a";
 /// in the pinned JPEG fixture -- `MIE-Meta` / `MIE-Doc` / UTF-8 `Copyright` --
 /// is decoded as well.
 pub fn parse_mie_trailer(file: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    if let Some(trailer) = find_trailer(file) {
-        // ExifTool's group-1 name is MIE-Main, but the comparison harness's
-        // canonical family for MIE trailers is MIE.
-        metadata.insert("MIE:TrailerSignature", TagValue::String(String::new()));
-        extract_document_copyright(file, trailer, &mut metadata);
-    }
-    metadata
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        if let Some(trailer) = find_trailer(file) {
+            // ExifTool's group-1 name is MIE-Main, but the comparison harness's
+            // canonical family for MIE trailers is MIE.
+            metadata.insert("MIE:TrailerSignature", TagValue::String(String::new()));
+            extract_document_copyright(file, trailer, &mut metadata);
+        }
+        metadata
+    })
 }
 
 /// Start of the MIE trailer that ends exactly at `end`, for a trailer-chain
@@ -405,11 +409,15 @@ use crate::core::FileReader;
 
 /// Parses metadata from a standalone `.mie` file.
 pub fn parse_mie_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size() as usize;
-    let data = reader.read(0, size).map_err(|e| e.to_string())?;
-    let mut metadata = MetadataMap::new();
-    parse_mie_document(data, &mut metadata);
-    Ok(metadata)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size() as usize;
+        let data = reader.read(0, size).map_err(|e| e.to_string())?;
+        let mut metadata = MetadataMap::new();
+        parse_mie_document(data, &mut metadata);
+        Ok(metadata)
+    })
 }
 
 /// The group tables reachable from `t/images/MIE.mie`'s top-level `0MIE`

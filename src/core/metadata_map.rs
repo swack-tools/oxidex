@@ -46,7 +46,7 @@ pub struct RawMetadataBlock {
 ///
 /// This structure is the primary in-memory representation of file metadata
 /// and can be serialized to JSON for output or deserialized from existing data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MetadataMap {
     /// Every occurrence recorded through `insert()`, plus the winner
     /// projection over them. See the module doc comment.
@@ -69,6 +69,133 @@ pub struct MetadataMap {
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
     raw_blocks: Vec<RawMetadataBlock>,
+    /// What the read that produced this map saw ([`Self::read_from`],
+    /// [`Self::read_saw`]); `None` for a map no read produced. Which rows are
+    /// the caller's is each occurrence's own flag ([`Self::is_assigned`]).
+    read_source: Option<ReadSource>,
+}
+
+/// Equality is the metadata's -- every occurrence and raw block -- never its
+/// write provenance: which file a map was read from, like which of its rows
+/// a caller assigned (`TagSink`'s own equality ignores those flags), does
+/// not make two maps with the same metadata different (#957,
+/// PRRT_kwDOQNbr5M6mO8E5).
+impl PartialEq for MetadataMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.sink == other.sink && self.raw_blocks == other.raw_blocks
+    }
+}
+
+/// Each view keeps its own read keys and explicit removals. Clones share the
+/// successfully saved files and caller-written keys, so atomic replacement
+/// does not invalidate them. Birth stamps guard against inode reuse without
+/// retaining descriptors. Surviving hardlinks keep their value identities.
+#[derive(Debug, Clone)]
+struct ReadSource {
+    keys: std::collections::HashSet<String>,
+    removed_assignments: std::collections::HashSet<String>,
+    source: Option<SourceIdentity>,
+    saved: std::sync::Arc<std::sync::Mutex<SavedSource>>,
+}
+
+#[derive(Debug)]
+struct SavedSource {
+    identities: std::collections::HashSet<FileIdentity>,
+    caller_fields: std::collections::HashMap<String, String>,
+}
+
+/// A value identity with an optional creation stamp, including signed Unix
+/// timestamps. Missing stamps permit no implicit deletion authority. Coarse or
+/// externally changed stamps are not an adversarial generation guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FileIdentity {
+    device: u64,
+    index: u64,
+    birth: Option<i128>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceIdentity {
+    identity: FileIdentity,
+    links: u64,
+}
+
+#[cfg(windows)]
+impl SourceIdentity {
+    pub(crate) fn same_file(self, other: Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+fn file_identity(path: &std::path::Path) -> Option<SourceIdentity> {
+    handle_identity(&std::fs::File::open(path).ok()?)
+}
+
+pub(crate) fn handle_identity(file: &std::fs::File) -> Option<SourceIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata().ok()?;
+        let birth = metadata.created().ok().map(|created| {
+            match created.duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos() as i128,
+                Err(before_epoch) => -(before_epoch.duration().as_nanos() as i128),
+            }
+        });
+        Some(SourceIdentity {
+            identity: FileIdentity {
+                device: metadata.dev(),
+                index: metadata.ino(),
+                birth,
+            },
+            links: metadata.nlink(),
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileInformation {
+            attributes: u32,
+            creation_time: [u32; 2],
+            access_time: [u32; 2],
+            write_time: [u32; 2],
+            volume_serial: u32,
+            size_high: u32,
+            size_low: u32,
+            links: u32,
+            index_high: u32,
+            index_low: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandle(
+                handle: *mut std::ffi::c_void,
+                information: *mut FileInformation,
+            ) -> i32;
+        }
+        let mut information = FileInformation::default();
+        // SAFETY: File owns a live handle and information has the Win32
+        // BY_HANDLE_FILE_INFORMATION layout and is writable for this call.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+        (ok != 0).then_some(SourceIdentity {
+            identity: FileIdentity {
+                device: u64::from(information.volume_serial),
+                index: (u64::from(information.index_high) << 32) | u64::from(information.index_low),
+                birth: Some(
+                    (i128::from(information.creation_time[1]) << 32)
+                        | i128::from(information.creation_time[0]),
+                ),
+            },
+            links: u64::from(information.links),
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        None
+    }
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -108,6 +235,7 @@ impl MetadataMap {
         Self {
             sink: TagSink::new(),
             raw_blocks: Vec::new(),
+            read_source: None,
         }
     }
 
@@ -119,6 +247,238 @@ impl MetadataMap {
         Self {
             sink: TagSink::with_capacity(capacity),
             raw_blocks: Vec::new(),
+            read_source: None,
+        }
+    }
+
+    /// Marks every occurrence recorded so far as read from the file.
+    ///
+    /// Provenance is a property of each occurrence
+    /// ([`TagSink`]'s `assigned` flags), not a position: a public mutation
+    /// -- [`Self::insert`], [`Self::get_mut`] -- marks the occurrence it
+    /// records or changes as the caller's assignment; readers record through
+    /// the same `insert`, so every public producer of file-derived rows
+    /// (`read_metadata*`, `read_metadata_report*`, the public parsers, the
+    /// format dispatcher) calls this before handing its map out. Clones and
+    /// copies carry each occurrence's flag; [`Self::clear`] drops them with
+    /// the occurrences.
+    pub(crate) fn mark_read_complete(&mut self) {
+        self.sink.mark_all_read();
+    }
+
+    /// [`Self::mark_read_complete`] by value, for a producer's return.
+    pub(crate) fn read_rows(mut self) -> Self {
+        self.mark_read_complete();
+        self
+    }
+
+    /// Whether the winning occurrence for `key` was assigned by a caller
+    /// ([`Self::insert`], [`Self::get_mut`]) rather than read from the file.
+    /// A writer that must tell an explicit assignment from a carried-over
+    /// value asks this, never whether the value happens to equal the file's
+    /// (the XP strings, whose same text can be two different byte strings:
+    /// `writers::xp_strings`; a same-value set under a removal:
+    /// `core::operations::write_metadata_transaction`).
+    pub fn is_assigned(&self, key: &str) -> bool {
+        self.sink.winner_is_assigned(key)
+    }
+
+    /// Every key whose winning occurrence the caller assigned
+    /// ([`Self::is_assigned`]), in file order: the one record of what a
+    /// write transaction explicitly sets, whatever the value.
+    pub(crate) fn assigned_keys(&self) -> Vec<String> {
+        self.iter()
+            .map(|(key, _)| key)
+            .filter(|key| self.is_assigned(key))
+            .cloned()
+            .collect()
+    }
+
+    /// Sets the provenance of the most recently recorded occurrence -- for a
+    /// copy that re-records an occurrence of another map and must carry that
+    /// occurrence's flag.
+    pub(crate) fn set_last_assigned(&mut self, assigned: bool) {
+        if let Some(idx) = self.sink.recorded_len().checked_sub(1) {
+            self.sink.set_assigned(idx, assigned);
+        }
+    }
+
+    /// Gives each key of this map the provenance its winner has in `source`
+    /// (a map this one was derived from by value, key for key); keys
+    /// `source` does not hold keep their own.
+    pub(crate) fn copy_provenance_from(&mut self, source: &MetadataMap) {
+        let keys: Vec<String> = self.keys().cloned().collect();
+        for key in keys {
+            if source.contains_key(&key)
+                && let Some(idx) = self.sink.winner_index(&key)
+            {
+                self.sink.set_assigned(idx, source.is_assigned(&key));
+            }
+        }
+    }
+
+    /// Records the file this map was read from (`read_metadata`), with the
+    /// keys the read produced: the snapshot [`Self::read_saw`] answers from.
+    pub(crate) fn set_read_source(&mut self, path: &std::path::Path) {
+        self.set_read_source_identity(path, Self::capture_read_source(path));
+    }
+
+    pub(crate) fn capture_read_source(path: &std::path::Path) -> Option<SourceIdentity> {
+        file_identity(path)
+    }
+
+    pub(crate) fn set_read_handle(&mut self, file: &std::fs::File) {
+        let identity = handle_identity(file);
+        self.set_read_source_observations(identity, identity);
+    }
+
+    pub(crate) fn set_read_source_identity(
+        &mut self,
+        path: &std::path::Path,
+        before: Option<SourceIdentity>,
+    ) {
+        self.set_read_source_observations(before, file_identity(path));
+    }
+
+    fn set_read_source_observations(
+        &mut self,
+        before: Option<SourceIdentity>,
+        after: Option<SourceIdentity>,
+    ) {
+        // Bound the actual read with two identity observations. A replacement
+        // during parsing cannot silently become this map's deletion source.
+        let source =
+            before.and_then(|before| after.filter(|after| before.identity == after.identity));
+        self.read_source = Some(ReadSource {
+            keys: self.keys().cloned().collect(),
+            removed_assignments: Default::default(),
+            source,
+            saved: std::sync::Arc::new(std::sync::Mutex::new(SavedSource {
+                // Inconsistent observations never grant authority, but an
+                // observed missing stamp must remain visible for explicit refusal.
+                identities: source
+                    .into_iter()
+                    .chain(
+                        before
+                            .into_iter()
+                            .chain(after)
+                            .filter(|source| source.identity.birth.is_none()),
+                    )
+                    .map(|source| source.identity)
+                    .collect(),
+                caller_fields: Default::default(),
+            })),
+        });
+    }
+
+    /// Filtering excludes rows, while preserving prior explicit removals.
+    pub(crate) fn inherit_read_source(&mut self, source: &MetadataMap) {
+        self.read_source = source.read_source.as_ref().map(|read| {
+            let retained = |key: &String| self.contains_key(key) || !source.contains_key(key);
+            ReadSource {
+                keys: read
+                    .keys
+                    .iter()
+                    .filter(|key| retained(key))
+                    .cloned()
+                    .collect(),
+                removed_assignments: read
+                    .removed_assignments
+                    .iter()
+                    .filter(|key| retained(key))
+                    .cloned()
+                    .collect(),
+                source: read.source,
+                saved: std::sync::Arc::clone(&read.saved),
+            }
+        });
+    }
+
+    /// Stable file identity, shared across successful saves and clones.
+    /// Path spellings never establish deletion authority.
+    pub(crate) fn read_from(&self, path: &std::path::Path) -> bool {
+        self.read_from_identity(file_identity(path))
+    }
+
+    pub(crate) fn read_from_identity(&self, target: Option<SourceIdentity>) -> bool {
+        self.read_source.as_ref().is_some_and(|read| {
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            target.is_some_and(|target| {
+                target.identity.birth.is_some() && saved.identities.contains(&target.identity)
+            })
+        })
+    }
+
+    /// An unverified object match can support caller assignments, but never
+    /// implicit removals. The write boundary explicitly refuses such removals.
+    pub(crate) fn unverifiable_read_identity(&self, path: &std::path::Path) -> bool {
+        self.unverifiable_source_identity(file_identity(path))
+    }
+
+    pub(crate) fn unverifiable_source_identity(&self, target: Option<SourceIdentity>) -> bool {
+        self.read_source.as_ref().is_some_and(|read| {
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            target.is_some_and(|target| {
+                saved.identities.iter().any(|source| {
+                    source.device == target.identity.device
+                        && source.index == target.identity.index
+                        && (source.birth.is_none() || target.identity.birth.is_none())
+                })
+            })
+        })
+    }
+
+    /// A removed original request owns only its last successfully proven field.
+    pub(crate) fn removed_saved_field(&self, key: &str) -> bool {
+        self.read_source.as_ref().is_some_and(|read| {
+            let saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            read.removed_assignments.iter().any(|request| {
+                !self.contains_key(request)
+                    && saved.caller_fields.get(request).is_some_and(|field| {
+                        field.eq_ignore_ascii_case(key)
+                            || crate::core::operations::field_spellings(key)
+                                .iter()
+                                .any(|alias| field.eq_ignore_ascii_case(alias))
+                    })
+            })
+        })
+    }
+
+    /// Only observed read rows or successfully saved caller fields can be removed.
+    pub(crate) fn read_saw(&self, key: &str) -> bool {
+        self.read_source
+            .as_ref()
+            .is_some_and(|read| read.keys.contains(key))
+            || self.removed_saved_field(key)
+    }
+
+    /// Refresh after a proven successful transaction and its successful read-back.
+    /// Writer seeds never enter caller_fields; the map's public rows stay intact.
+    pub(crate) fn record_write_success(
+        &self,
+        saved_map: &MetadataMap,
+        original: Option<SourceIdentity>,
+        expected: Option<SourceIdentity>,
+        caller_fields: &[(String, String)],
+    ) {
+        if let (Some(read), Some(written)) = (&self.read_source, &saved_map.read_source) {
+            let Some(written) = written.source.filter(|source| {
+                expected.is_some_and(|expected| source.identity == expected.identity)
+            }) else {
+                return;
+            };
+            let mut saved = read.saved.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(previous) = original
+                && previous.links <= 1
+            {
+                saved.identities.remove(&previous.identity);
+            }
+            saved.identities.insert(written.identity);
+            for (request, field) in caller_fields {
+                if self.is_assigned(request) {
+                    saved.caller_fields.insert(request.clone(), field.clone());
+                }
+            }
         }
     }
 
@@ -169,6 +529,10 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let occurrence = TagOccurrence::from_insert_shim(&key, value, order);
         self.sink.record(key, occurrence);
+        // A public mutation: the caller's assignment, whatever the value
+        // (a reader recording through `insert` is marked read when its
+        // producer returns, `mark_read_complete`).
+        self.sink.mark_assigned(order as usize);
         previous
     }
 
@@ -252,6 +616,7 @@ impl MetadataMap {
                     self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1)
                 }
             };
+            self.set_last_assigned(source.is_assigned(key));
         }
     }
 
@@ -497,6 +862,12 @@ impl MetadataMap {
     }
 
     /// The allocation-free form of [`all_occurrences`](Self::all_occurrences).
+    pub(crate) fn keyed_occurrences_with_provenance(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, bool)> {
+        self.sink.keyed_occurrences_with_provenance()
+    }
+
     pub(crate) fn keyed_occurrences(&self) -> impl Iterator<Item = (&str, &TagOccurrence)> {
         self.sink.keyed_occurrences()
     }
@@ -597,8 +968,9 @@ impl MetadataMap {
     /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         self.raw_blocks.extend(other.raw_blocks);
-        for (key, occurrence) in other.sink.into_keyed_occurrences() {
+        for (key, occurrence, assigned) in other.sink.into_keyed_occurrences_with_provenance() {
             self.sink.record_keyed_carrying_over(key, occurrence);
+            self.set_last_assigned(assigned);
         }
     }
 
@@ -616,7 +988,11 @@ impl MetadataMap {
         // A mutable reference can change the visible value without another
         // call into this map, so its old ValueConv form is no longer sound.
         // `TagSink::get_mut` itself clears the winner occurrence's `value`
-        // field for exactly this reason -- see its own doc comment.
+        // field for exactly this reason -- see its own doc comment. And the
+        // value is now the caller's: an assignment, whatever it is set to.
+        if let Some(idx) = self.sink.winner_index(key) {
+            self.sink.mark_assigned(idx);
+        }
         self.sink.get_mut(key)
     }
 
@@ -624,6 +1000,11 @@ impl MetadataMap {
     ///
     /// Returns the value if the tag existed, `None` otherwise.
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
+        if self.is_assigned(key)
+            && let Some(read) = &mut self.read_source
+        {
+            read.removed_assignments.insert(key.to_owned());
+        }
         self.sink.remove(key)
     }
 
@@ -644,6 +1025,14 @@ impl MetadataMap {
 
     /// Clears all tags from the map
     pub fn clear(&mut self) {
+        let assigned: Vec<_> = self
+            .keys()
+            .filter(|key| self.is_assigned(key))
+            .cloned()
+            .collect();
+        if let Some(read) = &mut self.read_source {
+            read.removed_assignments.extend(assigned);
+        }
         self.sink.clear();
         self.raw_blocks.clear();
     }
@@ -703,7 +1092,11 @@ impl MetadataMap {
         for (key, occurrence) in self.winner_occurrences() {
             let value = occurrence.value_conv();
             out.insert(key.clone(), value);
+            out.set_last_assigned(self.is_assigned(key));
         }
+        // The same rows in their ValueConv form: still the read, so a row its
+        // caller removes is a deletion (#957, PRRT_kwDOQNbr5M6mPnGR).
+        out.inherit_read_source(self);
         out
     }
 
@@ -734,6 +1127,35 @@ impl MetadataMap {
     pub fn get_datetime(&self, key: &str) -> Option<&chrono::DateTime<chrono::Utc>> {
         self.get(key).and_then(|v| v.as_datetime())
     }
+}
+
+/// A producer's result whose rows are read from a file: a map, or a
+/// `Result` holding one. See [`file_rows`].
+pub(crate) trait FileRows {
+    /// Marks every row read ([`MetadataMap::mark_read_complete`]).
+    fn into_read_rows(self) -> Self;
+}
+
+impl FileRows for MetadataMap {
+    fn into_read_rows(self) -> Self {
+        self.read_rows()
+    }
+}
+
+impl<E> FileRows for std::result::Result<MetadataMap, E> {
+    fn into_read_rows(self) -> Self {
+        self.map(MetadataMap::read_rows)
+    }
+}
+
+/// Runs a public producer's body and marks every row it returns as read from
+/// the file. Readers record through the same [`MetadataMap::insert`] a
+/// caller's assignment uses, so each public function that hands out
+/// file-derived rows wraps its body in this: the map it returns has no
+/// assignment in it, and a caller's later `insert` / `get_mut` is exactly
+/// what [`MetadataMap::is_assigned`] reports.
+pub(crate) fn file_rows<R: FileRows>(produce: impl FnOnce() -> R) -> R {
+    produce().into_read_rows()
 }
 
 impl Default for MetadataMap {
@@ -799,6 +1221,300 @@ impl IntoIterator for MetadataMap {
 mod tests {
     use super::super::tag_occurrence::{Instance, Provenance};
     use super::*;
+
+    #[test]
+    fn read_projection_keeps_prior_deletions_but_excludes_filtered_rows() {
+        let mut source = MetadataMap::new();
+        source.insert("IFD0:Artist", TagValue::new_string("remove me"));
+        source.insert("IFD0:Make", TagValue::new_string("filter me"));
+        source.insert("IFD0:Model", TagValue::new_string("keep me"));
+        source.set_read_source(std::path::Path::new("projection-source.jpg"));
+        source.remove("IFD0:Artist");
+        for projection in [
+            source.without_print_conv(),
+            crate::core::exiftool_compat::format_for_exiftool(&source),
+            crate::core::tag_normalization::normalize_metadata_map(&source),
+        ] {
+            assert!(projection.read_saw("IFD0:Artist"), "prior removal survives");
+            assert!(projection.read_saw("IFD0:Make"));
+        }
+        let mut filtered = MetadataMap::new();
+        filtered.insert("IFD0:Model", source.get("IFD0:Model").unwrap().clone());
+        filtered.inherit_read_source(&source);
+        assert!(
+            filtered.read_saw("IFD0:Artist"),
+            "prior removal survives a filter"
+        );
+        assert!(
+            !filtered.read_saw("IFD0:Make"),
+            "filter exclusion is not a removal"
+        );
+        assert!(filtered.read_saw("IFD0:Model"));
+    }
+
+    #[test]
+    fn missing_birth_stamp_refuses_deletion_without_changing_file() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("no-birth.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let mut seed = MetadataMap::new();
+        seed.insert(
+            "IFD0:Artist",
+            TagValue::new_string("retained until verifiable"),
+        );
+        write_metadata(&path, &seed).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let reliable = MetadataMap::capture_read_source(&path).unwrap();
+        let mut missing = reliable;
+        missing.identity.birth = None; // platform-independent missing-created seam
+        for (before, after) in [(missing, missing), (missing, reliable), (reliable, missing)] {
+            let mut map = read_metadata(&path).unwrap();
+            map.set_read_source_observations(Some(before), Some(after));
+            map.remove("IFD0:Artist");
+            let error = write_metadata(&path, &map)
+                .expect_err("missing birth must not silently skip a removal");
+            assert!(error.to_string().contains("creation timestamp"));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert!(read_metadata(&path).unwrap().get("IFD0:Artist").is_some());
+        }
+    }
+
+    #[test]
+    fn replacement_between_read_observations_grants_no_deletion_authority() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("observed.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let before = MetadataMap::capture_read_source(&path);
+        let replacement = directory.path().join("replacement.jpg");
+        std::fs::copy(&path, &replacement).unwrap();
+        let mut seed = MetadataMap::new();
+        seed.insert("IFD0:Artist", TagValue::new_string("replacement"));
+        write_metadata(&replacement, &seed).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let mut observed = read_metadata(&path).unwrap();
+        observed.set_read_source_identity(&path, before);
+        observed.remove("IFD0:Artist");
+        assert_eq!(
+            write_metadata(&path, &observed).unwrap(),
+            crate::core::WriteOutcome::Unchanged
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("replacement")
+        );
+    }
+
+    #[test]
+    fn filtered_view_does_not_delete_a_reinserted_saved_caller_row() {
+        use crate::core::operations::{read_metadata, remove_tag, write_metadata};
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("filtered.jpg");
+        std::fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        remove_tag(&path, "IFD0:Artist").unwrap();
+        let mut source = read_metadata(&path).unwrap();
+        source.insert("IFD0:Artist", TagValue::new_string("saved"));
+        write_metadata(&path, &source).unwrap();
+        source.remove("IFD0:Artist");
+        source.insert("IFD0:Artist", TagValue::new_string("saved"));
+        let mut filtered = MetadataMap::new();
+        for (key, value) in source
+            .iter()
+            .filter(|(key, _)| key.as_str() != "IFD0:Artist")
+        {
+            filtered.insert(key.clone(), value.clone());
+        }
+        filtered.copy_provenance_from(&source);
+        filtered.inherit_read_source(&source);
+        assert_eq!(
+            write_metadata(&path, &filtered).unwrap(),
+            crate::core::WriteOutcome::Unchanged
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+            Some("saved")
+        );
+    }
+
+    /// Provenance is a property of each occurrence, driven by the public
+    /// map API: every public mutation records an assignment, a read marks
+    /// every row read, `clear` drops the flags with the rows, and every copy
+    /// -- `clone`, normalization, the formatted and filtered projections, the
+    /// merges --
+    /// carries each row's own flag. One row per API; `IFD0:XPTitle` and
+    /// `IFD0:Artist` start as read rows, `IFD0:Make` as an assignment.
+    #[test]
+    fn provenance_follows_every_public_map_api() {
+        use crate::core::exiftool_compat::format_for_exiftool;
+        use crate::core::read_options::ReadOptions;
+        use crate::core::tag_normalization::normalize_metadata_map;
+
+        fn base() -> MetadataMap {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:XPTitle", TagValue::new_string("A"));
+            map.insert("IFD0:Artist", TagValue::new_string("me"));
+            map.mark_read_complete();
+            map.insert("IFD0:Make", TagValue::new_string("Acme"));
+            map
+        }
+        type Op = fn(MetadataMap) -> MetadataMap;
+        // (API, operation, expected is_assigned for XPTitle, Artist, Make)
+        let cases: Vec<(&str, Op, [bool; 3])> = vec![
+            ("read + insert", |m| m, [false, false, true]),
+            (
+                "insert same value",
+                |mut m| {
+                    m.insert("IFD0:XPTitle", TagValue::new_string("A"));
+                    m
+                },
+                [true, false, true],
+            ),
+            (
+                "get_mut same value",
+                |mut m| {
+                    *m.get_mut("IFD0:XPTitle").unwrap() = TagValue::new_string("A");
+                    m
+                },
+                [true, false, true],
+            ),
+            (
+                "get_mut read only",
+                |mut m| {
+                    let _ = m.get_mut("IFD0:Artist");
+                    m
+                },
+                [false, true, true],
+            ),
+            (
+                "clear then re-insert",
+                |m| {
+                    let rows: Vec<_> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let mut m = m;
+                    m.clear();
+                    assert!(m.is_empty());
+                    for (k, v) in rows {
+                        m.insert(k, v);
+                    }
+                    m
+                },
+                [true, true, true],
+            ),
+            (
+                "remove then insert",
+                |mut m| {
+                    m.remove("IFD0:XPTitle");
+                    m.insert("IFD0:XPTitle", TagValue::new_string("A"));
+                    m
+                },
+                [true, false, true],
+            ),
+            ("clone", |m| m.clone(), [false, false, true]),
+            (
+                "normalize_metadata_map",
+                |m| normalize_metadata_map(&m),
+                [false, false, true],
+            ),
+            (
+                "without_print_conv",
+                |m| m.without_print_conv(),
+                [false, false, true],
+            ),
+            (
+                "format_for_exiftool",
+                |m| format_for_exiftool(&m),
+                [false, false, true],
+            ),
+            (
+                "strip_extended_only",
+                |m| ReadOptions::default_full_listing().strip_extended_only(&m),
+                [false, false, true],
+            ),
+            (
+                "merge into a fresh map",
+                |m| {
+                    let mut out = MetadataMap::new();
+                    out.merge(m);
+                    out
+                },
+                [false, false, true],
+            ),
+            (
+                "merge_winners_keeping_group1",
+                |m| {
+                    let mut out = MetadataMap::new();
+                    out.merge_winners_keeping_group1(&m);
+                    out
+                },
+                [false, false, true],
+            ),
+            (
+                "FromIterator (a caller-built map)",
+                |m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                [true, true, true],
+            ),
+            (
+                "Deserialize (a caller-built map)",
+                |m| serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap(),
+                [true, true, true],
+            ),
+            (
+                "mark_read_complete again",
+                |mut m| {
+                    m.mark_read_complete();
+                    m
+                },
+                [false, false, false],
+            ),
+        ];
+        for (api, op, expected) in cases {
+            let map = op(base());
+            let got = ["IFD0:XPTitle", "IFD0:Artist", "IFD0:Make"].map(|k| map.is_assigned(k));
+            assert_eq!(got, expected, "{api}");
+        }
+        // Equality is about the rows, not who put them there.
+        let mut read = base();
+        read.mark_read_complete();
+        assert_eq!(read, base());
+    }
+
+    /// Codex thread PRRT_kwDOQNbr5M6mO8E5 (#957): which file a map was read
+    /// from is write provenance, not metadata. Two maps with the same rows
+    /// are equal whatever their read sources, as `TagSink`'s equality
+    /// ignores its per-occurrence assignment flags.
+    #[test]
+    fn read_provenance_does_not_affect_equality() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = || {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:Make", TagValue::new_string("Acme"));
+            map.mark_read_complete();
+            map
+        };
+        let (mut a, mut b) = (rows(), rows());
+        a.set_read_source(&dir.path().join("a.jpg"));
+        b.set_read_source(&dir.path().join("b.jpg"));
+        assert_eq!(a, b, "same rows read from two files");
+        assert_eq!(a, rows(), "a read and an unread map with the same rows");
+        b.insert("IFD0:Make", TagValue::new_string("Other"));
+        assert_ne!(a, b, "different rows still differ");
+    }
+
+    /// A public producer's rows are read (`file_rows`): the map a parser
+    /// hands out has no assignment in it.
+    #[test]
+    fn a_public_producer_hands_out_read_rows() {
+        let produced = file_rows(|| {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:XPTitle", TagValue::new_string("A"));
+            map
+        });
+        assert!(!produced.is_assigned("IFD0:XPTitle"));
+        let failed: std::result::Result<MetadataMap, ()> = file_rows(|| Err(()));
+        assert!(failed.is_err());
+    }
 
     fn source_occurrence(id: oxidex_tags::TagId, name: &str, raw: TagValue) -> TagOccurrence {
         use super::super::tag_occurrence::intern;

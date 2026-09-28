@@ -387,113 +387,117 @@ fn parse_ifd_entry(data: &[u8], little_endian: bool) -> Option<IfdEntry> {
 /// }
 /// ```
 pub fn parse_panasonic_extended(data: &[u8], byte_order: bool) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
 
-    // Validate minimum data length for header check
-    if data.len() < PANASONIC_HEADER_LEN {
-        return metadata;
-    }
+        // Validate minimum data length for header check
+        if data.len() < PANASONIC_HEADER_LEN {
+            return metadata;
+        }
 
-    // Verify Panasonic MakerNote header
-    // The header must match "Panasonic\0\0\0" exactly
-    if &data[..PANASONIC_HEADER_LEN] != PANASONIC_HEADER {
-        return metadata;
-    }
+        // Verify Panasonic MakerNote header
+        // The header must match "Panasonic\0\0\0" exactly
+        if &data[..PANASONIC_HEADER_LEN] != PANASONIC_HEADER {
+            return metadata;
+        }
 
-    // Skip header to reach IFD data
-    let ifd_data = &data[PANASONIC_HEADER_LEN..];
+        // Skip header to reach IFD data
+        let ifd_data = &data[PANASONIC_HEADER_LEN..];
 
-    // Read IFD entry count (first 2 bytes after header)
-    let entry_count = match read_u16(ifd_data, 0, byte_order) {
-        Some(count) => count as usize,
-        None => return metadata,
-    };
-
-    // Validate that we have enough data for all entries
-    // Each entry is 12 bytes, plus 2 bytes for the count
-    let required_len = 2 + (entry_count * IFD_ENTRY_SIZE);
-    if ifd_data.len() < required_len {
-        return metadata;
-    }
-
-    // Parse each IFD entry looking for our target tags
-    for i in 0..entry_count {
-        let entry_offset = 2 + (i * IFD_ENTRY_SIZE);
-        let entry_data = &ifd_data[entry_offset..];
-
-        let entry = match parse_ifd_entry(entry_data, byte_order) {
-            Some(e) => e,
-            None => continue,
+        // Read IFD entry count (first 2 bytes after header)
+        let entry_count = match read_u16(ifd_data, 0, byte_order) {
+            Some(count) => count as usize,
+            None => return metadata,
         };
 
-        // Process only the extended tags we're interested in
-        match entry.tag_id {
-            TAG_INTELLIGENT_EXPOSURE => {
-                let decoded = decode_intelligent_exposure(entry.value_offset as i32);
-                metadata.insert(
-                    "Panasonic:IntelligentExposure",
-                    TagValue::new_string(decoded),
-                );
-            }
-
-            TAG_INTELLIGENT_RESOLUTION => {
-                let decoded = decode_intelligent_resolution(entry.value_offset as i32);
-                metadata.insert(
-                    "Panasonic:IntelligentResolution",
-                    TagValue::new_string(decoded),
-                );
-            }
-
-            TAG_INTELLIGENT_D_RANGE => {
-                let decoded = decode_intelligent_d_range(entry.value_offset as i32);
-                metadata.insert(
-                    "Panasonic:IntelligentD-Range",
-                    TagValue::new_string(decoded),
-                );
-            }
-
-            TAG_PHOTO_STYLE => {
-                let decoded = decode_photo_style(entry.value_offset as i32);
-                metadata.insert("Panasonic:PhotoStyle", TagValue::new_string(decoded));
-            }
-
-            TAG_HDR => {
-                let decoded = decode_hdr(entry.value_offset as i32);
-                metadata.insert("Panasonic:HDR", TagValue::new_string(decoded));
-            }
-
-            TAG_ACCELEROMETER_X => {
-                // Accelerometer values are signed 16-bit integers
-                // The value is stored in the lower 16 bits of value_offset
-                let value = (entry.value_offset & 0xFFFF) as i16;
-                metadata.insert(
-                    "Panasonic:AccelerometerX",
-                    TagValue::new_integer(value as i64),
-                );
-            }
-
-            TAG_ACCELEROMETER_Y => {
-                let value = (entry.value_offset & 0xFFFF) as i16;
-                metadata.insert(
-                    "Panasonic:AccelerometerY",
-                    TagValue::new_integer(value as i64),
-                );
-            }
-
-            TAG_ACCELEROMETER_Z => {
-                let value = (entry.value_offset & 0xFFFF) as i16;
-                metadata.insert(
-                    "Panasonic:AccelerometerZ",
-                    TagValue::new_integer(value as i64),
-                );
-            }
-
-            // Skip all other tags - they're handled by the main parser
-            _ => {}
+        // Validate that we have enough data for all entries
+        // Each entry is 12 bytes, plus 2 bytes for the count
+        let required_len = 2 + (entry_count * IFD_ENTRY_SIZE);
+        if ifd_data.len() < required_len {
+            return metadata;
         }
-    }
 
-    metadata
+        // Parse each IFD entry looking for our target tags
+        for i in 0..entry_count {
+            let entry_offset = 2 + (i * IFD_ENTRY_SIZE);
+            let entry_data = &ifd_data[entry_offset..];
+
+            let entry = match parse_ifd_entry(entry_data, byte_order) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            // Process only the extended tags we're interested in
+            match entry.tag_id {
+                TAG_INTELLIGENT_EXPOSURE => {
+                    let decoded = decode_intelligent_exposure(entry.value_offset as i32);
+                    metadata.insert(
+                        "Panasonic:IntelligentExposure",
+                        TagValue::new_string(decoded),
+                    );
+                }
+
+                TAG_INTELLIGENT_RESOLUTION => {
+                    let decoded = decode_intelligent_resolution(entry.value_offset as i32);
+                    metadata.insert(
+                        "Panasonic:IntelligentResolution",
+                        TagValue::new_string(decoded),
+                    );
+                }
+
+                TAG_INTELLIGENT_D_RANGE => {
+                    let decoded = decode_intelligent_d_range(entry.value_offset as i32);
+                    metadata.insert(
+                        "Panasonic:IntelligentD-Range",
+                        TagValue::new_string(decoded),
+                    );
+                }
+
+                TAG_PHOTO_STYLE => {
+                    let decoded = decode_photo_style(entry.value_offset as i32);
+                    metadata.insert("Panasonic:PhotoStyle", TagValue::new_string(decoded));
+                }
+
+                TAG_HDR => {
+                    let decoded = decode_hdr(entry.value_offset as i32);
+                    metadata.insert("Panasonic:HDR", TagValue::new_string(decoded));
+                }
+
+                TAG_ACCELEROMETER_X => {
+                    // Accelerometer values are signed 16-bit integers
+                    // The value is stored in the lower 16 bits of value_offset
+                    let value = (entry.value_offset & 0xFFFF) as i16;
+                    metadata.insert(
+                        "Panasonic:AccelerometerX",
+                        TagValue::new_integer(value as i64),
+                    );
+                }
+
+                TAG_ACCELEROMETER_Y => {
+                    let value = (entry.value_offset & 0xFFFF) as i16;
+                    metadata.insert(
+                        "Panasonic:AccelerometerY",
+                        TagValue::new_integer(value as i64),
+                    );
+                }
+
+                TAG_ACCELEROMETER_Z => {
+                    let value = (entry.value_offset & 0xFFFF) as i16;
+                    metadata.insert(
+                        "Panasonic:AccelerometerZ",
+                        TagValue::new_integer(value as i64),
+                    );
+                }
+
+                // Skip all other tags - they're handled by the main parser
+                _ => {}
+            }
+        }
+
+        metadata
+    })
 }
 
 // =============================================================================

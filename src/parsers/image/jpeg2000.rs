@@ -184,22 +184,26 @@ impl FileReader for SliceReader {
 pub fn parse_jpeg2000_metadata(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let data = reader
-        .read(0, reader.size() as usize)
-        .map_err(|err| err.to_string())?;
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let data = reader
+            .read(0, reader.size() as usize)
+            .map_err(|err| err.to_string())?;
+        let mut metadata = MetadataMap::new();
 
-    if data.starts_with(J2C_SIGNATURE) {
-        parse_codestream(data, &mut metadata);
-        return Ok(metadata);
-    }
-    if JP2_SIGNATURES
-        .iter()
-        .any(|signature| data.starts_with(signature))
-    {
-        walk_boxes(data, &mut metadata);
-    }
-    Ok(metadata)
+        if data.starts_with(J2C_SIGNATURE) {
+            parse_codestream(data, &mut metadata);
+            return Ok(metadata);
+        }
+        if JP2_SIGNATURES
+            .iter()
+            .any(|signature| data.starts_with(signature))
+        {
+            walk_boxes(data, &mut metadata);
+        }
+        Ok(metadata)
+    })
 }
 
 // ---------------------------------------------------------------------------

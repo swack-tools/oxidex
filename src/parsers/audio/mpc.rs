@@ -107,73 +107,77 @@ pub fn parse_mpc_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for MpcParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let file_size = reader.size();
-        let mut metadata = MetadataMap::with_capacity(32);
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let file_size = reader.size();
+            let mut metadata = MetadataMap::with_capacity(32);
 
-        // Leading ID3v2 tag (MPC.pm:83-87 defers to ID3::ProcessID3, which
-        // reads its own frames before the audio-format dispatch loop
-        // re-enters ProcessMPC positioned right after this block --
-        // ID3.pm:1679-1698).
-        let mut mpc_header_start = 0u64;
-        let mut id3_size = 0u64;
-        let mut pending_id3v2: Option<(Vec<u8>, u8)> = None; // (frame bytes, version)
+            // Leading ID3v2 tag (MPC.pm:83-87 defers to ID3::ProcessID3, which
+            // reads its own frames before the audio-format dispatch loop
+            // re-enters ProcessMPC positioned right after this block --
+            // ID3.pm:1679-1698).
+            let mut mpc_header_start = 0u64;
+            let mut id3_size = 0u64;
+            let mut pending_id3v2: Option<(Vec<u8>, u8)> = None; // (frame bytes, version)
 
-        if file_size >= 10 {
-            let header = reader.read(0, 10)?;
-            if &header[0..3] == ID3V2_SIGNATURE {
-                let (_, id3v2_header) = parse_id3v2_header(header).map_err(|e| {
-                    ExifToolError::parse_error(format!("Failed to parse ID3v2 header: {:?}", e))
-                })?;
-                mpc_header_start = 10 + u64::from(id3v2_header.size);
-                id3_size += mpc_header_start;
-                let frames_size = id3v2_header.size as usize;
-                if frames_size > 0 {
-                    let frames_data = reader.read(10, frames_size)?;
-                    pending_id3v2 = Some((frames_data.to_vec(), id3v2_header.version));
+            if file_size >= 10 {
+                let header = reader.read(0, 10)?;
+                if &header[0..3] == ID3V2_SIGNATURE {
+                    let (_, id3v2_header) = parse_id3v2_header(header).map_err(|e| {
+                        ExifToolError::parse_error(format!("Failed to parse ID3v2 header: {:?}", e))
+                    })?;
+                    mpc_header_start = 10 + u64::from(id3v2_header.size);
+                    id3_size += mpc_header_start;
+                    let frames_size = id3v2_header.size as usize;
+                    if frames_size > 0 {
+                        let frames_data = reader.read(10, frames_size)?;
+                        pending_id3v2 = Some((frames_data.to_vec(), id3v2_header.version));
+                    }
                 }
             }
-        }
 
-        // MP+ v7 bit header (MPC.pm:91-109).
-        if mpc_header_start + MPC_HEADER_LEN <= file_size {
-            let buff = reader.read(mpc_header_start, MPC_HEADER_LEN as usize)?;
-            if &buff[0..3] == MPC_SIGNATURE {
-                let version = buff[3] & 0x0f;
-                if version == 7 {
-                    parse_mpc_header(buff, &mut metadata);
+            // MP+ v7 bit header (MPC.pm:91-109).
+            if mpc_header_start + MPC_HEADER_LEN <= file_size {
+                let buff = reader.read(mpc_header_start, MPC_HEADER_LEN as usize)?;
+                if &buff[0..3] == MPC_SIGNATURE {
+                    let version = buff[3] & 0x0f;
+                    if version == 7 {
+                        parse_mpc_header(buff, &mut metadata);
+                    }
                 }
             }
-        }
 
-        // APE trailer, container-independent (MPC.pm:111-113).
-        parse_ape_trailer(reader, &mut metadata)?;
+            // APE trailer, container-independent (MPC.pm:111-113).
+            parse_ape_trailer(reader, &mut metadata)?;
 
-        // `ID3Size` (ID3.pm:1606, `File:` group via the Extra table's
-        // default GROUPS) is recorded before the ID3v2/ID3v1 tag emission
-        // below, matching ProcessID3's own FoundTag order
-        // (ID3.pm:1598-1624).
-        let trailing_id3v1 = if file_size >= 128 {
-            let id3v1_offset = file_size - 128;
-            let id3v1_data = reader.read(id3v1_offset, 128)?;
-            (&id3v1_data[0..3] == ID3V1_SIGNATURE).then(|| id3v1_data.to_vec())
-        } else {
-            None
-        };
-        if trailing_id3v1.is_some() {
-            id3_size += 128;
-        }
-        if id3_size > 0 {
-            metadata.insert("File:ID3Size", TagValue::new_integer(id3_size as i64));
-        }
+            // `ID3Size` (ID3.pm:1606, `File:` group via the Extra table's
+            // default GROUPS) is recorded before the ID3v2/ID3v1 tag emission
+            // below, matching ProcessID3's own FoundTag order
+            // (ID3.pm:1598-1624).
+            let trailing_id3v1 = if file_size >= 128 {
+                let id3v1_offset = file_size - 128;
+                let id3v1_data = reader.read(id3v1_offset, 128)?;
+                (&id3v1_data[0..3] == ID3V1_SIGNATURE).then(|| id3v1_data.to_vec())
+            } else {
+                None
+            };
+            if trailing_id3v1.is_some() {
+                id3_size += 128;
+            }
+            if id3_size > 0 {
+                metadata.insert("File:ID3Size", TagValue::new_integer(id3_size as i64));
+            }
 
-        if let Some((frames, version)) = pending_id3v2 {
-            parse_id3v2_frames(&frames, version, &mut metadata)?;
-        }
-        if let Some(id3v1_data) = trailing_id3v1 {
-            parse_id3v1(&id3v1_data, &mut metadata)?;
-        }
+            if let Some((frames, version)) = pending_id3v2 {
+                parse_id3v2_frames(&frames, version, &mut metadata)?;
+            }
+            if let Some(id3v1_data) = trailing_id3v1 {
+                parse_id3v1(&id3v1_data, &mut metadata)?;
+            }
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

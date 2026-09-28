@@ -140,30 +140,34 @@ fn format_size(format: u16) -> usize {
 /// Returns an error when the payload does not begin with one of ExifTool's
 /// three accepted identifiers or the TIFF header is malformed.
 pub fn parse_meta_app3(data: &[u8]) -> Result<MetadataMap> {
-    if !META_IDENTIFIERS.iter().any(|id| data.starts_with(id)) {
-        return Err(ExifToolError::parse_error(
-            "APP3 segment is not a Kodak Meta directory",
-        ));
-    }
-    let tiff = data
-        .get(TIFF_BASE..)
-        .filter(|t| t.len() >= 8)
-        .ok_or_else(|| ExifToolError::parse_error("APP3 Meta segment has no TIFF header"))?;
-
-    let endian = match &tiff[0..2] {
-        b"II" => Endian::Little,
-        b"MM" => Endian::Big,
-        _ => {
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        if !META_IDENTIFIERS.iter().any(|id| data.starts_with(id)) {
             return Err(ExifToolError::parse_error(
-                "APP3 Meta segment has an invalid TIFF byte order mark",
+                "APP3 segment is not a Kodak Meta directory",
             ));
         }
-    };
+        let tiff = data
+            .get(TIFF_BASE..)
+            .filter(|t| t.len() >= 8)
+            .ok_or_else(|| ExifToolError::parse_error("APP3 Meta segment has no TIFF header"))?;
 
-    let mut metadata = MetadataMap::new();
-    let ifd_offset = endian.u32(&tiff[4..8]) as usize;
-    read_ifd(tiff, ifd_offset, endian, &mut metadata);
-    Ok(metadata)
+        let endian = match &tiff[0..2] {
+            b"II" => Endian::Little,
+            b"MM" => Endian::Big,
+            _ => {
+                return Err(ExifToolError::parse_error(
+                    "APP3 Meta segment has an invalid TIFF byte order mark",
+                ));
+            }
+        };
+
+        let mut metadata = MetadataMap::new();
+        let ifd_offset = endian.u32(&tiff[4..8]) as usize;
+        read_ifd(tiff, ifd_offset, endian, &mut metadata);
+        Ok(metadata)
+    })
 }
 
 /// Walks one IFD, inserting every entry whose id is in the Meta table.

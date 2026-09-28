@@ -76,66 +76,71 @@ const FILE_GUID: PerlCitation = citation("FileGUID", "ZISRAW.pm:35-40");
 
 /// Extract ZISRAW (CZI) header metadata (`Image::ExifTool::ZISRAW::ProcessCZI`).
 pub fn parse_czi_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("CZI file is too short for the 100-byte header".to_string());
-    }
-    let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
-    if !header.starts_with(CZI_SIGNATURE) {
-        return Err("invalid ZISRAW signature".to_string());
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("CZI file is too short for the 100-byte header".to_string());
+        }
+        let header = reader.read(0, HEADER_LEN).map_err(|e| e.to_string())?;
+        if !header.starts_with(CZI_SIGNATURE) {
+            return Err("invalid ZISRAW signature".to_string());
+        }
 
-    let table = find_table("ZISRAW", "Main").ok_or("missing ZISRAW::Main table")?;
-    // ZISRAW.pm:176, `SetByteOrder('II')`.
-    let decode = decode_binary_table(table, &header, ByteOrder::Little);
+        let table = find_table("ZISRAW", "Main").ok_or("missing ZISRAW::Main table")?;
+        // ZISRAW.pm:176, `SetByteOrder('II')`.
+        let decode = decode_binary_table(table, &header, ByteOrder::Little);
 
-    let mut metadata = MetadataMap::new();
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("File:{name}");
-        match name {
-            // ZISRAW.pm:23-27: `Format => 'int32u[2]'` with
-            // `PrintConv => '$val =~ tr/ /./; $val'` -- ExifTool renders an
-            // array as space-separated, so the PrintConv turns "1 0" into
-            // "1.0". The generator drops this PrintConv, so the raw array
-            // reaches here through the ordinary `.emit()` path.
-            "ZISRAWVersion" => {
-                // ExifTool renders the `int32u[2]` space-separated and the
-                // PrintConv transliterates each space to a dot, so the two
-                // elements end up joined by ".". Read the decoded array
-                // directly rather than re-splitting a rendered string.
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::NONE, &ZISRAW_VERSION)
-                    && let Some(rendered) = version_string(access.raw())
-                {
-                    metadata.insert(key, TagValue::new_string(rendered));
+        let mut metadata = MetadataMap::new();
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("File:{name}");
+            match name {
+                // ZISRAW.pm:23-27: `Format => 'int32u[2]'` with
+                // `PrintConv => '$val =~ tr/ /./; $val'` -- ExifTool renders an
+                // array as space-separated, so the PrintConv turns "1 0" into
+                // "1.0". The generator drops this PrintConv, so the raw array
+                // reaches here through the ordinary `.emit()` path.
+                "ZISRAWVersion" => {
+                    // ExifTool renders the `int32u[2]` space-separated and the
+                    // PrintConv transliterates each space to a dot, so the two
+                    // elements end up joined by ".". Read the decoded array
+                    // directly rather than re-splitting a rendered string.
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::NONE, &ZISRAW_VERSION)
+                        && let Some(rendered) = version_string(access.raw())
+                    {
+                        metadata.insert(key, TagValue::new_string(rendered));
+                    }
                 }
-            }
-            // ZISRAW.pm:30-40: `Format => 'undef[16]'` with
-            // `ValueConv => 'unpack("H*",$val)'` -- the 16 raw GUID bytes as
-            // lowercase hex, in file order (`H*` is high-nibble-first).
-            "PrimaryFileGUID" | "FileGUID" => {
-                let cite = if name == "PrimaryFileGUID" {
-                    &PRIMARY_FILE_GUID
-                } else {
-                    &FILE_GUID
-                };
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, cite)
-                    && let DecodedValue::Undefined(bytes) = access.raw()
-                {
-                    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                    metadata.insert(key, TagValue::new_string(hex));
+                // ZISRAW.pm:30-40: `Format => 'undef[16]'` with
+                // `ValueConv => 'unpack("H*",$val)'` -- the 16 raw GUID bytes as
+                // lowercase hex, in file order (`H*` is high-nibble-first).
+                "PrimaryFileGUID" | "FileGUID" => {
+                    let cite = if name == "PrimaryFileGUID" {
+                        &PRIMARY_FILE_GUID
+                    } else {
+                        &FILE_GUID
+                    };
+                    if let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, cite)
+                        && let DecodedValue::Undefined(bytes) = access.raw()
+                    {
+                        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                        metadata.insert(key, TagValue::new_string(hex));
+                    }
                 }
-            }
-            _ => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(key, value);
+                _ => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(key, value);
+                    }
                 }
             }
         }
-    }
 
-    process_metadata_section(reader, header, &mut metadata);
+        process_metadata_section(reader, header, &mut metadata);
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 /// ZISRAW.pm:23-27's `int32u[2]` under `PrintConv => '$val =~ tr/ /./; $val'`.

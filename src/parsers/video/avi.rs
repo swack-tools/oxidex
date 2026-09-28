@@ -52,35 +52,39 @@ pub struct AviParser;
 
 impl FormatParser for AviParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify RIFF/AVI signature
-        if reader.size() < 12 {
-            return Err(ExifToolError::parse_error("File too small to be AVI"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify RIFF/AVI signature
+            if reader.size() < 12 {
+                return Err(ExifToolError::parse_error("File too small to be AVI"));
+            }
 
-        let header = reader.read(0, 12)?;
-        if &header[0..4] != RIFF_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid RIFF signature: expected {:?}, found {:?}",
-                RIFF_SIGNATURE,
-                &header[0..4]
-            )));
-        }
+            let header = reader.read(0, 12)?;
+            if &header[0..4] != RIFF_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid RIFF signature: expected {:?}, found {:?}",
+                    RIFF_SIGNATURE,
+                    &header[0..4]
+                )));
+            }
 
-        if &header[8..12] != AVI_FORMAT {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid AVI format: expected {:?}, found {:?}",
-                AVI_FORMAT,
-                &header[8..12]
-            )));
-        }
+            if &header[8..12] != AVI_FORMAT {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid AVI format: expected {:?}, found {:?}",
+                    AVI_FORMAT,
+                    &header[8..12]
+                )));
+            }
 
-        let mut metadata = MetadataMap::with_capacity(16);
-        let file_size = reader.size();
+            let mut metadata = MetadataMap::with_capacity(16);
+            let file_size = reader.size();
 
-        // Parse RIFF chunks (shared with WAV parser)
-        parse_avi_chunks(reader, 12, file_size, &mut metadata)?;
+            // Parse RIFF chunks (shared with WAV parser)
+            parse_avi_chunks(reader, 12, file_size, &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -102,8 +106,12 @@ impl FormatParser for AviParser {
 /// * `Ok(MetadataMap)` - Successfully extracted metadata
 /// * `Err(String)` - Parse error message
 pub fn parse_avi_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = AviParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = AviParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 /// Formats a float the way Perl's default number stringification would: no

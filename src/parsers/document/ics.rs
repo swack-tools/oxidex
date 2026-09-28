@@ -357,93 +357,97 @@ impl ICSParser {
 
 impl FormatParser for ICSParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Read file data
-        let file_size = reader.size() as usize;
-        let data = reader.read(0, file_size)?;
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Read file data
+            let file_size = reader.size() as usize;
+            let data = reader.read(0, file_size)?;
 
-        // Verify ICS signature
-        if !Self::verify_signature(data) {
-            return Err(ExifToolError::parse_error("Invalid ICS signature"));
-        }
+            // Verify ICS signature
+            if !Self::verify_signature(data) {
+                return Err(ExifToolError::parse_error("Invalid ICS signature"));
+            }
 
-        // Convert to UTF-8 string
-        let text = std::str::from_utf8(data)
-            .map_err(|_| ExifToolError::parse_error("Invalid UTF-8 in ICS file"))?;
+            // Convert to UTF-8 string
+            let text = std::str::from_utf8(data)
+                .map_err(|_| ExifToolError::parse_error("Invalid UTF-8 in ICS file"))?;
 
-        let mut metadata = MetadataMap::new();
+            let mut metadata = MetadataMap::new();
 
-        // Set basic file info
-        metadata.insert("FileType".to_string(), TagValue::String("ICS".to_string()));
+            // Set basic file info
+            metadata.insert("FileType".to_string(), TagValue::String("ICS".to_string()));
 
-        // Extract VERSION (ICS:Version) - Worker 27 requirement
-        if let Some(version) = Self::extract_value(text, "VERSION") {
-            metadata.insert("ICS:Version".to_string(), TagValue::new_string(version));
-        }
+            // Extract VERSION (ICS:Version) - Worker 27 requirement
+            if let Some(version) = Self::extract_value(text, "VERSION") {
+                metadata.insert("ICS:Version".to_string(), TagValue::new_string(version));
+            }
 
-        // Extract PRODID (ICS:ProductID) - Worker 27 requirement
-        if let Some(prodid) = Self::extract_value(text, "PRODID") {
-            metadata.insert("ICS:ProductID".to_string(), TagValue::new_string(prodid));
-        }
+            // Extract PRODID (ICS:ProductID) - Worker 27 requirement
+            if let Some(prodid) = Self::extract_value(text, "PRODID") {
+                metadata.insert("ICS:ProductID".to_string(), TagValue::new_string(prodid));
+            }
 
-        // Extract CALSCALE (ICS:CalScale) - Worker 27 requirement
-        if let Some(calscale) = Self::extract_value(text, "CALSCALE") {
-            metadata.insert("ICS:CalScale".to_string(), TagValue::new_string(calscale));
-        }
+            // Extract CALSCALE (ICS:CalScale) - Worker 27 requirement
+            if let Some(calscale) = Self::extract_value(text, "CALSCALE") {
+                metadata.insert("ICS:CalScale".to_string(), TagValue::new_string(calscale));
+            }
 
-        // Extract METHOD (ICS:Method) - Worker 27 requirement
-        if let Some(method) = Self::extract_value(text, "METHOD") {
-            metadata.insert("ICS:Method".to_string(), TagValue::new_string(method));
-        }
+            // Extract METHOD (ICS:Method) - Worker 27 requirement
+            if let Some(method) = Self::extract_value(text, "METHOD") {
+                metadata.insert("ICS:Method".to_string(), TagValue::new_string(method));
+            }
 
-        // Count VEVENT entries (ICS:EventCount) - Worker 27 requirement
-        let event_count = Self::count_component(text, "VEVENT");
-        if event_count > 0 {
-            metadata.insert(
-                "ICS:EventCount".to_string(),
-                TagValue::new_integer(event_count),
-            );
-        }
+            // Count VEVENT entries (ICS:EventCount) - Worker 27 requirement
+            let event_count = Self::count_component(text, "VEVENT");
+            if event_count > 0 {
+                metadata.insert(
+                    "ICS:EventCount".to_string(),
+                    TagValue::new_integer(event_count),
+                );
+            }
 
-        // Count VTODO entries (ICS:TodoCount) - Worker 27 requirement
-        let todo_count = Self::count_component(text, "VTODO");
-        if todo_count > 0 {
-            metadata.insert(
-                "ICS:TodoCount".to_string(),
-                TagValue::new_integer(todo_count),
-            );
-        }
+            // Count VTODO entries (ICS:TodoCount) - Worker 27 requirement
+            let todo_count = Self::count_component(text, "VTODO");
+            if todo_count > 0 {
+                metadata.insert(
+                    "ICS:TodoCount".to_string(),
+                    TagValue::new_integer(todo_count),
+                );
+            }
 
-        // Extract first date (ICS:FirstDate) - Worker 27 requirement
-        if let Some(first_date) = Self::extract_first_date(text) {
-            metadata.insert(
-                "ICS:FirstDate".to_string(),
-                TagValue::new_string(first_date),
-            );
-        }
+            // Extract first date (ICS:FirstDate) - Worker 27 requirement
+            if let Some(first_date) = Self::extract_first_date(text) {
+                metadata.insert(
+                    "ICS:FirstDate".to_string(),
+                    TagValue::new_string(first_date),
+                );
+            }
 
-        // Extract last date (ICS:LastDate) - Worker 27 requirement
-        if let Some(last_date) = Self::extract_last_date(text) {
-            metadata.insert("ICS:LastDate".to_string(), TagValue::new_string(last_date));
-        }
+            // Extract last date (ICS:LastDate) - Worker 27 requirement
+            if let Some(last_date) = Self::extract_last_date(text) {
+                metadata.insert("ICS:LastDate".to_string(), TagValue::new_string(last_date));
+            }
 
-        // Real ExifTool parity: ICS files are read by ExifTool's VCard.pm module
-        // (Image::ExifTool::VCard::VCalendar table), which puts every extracted
-        // tag under family-0 group "VCard" - NOT "ICS". The `ICS:*` tags above
-        // are a fabricated namespace with no counterpart in real ExifTool output;
-        // they're left in place only because existing tests assert on them.
-        //
-        // This adds the real `VCard:<TagName>` tags for properties that are
-        // direct children of BEGIN:VCALENDAR (depth 1), matching
-        // Image::ExifTool::VCard::VCalendar. Verified against ExifTool 13.59
-        // (`exiftool -G -s`) on t/images/VCard.ics. Properties nested inside
-        // VEVENT/VALARM/VTIMEZONE etc. are intentionally NOT emitted here:
-        // ExifTool disambiguates repeated tag names (e.g. multiple VEVENTs)
-        // using family-1 group numbering (Event1, Event2, ...), which this
-        // flat Group:Tag map cannot represent without risking collisions/
-        // silently-wrong values, so those are left as a documented gap.
-        Self::extract_vcalendar_tags(text, &mut metadata);
+            // Real ExifTool parity: ICS files are read by ExifTool's VCard.pm module
+            // (Image::ExifTool::VCard::VCalendar table), which puts every extracted
+            // tag under family-0 group "VCard" - NOT "ICS". The `ICS:*` tags above
+            // are a fabricated namespace with no counterpart in real ExifTool output;
+            // they're left in place only because existing tests assert on them.
+            //
+            // This adds the real `VCard:<TagName>` tags for properties that are
+            // direct children of BEGIN:VCALENDAR (depth 1), matching
+            // Image::ExifTool::VCard::VCalendar. Verified against ExifTool 13.59
+            // (`exiftool -G -s`) on t/images/VCard.ics. Properties nested inside
+            // VEVENT/VALARM/VTIMEZONE etc. are intentionally NOT emitted here:
+            // ExifTool disambiguates repeated tag names (e.g. multiple VEVENTs)
+            // using family-1 group numbering (Event1, Event2, ...), which this
+            // flat Group:Tag map cannot represent without risking collisions/
+            // silently-wrong values, so those are left as a documented gap.
+            Self::extract_vcalendar_tags(text, &mut metadata);
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -455,8 +459,12 @@ impl FormatParser for ICSParser {
 ///
 /// This is a convenience wrapper around ICSParser that provides a functional API.
 pub fn parse_ics_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let parser = ICSParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = ICSParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

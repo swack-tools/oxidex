@@ -77,6 +77,7 @@ pub extern "C" fn exiftool_read_file(
                 // Clear string cache before loading new data
                 context.clear_string_cache();
                 context.metadata = metadata;
+                context.mutations.clear();
                 // Rebuild tag cache for iteration
                 context.rebuild_tag_cache();
                 EXIFTOOL_OK

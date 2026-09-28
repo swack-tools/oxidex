@@ -14,6 +14,7 @@ pub mod exiftool_compat;
 pub mod file_format;
 pub mod file_metadata;
 pub mod file_reader_trait;
+mod filesystem_metadata;
 pub mod flag_utils;
 pub mod format_dispatch;
 pub mod format_parser_trait;
@@ -33,9 +34,11 @@ pub mod tag_normalization;
 pub mod tag_occurrence;
 pub mod tag_sink;
 pub mod tag_value;
+pub(crate) mod tags_from_file;
 pub mod tiff_helpers;
 pub mod validation;
 pub mod value_formatter;
+pub mod write_transaction;
 
 // Re-export tag descriptor types from exiftool-tags crate
 pub use oxidex_tags::{FormatFamily, TagDescriptor, TagId, ValueType};
@@ -60,3 +63,4 @@ pub use tag_occurrence::{Group, Instance, Provenance, SHIM_DEFAULT_PRIORITY, Tag
 pub use tag_sink::TagSink;
 pub use tag_value::TagValue;
 pub use validation::validate_tag_value;
+pub use write_transaction::{TagChange, WriteOutcome, apply_tag_changes};

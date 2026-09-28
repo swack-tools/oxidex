@@ -86,37 +86,41 @@ fn is_perl_space(b: u8) -> bool {
 /// assert_eq!(metadata.get_string("APP12:CameraType"), Some("SR84"));
 /// ```
 pub fn parse_app12_picture_info(data: &[u8]) -> Result<MetadataMap> {
-    if data.len() < MIN_SEGMENT_LENGTH {
-        return Err(crate::error::ExifToolError::parse_error(format!(
-            "APP12 Picture Info segment too short: {} bytes (minimum {} required)",
-            data.len(),
-            MIN_SEGMENT_LENGTH
-        )));
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        if data.len() < MIN_SEGMENT_LENGTH {
+            return Err(crate::error::ExifToolError::parse_error(format!(
+                "APP12 Picture Info segment too short: {} bytes (minimum {} required)",
+                data.len(),
+                MIN_SEGMENT_LENGTH
+            )));
+        }
 
-    let mut metadata = MetadataMap::new();
-    for (key, value) in scan_pairs(data) {
-        let (name, value) = convert_tag(&key, &value);
-        // `%Image::ExifTool::APP12::PictureInfo` declares `PRIORITY => 0` at
-        // the table level (APP12.pm:27): this whole segment -- an ASCII
-        // `tag=value` block some older Agfa/Polaroid bodies wrote -- is
-        // less reliable than the standard EXIF tags of the same name.
-        // `Composite:Aperture`'s unqualified `Desire => {0 => 'FNumber'}`
-        // (Exif.pm:4782) resolves the bare name by priority-then-order, so
-        // without this an `APP12:FNumber` recorded after `ExifIFD:FNumber`
-        // would win the tie and feed the wrong f-number into every
-        // composite chained from it -- confirmed on `ExifTool.jpg`
-        // (`ExifIFD:FNumber` "3.5" vs `APP12:FNumber` "11.0", oracle's own
-        // `Composite:Aperture` reads the former).
-        metadata.insert_occurrence(
-            format!("APP12:{}", name),
-            value,
-            0,
-            "PictureInfo",
-            crate::core::Instance::default(),
-        );
-    }
-    Ok(metadata)
+        let mut metadata = MetadataMap::new();
+        for (key, value) in scan_pairs(data) {
+            let (name, value) = convert_tag(&key, &value);
+            // `%Image::ExifTool::APP12::PictureInfo` declares `PRIORITY => 0` at
+            // the table level (APP12.pm:27): this whole segment -- an ASCII
+            // `tag=value` block some older Agfa/Polaroid bodies wrote -- is
+            // less reliable than the standard EXIF tags of the same name.
+            // `Composite:Aperture`'s unqualified `Desire => {0 => 'FNumber'}`
+            // (Exif.pm:4782) resolves the bare name by priority-then-order, so
+            // without this an `APP12:FNumber` recorded after `ExifIFD:FNumber`
+            // would win the tie and feed the wrong f-number into every
+            // composite chained from it -- confirmed on `ExifTool.jpg`
+            // (`ExifIFD:FNumber` "3.5" vs `APP12:FNumber` "11.0", oracle's own
+            // `Composite:Aperture` reads the former).
+            metadata.insert_occurrence(
+                format!("APP12:{}", name),
+                value,
+                0,
+                "PictureInfo",
+                crate::core::Instance::default(),
+            );
+        }
+        Ok(metadata)
+    })
 }
 
 /// Walks the payload the way ExifTool's `ProcessAPP12` regex does, returning

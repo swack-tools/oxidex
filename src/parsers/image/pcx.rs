@@ -59,98 +59,108 @@ fn header_matches_signature(header: &[u8]) -> bool {
 
 /// Extract PCX metadata using ExifTool's declared `PCX::Main` binary layout.
 pub fn parse_pcx_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("PCX file is too short for the 0x50-byte header".to_string());
-    }
-    let header = reader
-        .read(0, HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !header_matches_signature(header) {
-        return Err("invalid PCX header".to_string());
-    }
-
-    let table = find_table("PCX", "Main").ok_or("missing PCX::Main table")?;
-    let decode = decode_binary_table(table, header, ByteOrder::Little);
-
-    let mut left_margin = 0_i64;
-    let mut top_margin = 0_i64;
-    for decoded in decode.fields() {
-        match decoded.field.name {
-            "LeftMargin" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &LEFT_MARGIN)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    left_margin = raw;
-                }
-            }
-            "TopMargin" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &TOP_MARGIN)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    top_margin = raw;
-                }
-            }
-            _ => {}
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("PCX file is too short for the 0x50-byte header".to_string());
         }
-    }
+        let header = reader
+            .read(0, HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !header_matches_signature(header) {
+            return Err("invalid PCX header".to_string());
+        }
 
-    let mut metadata = MetadataMap::new();
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("File:{name}");
-        match name {
-            "LeftMargin" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &LEFT_MARGIN)
-                {
-                    metadata.insert(key, access.emit_raw());
+        let table = find_table("PCX", "Main").ok_or("missing PCX::Main table")?;
+        let decode = decode_binary_table(table, header, ByteOrder::Little);
+
+        let mut left_margin = 0_i64;
+        let mut top_margin = 0_i64;
+        for decoded in decode.fields() {
+            match decoded.field.name {
+                "LeftMargin" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &LEFT_MARGIN)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        left_margin = raw;
+                    }
                 }
-            }
-            "TopMargin" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &TOP_MARGIN) {
-                    metadata.insert(key, access.emit_raw());
+                "TopMargin" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &TOP_MARGIN)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        top_margin = raw;
+                    }
                 }
-            }
-            "ImageWidth" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &IMAGE_WIDTH)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    metadata.insert(key, TagValue::new_integer(raw - left_margin + 1));
-                }
-            }
-            "ImageHeight" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::VALUE_CONV, &IMAGE_HEIGHT)
-                    && let Some(raw) = access.raw().as_integer()
-                {
-                    metadata.insert(key, TagValue::new_integer(raw - top_margin + 1));
-                }
-            }
-            "ScreenWidth" => {
-                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &SCREEN_WIDTH)
-                    && let DecodedValue::Integer(raw) = access.raw()
-                    && *raw != 0
-                {
-                    metadata.insert(key, TagValue::new_integer(*raw));
-                }
-            }
-            "ScreenHeight" => {
-                if let Some(access) =
-                    RawAccess::new(decoded, Acknowledged::RAW_CONV, &SCREEN_HEIGHT)
-                    && let DecodedValue::Integer(raw) = access.raw()
-                    && *raw != 0
-                {
-                    metadata.insert(key, TagValue::new_integer(*raw));
-                }
-            }
-            _ => {
-                if let Some(value) = decoded.emit() {
-                    metadata.insert(key, value);
-                }
+                _ => {}
             }
         }
-    }
-    Ok(metadata)
+
+        let mut metadata = MetadataMap::new();
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("File:{name}");
+            match name {
+                "LeftMargin" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &LEFT_MARGIN)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                "TopMargin" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &TOP_MARGIN)
+                    {
+                        metadata.insert(key, access.emit_raw());
+                    }
+                }
+                "ImageWidth" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &IMAGE_WIDTH)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        metadata.insert(key, TagValue::new_integer(raw - left_margin + 1));
+                    }
+                }
+                "ImageHeight" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::VALUE_CONV, &IMAGE_HEIGHT)
+                        && let Some(raw) = access.raw().as_integer()
+                    {
+                        metadata.insert(key, TagValue::new_integer(raw - top_margin + 1));
+                    }
+                }
+                "ScreenWidth" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &SCREEN_WIDTH)
+                        && let DecodedValue::Integer(raw) = access.raw()
+                        && *raw != 0
+                    {
+                        metadata.insert(key, TagValue::new_integer(*raw));
+                    }
+                }
+                "ScreenHeight" => {
+                    if let Some(access) =
+                        RawAccess::new(decoded, Acknowledged::RAW_CONV, &SCREEN_HEIGHT)
+                        && let DecodedValue::Integer(raw) = access.raw()
+                        && *raw != 0
+                    {
+                        metadata.insert(key, TagValue::new_integer(*raw));
+                    }
+                }
+                _ => {
+                    if let Some(value) = decoded.emit() {
+                        metadata.insert(key, value);
+                    }
+                }
+            }
+        }
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

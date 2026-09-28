@@ -1527,10 +1527,11 @@ fn write_metadata_routes_png_and_pdf_writers() {
     let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
     let pdf = copy_fixture_to_temp("tests/fixtures/pdf/sample.pdf", ".pdf");
 
+    // A read-modify-write: `write_metadata` treats every row the map lacks as
+    // a deletion, so clearing the map would ask to delete the file's other
+    // metadata (and be refused for the rows no writer deletes). Only the
+    // changed row is validated, so the fixture's other rows are no obstacle.
     let mut png_metadata = read_metadata(png.path()).expect("read png");
-    // Keep the test focused on write routing; fixture metadata includes tags
-    // that can fail validation before dispatch is reached.
-    png_metadata.clear();
     png_metadata.insert("PNG:Author", TagValue::new_string("OxiDex QA"));
     write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
     let png_after = read_metadata(png.path()).expect("re-read png after write");
@@ -1545,7 +1546,6 @@ fn write_metadata_routes_png_and_pdf_writers() {
     );
 
     let mut pdf_metadata = read_metadata(pdf.path()).expect("read pdf");
-    pdf_metadata.clear();
     pdf_metadata.insert("PDF:Title", TagValue::new_string("OxiDex QA"));
     write_metadata(pdf.path(), &pdf_metadata).expect("write pdf through high-level API");
     let pdf_after = read_metadata(pdf.path()).expect("re-read pdf after write");
@@ -1557,26 +1557,30 @@ fn write_metadata_routes_png_and_pdf_writers() {
 }
 
 #[test]
-fn write_metadata_rejects_tiff_until_writer_preserves_image_data() {
-    // The TIFF writer rebuilds files from metadata alone and drops image data,
-    // so the high-level API must refuse to route TIFF writes to it.
+fn write_metadata_on_tiff_sets_only_and_preserves_image_data() {
+    // The TIFF path is the surgical in-place writer, which keeps the image
+    // data. A map built from scratch names only what it sets (maintainer
+    // decision on #951, ExifTool's SetNewValue model): `EXIF:Make` is set
+    // (resolved to IFD0:Make) and every other stored row survives. This test
+    // used to require a refusal, from when the TIFF writer rebuilt files from
+    // metadata alone and dropped the image data.
     let tiff = copy_fixture_to_temp("tests/fixtures/tiff/sample.tif", ".tif");
-    let size_before = std::fs::metadata(tiff.path()).expect("stat tiff").len();
+    let before = read_metadata(tiff.path()).expect("read tiff");
 
     let mut tiff_metadata = MetadataMap::new();
     tiff_metadata.insert("EXIF:Make", TagValue::new_string("OxiDex QA"));
+    write_metadata(tiff.path(), &tiff_metadata).expect("a from-scratch set on a TIFF");
 
-    let result = write_metadata(tiff.path(), &tiff_metadata);
-    assert!(
-        result.is_err(),
-        "TIFF writes must be rejected while the writer discards image data"
-    );
-
-    let size_after = std::fs::metadata(tiff.path()).expect("stat tiff").len();
-    assert_eq!(
-        size_before, size_after,
-        "rejected TIFF write must leave the file untouched"
-    );
+    let after = read_metadata(tiff.path()).expect("re-read tiff");
+    assert_eq!(after.get_string("IFD0:Make"), Some("OxiDex QA"));
+    for (key, value) in before.iter() {
+        let stored = key.split_once(':').is_some_and(|(group, _)| {
+            !matches!(group, "File" | "System" | "Composite" | "ExifTool")
+        });
+        if stored && key != "IFD0:Make" {
+            assert_eq!(after.get(key), Some(value), "{key} changed or vanished");
+        }
+    }
 }
 
 #[test]
@@ -1772,7 +1776,9 @@ trailer<</Size 5/Root 1 0 R/Info 4 0 R/Prev {base_xref_off}>>\nstartxref\n{upd_x
     temp.flush().expect("flush pdf");
     let size_before = fs::metadata(temp.path()).expect("stat pdf").len();
 
-    let mut metadata = MetadataMap::new();
+    // A read-modify-write: a map holding only `PDF:Author` would ask to
+    // delete every other row (`PDF:Producer` among them).
+    let mut metadata = read_metadata(temp.path()).expect("read incremental pdf");
     metadata.insert("PDF:Author", TagValue::new_string("Ansel"));
     write_metadata(temp.path(), &metadata).expect("incremental PDF write must succeed");
 

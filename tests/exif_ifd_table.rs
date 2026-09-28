@@ -1036,16 +1036,14 @@ fn tiff_entries(tiff: &[u8]) -> Vec<(u16, u16, u32, Vec<u8>)> {
 }
 
 /// Review finding (E-2, found while fixing the PNG writer): `-TagsFromFile`
-/// copied an engine row's printed value, so a binary tag's `(Binary data 4
-/// bytes, ...)` placeholder reached the writer as text and the copy failed
-/// ("expected Binary but got String"), where control b4808958 copied the
-/// bytes. `copy_metadata` copies the stored form: the 4 bytes of a crafted
-/// source's DeviceSettingDescription (the shape of DJI_FC300X.jpg's)
-/// arrive as the 4 bytes (pinned `exiftool-pinned.sh -v3` on the result:
-/// `Tag 0xa40b (4 bytes, undef[4])`, `01 02 03 04`), and ColorSpace as its
-/// SHORT (`-n` 1).
+/// handed a binary tag's `(Binary data 4 bytes, ...)` placeholder to the
+/// writer as text. Exif.pm's 0xa40b DeviceSettingDescription has no
+/// `Writable`, so pinned 13.59 skips it while copying ColorSpace as SHORT
+/// (`-n` 2). An explicit named OxiDex request instead refuses atomically
+/// when any surviving destination is unwritable. A wildcard selection keeps
+/// the best-effort behavior and must never write the binary placeholder.
 #[test]
-fn copy_metadata_copies_stored_values() {
+fn copy_metadata_refuses_unwritable_names_and_copies_selected_fields() {
     let Some(path) = fixtures::pinned_t_images_fixture_path("Nikon.jpg") else {
         return;
     };
@@ -1086,15 +1084,24 @@ fn copy_metadata_copies_stored_values() {
         "ExifIFD:DeviceSettingDescription".to_string(),
         "ExifIFD:ColorSpace".to_string(),
     ];
-    oxidex::core::operations::copy_metadata(src.path(), dst.path(), Some(&tags))
-        .expect("the copy succeeds");
+    let error = oxidex::core::operations::copy_metadata(src.path(), dst.path(), Some(&tags))
+        .expect_err("a named unwritable destination refuses the entire copy");
+    assert!(matches!(
+        error,
+        oxidex::error::ExifToolError::TagsNotWritten { tags }
+            if tags.iter().any(|tag| tag.tag == "ExifIFD:DeviceSettingDescription")
+    ));
+    assert_eq!(std::fs::read(dst.path()).unwrap(), dest_bytes);
+    oxidex::core::operations::copy_metadata(
+        src.path(),
+        dst.path(),
+        Some(&["ExifIFD:*".to_string()]),
+    )
+    .expect("a selection copies the writable fields");
     let written = std::fs::read(dst.path()).expect("read back");
     let entries = tiff_entries(&tiff_block_of(&written));
     assert!(
-        entries.iter().any(|(tag, ty, count, value)| *tag == 0xa40b
-            && *ty == 7
-            && *count == 4
-            && value == &[1, 2, 3, 4]),
+        !entries.iter().any(|(tag, ..)| *tag == 0xa40b),
         "{entries:?}"
     );
     let copied = read_metadata(dst.path()).expect("the destination parses");

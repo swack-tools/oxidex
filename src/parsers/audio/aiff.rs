@@ -88,28 +88,32 @@ pub fn parse_aiff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
 impl FormatParser for AiffParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // AIFF.pm:191 -- 12 readable bytes are the minimum ProcessAIFF accepts.
-        if reader.size() < 12 {
-            return Err(ExifToolError::parse_error("File too small to be AIFF"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // AIFF.pm:191 -- 12 readable bytes are the minimum ProcessAIFF accepts.
+            if reader.size() < 12 {
+                return Err(ExifToolError::parse_error("File too small to be AIFF"));
+            }
 
-        let header = reader.read(0, 12)?;
-        let (Some(signature), Some(form_type)) = (header.get(0..4), header.get(8..12)) else {
-            return Err(ExifToolError::parse_error("Truncated AIFF header"));
-        };
-        // AIFF.pm:209 -- `/^FORM....(AIF(F|C))/s`. The four bytes between are
-        // the FORM length, which ProcessAIFF never consults: it walks chunks to
-        // end of file regardless of what the wrapper claims.
-        if signature != FORM_SIGNATURE || !matches!(form_type, b"AIFF" | b"AIFC") {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid AIFF signature: expected FORM....AIF[FC], found {:?}{:?}",
-                signature, form_type
-            )));
-        }
+            let header = reader.read(0, 12)?;
+            let (Some(signature), Some(form_type)) = (header.get(0..4), header.get(8..12)) else {
+                return Err(ExifToolError::parse_error("Truncated AIFF header"));
+            };
+            // AIFF.pm:209 -- `/^FORM....(AIF(F|C))/s`. The four bytes between are
+            // the FORM length, which ProcessAIFF never consults: it walks chunks to
+            // end of file regardless of what the wrapper claims.
+            if signature != FORM_SIGNATURE || !matches!(form_type, b"AIFF" | b"AIFC") {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid AIFF signature: expected FORM....AIF[FC], found {:?}{:?}",
+                    signature, form_type
+                )));
+            }
 
-        let mut metadata = MetadataMap::with_capacity(16);
-        walk_chunks(reader, 12, reader.size(), &mut metadata);
-        Ok(metadata)
+            let mut metadata = MetadataMap::with_capacity(16);
+            walk_chunks(reader, 12, reader.size(), &mut metadata);
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

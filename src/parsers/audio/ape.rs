@@ -82,27 +82,31 @@ pub fn parse_ape_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for ApeParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        let file_size = reader.size();
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            let file_size = reader.size();
 
-        if file_size < APE_TAG_BLOCK_LEN {
-            return Err(ExifToolError::parse_error("File too small to be APE"));
-        }
+            if file_size < APE_TAG_BLOCK_LEN {
+                return Err(ExifToolError::parse_error("File too small to be APE"));
+            }
 
-        let descriptor = reader.read(0, 32)?;
-        if &descriptor[0..4] != MAC_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid APE signature: expected {:?}, found {:?}",
-                MAC_SIGNATURE,
-                &descriptor[0..4]
-            )));
-        }
+            let descriptor = reader.read(0, 32)?;
+            if &descriptor[0..4] != MAC_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid APE signature: expected {:?}, found {:?}",
+                    MAC_SIGNATURE,
+                    &descriptor[0..4]
+                )));
+            }
 
-        let mut metadata = MetadataMap::with_capacity(24);
+            let mut metadata = MetadataMap::with_capacity(24);
 
-        parse_mac_audio_header(reader, descriptor, &mut metadata)?;
-        parse_ape_trailer(reader, &mut metadata)?;
+            parse_mac_audio_header(reader, descriptor, &mut metadata)?;
+            parse_ape_trailer(reader, &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

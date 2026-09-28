@@ -66,35 +66,39 @@ pub fn parse_wav_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
 impl FormatParser for WavParser {
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify RIFF/WAVE signature
-        if reader.size() < 12 {
-            return Err(ExifToolError::parse_error("File too small to be WAV"));
-        }
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify RIFF/WAVE signature
+            if reader.size() < 12 {
+                return Err(ExifToolError::parse_error("File too small to be WAV"));
+            }
 
-        let header = reader.read(0, 12)?;
-        if &header[0..4] != RIFF_SIGNATURE {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid RIFF signature: expected {:?}, found {:?}",
-                RIFF_SIGNATURE,
-                &header[0..4]
-            )));
-        }
+            let header = reader.read(0, 12)?;
+            if &header[0..4] != RIFF_SIGNATURE {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid RIFF signature: expected {:?}, found {:?}",
+                    RIFF_SIGNATURE,
+                    &header[0..4]
+                )));
+            }
 
-        if &header[8..12] != WAVE_FORMAT {
-            return Err(ExifToolError::parse_error(format!(
-                "Invalid WAVE format: expected {:?}, found {:?}",
-                WAVE_FORMAT,
-                &header[8..12]
-            )));
-        }
+            if &header[8..12] != WAVE_FORMAT {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid WAVE format: expected {:?}, found {:?}",
+                    WAVE_FORMAT,
+                    &header[8..12]
+                )));
+            }
 
-        let mut metadata = MetadataMap::with_capacity(16);
-        let file_size = reader.size();
+            let mut metadata = MetadataMap::with_capacity(16);
+            let file_size = reader.size();
 
-        // Parse RIFF chunks
-        parse_riff_chunks(reader, 12, file_size, &mut metadata)?;
+            // Parse RIFF chunks
+            parse_riff_chunks(reader, 12, file_size, &mut metadata)?;
 
-        Ok(metadata)
+            Ok(metadata)
+        })
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {

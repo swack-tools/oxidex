@@ -90,70 +90,74 @@ fn format_records(record_runs: &[(u8, usize)]) -> Vec<String> {
 
 /// Parses only WPG v1's ExifTool-compatible `WPG:Records` list.
 pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < WPG_HEADER_LEN as u64 {
-        return Err("WPG file too short".to_string());
-    }
-
-    let header = reader
-        .read(0, WPG_HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if header[0..4] != *WPG_SIGNATURE {
-        return Err("Invalid WPG signature".to_string());
-    }
-
-    let mut metadata = MetadataMap::new();
-    // `Records` is a WPG 1.0 tag. WPG 2.0 has the separate `RecordsV2` tag,
-    // which is intentionally out of this single-tag change.
-    if header[10] != 1 {
-        return Ok(metadata);
-    }
-
-    let declared_offset = u64::from(u32::from_le_bytes([
-        header[4], header[5], header[6], header[7],
-    ]));
-    let records_offset = declared_offset.max(WPG_HEADER_LEN as u64);
-    if records_offset >= reader.size() {
-        return Ok(metadata);
-    }
-
-    let remaining = usize::try_from(reader.size() - records_offset)
-        .map_err(|_| "WPG file is too large to parse".to_string())?;
-    let data = reader
-        .read(records_offset, remaining)
-        .map_err(|error| error.to_string())?;
-
-    let mut cursor = 0;
-    let mut record_runs = Vec::new();
-    while let Some(&record_type) = data.get(cursor) {
-        cursor += 1;
-        let Some(length) = read_var_int(&data, &mut cursor) else {
-            break;
-        };
-        let Some(next) = cursor.checked_add(length) else {
-            break;
-        };
-        if next > data.len() {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < WPG_HEADER_LEN as u64 {
+            return Err("WPG file too short".to_string());
         }
-        cursor = next;
-        if record_type == 0 {
-            break;
-        }
-        add_record_type(&mut record_runs, record_type);
-    }
 
-    if !record_runs.is_empty() {
-        metadata.insert(
-            "WPG:Records".to_string(),
-            TagValue::Array(
-                format_records(&record_runs)
-                    .into_iter()
-                    .map(TagValue::String)
-                    .collect(),
-            ),
-        );
-    }
-    Ok(metadata)
+        let header = reader
+            .read(0, WPG_HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if header[0..4] != *WPG_SIGNATURE {
+            return Err("Invalid WPG signature".to_string());
+        }
+
+        let mut metadata = MetadataMap::new();
+        // `Records` is a WPG 1.0 tag. WPG 2.0 has the separate `RecordsV2` tag,
+        // which is intentionally out of this single-tag change.
+        if header[10] != 1 {
+            return Ok(metadata);
+        }
+
+        let declared_offset = u64::from(u32::from_le_bytes([
+            header[4], header[5], header[6], header[7],
+        ]));
+        let records_offset = declared_offset.max(WPG_HEADER_LEN as u64);
+        if records_offset >= reader.size() {
+            return Ok(metadata);
+        }
+
+        let remaining = usize::try_from(reader.size() - records_offset)
+            .map_err(|_| "WPG file is too large to parse".to_string())?;
+        let data = reader
+            .read(records_offset, remaining)
+            .map_err(|error| error.to_string())?;
+
+        let mut cursor = 0;
+        let mut record_runs = Vec::new();
+        while let Some(&record_type) = data.get(cursor) {
+            cursor += 1;
+            let Some(length) = read_var_int(&data, &mut cursor) else {
+                break;
+            };
+            let Some(next) = cursor.checked_add(length) else {
+                break;
+            };
+            if next > data.len() {
+                break;
+            }
+            cursor = next;
+            if record_type == 0 {
+                break;
+            }
+            add_record_type(&mut record_runs, record_type);
+        }
+
+        if !record_runs.is_empty() {
+            metadata.insert(
+                "WPG:Records".to_string(),
+                TagValue::Array(
+                    format_records(&record_runs)
+                        .into_iter()
+                        .map(TagValue::String)
+                        .collect(),
+                ),
+            );
+        }
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

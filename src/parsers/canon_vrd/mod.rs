@@ -153,18 +153,22 @@ impl Scalar {
 /// A metadata map keyed `CanonVRD:<Name>`; empty when the file carries no
 /// CanonVRD trailer.
 pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let Some(trailer) = find_trailer(file) else {
-        return metadata;
-    };
-    for (block_type, block) in blocks(trailer) {
-        match block_type {
-            BLOCK_EDIT_DATA => parse_edit_data(block, &mut metadata),
-            BLOCK_EDIT4_DATA => metadata.merge(dr4::parse_dr4(block)),
-            _ => {}
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let Some(trailer) = find_trailer(file) else {
+            return metadata;
+        };
+        for (block_type, block) in blocks(trailer) {
+            match block_type {
+                BLOCK_EDIT_DATA => parse_edit_data(block, &mut metadata),
+                BLOCK_EDIT4_DATA => metadata.merge(dr4::parse_dr4(block)),
+                _ => {}
+            }
         }
-    }
-    metadata
+        metadata
+    })
 }
 
 /// Reads a `.VRD` file, the standalone form of the same record.
@@ -179,13 +183,17 @@ pub fn parse_canon_vrd_trailer(file: &[u8]) -> MetadataMap {
 /// The `File:` identity tags come from `filetype`'s tables rather than
 /// literals, so there is one source for them.
 pub fn parse_vrd_file(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let file = reader.read(0, reader.size() as usize)?;
-    let mut metadata = parse_canon_vrd_trailer(file);
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error("No valid CanonVRD record found"));
-    }
-    set_identity(&mut metadata, "vrd");
-    Ok(metadata)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file = reader.read(0, reader.size() as usize)?;
+        let mut metadata = parse_canon_vrd_trailer(file);
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error("No valid CanonVRD record found"));
+        }
+        set_identity(&mut metadata, "vrd");
+        Ok(metadata)
+    })
 }
 
 /// Reads a `.DR4` file: the DPP 4 directory with nothing wrapped around it.
@@ -200,13 +208,17 @@ pub fn parse_vrd_file(reader: &dyn FileReader) -> Result<MetadataMap> {
 /// Returns `ParseError` when the header is present but the directory yields no
 /// tags -- the same "Invalid DR4 directory" condition ExifTool warns about.
 pub fn parse_dr4_file(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let file = reader.read(0, reader.size() as usize)?;
-    let mut metadata = dr4::parse_dr4(file);
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error("Invalid DR4 directory"));
-    }
-    set_identity(&mut metadata, "dr4");
-    Ok(metadata)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file = reader.read(0, reader.size() as usize)?;
+        let mut metadata = dr4::parse_dr4(file);
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error("Invalid DR4 directory"));
+        }
+        set_identity(&mut metadata, "dr4");
+        Ok(metadata)
+    })
 }
 
 /// Stamps the `File:` identity tags from `filetype`'s tables.

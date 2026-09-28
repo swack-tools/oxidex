@@ -161,150 +161,154 @@ const PROFILES: &[Profile] = &[
 
 /// Extract DV metadata (`Image::ExifTool::DV::ProcessDV`).
 pub fn parse_dv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let file_size = reader.size();
-    let want = SCAN_LEN.min(file_size as usize);
-    if want == 0 {
-        return Err("empty DV file".to_string());
-    }
-    let buff = reader.read(0, want).map_err(|e| e.to_string())?;
-
-    let start = find_start(&buff).ok_or("no DV DIF header found")?;
-
-    // DV.pm:170-171: must have a full DIF header.
-    if start + 80 * 6 > buff.len() {
-        return Err("DV file is truncated before a full DIF header".to_string());
-    }
-
-    // DV.pm:176-177.
-    let dsf = (buff[start + 3] & 0x80) >> 7;
-    let stype = buff[start + 80 * 5 + 48 + 3] & 0x1f;
-
-    // DV.pm:180-187. Note the special case reads absolute offset 4, not
-    // `$start + 4` -- that is what the Perl says, and it is what decides
-    // between the two otherwise-identical 625/50 profiles.
-    let profile = if dsf == 1 && stype == 0 && buff.len() > 4 && (buff[4] & 0x07) != 0 {
-        &PROFILES[2]
-    } else {
-        match PROFILES
-            .iter()
-            .find(|p| p.dsf == dsf && p.video_stype == stype)
-        {
-            Some(profile) => profile,
-            // DV.pm:187: "Unrecognized DV profile" -- the file is valid, it
-            // just yields no DV tags.
-            None => return Ok(MetadataMap::new()),
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let file_size = reader.size();
+        let want = SCAN_LEN.min(file_size as usize);
+        if want == 0 {
+            return Err("empty DV file".to_string());
         }
-    };
+        let buff = reader.read(0, want).map_err(|e| e.to_string())?;
 
-    let mut metadata = MetadataMap::new();
+        let start = find_start(&buff).ok_or("no DV DIF header found")?;
 
-    // DV.pm:190-194: total bit rate and duration.
-    let byte_rate = profile.frame_size * profile.frame_rate;
+        // DV.pm:170-171: must have a full DIF header.
+        if start + 80 * 6 > buff.len() {
+            return Err("DV file is truncated before a full DIF header".to_string());
+        }
 
-    // DV.pm:196-235: scan the VAUX DIF blocks for date/time, aspect ratio
-    // and scan type.
-    let vaux = scan_vaux(&buff, start);
+        // DV.pm:176-177.
+        let dsf = (buff[start + 3] & 0x80) >> 7;
+        let stype = buff[start + 80 * 5 + 48 + 3] & 0x1f;
 
-    // DV.pm:262-265 emits `@dvTags` in a fixed order (DV.pm:114-121). The
-    // insertion order here matches so `-a -G1 -s` lists them the same way.
+        // DV.pm:180-187. Note the special case reads absolute offset 4, not
+        // `$start + 4` -- that is what the Perl says, and it is what decides
+        // between the two otherwise-identical 625/50 profiles.
+        let profile = if dsf == 1 && stype == 0 && buff.len() > 4 && (buff[4] & 0x07) != 0 {
+            &PROFILES[2]
+        } else {
+            match PROFILES
+                .iter()
+                .find(|p| p.dsf == dsf && p.video_stype == stype)
+            {
+                Some(profile) => profile,
+                // DV.pm:187: "Unrecognized DV profile" -- the file is valid, it
+                // just yields no DV tags.
+                None => return Ok(MetadataMap::new()),
+            }
+        };
 
-    // DV.pm:236-243: DateTimeOriginal only exists when *both* a valid date
-    // and a consecutive time record were found.
-    if let (Some(date), Some(time)) = (&vaux.date, &vaux.time) {
-        metadata.insert(
-            "DV:DateTimeOriginal".to_string(),
-            TagValue::new_string(format!("{date} {time}")),
-        );
-    }
+        let mut metadata = MetadataMap::new();
 
-    metadata.insert(
-        "DV:ImageWidth".to_string(),
-        TagValue::new_integer(i64::from(profile.image_width)),
-    );
-    metadata.insert(
-        "DV:ImageHeight".to_string(),
-        TagValue::new_integer(i64::from(profile.image_height)),
-    );
+        // DV.pm:190-194: total bit rate and duration.
+        let byte_rate = profile.frame_size * profile.frame_rate;
 
-    // DV.pm:193, `$$profile{Duration} = $fileSize / $byteRate` -- only when
-    // the file size is known, which it always is here.
-    if byte_rate > 0.0 {
-        metadata.insert(
-            "DV:Duration".to_string(),
-            TagValue::new_string(convert_duration(file_size as f64 / byte_rate)),
-        );
-    }
-    // DV.pm:192, `$$profile{TotalBitrate} = 8 * $byteRate`.
-    metadata.insert(
-        "DV:TotalBitrate".to_string(),
-        TagValue::new_string(convert_bitrate(8.0 * byte_rate)),
-    );
+        // DV.pm:196-235: scan the VAUX DIF blocks for date/time, aspect ratio
+        // and scan type.
+        let vaux = scan_vaux(&buff, start);
 
-    metadata.insert(
-        "DV:VideoFormat".to_string(),
-        TagValue::new_string(profile.video_format),
-    );
+        // DV.pm:262-265 emits `@dvTags` in a fixed order (DV.pm:114-121). The
+        // insertion order here matches so `-a -G1 -s` lists them the same way.
 
-    // DV.pm:238-241: AspectRatio and VideoScanType are only set inside the
-    // `$date and $time` branch, and only when a video-control record was
-    // seen.
-    let aspect = if vaux.date.is_some() && vaux.time.is_some() {
-        vaux.is_16_9
-    } else {
-        None
-    };
-    if aspect.is_some() {
-        metadata.insert(
-            "DV:VideoScanType".to_string(),
-            TagValue::new_string(if vaux.interlaced {
-                "Interlaced"
-            } else {
-                "Progressive"
-            }),
-        );
-    }
-
-    // DV.pm:138, `PrintConv => 'int($val * 1000 + 0.5) / 1000'`.
-    metadata.insert(
-        "DV:FrameRate".to_string(),
-        TagValue::new_string(perl_number(
-            (profile.frame_rate * 1000.0 + 0.5).trunc() / 1000.0,
-        )),
-    );
-
-    if let Some(is_16_9) = aspect {
-        metadata.insert(
-            "DV:AspectRatio".to_string(),
-            TagValue::new_string(if is_16_9 { "16:9" } else { "4:3" }),
-        );
-    }
-
-    metadata.insert(
-        "DV:Colorimetry".to_string(),
-        TagValue::new_string(profile.colorimetry),
-    );
-
-    // DV.pm:245-259: audio parameters from the first audio DIF block.
-    if let Some(audio) = read_audio(&buff, start) {
-        if let Some(channels) = audio.channels {
+        // DV.pm:236-243: DateTimeOriginal only exists when *both* a valid date
+        // and a consecutive time record were found.
+        if let (Some(date), Some(time)) = (&vaux.date, &vaux.time) {
             metadata.insert(
-                "DV:AudioChannels".to_string(),
-                TagValue::new_integer(i64::from(channels)),
+                "DV:DateTimeOriginal".to_string(),
+                TagValue::new_string(format!("{date} {time}")),
             );
         }
-        if let Some(rate) = audio.sample_rate {
+
+        metadata.insert(
+            "DV:ImageWidth".to_string(),
+            TagValue::new_integer(i64::from(profile.image_width)),
+        );
+        metadata.insert(
+            "DV:ImageHeight".to_string(),
+            TagValue::new_integer(i64::from(profile.image_height)),
+        );
+
+        // DV.pm:193, `$$profile{Duration} = $fileSize / $byteRate` -- only when
+        // the file size is known, which it always is here.
+        if byte_rate > 0.0 {
             metadata.insert(
-                "DV:AudioSampleRate".to_string(),
-                TagValue::new_integer(i64::from(rate)),
+                "DV:Duration".to_string(),
+                TagValue::new_string(convert_duration(file_size as f64 / byte_rate)),
             );
         }
+        // DV.pm:192, `$$profile{TotalBitrate} = 8 * $byteRate`.
         metadata.insert(
-            "DV:AudioBitsPerSample".to_string(),
-            TagValue::new_integer(i64::from(audio.bits_per_sample)),
+            "DV:TotalBitrate".to_string(),
+            TagValue::new_string(convert_bitrate(8.0 * byte_rate)),
         );
-    }
 
-    Ok(metadata)
+        metadata.insert(
+            "DV:VideoFormat".to_string(),
+            TagValue::new_string(profile.video_format),
+        );
+
+        // DV.pm:238-241: AspectRatio and VideoScanType are only set inside the
+        // `$date and $time` branch, and only when a video-control record was
+        // seen.
+        let aspect = if vaux.date.is_some() && vaux.time.is_some() {
+            vaux.is_16_9
+        } else {
+            None
+        };
+        if aspect.is_some() {
+            metadata.insert(
+                "DV:VideoScanType".to_string(),
+                TagValue::new_string(if vaux.interlaced {
+                    "Interlaced"
+                } else {
+                    "Progressive"
+                }),
+            );
+        }
+
+        // DV.pm:138, `PrintConv => 'int($val * 1000 + 0.5) / 1000'`.
+        metadata.insert(
+            "DV:FrameRate".to_string(),
+            TagValue::new_string(perl_number(
+                (profile.frame_rate * 1000.0 + 0.5).trunc() / 1000.0,
+            )),
+        );
+
+        if let Some(is_16_9) = aspect {
+            metadata.insert(
+                "DV:AspectRatio".to_string(),
+                TagValue::new_string(if is_16_9 { "16:9" } else { "4:3" }),
+            );
+        }
+
+        metadata.insert(
+            "DV:Colorimetry".to_string(),
+            TagValue::new_string(profile.colorimetry),
+        );
+
+        // DV.pm:245-259: audio parameters from the first audio DIF block.
+        if let Some(audio) = read_audio(&buff, start) {
+            if let Some(channels) = audio.channels {
+                metadata.insert(
+                    "DV:AudioChannels".to_string(),
+                    TagValue::new_integer(i64::from(channels)),
+                );
+            }
+            if let Some(rate) = audio.sample_rate {
+                metadata.insert(
+                    "DV:AudioSampleRate".to_string(),
+                    TagValue::new_integer(i64::from(rate)),
+                );
+            }
+            metadata.insert(
+                "DV:AudioBitsPerSample".to_string(),
+                TagValue::new_integer(i64::from(audio.bits_per_sample)),
+            );
+        }
+
+        Ok(metadata)
+    })
 }
 
 /// DV.pm:158-167: find the first DIF block.

@@ -115,8 +115,11 @@ impl MMapReader {
     /// # }
     /// ```
     pub fn new(path: &Path) -> io::Result<Self> {
-        let file = File::open(path)?;
+        Self::from_file(File::open(path)?)
+    }
 
+    /// Map an already opened file without resolving its pathname again.
+    pub(crate) fn from_file(file: File) -> io::Result<Self> {
         // SAFETY: We're creating a read-only memory mapping of a file we own.
         // The `file` handle is stored in the struct to ensure it remains open
         // for the lifetime of the mapping. The `memmap2::Mmap` type ensures

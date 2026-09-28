@@ -7,6 +7,10 @@
 pub mod atomic_writer;
 pub mod exif_inplace;
 pub mod exif_surgical;
+// Keeps maker-note data outside the MakerNote through a surgical EXIF rewrite.
+pub(crate) mod makernote_guard;
+// Generated from the pinned ExifTool's IsOffset/OffsetPair inventory.
+pub(crate) mod makernote_offset_pairs;
 // Source-selected addresses remain internal until public file parity is proved.
 pub(crate) mod generated_public_write;
 pub(crate) mod generated_setnewvalue_address_rules;
@@ -38,13 +42,26 @@ pub(crate) mod jpeg_trailer;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
+pub(crate) mod rw2_ifd0;
 // Source-selected final scalar stage remains internal until file parity is proved.
+pub(crate) mod generated_tag_exists;
+// Where pinned ExifTool's `-TagsFromFile` writes each copied name (SetNewValue
+// captured per name), and which of those a destination realises.
+pub(crate) mod copy_targets;
+pub(crate) mod generated_copy_targets;
 pub(crate) mod generated_tiff_scalar_final_rules;
 pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
 pub mod tiff_writer;
+pub mod write_request;
 // Exif.pm ValueConvInv for 0x9c9b-0x9c9f, shared by every EXIF serializer.
 pub(crate) mod xp_strings;
+// EncodeExifText (UserComment, GPSProcessingMethod, GPSAreaInformation),
+// shared by every EXIF serializer.
+pub(crate) mod exif_text;
+// The directory chain past IFD1 (IFD2 on): carried, and a JPEG's IFD2
+// preview re-pointed, through a re-laid-out EXIF block.
+pub mod ifd_chain;
 
 #[cfg(test)]
 pub(crate) mod exif_surgical_test_support {

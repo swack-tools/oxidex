@@ -146,85 +146,89 @@ impl Value {
 /// `data` is the directory itself, starting at the `IIII` magic number.
 #[must_use]
 pub fn parse_dr4(data: &[u8]) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    // `$dirLen < 32` and `SetByteOrder` both fail out (CanonVRD.pm:1798-1801).
-    if data.len() < HEADER_LEN {
-        return metadata;
-    }
-    let big_endian = match &data[..2] {
-        b"MM" => true,
-        b"II" => false,
-        _ => return metadata,
-    };
-    let r = Reader { data, big_endian };
-
-    // `%CanonVRD::DR4Header` index 3, the only named header field.
-    if let Some(model) = r.u32(CAMERA_MODEL_OFFSET) {
-        insert(
-            &mut metadata,
-            "DR4CameraModel",
-            TagValue::new_string(model_name(model)),
-        );
-    }
-
-    let Some(num_entries) = r.u32(NUM_ENTRIES_OFFSET) else {
-        return metadata;
-    };
-    // `$err = 1 if $dirLen < 36 + 28 * $numEntries` -- an over-long count is
-    // "Invalid DR4 directory" and yields nothing at all.
-    let Some(needed) = (num_entries as usize)
-        .checked_mul(ENTRY_LEN)
-        .and_then(|n| n.checked_add(FIRST_ENTRY))
-    else {
-        return MetadataMap::new();
-    };
-    if data.len() < needed {
-        return MetadataMap::new();
-    }
-
-    for index in 0..num_entries as usize {
-        let entry = FIRST_ENTRY + ENTRY_LEN * index;
-        // `last if $entry + 28 > $dirEnd`
-        if entry + ENTRY_LEN > data.len() {
-            break;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        // `$dirLen < 32` and `SetByteOrder` both fail out (CanonVRD.pm:1798-1801).
+        if data.len() < HEADER_LEN {
+            return metadata;
         }
-        let (Some(tag), Some(fmt), Some(flag0), Some(flag1), Some(flag2), Some(off), Some(len)) = (
-            r.u32(entry),
-            r.u32(entry + 4),
-            r.u32(entry + 8),
-            r.u32(entry + 12),
-            r.u32(entry + 16),
-            r.u32(entry + 20),
-            r.u32(entry + 24),
-        ) else {
-            break;
+        let big_endian = match &data[..2] {
+            b"MM" => true,
+            b"II" => false,
+            _ => return metadata,
         };
-        let (off, len) = (off as usize, len as usize);
-        // `next if $off + $len >= $dirEnd` -- note `>=`, so a value that ends
-        // exactly at the end of the directory is skipped, not read.
-        if off.checked_add(len).is_none_or(|end| end >= data.len()) {
-            continue;
+        let r = Reader { data, big_endian };
+
+        // `%CanonVRD::DR4Header` index 3, the only named header field.
+        if let Some(model) = r.u32(CAMERA_MODEL_OFFSET) {
+            insert(
+                &mut metadata,
+                "DR4CameraModel",
+                TagValue::new_string(model_name(model)),
+            );
         }
 
-        let flags = [flag0, flag1, flag2];
-        match DR4_MAIN.iter().find(|e| e.tag == tag) {
-            Some(def) => {
-                match def.conv {
-                    Conv::SubDir(sub) => parse_subdir(&r, sub, off, len, &mut metadata),
-                    _ => {
-                        if let Some(value) = r.value(fmt, off, len)
-                            && let Some(printed) = convert(def.conv, &value)
-                        {
-                            insert(&mut metadata, def.name, printed);
+        let Some(num_entries) = r.u32(NUM_ENTRIES_OFFSET) else {
+            return metadata;
+        };
+        // `$err = 1 if $dirLen < 36 + 28 * $numEntries` -- an over-long count is
+        // "Invalid DR4 directory" and yields nothing at all.
+        let Some(needed) = (num_entries as usize)
+            .checked_mul(ENTRY_LEN)
+            .and_then(|n| n.checked_add(FIRST_ENTRY))
+        else {
+            return MetadataMap::new();
+        };
+        if data.len() < needed {
+            return MetadataMap::new();
+        }
+
+        for index in 0..num_entries as usize {
+            let entry = FIRST_ENTRY + ENTRY_LEN * index;
+            // `last if $entry + 28 > $dirEnd`
+            if entry + ENTRY_LEN > data.len() {
+                break;
+            }
+            let (Some(tag), Some(fmt), Some(flag0), Some(flag1), Some(flag2), Some(off), Some(len)) = (
+                r.u32(entry),
+                r.u32(entry + 4),
+                r.u32(entry + 8),
+                r.u32(entry + 12),
+                r.u32(entry + 16),
+                r.u32(entry + 20),
+                r.u32(entry + 24),
+            ) else {
+                break;
+            };
+            let (off, len) = (off as usize, len as usize);
+            // `next if $off + $len >= $dirEnd` -- note `>=`, so a value that ends
+            // exactly at the end of the directory is skipped, not read.
+            if off.checked_add(len).is_none_or(|end| end >= data.len()) {
+                continue;
+            }
+
+            let flags = [flag0, flag1, flag2];
+            match DR4_MAIN.iter().find(|e| e.tag == tag) {
+                Some(def) => {
+                    match def.conv {
+                        Conv::SubDir(sub) => parse_subdir(&r, sub, off, len, &mut metadata),
+                        _ => {
+                            if let Some(value) = r.value(fmt, off, len)
+                                && let Some(printed) = convert(def.conv, &value)
+                            {
+                                insert(&mut metadata, def.name, printed);
+                            }
                         }
                     }
+                    emit_flags(def, &flags, &mut metadata);
                 }
-                emit_flags(def, &flags, &mut metadata);
+                None => continue,
             }
-            None => continue,
         }
-    }
-    metadata
+        metadata
+    })
 }
 
 /// `foreach $i (0..2) { ... HandleTag($tagTablePtr, $flagID, $flg[$i]) }`

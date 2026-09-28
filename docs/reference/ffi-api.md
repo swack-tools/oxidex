@@ -38,7 +38,7 @@ Two headers declare the API:
 - `include/oxidex.h` is maintained by hand, and the C integration test
   (`tests/ffi/c_integration_test.c`) uses it.
 
-Both declare the 15 exported `exiftool_*` functions. Tag names are the
+Both declare the 19 exported `exiftool_*` functions. Tag names are the
 group-qualified keys that `oxidex -j` prints, such as `IFD0:Make` and
 `ExifIFD:ISO`.
 
@@ -145,6 +145,7 @@ if (result != EXIFTOOL_OK) {
 | 4 | `EXIFTOOL_ERR_INVALID_TAG_VALUE` | Invalid tag value (type mismatch, out of range) |
 | 5 | `EXIFTOOL_ERR_UNSUPPORTED_FORMAT` | The format cannot be read or written |
 | 6 | `EXIFTOOL_ERR_NULL_POINTER` | A required pointer was NULL |
+| 7 | `EXIFTOOL_ERR_TAG_NOT_WRITTEN` | A write named tags that would not be written; nothing was written. `exiftool_get_last_error_tag()` names each one |
 | 99 | `EXIFTOOL_ERR_INTERNAL` | Internal error (a Rust panic was caught) |
 
 These values are defined in `src/ffi/error.rs`.
@@ -425,6 +426,29 @@ int exiftool_remove_tag(ExifToolHandle* handle, const char* tag_name);
 exiftool_remove_tag(handle, "IFD0:Artist");
 ```
 
+A group name ending in `:All` (`EXIF:All`, `GPS:All`) is ExifTool's
+`-GROUP:All=`: it removes no row of the handle, and the next
+`exiftool_write_file()` deletes the whole group from the file. When the file
+holds nothing in the group, the file is left byte-identical and the call
+succeeds. A group oxidex cannot delete from that file (`XMP:All` where there
+is XMP) fails with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`.
+
+The handle's changes are written in the order of the calls that made them,
+as ExifTool applies a command line's assignments: a group deletion removes
+what was set in the group before it, never a tag set after it.
+
+On a handle read from the file it writes, removing a tag the handle does not
+hold under that name (`XMP-dc:Title` where the reader keys the title
+`XMP:Title`, or a tag the file lacks) is ExifTool's `-TAG=`: the write deletes
+it by name, leaves the file unchanged when there is no such tag, or refuses it
+with `EXIFTOOL_ERR_TAG_NOT_WRITTEN`. A PDF date's two spellings
+(`PDF:CreateDate`, `PDF:CreationDate`) are one field, decided by the last call
+naming either.
+`exiftool_remove_tag(h, "EXIF:All")` followed by
+`exiftool_set_tag_string(h, "IFD0:Artist", "x")` writes a file whose only
+EXIF is that Artist (ExifTool's `-EXIF:All= -IFD0:Artist=x`); the reverse
+order leaves no EXIF.
+
 #### `exiftool_write_file()`
 
 Writes modified metadata to file.
@@ -440,16 +464,52 @@ int exiftool_write_file(ExifToolHandle* handle, const char* path);
   does not create a new file. See [Writing metadata](/guide/writing) for
   which tags are proven against ExifTool.
 
+**What is written:** a tag of the handle that is new or differs from the file
+is set -- resolved the way the CLI resolves `-TAG=VALUE` (an ungrouped
+`XPTitle` lands in `IFD0`). A tag the file carries that the handle lacks is
+deleted only when the handle was read from this same file and the caller
+removed it; a handle read from another file, or never read, only sets
+(ExifTool's SetNewValue model). The derived `File:`, `Composite:` and
+file-system rows are never deleted, and the file-system ones (`FileName`,
+`FileSize`, the file dates) are never written.
+
 **Returns:**
-- `EXIFTOOL_OK` on success
-- Error code on failure
+- `EXIFTOOL_OK` when every change is in the file, proven by reading it back
+- `EXIFTOOL_ERR_TAG_NOT_WRITTEN` when any requested change would not be
+  written: a group the file's writer cannot write (`XMP:Title` in a JPEG,
+  TIFF or PNG, `File:Comment`, most `IFD1:` keys), an ungrouped name that does
+  not resolve to one address, or a change the read-back does not find. The
+  whole write is refused and the file is byte-identical.
+- Another error code on any other failure (the file is untouched then too)
 
 **Example:**
 
 ```c
 exiftool_set_tag_string(handle, "EXIF:Artist", "Jane Doe");
 int result = exiftool_write_file(handle, "photo.jpg");
+if (result == EXIFTOOL_ERR_TAG_NOT_WRITTEN) {
+    for (size_t i = 0; i < exiftool_get_last_error_tag_count(); i++) {
+        fprintf(stderr, "not written: %s (%s)\n",
+                exiftool_get_last_error_tag(i),
+                exiftool_get_last_error_tag_reason(i));
+    }
+}
 ```
+
+#### `exiftool_write_file_with_outcome()`
+
+As `exiftool_write_file()`, and reports what the write did, like ExifTool's
+`WriteInfo` return value.
+
+```c
+int exiftool_write_file_with_outcome(ExifToolHandle* handle, const char* path, int* outcome);
+```
+
+**Returns:** the same codes as `exiftool_write_file()`, plus
+`EXIFTOOL_ERR_NULL_POINTER` for a NULL `outcome`. On `EXIFTOOL_OK`, `*outcome`
+is `EXIFTOOL_WRITE_UPDATED` (1) when the file changed, or
+`EXIFTOOL_WRITE_UNCHANGED` (2) when every change was already in effect and the
+file is byte-identical.
 
 ### Utility Functions
 
@@ -471,6 +531,22 @@ if (result != EXIFTOOL_OK) {
     fprintf(stderr, "Error: %s\n", exiftool_get_last_error());
 }
 ```
+
+#### `exiftool_get_last_error_tag_count()`, `exiftool_get_last_error_tag()`, `exiftool_get_last_error_tag_reason()`
+
+The tags the last `EXIFTOOL_ERR_TAG_NOT_WRITTEN` on this thread named, each
+spelled as the write request spelled it, and why each would not be written.
+
+```c
+size_t exiftool_get_last_error_tag_count(void);
+const char* exiftool_get_last_error_tag(size_t index);
+const char* exiftool_get_last_error_tag_reason(size_t index);
+```
+
+**Returns:**
+- The count is 0 after any other error, or when no error occurred
+- The strings are thread-local, valid until the next API call that sets an
+  error on the same thread; NULL for an index at or past the count
 
 #### `exiftool_get_tag_count()`
 

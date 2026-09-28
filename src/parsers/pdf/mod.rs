@@ -250,245 +250,250 @@ mod page_count_tests {
 /// # }
 /// ```
 pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let file_size = reader.size();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let file_size = reader.size();
 
-    // Verify PDF signature
-    if file_size < PDF_SIGNATURE.len() as u64 {
-        return Err(ExifToolError::parse_error("File too small to be a PDF"));
-    }
-
-    // Read first 20 bytes to get version
-    let header_size = std::cmp::min(20, file_size as usize);
-    let header_data = reader.read(0, header_size)?;
-
-    if !header_data.starts_with(PDF_SIGNATURE) {
-        return Err(ExifToolError::parse_error("Invalid PDF signature"));
-    }
-
-    // Initialize combined metadata map
-    let mut metadata = MetadataMap::with_capacity(20);
-
-    // Extract PDF version from header (e.g., "%PDF-1.4")
-    // The version is in format "%PDF-X.Y" on the first line
-    // PDF headers often have binary data after the first line, so we need to extract just the first line
-    // Look for the newline to find end of first line
-    let first_line_end = header_data
-        .iter()
-        .position(|&b| b == b'\n' || b == b'\r')
-        .unwrap_or(header_data.len());
-    let first_line = &header_data[..first_line_end];
-
-    // The first line should be ASCII: %PDF-X.Y
-    if let Ok(header_str) = std::str::from_utf8(first_line)
-        && let Some(version_str) = header_str.strip_prefix("%PDF-")
-    {
-        let version = version_str.trim();
-        // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
-        let version_string = crate::core::TagValue::new_string(version.to_string());
-        metadata.insert("PDF:PDFVersion".to_string(), version_string.clone());
-        // Add PDF:Version as alias for ExifTool compatibility
-        metadata.insert("PDF:Version".to_string(), version_string);
-    }
-
-    // Check for linearization (optimize for web display)
-    // Linearized PDFs have a linearization dictionary in the first object
-    // We search for the byte sequence "/Linearized" in the first 2KB
-    let check_size = std::cmp::min(2048, file_size as usize);
-    let check_data = reader.read(0, check_size)?;
-
-    // Search for "/Linearized" as bytes (PDF dictionaries can contain binary data)
-    let linearized_marker = b"/Linearized";
-    let is_linearized = check_data
-        .windows(linearized_marker.len())
-        .any(|window| window == linearized_marker);
-
-    metadata.insert(
-        "PDF:Linearized".to_string(),
-        crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
-    );
-
-    // Page tree facts. ExifTool reports PageCount from the page tree root's
-    // /Count and MediaBox from the first /MediaBox it finds, both of which
-    // sit in plain object dictionaries rather than the Info dict this parser
-    // already reads -- so neither was ever emitted.
-    if let Ok(all) = reader.read(0, reader.size().min(4 * 1024 * 1024) as usize) {
-        if let Some(count) = pdf_page_count(all) {
-            metadata.insert(
-                "PDF:PageCount".to_string(),
-                crate::core::TagValue::new_integer(count as i64),
-            );
+        // Verify PDF signature
+        if file_size < PDF_SIGNATURE.len() as u64 {
+            return Err(ExifToolError::parse_error("File too small to be a PDF"));
         }
-        if let Some(media_box) = pdf_media_box(all) {
-            metadata.insert(
-                "PDF:MediaBox".to_string(),
-                crate::core::TagValue::new_string(media_box),
-            );
-        }
-    }
 
-    // Extract Info dictionary metadata
-    match info_parser::parse_info_dict(reader) {
-        Ok(info_metadata) => {
-            // Merge Info dictionary tags into main metadata
-            for (key, value) in info_metadata.iter() {
+        // Read first 20 bytes to get version
+        let header_size = std::cmp::min(20, file_size as usize);
+        let header_data = reader.read(0, header_size)?;
+
+        if !header_data.starts_with(PDF_SIGNATURE) {
+            return Err(ExifToolError::parse_error("Invalid PDF signature"));
+        }
+
+        // Initialize combined metadata map
+        let mut metadata = MetadataMap::with_capacity(20);
+
+        // Extract PDF version from header (e.g., "%PDF-1.4")
+        // The version is in format "%PDF-X.Y" on the first line
+        // PDF headers often have binary data after the first line, so we need to extract just the first line
+        // Look for the newline to find end of first line
+        let first_line_end = header_data
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+            .unwrap_or(header_data.len());
+        let first_line = &header_data[..first_line_end];
+
+        // The first line should be ASCII: %PDF-X.Y
+        if let Ok(header_str) = std::str::from_utf8(first_line)
+            && let Some(version_str) = header_str.strip_prefix("%PDF-")
+        {
+            let version = version_str.trim();
+            // Store as string to preserve exact version format (e.g., "1.3", "1.4", "2.0")
+            let version_string = crate::core::TagValue::new_string(version.to_string());
+            metadata.insert("PDF:PDFVersion".to_string(), version_string.clone());
+            // Add PDF:Version as alias for ExifTool compatibility
+            metadata.insert("PDF:Version".to_string(), version_string);
+        }
+
+        // Check for linearization (optimize for web display)
+        // Linearized PDFs have a linearization dictionary in the first object
+        // We search for the byte sequence "/Linearized" in the first 2KB
+        let check_size = std::cmp::min(2048, file_size as usize);
+        let check_data = reader.read(0, check_size)?;
+
+        // Search for "/Linearized" as bytes (PDF dictionaries can contain binary data)
+        let linearized_marker = b"/Linearized";
+        let is_linearized = check_data
+            .windows(linearized_marker.len())
+            .any(|window| window == linearized_marker);
+
+        metadata.insert(
+            "PDF:Linearized".to_string(),
+            crate::core::TagValue::new_string(if is_linearized { "Yes" } else { "No" }),
+        );
+
+        // Page tree facts. ExifTool reports PageCount from the page tree root's
+        // /Count and MediaBox from the first /MediaBox it finds, both of which
+        // sit in plain object dictionaries rather than the Info dict this parser
+        // already reads -- so neither was ever emitted.
+        if let Ok(all) = reader.read(0, reader.size().min(4 * 1024 * 1024) as usize) {
+            if let Some(count) = pdf_page_count(all) {
+                metadata.insert(
+                    "PDF:PageCount".to_string(),
+                    crate::core::TagValue::new_integer(count as i64),
+                );
+            }
+            if let Some(media_box) = pdf_media_box(all) {
+                metadata.insert(
+                    "PDF:MediaBox".to_string(),
+                    crate::core::TagValue::new_string(media_box),
+                );
+            }
+        }
+
+        // Extract Info dictionary metadata
+        match info_parser::parse_info_dict(reader) {
+            Ok(info_metadata) => {
+                // Merge Info dictionary tags into main metadata
+                for (key, value) in info_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(e) => {
+                // Log warning but continue - Info dict might not exist or be malformed
+                eprintln!("Warning: Failed to parse PDF Info dictionary: {}", e);
+            }
+        }
+
+        // Extract XMP metadata
+        match xmp_extractor::extract_xmp_metadata(reader) {
+            Ok(xmp_metadata) => {
+                // Merge XMP tags into main metadata, keeping each occurrence's
+                // family-1 XMP group.
+                metadata.merge(xmp_metadata);
+            }
+            Err(e) => {
+                // Log warning but continue - XMP might not exist
+                eprintln!("Warning: Failed to extract XMP metadata: {}", e);
+            }
+        }
+
+        // Extract ICC profile metadata
+        match extract_icc_profile(reader) {
+            Ok(icc_metadata) => {
+                for (key, value) in icc_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(_) => {
+                // ICC profile is optional - silently continue if not present
+            }
+        }
+
+        // Extract root dictionary metadata (Language, PageLayout, PageMode, JavaScript, Outlines, Names)
+        if let Ok(root_meta) = root_parser::parse_root_metadata(reader) {
+            for (key, value) in root_meta.iter() {
                 metadata.insert(key.clone(), value.clone());
             }
         }
-        Err(e) => {
-            // Log warning but continue - Info dict might not exist or be malformed
-            eprintln!("Warning: Failed to parse PDF Info dictionary: {}", e);
-        }
-    }
 
-    // Extract XMP metadata
-    match xmp_extractor::extract_xmp_metadata(reader) {
-        Ok(xmp_metadata) => {
-            // Merge XMP tags into main metadata, keeping each occurrence's
-            // family-1 XMP group.
-            metadata.merge(xmp_metadata);
-        }
-        Err(e) => {
-            // Log warning but continue - XMP might not exist
-            eprintln!("Warning: Failed to extract XMP metadata: {}", e);
-        }
-    }
-
-    // Extract ICC profile metadata
-    match extract_icc_profile(reader) {
-        Ok(icc_metadata) => {
-            for (key, value) in icc_metadata.iter() {
+        // Extract encryption metadata
+        if let Ok(enc_meta) = encryption_parser::parse_encryption_metadata(reader) {
+            for (key, value) in enc_meta.iter() {
                 metadata.insert(key.clone(), value.clone());
             }
         }
-        Err(_) => {
-            // ICC profile is optional - silently continue if not present
-        }
-    }
 
-    // Extract root dictionary metadata (Language, PageLayout, PageMode, JavaScript, Outlines, Names)
-    if let Ok(root_meta) = root_parser::parse_root_metadata(reader) {
-        for (key, value) in root_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract encryption metadata
-    if let Ok(enc_meta) = encryption_parser::parse_encryption_metadata(reader) {
-        for (key, value) in enc_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract digital signature metadata
-    if let Ok(sig_meta) = signature_parser::parse_signature_metadata(reader) {
-        for (key, value) in sig_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract permissions metadata
-    if let Ok(perm_meta) = permissions_parser::parse_permissions_metadata(reader) {
-        for (key, value) in perm_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract embedded resources metadata: an image XObject's DCT stream is
-    // a whole JPEG, re-entered through `parse_jpeg_metadata`, so these rows
-    // include the ExifIFD engine's, which store ExifTool's printed value and
-    // keep the `--no-print-conv` form beside it -- the form Composite inputs
-    // read (FocalPlaneX/YResolution's fraction for Canon's sensor size).
-    // Copy each winner as `insert()` did, with its forms, in file order:
-    // flattening through `iter()` kept only the printed value.
-    if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
-        for (key, occurrence) in res_meta.winners_in_file_order() {
-            metadata.insert_carrying_forms(key.clone(), occurrence);
-        }
-    }
-
-    // Extract font metadata
-    if let Ok(font_meta) = font_parser::parse_font_metadata(reader) {
-        for (key, value) in font_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract embedded file metadata
-    if let Ok(embedded_meta) = embedded_files_parser::parse_embedded_files_metadata(reader) {
-        for (key, value) in embedded_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-
-    // Extract encryption metadata
-    match parse_encryption_metadata(reader) {
-        Ok(encryption_metadata) => {
-            // Merge encryption tags into main metadata
-            for (key, value) in encryption_metadata.iter() {
+        // Extract digital signature metadata
+        if let Ok(sig_meta) = signature_parser::parse_signature_metadata(reader) {
+            for (key, value) in sig_meta.iter() {
                 metadata.insert(key.clone(), value.clone());
             }
         }
-        Err(e) => {
-            // Log warning but continue - encryption might not be parseable
-            eprintln!("Warning: Failed to parse PDF encryption metadata: {}", e);
+
+        // Extract permissions metadata
+        if let Ok(perm_meta) = permissions_parser::parse_permissions_metadata(reader) {
+            for (key, value) in perm_meta.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
         }
-    }
 
-    // Extract Root/Catalog metadata
-    // TODO: Implement root_parser
-    // match parse_root_metadata(reader) {
-    //     Ok(root_metadata) => {
-    //         // Merge Root tags into main metadata
-    //         for (key, value) in root_metadata.iter() {
-    //             metadata.insert(key.clone(), value.clone());
-    //         }
-    //     }
-    //     Err(e) => {
-    //         // Log warning but continue - Root metadata might not be parseable
-    //         eprintln!("Warning: Failed to parse PDF Root metadata: {}", e);
-    //     }
-    // }
-
-    // A Photoshop-authored PDF parks the image's whole 8BIM resource block in
-    // the page dictionary (/PieceInfo /AdobePhotoshop /Private
-    // /ImageResources). ExifTool walks it and reports the Photoshop, IPTC and
-    // EXIF tags it carries.
-    if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader) {
-        // Preserve this PDF boundary's existing one-winner-per-key projection.
-        // Repeated EXIFInfo resources need ExifTool's shared processed-directory
-        // address state before their additional occurrences can be exposed.
-        // Carry each selected winner's forms/priority in its recorded order;
-        // HashMap iteration and plain insert would discard that information.
-        let mut winners = photoshop_metadata.winner_occurrences().collect::<Vec<_>>();
-        winners.sort_by_key(|(_, occurrence)| occurrence.order);
-        for (key, occurrence) in winners {
-            metadata.insert_renamed_occurrence(key.clone(), occurrence);
+        // Extract embedded resources metadata: an image XObject's DCT stream is
+        // a whole JPEG, re-entered through `parse_jpeg_metadata`, so these rows
+        // include the ExifIFD engine's, which store ExifTool's printed value and
+        // keep the `--no-print-conv` form beside it -- the form Composite inputs
+        // read (FocalPlaneX/YResolution's fraction for Canon's sensor size).
+        // Copy each winner as `insert()` did, with its forms, in file order:
+        // flattening through `iter()` kept only the printed value.
+        if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
+            for (key, occurrence) in res_meta.winners_in_file_order() {
+                metadata.insert_carrying_forms(key.clone(), occurrence);
+            }
         }
-    }
 
-    // PDF image streams may contain complete TIFF/EXIF payloads. Extract
-    // metadata from these payloads after the PDF-level resource parsers have
-    // run so the standard IFD tag database determines the canonical key.
-    //
-    // Preserve the legacy rescanner's existing converted-value precedence.
-    // It may overlap the resource-block walk, but neither path establishes
-    // shared source identity (resources may also be inflated). Its late
-    // occurrences therefore remain separate; this does not establish complete
-    // PDF raw/printed equivalence or justify dropping apparent duplicates.
-    if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
-        for (key, value) in exif_metadata.iter() {
-            metadata.insert(key.clone(), value.clone());
+        // Extract font metadata
+        if let Ok(font_meta) = font_parser::parse_font_metadata(reader) {
+            for (key, value) in font_meta.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
         }
-    }
 
-    // If we didn't extract any metadata at all, return error
-    if metadata.is_empty() {
-        return Err(ExifToolError::parse_error(
-            "No metadata found in PDF (no Info dictionary, XMP, ICC profile, encryption, Root, or structure)",
-        ));
-    }
+        // Extract embedded file metadata
+        if let Ok(embedded_meta) = embedded_files_parser::parse_embedded_files_metadata(reader) {
+            for (key, value) in embedded_meta.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
 
-    Ok(metadata)
+        // Extract encryption metadata
+        match parse_encryption_metadata(reader) {
+            Ok(encryption_metadata) => {
+                // Merge encryption tags into main metadata
+                for (key, value) in encryption_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(e) => {
+                // Log warning but continue - encryption might not be parseable
+                eprintln!("Warning: Failed to parse PDF encryption metadata: {}", e);
+            }
+        }
+
+        // Extract Root/Catalog metadata
+        // TODO: Implement root_parser
+        // match parse_root_metadata(reader) {
+        //     Ok(root_metadata) => {
+        //         // Merge Root tags into main metadata
+        //         for (key, value) in root_metadata.iter() {
+        //             metadata.insert(key.clone(), value.clone());
+        //         }
+        //     }
+        //     Err(e) => {
+        //         // Log warning but continue - Root metadata might not be parseable
+        //         eprintln!("Warning: Failed to parse PDF Root metadata: {}", e);
+        //     }
+        // }
+
+        // A Photoshop-authored PDF parks the image's whole 8BIM resource block in
+        // the page dictionary (/PieceInfo /AdobePhotoshop /Private
+        // /ImageResources). ExifTool walks it and reports the Photoshop, IPTC and
+        // EXIF tags it carries.
+        if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader)
+        {
+            // Preserve this PDF boundary's existing one-winner-per-key projection.
+            // Repeated EXIFInfo resources need ExifTool's shared processed-directory
+            // address state before their additional occurrences can be exposed.
+            // Carry each selected winner's forms/priority in its recorded order;
+            // HashMap iteration and plain insert would discard that information.
+            let mut winners = photoshop_metadata.winner_occurrences().collect::<Vec<_>>();
+            winners.sort_by_key(|(_, occurrence)| occurrence.order);
+            for (key, occurrence) in winners {
+                metadata.insert_renamed_occurrence(key.clone(), occurrence);
+            }
+        }
+
+        // PDF image streams may contain complete TIFF/EXIF payloads. Extract
+        // metadata from these payloads after the PDF-level resource parsers have
+        // run so the standard IFD tag database determines the canonical key.
+        //
+        // Preserve the legacy rescanner's existing converted-value precedence.
+        // It may overlap the resource-block walk, but neither path establishes
+        // shared source identity (resources may also be inflated). Its late
+        // occurrences therefore remain separate; this does not establish complete
+        // PDF raw/printed equivalence or justify dropping apparent duplicates.
+        if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
+            for (key, value) in exif_metadata.iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+
+        // If we didn't extract any metadata at all, return error
+        if metadata.is_empty() {
+            return Err(ExifToolError::parse_error(
+                "No metadata found in PDF (no Info dictionary, XMP, ICC profile, encryption, Root, or structure)",
+            ));
+        }
+
+        Ok(metadata)
+    })
 }
 
 const TIFF_ARTIST_TAG: u16 = 0x013b;

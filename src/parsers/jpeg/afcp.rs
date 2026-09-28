@@ -82,7 +82,11 @@ struct Located {
 /// `AFCP:Text` for a `TEXT` entry; empty when the file carries no AFCP
 /// trailer, or the trailer has no directory entry this module reads.
 pub fn parse_afcp_trailer(file: &[u8]) -> MetadataMap {
-    parse_afcp_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        parse_afcp_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+    })
 }
 
 /// Where the AFCP block this module reads begins, if the file has one --
@@ -99,28 +103,32 @@ pub fn parse_afcp_trailer_grouped(
     file: &[u8],
     iptc_groups: &mut NonStandardIptcGroups,
 ) -> MetadataMap {
-    let mut metadata = MetadataMap::new();
-    let Some(located) = find_afcp_block(file) else {
-        return metadata;
-    };
-    for (tag, data) in afcp_entries(file, &located) {
-        match tag {
-            TAG_IPTC => {
-                let group1 = iptc_groups.next_group();
-                for (name, value) in extract_iptc_values_from_block(data) {
-                    metadata.insert_with_group1(name, value, &group1);
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        let Some(located) = find_afcp_block(file) else {
+            return metadata;
+        };
+        for (tag, data) in afcp_entries(file, &located) {
+            match tag {
+                TAG_IPTC => {
+                    let group1 = iptc_groups.next_group();
+                    for (name, value) in extract_iptc_values_from_block(data) {
+                        metadata.insert_with_group1(name, value, &group1);
+                    }
                 }
+                TAG_TEXT => {
+                    metadata.insert(
+                        "AFCP:Text",
+                        TagValue::new_string(String::from_utf8_lossy(data).into_owned()),
+                    );
+                }
+                _ => {}
             }
-            TAG_TEXT => {
-                metadata.insert(
-                    "AFCP:Text",
-                    TagValue::new_string(String::from_utf8_lossy(data).into_owned()),
-                );
-            }
-            _ => {}
         }
-    }
-    metadata
+        metadata
+    })
 }
 
 /// Finds a validated AFCP block by locating its footer.

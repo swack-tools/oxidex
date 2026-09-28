@@ -78,63 +78,67 @@ use super::info_parser::{ObjectRef, PdfContext, format_pdf_date};
 /// If multiple signatures exist, only the first one is extracted.
 /// Returns empty metadata if no signatures are found.
 pub fn parse_signature_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
-    // Load PDF navigation context (xref table and trailer)
-    let context = PdfContext::load(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        // Load PDF navigation context (xref table and trailer)
+        let context = PdfContext::load(reader)?;
 
-    // Navigate: Trailer -> Root -> AcroForm
-    let acroform_data = match navigate_to_acroform(reader, &context) {
-        Ok(data) => data,
-        Err(_) => {
-            // No AcroForm found - return empty metadata (not an error)
-            return Ok(MetadataMap::new());
-        }
-    };
+        // Navigate: Trailer -> Root -> AcroForm
+        let acroform_data = match navigate_to_acroform(reader, &context) {
+            Ok(data) => data,
+            Err(_) => {
+                // No AcroForm found - return empty metadata (not an error)
+                return Ok(MetadataMap::new());
+            }
+        };
 
-    // Find signature field in AcroForm
-    let signature_ref = match find_signature_field(&acroform_data) {
-        Ok(sig_ref) => sig_ref,
-        Err(_) => {
-            // No signature field found - return empty metadata
-            return Ok(MetadataMap::new());
-        }
-    };
+        // Find signature field in AcroForm
+        let signature_ref = match find_signature_field(&acroform_data) {
+            Ok(sig_ref) => sig_ref,
+            Err(_) => {
+                // No signature field found - return empty metadata
+                return Ok(MetadataMap::new());
+            }
+        };
 
-    // Read signature field object
-    let sig_offset = match context.get_object_offset(signature_ref.object_num, "Signature") {
-        Ok(offset) => offset,
-        Err(_) => return Ok(MetadataMap::new()),
-    };
-
-    let sig_size = std::cmp::min(4096, reader.size().saturating_sub(sig_offset) as usize);
-    let sig_data = reader.read(sig_offset, sig_size)?;
-
-    // Find /V (signature dictionary) reference
-    let sig_value_ref = match find_dict_reference(sig_data, "/V") {
-        Ok(v_ref) => v_ref,
-        Err(_) => {
-            // No /V found - return empty metadata
-            return Ok(MetadataMap::new());
-        }
-    };
-
-    // Read signature value object
-    let sig_value_offset =
-        match context.get_object_offset(sig_value_ref.object_num, "SignatureValue") {
+        // Read signature field object
+        let sig_offset = match context.get_object_offset(signature_ref.object_num, "Signature") {
             Ok(offset) => offset,
             Err(_) => return Ok(MetadataMap::new()),
         };
 
-    let sig_value_size = std::cmp::min(
-        8192,
-        reader.size().saturating_sub(sig_value_offset) as usize,
-    );
-    let sig_value_data = reader.read(sig_value_offset, sig_value_size)?;
+        let sig_size = std::cmp::min(4096, reader.size().saturating_sub(sig_offset) as usize);
+        let sig_data = reader.read(sig_offset, sig_size)?;
 
-    // Parse signature dictionary
-    let mut metadata = MetadataMap::new();
-    extract_signature_fields(sig_value_data, &mut metadata);
+        // Find /V (signature dictionary) reference
+        let sig_value_ref = match find_dict_reference(sig_data, "/V") {
+            Ok(v_ref) => v_ref,
+            Err(_) => {
+                // No /V found - return empty metadata
+                return Ok(MetadataMap::new());
+            }
+        };
 
-    Ok(metadata)
+        // Read signature value object
+        let sig_value_offset =
+            match context.get_object_offset(sig_value_ref.object_num, "SignatureValue") {
+                Ok(offset) => offset,
+                Err(_) => return Ok(MetadataMap::new()),
+            };
+
+        let sig_value_size = std::cmp::min(
+            8192,
+            reader.size().saturating_sub(sig_value_offset) as usize,
+        );
+        let sig_value_data = reader.read(sig_value_offset, sig_value_size)?;
+
+        // Parse signature dictionary
+        let mut metadata = MetadataMap::new();
+        extract_signature_fields(sig_value_data, &mut metadata);
+
+        Ok(metadata)
+    })
 }
 
 //

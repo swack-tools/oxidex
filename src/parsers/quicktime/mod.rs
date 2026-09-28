@@ -87,23 +87,27 @@ pub use atom_parser::{Atom, FourCC};
 /// # }
 /// ```
 pub fn parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, String> {
-    // Validate file signature
-    // QuickTime/MP4 files typically start with ftyp atom at offset 4
-    // But we can also check for moov atom presence
-    validate_signature(reader)?;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap, String> {
+        // Validate file signature
+        // QuickTime/MP4 files typically start with ftyp atom at offset 4
+        // But we can also check for moov atom presence
+        validate_signature(reader)?;
 
-    // Read enough data to parse the atom structure
-    // For most files, metadata is in the first few MB
-    // Read up to 10MB to handle various file layouts
-    let max_read_size = 10 * 1024 * 1024; // 10 MB
-    let file_size = reader.size();
-    let read_size = file_size.min(max_read_size as u64) as usize;
+        // Read enough data to parse the atom structure
+        // For most files, metadata is in the first few MB
+        // Read up to 10MB to handle various file layouts
+        let max_read_size = 10 * 1024 * 1024; // 10 MB
+        let file_size = reader.size();
+        let read_size = file_size.min(max_read_size as u64) as usize;
 
-    let data = reader
-        .read(0, read_size)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        let data = reader
+            .read(0, read_size)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    parse_quicktime_metadata_from_bytes(data)
+        parse_quicktime_metadata_from_bytes(data)
+    })
 }
 
 /// Parse QuickTime/MP4 metadata from an in-memory ISO Base Media container.
@@ -119,7 +123,11 @@ pub fn parse_quicktime_metadata(reader: &dyn FileReader) -> Result<MetadataMap, 
 ///
 /// No signature check: the caller has already identified the container.
 pub fn parse_quicktime_metadata_from_bytes(data: &[u8]) -> Result<MetadataMap, String> {
-    parse_quicktime_metadata_from_bytes_with_options(data, false)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap, String> {
+        parse_quicktime_metadata_from_bytes_with_options(data, false)
+    })
 }
 
 /// Same as [`parse_quicktime_metadata_from_bytes`], with `is_cr3` selecting
@@ -141,13 +149,17 @@ pub fn parse_quicktime_metadata_from_bytes_with_options(
     data: &[u8],
     is_cr3: bool,
 ) -> Result<MetadataMap, String> {
-    // Parse top-level atoms
-    let atoms = atom_parser::parse_atoms(data)
-        .map_err(|e| format!("Failed to parse atoms: {}", e))?
-        .1;
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap, String> {
+        // Parse top-level atoms
+        let atoms = atom_parser::parse_atoms(data)
+            .map_err(|e| format!("Failed to parse atoms: {}", e))?
+            .1;
 
-    // Extract metadata from the atoms
-    metadata_extractor::extract_metadata(&atoms, is_cr3)
+        // Extract metadata from the atoms
+        metadata_extractor::extract_metadata(&atoms, is_cr3)
+    })
 }
 
 /// Validate QuickTime/MP4 file signature.

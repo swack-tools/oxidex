@@ -283,52 +283,57 @@ const JPEG_HDR_GROUP1: &str = "JPEG-HDR";
 /// }
 /// ```
 pub fn parse_app11_jpeg_hdr(data: &[u8]) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    // `Condition => '$$valPt =~ /^HDR_RI /'`
-    if data.len() < HDR_RI_IDENTIFIER.len() || &data[..HDR_RI_IDENTIFIER.len()] != HDR_RI_IDENTIFIER
-    {
-        return Err(crate::error::ExifToolError::parse_error(
-            "Not a JPEG-HDR segment (expected \"HDR_RI \" identifier)",
-        ));
-    }
-
-    // `$$dataPt =~ /~\0/g or $et->Warn('Unrecognized JPEG-HDR format'), return 0;`
-    let Some(term) = data
-        .windows(HDR_META_TERMINATOR.len())
-        .position(|w| w == HDR_META_TERMINATOR)
-    else {
-        return Err(crate::error::ExifToolError::parse_error(
-            "Unrecognized JPEG-HDR format",
-        ));
-    };
-
-    // `my $meta = substr($$dataPt, 7, $pos-9);` — from just past the identifier
-    // up to, but not including, the `~`.
-    if term > HDR_RI_IDENTIFIER.len() {
-        let meta = String::from_utf8_lossy(&data[HDR_RI_IDENTIFIER.len()..term]);
-        for (key, value) in scan_hdr_pairs(&meta) {
-            metadata.insert_with_group1(
-                format!("APP11:{}", hdr_tag_name(key)),
-                TagValue::String(value.to_string()),
-                JPEG_HDR_GROUP1,
-            );
+        // `Condition => '$$valPt =~ /^HDR_RI /'`
+        if data.len() < HDR_RI_IDENTIFIER.len()
+            || &data[..HDR_RI_IDENTIFIER.len()] != HDR_RI_IDENTIFIER
+        {
+            return Err(crate::error::ExifToolError::parse_error(
+                "Not a JPEG-HDR segment (expected \"HDR_RI \" identifier)",
+            ));
         }
-    }
 
-    // `$et->HandleTag($tagTablePtr, 'RatioImage', substr($$dataPt, $pos));`
-    // `RatioImage` is `Binary => 1`, so without -b ExifTool prints a placeholder.
-    let ratio_image_size = data.len() - (term + HDR_META_TERMINATOR.len());
-    metadata.insert_with_group1(
-        "APP11:RatioImage",
-        TagValue::String(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            ratio_image_size
-        )),
-        JPEG_HDR_GROUP1,
-    );
+        // `$$dataPt =~ /~\0/g or $et->Warn('Unrecognized JPEG-HDR format'), return 0;`
+        let Some(term) = data
+            .windows(HDR_META_TERMINATOR.len())
+            .position(|w| w == HDR_META_TERMINATOR)
+        else {
+            return Err(crate::error::ExifToolError::parse_error(
+                "Unrecognized JPEG-HDR format",
+            ));
+        };
 
-    Ok(metadata)
+        // `my $meta = substr($$dataPt, 7, $pos-9);` — from just past the identifier
+        // up to, but not including, the `~`.
+        if term > HDR_RI_IDENTIFIER.len() {
+            let meta = String::from_utf8_lossy(&data[HDR_RI_IDENTIFIER.len()..term]);
+            for (key, value) in scan_hdr_pairs(&meta) {
+                metadata.insert_with_group1(
+                    format!("APP11:{}", hdr_tag_name(key)),
+                    TagValue::String(value.to_string()),
+                    JPEG_HDR_GROUP1,
+                );
+            }
+        }
+
+        // `$et->HandleTag($tagTablePtr, 'RatioImage', substr($$dataPt, $pos));`
+        // `RatioImage` is `Binary => 1`, so without -b ExifTool prints a placeholder.
+        let ratio_image_size = data.len() - (term + HDR_META_TERMINATOR.len());
+        metadata.insert_with_group1(
+            "APP11:RatioImage",
+            TagValue::String(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                ratio_image_size
+            )),
+            JPEG_HDR_GROUP1,
+        );
+
+        Ok(metadata)
+    })
 }
 
 /// Extracts JPEG-HDR parameters into a structured, numeric form.

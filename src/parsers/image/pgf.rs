@@ -70,86 +70,90 @@ const COLOR_MODE: PerlCitation = PerlCitation {
 /// Extract PGF metadata using ExifTool's declared `PGF::Main` binary layout,
 /// plus the trailing embedded-PNG metadata blob.
 pub fn parse_pgf_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    if reader.size() < HEADER_LEN as u64 {
-        return Err("PGF file is too short for the 24-byte header".to_string());
-    }
-    let header = reader
-        .read(0, HEADER_LEN)
-        .map_err(|error| error.to_string())?;
-    if !header.starts_with(b"PGF") {
-        return Err("invalid PGF signature".to_string());
-    }
-    let version = header[3];
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        if reader.size() < HEADER_LEN as u64 {
+            return Err("PGF file is too short for the 24-byte header".to_string());
+        }
+        let header = reader
+            .read(0, HEADER_LEN)
+            .map_err(|error| error.to_string())?;
+        if !header.starts_with(b"PGF") {
+            return Err("invalid PGF signature".to_string());
+        }
+        let version = header[3];
 
-    let mut metadata = MetadataMap::new();
-    if version != SUPPORTED_VERSION {
-        // PGF.pm:81-83: an unsupported major version still identifies the
-        // file (via `SetFileType`, which `add_identity_tags` reproduces
-        // centrally) but ExifTool extracts nothing further -- an `Error` is
-        // recorded and `ProcessPGF` returns success with no PGF tags.
-        return Ok(metadata);
-    }
+        let mut metadata = MetadataMap::new();
+        if version != SUPPORTED_VERSION {
+            // PGF.pm:81-83: an unsupported major version still identifies the
+            // file (via `SetFileType`, which `add_identity_tags` reproduces
+            // centrally) but ExifTool extracts nothing further -- an `Error` is
+            // recorded and `ProcessPGF` returns success with no PGF tags.
+            return Ok(metadata);
+        }
 
-    let table = find_table("PGF", "Main").ok_or("missing PGF::Main table")?;
-    let decode = decode_binary_table(table, header, ByteOrder::Little);
+        let table = find_table("PGF", "Main").ok_or("missing PGF::Main table")?;
+        let decode = decode_binary_table(table, header, ByteOrder::Little);
 
-    let mut color_mode = None;
-    for decoded in decode.fields() {
-        let name = decoded.field.name;
-        let key = format!("File:{name}");
-        if name == "ColorMode" {
-            if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &COLOR_MODE)
-                && let Some(raw) = access.raw().as_integer()
-            {
-                color_mode = Some(raw);
+        let mut color_mode = None;
+        for decoded in decode.fields() {
+            let name = decoded.field.name;
+            let key = format!("File:{name}");
+            if name == "ColorMode" {
+                if let Some(access) = RawAccess::new(decoded, Acknowledged::RAW_CONV, &COLOR_MODE)
+                    && let Some(raw) = access.raw().as_integer()
+                {
+                    color_mode = Some(raw);
+                    metadata.insert_occurrence(
+                        key,
+                        access.emit_raw(),
+                        HEADER_PRIORITY,
+                        HEADER_GROUP1,
+                        Instance::default(),
+                    );
+                }
+            } else if let Some(value) = decoded.emit() {
                 metadata.insert_occurrence(
                     key,
-                    access.emit_raw(),
+                    value,
                     HEADER_PRIORITY,
                     HEADER_GROUP1,
                     Instance::default(),
                 );
             }
-        } else if let Some(value) = decoded.emit() {
-            metadata.insert_occurrence(
-                key,
-                value,
-                HEADER_PRIORITY,
-                HEADER_GROUP1,
-                Instance::default(),
-            );
         }
-    }
 
-    // PGF.pm:87, `Get32u(\$buff, 4) - 16`: little-endian u32 at header byte 4
-    // (the file's own declared header size), minus the 16-byte tail of the
-    // fixed table above (offsets 8..24).
-    let header_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-    let mut len = i64::from(header_size) - 16;
-    let mut post_header_offset = HEADER_LEN as u64;
+        // PGF.pm:87, `Get32u(\$buff, 4) - 16`: little-endian u32 at header byte 4
+        // (the file's own declared header size), minus the 16-byte tail of the
+        // fixed table above (offsets 8..24).
+        let header_size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let mut len = i64::from(header_size) - 16;
+        let mut post_header_offset = HEADER_LEN as u64;
 
-    // PGF.pm:91-92: skip the 1024-byte colour table for indexed images,
-    // exactly like `$raf->Seek(1024, 1) ? 1024 : $len`.
-    if color_mode == Some(2) {
-        if reader.size() >= post_header_offset + COLOR_TABLE_LEN {
-            post_header_offset += COLOR_TABLE_LEN;
-            len -= COLOR_TABLE_LEN as i64;
-        } else {
-            len = 0;
-        }
-    }
-
-    if len > 0 && len < MAX_METADATA_LEN {
-        let len = len as usize;
-        if let Ok(png_bytes) = reader.read(post_header_offset, len) {
-            let png_reader = BufferedReader::from_bytes(png_bytes);
-            if let Ok(png_metadata) = crate::parsers::png::parse_png_metadata(&png_reader) {
-                metadata.merge(png_metadata);
+        // PGF.pm:91-92: skip the 1024-byte colour table for indexed images,
+        // exactly like `$raf->Seek(1024, 1) ? 1024 : $len`.
+        if color_mode == Some(2) {
+            if reader.size() >= post_header_offset + COLOR_TABLE_LEN {
+                post_header_offset += COLOR_TABLE_LEN;
+                len -= COLOR_TABLE_LEN as i64;
+            } else {
+                len = 0;
             }
         }
-    }
 
-    Ok(metadata)
+        if len > 0 && len < MAX_METADATA_LEN {
+            let len = len as usize;
+            if let Ok(png_bytes) = reader.read(post_header_offset, len) {
+                let png_reader = BufferedReader::from_bytes(png_bytes);
+                if let Ok(png_metadata) = crate::parsers::png::parse_png_metadata(&png_reader) {
+                    metadata.merge(png_metadata);
+                }
+            }
+        }
+
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

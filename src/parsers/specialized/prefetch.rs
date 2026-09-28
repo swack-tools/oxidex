@@ -240,123 +240,127 @@ impl FormatParser for PrefetchParser {
     /// * `Ok(MetadataMap)` - Extracted metadata including forensic indicators
     /// * `Err(ExifToolError)` - Invalid signature or parse error
     fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
-        // Verify signature and detect compression
-        let is_compressed = match Self::verify_signature(reader)? {
-            Some(compressed) => compressed,
-            None => {
-                return Err(ExifToolError::parse_error(
-                    "Invalid Prefetch signature (expected SCCA or MAM)",
-                ));
-            }
-        };
-
-        let mut metadata = MetadataMap::new();
-
-        // Detect MAM compression (Windows 10+)
-        metadata.insert(
-            "Prefetch:IsCompressed".to_string(),
-            TagValue::String(
-                if is_compressed {
-                    "true (MAM LZXPRESS HUFFMAN)"
-                } else {
-                    "false"
+        // Every row here is read from the file (`metadata_map::file_rows`):
+        // a caller's later `insert`/`get_mut` is what counts as assigned.
+        crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+            // Verify signature and detect compression
+            let is_compressed = match Self::verify_signature(reader)? {
+                Some(compressed) => compressed,
+                None => {
+                    return Err(ExifToolError::parse_error(
+                        "Invalid Prefetch signature (expected SCCA or MAM)",
+                    ));
                 }
-                .to_string(),
-            ),
-        );
+            };
 
-        // If compressed, we can only read the header for now
-        if is_compressed {
+            let mut metadata = MetadataMap::new();
+
+            // Detect MAM compression (Windows 10+)
             metadata.insert(
-                "Prefetch:FileType".to_string(),
-                TagValue::String("Windows Prefetch (Compressed)".to_string()),
-            );
-            metadata.insert(
-                "Prefetch:Note".to_string(),
+                "Prefetch:IsCompressed".to_string(),
                 TagValue::String(
-                    "File is MAM compressed. Full metadata extraction requires decompression."
-                        .to_string(),
+                    if is_compressed {
+                        "true (MAM LZXPRESS HUFFMAN)"
+                    } else {
+                        "false"
+                    }
+                    .to_string(),
                 ),
             );
-            return Ok(metadata);
-        }
 
-        // Basic file information
-        metadata.insert(
-            "Prefetch:FileType".to_string(),
-            TagValue::String("Windows Prefetch".to_string()),
-        );
+            // If compressed, we can only read the header for now
+            if is_compressed {
+                metadata.insert(
+                    "Prefetch:FileType".to_string(),
+                    TagValue::String("Windows Prefetch (Compressed)".to_string()),
+                );
+                metadata.insert(
+                    "Prefetch:Note".to_string(),
+                    TagValue::String(
+                        "File is MAM compressed. Full metadata extraction requires decompression."
+                            .to_string(),
+                    ),
+                );
+                return Ok(metadata);
+            }
 
-        // Read version
-        let version = Self::read_version(reader)?;
-        metadata.insert(
-            "Prefetch:Version".to_string(),
-            TagValue::String(Self::format_version(version)),
-        );
-
-        // Read file size from header
-        let file_size = Self::read_file_size(reader)?;
-        metadata.insert(
-            "Prefetch:FileSize".to_string(),
-            TagValue::String(format!("{} bytes", file_size)),
-        );
-
-        // Read executable name
-        let executable_name = Self::read_executable_name(reader)?;
-        metadata.insert(
-            "Prefetch:ExecutableName".to_string(),
-            TagValue::String(executable_name),
-        );
-
-        // Read path hash
-        let path_hash = Self::read_path_hash(reader)?;
-        metadata.insert(
-            "Prefetch:PathHash".to_string(),
-            TagValue::String(format!("0x{:08X}", path_hash)),
-        );
-
-        // Read run count
-        let run_count = Self::read_run_count(reader, version)?;
-        metadata.insert(
-            "Prefetch:RunCount".to_string(),
-            TagValue::String(run_count.to_string()),
-        );
-
-        // Read last run time
-        let last_run_time = Self::read_last_run_time(reader, version)?;
-        metadata.insert(
-            "Prefetch:LastRunTime".to_string(),
-            TagValue::String(Self::convert_filetime(last_run_time)),
-        );
-
-        // Read previous run times (v26+ only)
-        let previous_times = Self::read_previous_run_times(reader, version)?;
-        if !previous_times.is_empty() {
-            let formatted_times: Vec<String> = previous_times
-                .iter()
-                .map(|&t| Self::convert_filetime(t))
-                .collect();
+            // Basic file information
             metadata.insert(
-                "Prefetch:PreviousRunTimes".to_string(),
-                TagValue::String(formatted_times.join(", ")),
+                "Prefetch:FileType".to_string(),
+                TagValue::String("Windows Prefetch".to_string()),
             );
+
+            // Read version
+            let version = Self::read_version(reader)?;
             metadata.insert(
-                "Prefetch:PreviousRunTimesCount".to_string(),
-                TagValue::String(formatted_times.len().to_string()),
+                "Prefetch:Version".to_string(),
+                TagValue::String(Self::format_version(version)),
             );
-        }
 
-        // Add forensic note for investigators
-        metadata.insert(
-            "Prefetch:ForensicNote".to_string(),
-            TagValue::String(format!(
-                "Program executed {} time(s). Last execution: {}",
-                run_count,
-                Self::convert_filetime(last_run_time)
-            )),
-        );
+            // Read file size from header
+            let file_size = Self::read_file_size(reader)?;
+            metadata.insert(
+                "Prefetch:FileSize".to_string(),
+                TagValue::String(format!("{} bytes", file_size)),
+            );
 
-        Ok(metadata)
+            // Read executable name
+            let executable_name = Self::read_executable_name(reader)?;
+            metadata.insert(
+                "Prefetch:ExecutableName".to_string(),
+                TagValue::String(executable_name),
+            );
+
+            // Read path hash
+            let path_hash = Self::read_path_hash(reader)?;
+            metadata.insert(
+                "Prefetch:PathHash".to_string(),
+                TagValue::String(format!("0x{:08X}", path_hash)),
+            );
+
+            // Read run count
+            let run_count = Self::read_run_count(reader, version)?;
+            metadata.insert(
+                "Prefetch:RunCount".to_string(),
+                TagValue::String(run_count.to_string()),
+            );
+
+            // Read last run time
+            let last_run_time = Self::read_last_run_time(reader, version)?;
+            metadata.insert(
+                "Prefetch:LastRunTime".to_string(),
+                TagValue::String(Self::convert_filetime(last_run_time)),
+            );
+
+            // Read previous run times (v26+ only)
+            let previous_times = Self::read_previous_run_times(reader, version)?;
+            if !previous_times.is_empty() {
+                let formatted_times: Vec<String> = previous_times
+                    .iter()
+                    .map(|&t| Self::convert_filetime(t))
+                    .collect();
+                metadata.insert(
+                    "Prefetch:PreviousRunTimes".to_string(),
+                    TagValue::String(formatted_times.join(", ")),
+                );
+                metadata.insert(
+                    "Prefetch:PreviousRunTimesCount".to_string(),
+                    TagValue::String(formatted_times.len().to_string()),
+                );
+            }
+
+            // Add forensic note for investigators
+            metadata.insert(
+                "Prefetch:ForensicNote".to_string(),
+                TagValue::String(format!(
+                    "Program executed {} time(s). Last execution: {}",
+                    run_count,
+                    Self::convert_filetime(last_run_time)
+                )),
+            );
+
+            Ok(metadata)
+        })
     }
 
     /// Checks if this parser supports the given format
@@ -405,8 +409,12 @@ impl FormatParser for PrefetchParser {
 pub fn parse_prefetch_metadata(
     reader: &dyn FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    let parser = PrefetchParser;
-    parser.parse(reader).map_err(|e| e.to_string())
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let parser = PrefetchParser;
+        parser.parse(reader).map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]

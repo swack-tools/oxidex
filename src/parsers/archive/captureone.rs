@@ -47,7 +47,11 @@ const EIP_MEMBER_MAX_SIZE: u64 = 1 << 30;
 pub fn parse_eip_metadata(
     reader: &dyn crate::core::FileReader,
 ) -> std::result::Result<MetadataMap, String> {
-    parse(reader).map_err(|e| format!("EIP parse error: {}", e))
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        parse(reader).map_err(|e| format!("EIP parse error: {}", e))
+    })
 }
 
 fn parse(reader: &dyn crate::core::FileReader) -> Result<MetadataMap> {

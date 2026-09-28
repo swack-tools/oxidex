@@ -71,191 +71,196 @@ fn split_ws(s: &str) -> Vec<&str> {
 /// Parses metadata from a MIFF image, following `ProcessMIFF()` in
 /// `Image::ExifTool::MIFF.pm`.
 pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
-    let size = reader.size();
-    if size < MIFF_HEADER.len() as u64 {
-        return Err("File too small for MIFF signature".to_string());
-    }
-    let hdr = reader
-        .read(0, MIFF_HEADER.len())
-        .map_err(|e| e.to_string())?;
-    if hdr != MIFF_HEADER {
-        return Err("Invalid MIFF signature".to_string());
-    }
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> std::result::Result<MetadataMap, String> {
+        let size = reader.size();
+        if size < MIFF_HEADER.len() as u64 {
+            return Err("File too small for MIFF signature".to_string());
+        }
+        let hdr = reader
+            .read(0, MIFF_HEADER.len())
+            .map_err(|e| e.to_string())?;
+        if hdr != MIFF_HEADER {
+            return Err("Invalid MIFF signature".to_string());
+        }
 
-    // Read the text header up to the new-style terminator ":\x1a", capped so
-    // a malformed/old-style file (terminated by ":\n") can't force reading
-    // the whole (possibly huge) file into memory.
-    const MAX_HEADER: u64 = 1024 * 1024;
-    let scan_len = size.min(MAX_HEADER);
-    let buf = reader
-        .read(0, scan_len as usize)
-        .map_err(|e| e.to_string())?;
-    let terminator_pos = buf
-        .windows(NEW_TERMINATOR.len())
-        .position(|w| w == NEW_TERMINATOR);
-    let text_end = terminator_pos.unwrap_or(buf.len());
-    let text = String::from_utf8_lossy(&buf[..text_end]);
-    let text = text.trim_end_matches([':']); // in case terminator wasn't found and trailing ':' remains
+        // Read the text header up to the new-style terminator ":\x1a", capped so
+        // a malformed/old-style file (terminated by ":\n") can't force reading
+        // the whole (possibly huge) file into memory.
+        const MAX_HEADER: u64 = 1024 * 1024;
+        let scan_len = size.min(MAX_HEADER);
+        let buf = reader
+            .read(0, scan_len as usize)
+            .map_err(|e| e.to_string())?;
+        let terminator_pos = buf
+            .windows(NEW_TERMINATOR.len())
+            .position(|w| w == NEW_TERMINATOR);
+        let text_end = terminator_pos.unwrap_or(buf.len());
+        let text = String::from_utf8_lossy(&buf[..text_end]);
+        let text = text.trim_end_matches([':']); // in case terminator wasn't found and trailing ':' remains
 
-    let mut metadata = MetadataMap::new();
-    metadata.insert("FileType".to_string(), TagValue::String("MIFF".to_string()));
+        let mut metadata = MetadataMap::new();
+        metadata.insert("FileType".to_string(), TagValue::String("MIFF".to_string()));
 
-    let mut entries = split_ws(text);
-    // Put the id= header token back at the front, matching ExifTool
-    // unshifting $hdr onto @entries.
-    let hdr_str = "id=ImageMagick";
-    entries.insert(0, hdr_str);
+        let mut entries = split_ws(text);
+        // Put the id= header token back at the front, matching ExifTool
+        // unshifting $hdr onto @entries.
+        let hdr_str = "id=ImageMagick";
+        entries.insert(0, hdr_str);
 
-    #[derive(PartialEq)]
-    enum Mode {
-        None,
-        Comment,
-        Value,
-    }
-    let mut mode = Mode::None;
-    let mut tag = String::new();
-    let mut val = String::new();
-    let mut profiles: Vec<(String, u64)> = Vec::new();
+        #[derive(PartialEq)]
+        enum Mode {
+            None,
+            Comment,
+            Value,
+        }
+        let mut mode = Mode::None;
+        let mut tag = String::new();
+        let mut val = String::new();
+        let mut profiles: Vec<(String, u64)> = Vec::new();
 
-    for entry in entries {
-        match mode {
-            Mode::Comment => {
-                if entry.ends_with('}') {
-                    mode = Mode::None;
-                }
-                continue;
-            }
-            Mode::Value => {
-                val.push(' ');
-                val.push_str(entry);
-                if !entry.ends_with('}') {
+        for entry in entries {
+            match mode {
+                Mode::Comment => {
+                    if entry.ends_with('}') {
+                        mode = Mode::None;
+                    }
                     continue;
                 }
-                mode = Mode::None;
-                // strip a single leading '{' and trailing '}'
-                if let Some(stripped) = val.strip_prefix('{') {
-                    val = stripped.to_string();
-                }
-                if let Some(stripped) = val.strip_suffix('}') {
-                    val = stripped.to_string();
-                }
-            }
-            Mode::None => {
-                if entry.starts_with('{') {
-                    // Mirrors ExifTool's ProcessMIFF(): entering comment
-                    // mode does not check for a closing brace in the same
-                    // token, so a self-contained `{comment}` token still
-                    // requires a later token ending in `}` to exit.
-                    mode = Mode::Comment;
-                    continue;
-                } else if entry
-                    .rfind('=')
-                    .is_some_and(|eq| eq > 0 && eq < entry.len() - 1)
-                {
-                    // Perl's greedy `/(.+)=(.+)/` backtracks to the
-                    // rightmost '=' that still leaves >=1 char on each side.
-                    let eq = entry.rfind('=').unwrap();
-                    tag = entry[..eq].to_string();
-                    val = entry[eq + 1..].to_string();
-                    if val.starts_with('{') {
-                        mode = Mode::Value;
+                Mode::Value => {
+                    val.push(' ');
+                    val.push_str(entry);
+                    if !entry.ends_with('}') {
                         continue;
                     }
-                } else if entry.starts_with(':') {
-                    break;
-                } else {
-                    // Unrecognized data -- stop parsing (mirrors ExifTool's Warn + last)
-                    break;
+                    mode = Mode::None;
+                    // strip a single leading '{' and trailing '}'
+                    if let Some(stripped) = val.strip_prefix('{') {
+                        val = stripped.to_string();
+                    }
+                    if let Some(stripped) = val.strip_suffix('}') {
+                        val = stripped.to_string();
+                    }
+                }
+                Mode::None => {
+                    if entry.starts_with('{') {
+                        // Mirrors ExifTool's ProcessMIFF(): entering comment
+                        // mode does not check for a closing brace in the same
+                        // token, so a self-contained `{comment}` token still
+                        // requires a later token ending in `}` to exit.
+                        mode = Mode::Comment;
+                        continue;
+                    } else if entry
+                        .rfind('=')
+                        .is_some_and(|eq| eq > 0 && eq < entry.len() - 1)
+                    {
+                        // Perl's greedy `/(.+)=(.+)/` backtracks to the
+                        // rightmost '=' that still leaves >=1 char on each side.
+                        let eq = entry.rfind('=').unwrap();
+                        tag = entry[..eq].to_string();
+                        val = entry[eq + 1..].to_string();
+                        if val.starts_with('{') {
+                            mode = Mode::Value;
+                            continue;
+                        }
+                    } else if entry.starts_with(':') {
+                        break;
+                    } else {
+                        // Unrecognized data -- stop parsing (mirrors ExifTool's Warn + last)
+                        break;
+                    }
                 }
             }
+
+            // A completed tag=value pair.
+            if tag.starts_with("profile-") {
+                if let Ok(length) = val.parse::<u64>() {
+                    profiles.push((tag.clone(), length));
+                }
+            } else if let Some(name) = known_tag_name(&tag) {
+                metadata.insert(name.to_string(), TagValue::String(val.clone()));
+            } else {
+                // Arbitrary tag: ExifTool passes the raw key through as the tag
+                // name verbatim.
+                metadata.insert(tag.clone(), TagValue::String(val.clone()));
+            }
         }
 
-        // A completed tag=value pair.
-        if tag.starts_with("profile-") {
-            if let Ok(length) = val.parse::<u64>() {
-                profiles.push((tag.clone(), length));
-            }
-        } else if let Some(name) = known_tag_name(&tag) {
-            metadata.insert(name.to_string(), TagValue::String(val.clone()));
-        } else {
-            // Arbitrary tag: ExifTool passes the raw key through as the tag
-            // name verbatim.
-            metadata.insert(tag.clone(), TagValue::String(val.clone()));
-        }
-    }
+        // MIFF stores profile payloads consecutively after the text terminator in
+        // declaration order. ExifTool's ProcessMIFF() runs the full processors on
+        // each profile it recognizes: ProcessTIFF on an APP1 EXIF payload,
+        // Photoshop on profile-iptc, XMP on an APP1 XMP payload. This parser does
+        // not yet wire most of that; the whitelist below names the only EXIF tags
+        // this iteration extracts, and every other tag ExifTool would emit from
+        // the profiles (remaining EXIF, IPTC/Photoshop, XMP) is deliberately
+        // omitted rather than approximated. Note before growing the list:
+        // ExifTool processes the embedded TIFF with Base => 12, so offset-bearing
+        // tags (e.g. ThumbnailOffset) need that base applied to match the oracle.
+        const MIFF_EXIF_TAGS: [&str; 6] = [
+            "ApertureValue",
+            "Artist",
+            "BrightnessValue",
+            "ColorSpace",
+            "ComponentsConfiguration",
+            "CompressedBitsPerPixel",
+        ];
 
-    // MIFF stores profile payloads consecutively after the text terminator in
-    // declaration order. ExifTool's ProcessMIFF() runs the full processors on
-    // each profile it recognizes: ProcessTIFF on an APP1 EXIF payload,
-    // Photoshop on profile-iptc, XMP on an APP1 XMP payload. This parser does
-    // not yet wire most of that; the whitelist below names the only EXIF tags
-    // this iteration extracts, and every other tag ExifTool would emit from
-    // the profiles (remaining EXIF, IPTC/Photoshop, XMP) is deliberately
-    // omitted rather than approximated. Note before growing the list:
-    // ExifTool processes the embedded TIFF with Base => 12, so offset-bearing
-    // tags (e.g. ThumbnailOffset) need that base applied to match the oracle.
-    const MIFF_EXIF_TAGS: [&str; 6] = [
-        "ApertureValue",
-        "Artist",
-        "BrightnessValue",
-        "ColorSpace",
-        "ComponentsConfiguration",
-        "CompressedBitsPerPixel",
-    ];
-
-    if let Some(header_end) = terminator_pos {
-        let Some(profile_start) = header_end.checked_add(NEW_TERMINATOR.len()) else {
-            return Ok(metadata);
-        };
-        let mut profile_offset = match u64::try_from(profile_start) {
-            Ok(offset) => offset,
-            Err(_) => return Ok(metadata),
-        };
-
-        for (profile_name, profile_length) in profiles {
-            let Ok(profile_size) = usize::try_from(profile_length) else {
-                break;
+        if let Some(header_end) = terminator_pos {
+            let Some(profile_start) = header_end.checked_add(NEW_TERMINATOR.len()) else {
+                return Ok(metadata);
             };
-            let Some(next_offset) = profile_offset.checked_add(profile_length) else {
-                break;
-            };
-            if next_offset > size {
-                break;
-            }
-
-            let profile = match reader.read(profile_offset, profile_size) {
-                Ok(profile) => profile,
-                Err(_) => break,
+            let mut profile_offset = match u64::try_from(profile_start) {
+                Ok(offset) => offset,
+                Err(_) => return Ok(metadata),
             };
 
-            // ExifTool dispatches case-sensitively on the text after
-            // "profile-": `$type eq 'APP1' or $type eq 'exif' or $type eq
-            // 'xmp'` selects the Exif-header check. Only the observed
-            // 'profile-APP1' spelling is wired here; 'profile-exif' and
-            // 'profile-xmp' (never seen per MIFF.pm) remain unhandled, and a
-            // lowercase 'profile-app1' is skipped exactly as ExifTool skips it.
-            if profile_name == "profile-APP1"
-                && let Some(tiff_data) = profile.strip_prefix(b"Exif\0\0")
-            {
-                let mut embedded = MetadataMap::new();
-                if parse_embedded_exif_at(tiff_data, 0, &mut embedded) {
-                    // Each winner with its `--no-print-conv` form (an engine
-                    // row stores the printed label as its value), in file
-                    // order (`winners_in_file_order`).
-                    for (key, occurrence) in embedded.winners_in_file_order() {
-                        let base_name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
-                        if MIFF_EXIF_TAGS.contains(&base_name) {
-                            metadata.insert_carrying_forms(key.clone(), occurrence);
+            for (profile_name, profile_length) in profiles {
+                let Ok(profile_size) = usize::try_from(profile_length) else {
+                    break;
+                };
+                let Some(next_offset) = profile_offset.checked_add(profile_length) else {
+                    break;
+                };
+                if next_offset > size {
+                    break;
+                }
+
+                let profile = match reader.read(profile_offset, profile_size) {
+                    Ok(profile) => profile,
+                    Err(_) => break,
+                };
+
+                // ExifTool dispatches case-sensitively on the text after
+                // "profile-": `$type eq 'APP1' or $type eq 'exif' or $type eq
+                // 'xmp'` selects the Exif-header check. Only the observed
+                // 'profile-APP1' spelling is wired here; 'profile-exif' and
+                // 'profile-xmp' (never seen per MIFF.pm) remain unhandled, and a
+                // lowercase 'profile-app1' is skipped exactly as ExifTool skips it.
+                if profile_name == "profile-APP1"
+                    && let Some(tiff_data) = profile.strip_prefix(b"Exif\0\0")
+                {
+                    let mut embedded = MetadataMap::new();
+                    if parse_embedded_exif_at(tiff_data, 0, &mut embedded) {
+                        // Each winner with its `--no-print-conv` form (an engine
+                        // row stores the printed label as its value), in file
+                        // order (`winners_in_file_order`).
+                        for (key, occurrence) in embedded.winners_in_file_order() {
+                            let base_name =
+                                key.split_once(':').map_or(key.as_str(), |(_, name)| name);
+                            if MIFF_EXIF_TAGS.contains(&base_name) {
+                                metadata.insert_carrying_forms(key.clone(), occurrence);
+                            }
                         }
                     }
                 }
+
+                profile_offset = next_offset;
             }
-
-            profile_offset = next_offset;
         }
-    }
 
-    Ok(metadata)
+        Ok(metadata)
+    })
 }
 
 #[cfg(test)]

@@ -98,11 +98,15 @@ const CBOR_PREDEFINED_NAMES: &[(&str, &str)] = &[
 /// A [`MetadataMap`] of `JUMBF:*` tags. An input with no JUMBF chunks yields an
 /// empty map rather than an error.
 pub fn parse_jumbf(app11_payloads: &[&[u8]]) -> Result<MetadataMap> {
-    let mut collector = Collector::default();
-    for boxed in assemble_boxes(app11_payloads) {
-        collector.walk(&boxed, 0);
-    }
-    Ok(collector.metadata)
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut collector = Collector::default();
+        for boxed in assemble_boxes(app11_payloads) {
+            collector.walk(&boxed, 0);
+        }
+        Ok(collector.metadata)
+    })
 }
 
 // ---------------------------------------------------------------------------

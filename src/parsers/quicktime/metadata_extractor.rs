@@ -297,106 +297,110 @@ fn extract_track_aperture(
 /// [`render_quicktime_datetime`]). Every other caller -- plain MOV/MP4/AVIF/
 /// HEIF -- passes `false` and keeps today's zone-less UTC rendering.
 pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap, String> {
-    let mut metadata = MetadataMap::with_capacity(50);
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap, String> {
+        let mut metadata = MetadataMap::with_capacity(50);
 
-    // Extract file-level metadata from ftyp and mdat atoms
-    extract_file_level_metadata(root_atoms, &mut metadata);
+        // Extract file-level metadata from ftyp and mdat atoms
+        extract_file_level_metadata(root_atoms, &mut metadata);
 
-    // Find the moov atom (movie container) - optional for HEIF/HIF files
-    let moov = root_atoms
-        .iter()
-        .find(|atom| atom.atom_type.matches("moov"));
+        // Find the moov atom (movie container) - optional for HEIF/HIF files
+        let moov = root_atoms
+            .iter()
+            .find(|atom| atom.atom_type.matches("moov"));
 
-    // If we have a moov atom, extract traditional QuickTime/MP4 metadata
-    if let Some(moov) = moov {
-        // Extract movie header metadata (mvhd)
-        if let Some(mvhd) = moov.find_child("mvhd") {
-            extract_movie_header(&mvhd, &mut metadata, is_cr3)?;
-        }
-
-        // Extract track headers (tkhd) from all trak atoms
-        if let Ok(children) = moov.parse_children() {
-            let trak_atoms: Vec<_> = children
-                .iter()
-                .filter(|a| a.atom_type.matches("trak"))
-                .collect();
-
-            for (index, trak) in trak_atoms.iter().enumerate() {
-                // Ignore errors - missing atoms in a track should not prevent
-                // processing other tracks (preserves original behavior)
-                let _ = extract_track_metadata(trak, &mut metadata, index, is_cr3);
+        // If we have a moov atom, extract traditional QuickTime/MP4 metadata
+        if let Some(moov) = moov {
+            // Extract movie header metadata (mvhd)
+            if let Some(mvhd) = moov.find_child("mvhd") {
+                extract_movie_header(&mvhd, &mut metadata, is_cr3)?;
             }
-        }
 
-        // Extract from all possible locations
-        if let Some(udta) = moov.find_child("udta") {
-            // Extract handler metadata (hdlr) - may be in udta or udta→meta
-            if let Some(meta) = udta.find_child("meta") {
-                // Parse meta children (skip version/flags)
-                let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
-                    &meta.data[4..]
-                } else {
-                    meta.data
-                };
+            // Extract track headers (tkhd) from all trak atoms
+            if let Ok(children) = moov.parse_children() {
+                let trak_atoms: Vec<_> = children
+                    .iter()
+                    .filter(|a| a.atom_type.matches("trak"))
+                    .collect();
 
-                if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
-                    && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
-                {
-                    extract_handler_metadata(hdlr, &mut metadata)?;
+                for (index, trak) in trak_atoms.iter().enumerate() {
+                    // Ignore errors - missing atoms in a track should not prevent
+                    // processing other tracks (preserves original behavior)
+                    let _ = extract_track_metadata(trak, &mut metadata, index, is_cr3);
                 }
             }
 
-            // Also check for hdlr directly in udta
-            if let Some(hdlr) = udta.find_child("hdlr") {
-                extract_handler_metadata(&hdlr, &mut metadata)?;
-            }
-            // Extract classic QuickTime user data (©xxx atoms)
-            extract_user_data_atoms(&udta, &mut metadata)?;
+            // Extract from all possible locations
+            if let Some(udta) = moov.find_child("udta") {
+                // Extract handler metadata (hdlr) - may be in udta or udta→meta
+                if let Some(meta) = udta.find_child("meta") {
+                    // Parse meta children (skip version/flags)
+                    let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
+                        &meta.data[4..]
+                    } else {
+                        meta.data
+                    };
 
-            // Extract iTunes-style metadata (udta→meta)
-            if let Some(meta) = udta.find_child("meta") {
-                extract_itunes_metadata(&meta, &mut metadata)?;
+                    if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
+                        && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
+                    {
+                        extract_handler_metadata(hdlr, &mut metadata)?;
+                    }
+                }
+
+                // Also check for hdlr directly in udta
+                if let Some(hdlr) = udta.find_child("hdlr") {
+                    extract_handler_metadata(&hdlr, &mut metadata)?;
+                }
+                // Extract classic QuickTime user data (©xxx atoms)
+                extract_user_data_atoms(&udta, &mut metadata)?;
+
+                // Extract iTunes-style metadata (udta→meta)
+                if let Some(meta) = udta.find_child("meta") {
+                    extract_itunes_metadata(&meta, &mut metadata)?;
+                    extract_mp4_metadata(&meta, &mut metadata)?;
+                }
+            }
+
+            // Extract MP4 metadata (moov→meta with keys/ilst)
+            if let Some(meta) = moov.find_child("meta") {
                 extract_mp4_metadata(&meta, &mut metadata)?;
             }
         }
 
-        // Extract MP4 metadata (moov→meta with keys/ilst)
-        if let Some(meta) = moov.find_child("meta") {
-            extract_mp4_metadata(&meta, &mut metadata)?;
-        }
-    }
+        // HEIF/HIF files have a root-level meta atom instead of moov
+        // Extract metadata from root-level meta atom if present
+        if let Some(meta) = root_atoms.iter().find(|a| a.atom_type.matches("meta")) {
+            // Extract handler metadata from root-level meta
+            let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
+                &meta.data[4..]
+            } else {
+                meta.data
+            };
 
-    // HEIF/HIF files have a root-level meta atom instead of moov
-    // Extract metadata from root-level meta atom if present
-    if let Some(meta) = root_atoms.iter().find(|a| a.atom_type.matches("meta")) {
-        // Extract handler metadata from root-level meta
-        let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
-            &meta.data[4..]
+            if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
+                && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
+            {
+                extract_handler_metadata(hdlr, &mut metadata)?;
+            }
+
+            // Extract HEIF-specific metadata (iinf, iloc, etc.) including EXIF data
+            extract_heif_metadata(meta, root_atoms, &mut metadata)?;
+        }
+
+        // Canon CR3 stores its JPEG preview as a timed media sample rather than
+        // as a conventional metadata atom. Extract the first JPEG sample and its
+        // timing information by following the ISO Base Media sample tables.
+        extract_canon_cr3_sample_metadata(root_atoms, &mut metadata);
+
+        // If no metadata was extracted, return error
+        if metadata.is_empty() {
+            Err("No metadata found in QuickTime/MP4 file".to_string())
         } else {
-            meta.data
-        };
-
-        if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
-            && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
-        {
-            extract_handler_metadata(hdlr, &mut metadata)?;
+            Ok(metadata)
         }
-
-        // Extract HEIF-specific metadata (iinf, iloc, etc.) including EXIF data
-        extract_heif_metadata(meta, root_atoms, &mut metadata)?;
-    }
-
-    // Canon CR3 stores its JPEG preview as a timed media sample rather than
-    // as a conventional metadata atom. Extract the first JPEG sample and its
-    // timing information by following the ISO Base Media sample tables.
-    extract_canon_cr3_sample_metadata(root_atoms, &mut metadata);
-
-    // If no metadata was extracted, return error
-    if metadata.is_empty() {
-        Err("No metadata found in QuickTime/MP4 file".to_string())
-    } else {
-        Ok(metadata)
-    }
+    })
 }
 
 /// Extract Canon CR3 metadata stored in ISO Base Media sample tables.
@@ -4151,6 +4155,99 @@ mod tests {
         mdat.extend_from_slice(&exif_item);
 
         [ftyp, meta(off1, off2), child_atom(b"mdat", &mdat)].concat()
+    }
+
+    /// #949 review (tests/map_provenance_producers.rs:56): every public
+    /// QuickTime producer -- `parse_quicktime_metadata`, its two
+    /// `_from_bytes` forms and `metadata_extractor::extract_metadata`, which
+    /// return `Result<MetadataMap, String>` and so escaped the tripwire's
+    /// `Result<MetadataMap>` matcher -- hands out rows read from the file.
+    /// A map one of them produced from a HEIC Exif item, handed to
+    /// `write_metadata` for a JPEG holding the same TIFF block, is the file's
+    /// own: nothing is a caller's assignment, so the XPTitle whose stored
+    /// code units are a surrogate pair (re-encoding its decoded text would
+    /// give `41 00 8c f3 00 00`, `writers::xp_strings`) keeps its bytes and
+    /// the write reports `Unchanged`. This held at e4d2d79a too -- the Exif
+    /// item's rows are recorded through `insert_occurrence`, never as
+    /// assignments -- while the producers' own `insert`ed QuickTime rows were
+    /// (`tests/map_provenance_producers.rs`
+    /// `newly_covered_producers_hand_out_read_rows`): it pins the write-back
+    /// now that each producer's body runs in `metadata_map::file_rows`.
+    #[test]
+    fn quicktime_producer_rows_write_back_unchanged() {
+        use crate::core::operations::{read_metadata, write_metadata};
+        use crate::core::write_transaction::WriteOutcome;
+        use crate::parsers::image::embedded::test_fixtures::tiff_with_entries;
+        // "A", then U+1F38C as the surrogate pair D83C DF8C, then the NUL pair.
+        const PAIR: [u8; 8] = [0x41, 0x00, 0x3c, 0xd8, 0x8c, 0xdf, 0x00, 0x00];
+        // An 8x8 baseline JPEG with no metadata segment (tests/xp_string_write.rs).
+        const BASE_JPEG_HEX: &str = "ffd8ffdb0084001410101912192717172732261f26322e262626262e3e35353535353e44414141414141444444444444444444444444444444444444444444444444444444444401151919201c2026181826362620263644362b2b364444444235424444444444444444444444444444444444444444444444444444444444444444444444444444ffc00011080008000803012200021101031101ffc4004b00010100000000000000000000000000000006010100000000000000000000000000000000100100000000000000000000000000000000110100000000000000000000000000000000ffda000c03010002110311003f00b3001fffd9";
+        let base: Vec<u8> = (0..BASE_JPEG_HEX.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&BASE_JPEG_HEX[i..i + 2], 16).unwrap())
+            .collect();
+        let tiff = tiff_with_entries(&[(0x013b, 2, b"me\0"), (0x9c9b, 1, &PAIR)]);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let mut jpeg = base[..2].to_vec();
+        jpeg.extend_from_slice(&[0xFF, 0xE1]);
+        jpeg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&app1);
+        jpeg.extend_from_slice(&base[2..]);
+
+        let heic = heic_with_exif_item(&tiff);
+        let atoms = super::super::atom_parser::parse_atoms(&heic)
+            .expect("atoms")
+            .1;
+        let produced = [
+            (
+                "parse_quicktime_metadata",
+                crate::parsers::quicktime::parse_quicktime_metadata(
+                    &crate::test_support::TestReader::from_slice(&heic),
+                ),
+            ),
+            (
+                "parse_quicktime_metadata_from_bytes",
+                crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&heic),
+            ),
+            (
+                "parse_quicktime_metadata_from_bytes_with_options",
+                crate::parsers::quicktime::parse_quicktime_metadata_from_bytes_with_options(
+                    &heic, false,
+                ),
+            ),
+            ("extract_metadata", extract_metadata(&atoms, false)),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        for (label, map) in produced {
+            let mut map = map.unwrap_or_else(|err| panic!("{label}: {err}"));
+            let path = dir.path().join(format!("{label}.jpg"));
+            std::fs::write(&path, &jpeg).unwrap();
+            let held = read_metadata(&path).unwrap();
+            // The rows the JPEG itself carries: the IFD0 of the Exif item.
+            let foreign: Vec<String> = map
+                .keys()
+                .filter(|key| !key.starts_with("IFD0:"))
+                .cloned()
+                .collect();
+            for key in foreign {
+                map.remove(&key);
+            }
+            assert!(
+                map.get("IFD0:XPTitle").is_some()
+                    && map.get("IFD0:XPTitle") == held.get("IFD0:XPTitle"),
+                "{label}: {:?} vs the JPEG's {:?}",
+                map.get("IFD0:XPTitle"),
+                held.get("IFD0:XPTitle")
+            );
+            let outcome =
+                write_metadata(&path, &map).unwrap_or_else(|err| panic!("{label}: {err}"));
+            assert_eq!(outcome, WriteOutcome::Unchanged, "{label}");
+            assert!(
+                std::fs::read(&path).unwrap() == jpeg,
+                "{label}: the stored XPTitle bytes were re-encoded"
+            );
+        }
     }
 
     #[test]

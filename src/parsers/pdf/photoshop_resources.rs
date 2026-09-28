@@ -57,68 +57,72 @@ const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 /// Returns an empty map (not an error) for PDFs that carry no such block,
 /// which is the overwhelming majority of them.
 pub fn parse_photoshop_image_resources(reader: &dyn FileReader) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
+    // Every row here is read from the file (`metadata_map::file_rows`):
+    // a caller's later `insert`/`get_mut` is what counts as assigned.
+    crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
 
-    let Some(resources) = find_image_resources(reader) else {
-        return Ok(metadata);
-    };
+        let Some(resources) = find_image_resources(reader) else {
+            return Ok(metadata);
+        };
 
-    // Photoshop family tags: hand the run to the APP13 decoder with the
-    // preamble it expects, so PDF and JPEG produce identical values for the
-    // identical bytes.
-    let mut with_signature = Vec::with_capacity(PHOTOSHOP_SIGNATURE.len() + resources.len());
-    with_signature.extend_from_slice(PHOTOSHOP_SIGNATURE);
-    with_signature.extend_from_slice(&resources);
-    if let Ok(photoshop_tags) = parse_photoshop_irb(&with_signature) {
-        metadata.merge(photoshop_tags);
-    }
-
-    // IPTC (0x0404) and EXIF (0x0422) are sub-directories the APP13 decoder
-    // deliberately leaves alone, so they are walked here.
-    for (id, payload) in image_resource_blocks(&resources) {
-        match id {
-            RES_IPTC => insert_iptc_tags(payload, &mut metadata),
-            RES_EXIF => {
-                let mut exif = MetadataMap::new();
-                // ExifTool reports the byte order of every TIFF block it
-                // processes, including this one (Exif.pm's ExifByteOrder
-                // PrintConv). The marker is the block's own first two bytes.
-                match payload.get(..2) {
-                    Some(b"II") => {
-                        exif.insert(
-                            "File:ExifByteOrder",
-                            TagValue::String("Little-endian (Intel, II)".to_string()),
-                        );
-                    }
-                    Some(b"MM") => {
-                        exif.insert(
-                            "File:ExifByteOrder",
-                            TagValue::String("Big-endian (Motorola, MM)".to_string()),
-                        );
-                    }
-                    _ => {}
-                }
-                parse_embedded_exif_at(payload, 0, &mut exif);
-                parse_embedded_thumbnail_ifd(payload, &mut exif);
-                // Replay the shared walk in file order, keeping each value
-                // form and occurrence through this PDF-specific name filter.
-                for (key, occurrence) in exif.all_occurrences() {
-                    // A tag id the generated registry has no name for comes
-                    // back as `Group:0xNNNN`. ExifTool reports no such tag
-                    // without -u, so emitting one would only add a key that
-                    // can never match. Drop them here rather than teach the
-                    // shared walk a PDF-specific rule.
-                    if is_unnamed_tag_key(&key) {
-                        continue;
-                    }
-                    metadata.insert_renamed_occurrence(key, occurrence);
-                }
-            }
-            _ => {}
+        // Photoshop family tags: hand the run to the APP13 decoder with the
+        // preamble it expects, so PDF and JPEG produce identical values for the
+        // identical bytes.
+        let mut with_signature = Vec::with_capacity(PHOTOSHOP_SIGNATURE.len() + resources.len());
+        with_signature.extend_from_slice(PHOTOSHOP_SIGNATURE);
+        with_signature.extend_from_slice(&resources);
+        if let Ok(photoshop_tags) = parse_photoshop_irb(&with_signature) {
+            metadata.merge(photoshop_tags);
         }
-    }
 
-    Ok(metadata)
+        // IPTC (0x0404) and EXIF (0x0422) are sub-directories the APP13 decoder
+        // deliberately leaves alone, so they are walked here.
+        for (id, payload) in image_resource_blocks(&resources) {
+            match id {
+                RES_IPTC => insert_iptc_tags(payload, &mut metadata),
+                RES_EXIF => {
+                    let mut exif = MetadataMap::new();
+                    // ExifTool reports the byte order of every TIFF block it
+                    // processes, including this one (Exif.pm's ExifByteOrder
+                    // PrintConv). The marker is the block's own first two bytes.
+                    match payload.get(..2) {
+                        Some(b"II") => {
+                            exif.insert(
+                                "File:ExifByteOrder",
+                                TagValue::String("Little-endian (Intel, II)".to_string()),
+                            );
+                        }
+                        Some(b"MM") => {
+                            exif.insert(
+                                "File:ExifByteOrder",
+                                TagValue::String("Big-endian (Motorola, MM)".to_string()),
+                            );
+                        }
+                        _ => {}
+                    }
+                    parse_embedded_exif_at(payload, 0, &mut exif);
+                    parse_embedded_thumbnail_ifd(payload, &mut exif);
+                    // Replay the shared walk in file order, keeping each value
+                    // form and occurrence through this PDF-specific name filter.
+                    for (key, occurrence) in exif.all_occurrences() {
+                        // A tag id the generated registry has no name for comes
+                        // back as `Group:0xNNNN`. ExifTool reports no such tag
+                        // without -u, so emitting one would only add a key that
+                        // can never match. Drop them here rather than teach the
+                        // shared walk a PDF-specific rule.
+                        if is_unnamed_tag_key(&key) {
+                            continue;
+                        }
+                        metadata.insert_renamed_occurrence(key, occurrence);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(metadata)
+    })
 }
 
 /// True for keys like `ExifIFD:0x920D`, i.e. an IFD entry whose tag id the
