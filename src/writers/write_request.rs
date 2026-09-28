@@ -1309,6 +1309,27 @@ fn makernote_may_hold_in_groups(
     // unless the deletion is `MakerNotes:All`, which takes CIFF too.
     let deletions = census.deletions;
     let ciff = census.ciff;
+    let surviving_direct = if deletions.exif_ifd_only() {
+        let surviving = if deletions.ifd1 && census.surviving_exif_ifd_clear != usize::MAX {
+            census
+                .surviving_exif_ifd_clear
+                .saturating_sub(census.ifd1_tag_bearing)
+        } else {
+            census.surviving_exif_ifd_clear
+        };
+        surviving > 0
+    } else {
+        false
+    };
+    // Rows do not identify which physical note supplied them. After an
+    // ExifIFD clear, a surviving direct note must stay an unknown candidate
+    // even if the removed ExifIFD note supplied a decoded vendor row.
+    if surviving_direct {
+        return Some(format!(
+            "the file carries a maker note outside ExifIFD where ExifTool also \
+             writes {name} if the note holds it, which oxidex cannot write"
+        ));
+    }
     if deletions.makernotes && (!ciff || deletions.ciff) {
         return None;
     }
@@ -1335,6 +1356,8 @@ fn makernote_may_hold_in_groups(
     }
     let tag_bearing = if deletions.makernotes {
         0
+    } else if deletions.ifd1 && census.tag_bearing != usize::MAX {
+        census.tag_bearing.saturating_sub(census.ifd1_tag_bearing)
     } else {
         census.tag_bearing
     };
@@ -1800,6 +1823,26 @@ mod tests {
             ..one_note()
         };
         assert!(makernote_may_hold("WhiteBalance", &canon, &exif_ifd_all).is_none());
+        // A direct IFD0 note survives ExifIFD:All. Even a decoded Nikon row
+        // could have belonged to an ExifIFD note that was just removed, so
+        // its physical survivor is kept as unknown rather than attributed
+        // to that row.
+        let direct_survivor = || MakerNoteCensus {
+            surviving_exif_ifd_clear: 1,
+            ..exif_ifd_all()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &canon, &direct_survivor)
+                .unwrap()
+                .contains("outside ExifIFD")
+        );
+        for clear in ["IFD0:All", "EXIF:All", "MakerNotes:All"] {
+            let removed = || MakerNoteCensus {
+                deletions: super::super::exif_surgical::RequestDeletions::of(clear),
+                ..direct_survivor()
+            };
+            assert!(makernote_may_hold("WhiteBalance", &canon, &removed).is_none());
+        }
         let mut ciff = canon.clone();
         ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
         let exif_ifd_all_ciff = || MakerNoteCensus {

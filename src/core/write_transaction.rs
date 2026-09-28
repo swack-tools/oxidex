@@ -582,6 +582,21 @@ fn plan_changes<'a>(
         &mie,
     );
     let gone = deletions.effective();
+    // Resolve CIFF presence from its APP0 bytes only if a surviving request
+    // can address it. Decoded rows cannot prove that an APP0 is absent.
+    let mut ciff_presence = None;
+    let mut physical_ciff = || -> Result<bool> {
+        if let Some(present) = ciff_presence {
+            return Ok(present);
+        }
+        let present = if head.starts_with(&[0xff, 0xd8]) {
+            crate::writers::exif_surgical::jpeg_has_ciff(reader.read(0, reader.size() as usize)?)?
+        } else {
+            false
+        };
+        ciff_presence = Some(present);
+        Ok(present)
+    };
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -654,7 +669,7 @@ fn plan_changes<'a>(
         // (either order) and `-MakerNotes:All= -MakerNotes:WhiteBalance#=1`
         // on Canon.jpg each delete the note and nothing else. Where the
         // deletion does not take effect (a raw type) the note is edited.
-        if makernote_request_gone(change, gone, &baseline) {
+        if makernote_request_gone(change, gone, path, &mut physical_ciff)? {
             continue;
         }
         match resolve_write_key_in_request_with_reader(
@@ -792,14 +807,15 @@ fn plan_changes<'a>(
 fn makernote_request_gone(
     change: &TagChange,
     gone: crate::writers::exif_surgical::RequestDeletions,
-    baseline: &MetadataMap,
-) -> bool {
+    path: &Path,
+    physical_ciff: &mut impl FnMut() -> Result<bool>,
+) -> Result<bool> {
     use crate::writers::generated_makernote_groups::MAKERNOTE_ROOTS;
     if !gone.makernotes {
-        return false;
+        return Ok(false);
     }
     let Some((group, name)) = change.tag().split_once(':') else {
-        return false;
+        return Ok(false);
     };
     let name = name.strip_suffix('#').unwrap_or(name);
     let entry = MAKERNOTE_ROOTS
@@ -816,7 +832,16 @@ fn makernote_request_gone(
         makernote_group
     };
     if !named {
-        return false;
+        return Ok(false);
+    }
+    // ExifIFD:All leaves a direct IFD0 note in the JPEG/TIFF carrier. A
+    // grouped setter can still reach it even if our reader decoded no row.
+    // Entry deletions explicitly naming ExifIFD remain gone.
+    if !entry
+        && gone.exif_ifd_only()
+        && crate::core::operations::conversion_makernote_census(path).surviving_exif_ifd_clear > 0
+    {
+        return Ok(false);
     }
     // A JPEG's CIFF segment survives every deletion but `MakerNotes:All`;
     // only a request that can address it stays live beside it: `MakerNotes:`
@@ -832,7 +857,7 @@ fn makernote_request_gone(
                         .iter()
                         .any(|reached| reached.eq_ignore_ascii_case(group))
             }));
-    gone.ciff || !can_address_ciff || !crate::writers::exif_surgical::has_ciff_rows(baseline)
+    Ok(gone.ciff || !can_address_ciff || !physical_ciff()?)
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`

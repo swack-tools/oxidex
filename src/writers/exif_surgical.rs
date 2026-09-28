@@ -719,6 +719,14 @@ pub enum IfdKind {
     Ifd1,
 }
 
+/// A physical 0x927C is a MakerNote only in directories ExifTool reads with
+/// Exif::Main. GPSInfo uses GPS::Main: its 0x927C is an unrelated binary tag
+/// (`GPS_0x927c` in pinned 13.59), even when its bytes begin with `Nikon`.
+/// InteropIFD and IFD1 still use Exif::Main and can hold real notes.
+pub(crate) fn is_makernote_entry(ifd: IfdKind, tag_id: u16) -> bool {
+    tag_id == MAKERNOTE && ifd != IfdKind::Gps
+}
+
 impl IfdKind {
     /// The metadata-map key prefix the reader uses for this IFD.
     pub fn prefix(self) -> &'static str {
@@ -1545,17 +1553,16 @@ fn plan_exif_write_inner(
             entry.tag_id
         )));
     }
-    // A MakerNote stored directly in a top-level directory (IFD0, GPS,
+    // A MakerNote stored directly in a top-level Exif::Main directory (IFD0,
     // InteropIFD, IFD1 -- the reader decodes one in IFD0 as it does in
     // ExifIFD) is not pinned: the serializer pins only ExifIFD's, so a
     // re-layout would move it and invalidate the absolute offsets inside it.
     // Refused, unless the write deletes the directory holding it.
     if let Some(entry) = scan.entries.iter().find(|entry| {
-        entry.tag_id == MAKERNOTE
+        is_makernote_entry(entry.ifd, entry.tag_id)
             && entry.ifd != IfdKind::ExifIfd
             && entry.value.len() > 4
             && !(entry.ifd == IfdKind::Ifd1 && groups.contains(&GroupRemoval::Ifd1))
-            && !(entry.ifd == IfdKind::Gps && groups.contains(&GroupRemoval::Gps))
             && !(entry.ifd == IfdKind::Interop
                 && (groups.contains(&GroupRemoval::Interop)
                     || groups.contains(&GroupRemoval::ExifIfd)))
@@ -1742,7 +1749,9 @@ fn plan_exif_write_inner(
         }
     }
     for entry in &scan.entries {
-        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
+        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1)
+            || is_makernote_entry(entry.ifd, entry.tag_id)
+        {
             continue;
         }
         // A borrowed name folds nothing: `EXIF:<name>` is the add path's,
@@ -1808,7 +1817,9 @@ fn plan_exif_write_inner(
         // original_map too) are unaffected and stay silently carried, which
         // is correct: the caller never had a chance to remove what it never
         // saw.
-        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
+        if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1)
+            || is_makernote_entry(entry.ifd, entry.tag_id)
+        {
             let reader_keys = carried_class_reader_keys(entry);
             let group_deleted = match entry.ifd {
                 IfdKind::Interop => groups
@@ -2447,8 +2458,9 @@ pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
 /// deletion is a no-op, only the second leaves the note unedited).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RequestDeletions {
-    /// Every EXIF maker note goes (`MakerNotes:All`, `ExifIFD:All`,
-    /// `EXIF:All`/`IFD0:All`, planned as a real deletion).
+    /// A note deletion is requested (`MakerNotes:All`, `ExifIFD:All`,
+    /// `EXIF:All`/`IFD0:All`). `ExifIFD:All` deletes that directory's
+    /// notes only; the census separately tracks notes that survive it.
     pub makernotes: bool,
     /// A JPEG's CIFF segments go too: `MakerNotes:All` only (the JPEG
     /// writer's `jpeg_without_ciff`; 13.59 on a Writer.jpg carrying
@@ -2458,9 +2470,19 @@ pub(crate) struct RequestDeletions {
     /// Every EXIF block goes (`EXIF:All`/`IFD0:All`): what is written after
     /// is one new block, so several blocks are no longer several copies.
     pub exif_blocks: bool,
+    /// The IFD1 directory (and its following chain) goes. Its direct
+    /// MakerNote is gone even though other EXIF-table notes may survive.
+    pub ifd1: bool,
 }
 
 impl RequestDeletions {
+    /// `ExifIFD:All` removes the note in ExifIFD, but a direct IFD0 (or
+    /// other surviving top-level directory) note remains. A carrier clear or
+    /// `MakerNotes:All` removes those too.
+    pub(crate) fn exif_ifd_only(self) -> bool {
+        self.makernotes && !self.ciff && !self.exif_blocks
+    }
+
     /// What the planned group deletion `key` deletes.
     pub(crate) fn of(key: &str) -> Self {
         match group_removal(key) {
@@ -2468,6 +2490,7 @@ impl RequestDeletions {
                 makernotes: true,
                 ciff: true,
                 exif_blocks: false,
+                ifd1: false,
             },
             Some(GroupRemoval::ExifIfd) => Self {
                 makernotes: true,
@@ -2477,6 +2500,11 @@ impl RequestDeletions {
                 makernotes: true,
                 ciff: false,
                 exif_blocks: true,
+                ifd1: true,
+            },
+            Some(GroupRemoval::Ifd1) => Self {
+                ifd1: true,
+                ..Self::default()
             },
             _ => Self::default(),
         }
@@ -2488,6 +2516,7 @@ impl RequestDeletions {
             makernotes: self.makernotes || other.makernotes,
             ciff: self.ciff || other.ciff,
             exif_blocks: self.exif_blocks || other.exif_blocks,
+            ifd1: self.ifd1 || other.ifd1,
         }
     }
 }
@@ -2498,9 +2527,9 @@ impl RequestDeletions {
 pub(crate) struct MakerNoteCensus {
     /// EXIF blocks (a JPEG's EXIF APP1s, a PNG's `eXIf`, a TIFF itself).
     pub blocks: usize,
-    /// Maker-note entries of those blocks, every kind: each ExifIFD
-    /// MakerNote (0x927C) and each IFD0 `DNGPrivateData` with an Adobe
-    /// `MakN` record.
+    /// Maker-note entries of those blocks: each scanned 0x927C under
+    /// Exif::Main, and each IFD0 `DNGPrivateData` with a recognized record.
+    /// GPS::Main's 0x927C is unrelated opaque data.
     pub notes: usize,
     /// The ones of [`notes`](Self::notes) that may hold tags ExifTool edits:
     /// every such entry, not every block holding one (an ExifIFD may carry
@@ -2511,6 +2540,12 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). A block the scan cannot walk counts as one, as does any count
     /// that cannot be made at all -- absence is what callers rely on.
     pub tag_bearing: usize,
+    /// The direct IFD1 subset of `tag_bearing`, removed by `IFD1:All`.
+    pub ifd1_tag_bearing: usize,
+    /// Tag-bearing 0x927C entries outside ExifIFD and its Interop child,
+    /// plus IFD0 DNGPrivateData maker-note records. These survive
+    /// `ExifIFD:All`, even if the reader emits no note row.
+    pub surviving_exif_ifd_clear: usize,
     /// A physical JPEG APP0 CIFF container, including one whose fields the
     /// reader does not surface. Decoded rows cannot prove its absence.
     pub ciff: bool,
@@ -2524,11 +2559,14 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        ifd1_tag_bearing: usize::MAX,
+        surviving_exif_ifd_clear: usize::MAX,
         ciff: true,
         deletions: RequestDeletions {
             makernotes: false,
             ciff: false,
             exif_blocks: false,
+            ifd1: false,
         },
     };
 }
@@ -2559,7 +2597,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
         };
         let (make, model) = (ifd0_text(0x010F), ifd0_text(0x0110));
         for entry in &scan.entries {
-            if entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE {
+            if is_makernote_entry(entry.ifd, entry.tag_id) {
                 census.notes += 1;
                 if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
                     &entry.value,
@@ -2567,6 +2605,12 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     &model,
                 ) {
                     census.tag_bearing += 1;
+                    if entry.ifd == IfdKind::Ifd1 {
+                        census.ifd1_tag_bearing += 1;
+                    }
+                    if entry.ifd != IfdKind::ExifIfd && entry.ifd != IfdKind::Interop {
+                        census.surviving_exif_ifd_clear += 1;
+                    }
                 }
             } else if entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA {
                 let Some(notes) = dng_private_makernote_count(&entry.value) else {
@@ -2575,6 +2619,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                 };
                 census.notes += notes;
                 census.tag_bearing += notes;
+                census.surviving_exif_ifd_clear += notes;
             }
         }
     }
@@ -4975,6 +5020,26 @@ mod tests {
     }
 
     #[test]
+    fn physical_census_counts_direct_ifd0_notes_without_decoded_rows() {
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&MAKERNOTE.to_le_bytes());
+        tiff.extend_from_slice(&7u16.to_le_bytes());
+        tiff.extend_from_slice(&16u32.to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(b"Nikon\0\x02\x10\0\0II\x2a\0\0\0");
+        let census = makernote_census(&[&tiff], &[42]);
+        assert_eq!(census.notes, 1);
+        assert_eq!(census.tag_bearing, 1);
+        assert_eq!(census.surviving_exif_ifd_clear, 1);
+        assert_eq!(
+            MakerNoteCensus::UNKNOWN.surviving_exif_ifd_clear,
+            usize::MAX
+        );
+    }
+
+    #[test]
     fn dng_makernote_census_uses_adobe_record_boundaries() {
         let record = |tag: &[u8; 4], payload: &[u8]| {
             let mut bytes = tag.to_vec();
@@ -5020,6 +5085,7 @@ mod tests {
             tiff.extend_from_slice(private);
             let census = makernote_census(&[&tiff], &[42]);
             assert_eq!((census.notes, census.tag_bearing), (1, 1));
+            assert_eq!(census.surviving_exif_ifd_clear, 1);
         }
         assert_eq!(dng_private_makernote_count(b"other private data"), Some(0));
 
@@ -5027,10 +5093,12 @@ mod tests {
         padded.extend_from_slice(&record(b"MakN", b"II\0\0\0\0"));
         let census = census_for(&padded);
         assert_eq!((census.notes, census.tag_bearing), (1, 1));
+        assert_eq!(census.surviving_exif_ifd_clear, 1);
 
         padded.extend_from_slice(&record(b"MakN", b"MM\0\0\0\0"));
         let census = census_for(&padded);
         assert_eq!((census.notes, census.tag_bearing), (2, 2));
+        assert_eq!(census.surviving_exif_ifd_clear, 2);
 
         // Corrupt framing remains an unknown destination, so the guard
         // conservatively refuses bare writes rather than partially writing.
