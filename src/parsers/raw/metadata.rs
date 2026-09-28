@@ -1265,6 +1265,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             preview_ifd_base,
                             &mut makernote_tags,
                             &mut value_forms,
+                            &mut structured_occurrences,
                         )
                     } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
                         && is_olympus_make(make)

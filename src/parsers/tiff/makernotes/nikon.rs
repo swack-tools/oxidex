@@ -2000,7 +2000,8 @@ pub fn parse_nikon_makernotes(
 }
 
 /// Parses Nikon MakerNotes while converting PreviewIFD's relative image start
-/// to the absolute file offset ExifTool reports.
+/// to the absolute file offset ExifTool reports, while retaining generated
+/// occurrences for the RAW reader's ownership channel.
 pub fn parse_nikon_makernotes_with_preview_ifd_base(
     data: &[u8],
     byte_order: ByteOrder,
@@ -2008,6 +2009,7 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base(
     preview_ifd_base: u64,
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
+    occurrences: &mut Vec<(String, TagOccurrence)>,
 ) -> std::result::Result<(), String> {
     NikonParser.parse_with_preview_ifd_base(
         data,
@@ -2016,7 +2018,7 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base(
         tags,
         value_forms,
         Some(preview_ifd_base),
-        None,
+        Some(occurrences),
     )
 }
 
@@ -2316,6 +2318,28 @@ mod tests {
         assert_eq!(tags.get("Nikon:PreviewImageStart").unwrap(), "4218");
         // The length half is not an offset and is reported unchanged.
         assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+    }
+
+    #[test]
+    fn preview_base_is_preserved_when_collecting_structured_occurrences() {
+        let tiff = nikon_type3_block(100, 1024);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut occurrences = Vec::new();
+        parse_nikon_makernotes_with_preview_ifd_base(
+            &tiff[100..],
+            ByteOrder::LittleEndian,
+            None,
+            110,
+            &mut tags,
+            &mut value_forms,
+            &mut occurrences,
+        )
+        .expect("parse preview IFD with occurrence channel");
+
+        assert_eq!(tags.get("Nikon:PreviewImageStart").unwrap(), "4206");
+        assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+        assert!(occurrences.is_empty());
     }
 
     /// A detached context knows no file position, so there is no base to add

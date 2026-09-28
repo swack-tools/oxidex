@@ -11,14 +11,37 @@ use oxidex::parsers::tiff::makernotes::nikon::NikonParser;
 use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use oxidex_tags::TagId;
 use std::collections::HashMap;
+use std::io::Write;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
+/// EXIF TIFF from the pinned 13.59 combined-samples Nikon/NikonD810.jpg
+/// (source SHA-256 03ec78ef39ea83d4e81715dae96a24ffcf57df48a4d6091a7b07dca06ba10c57).
+/// It ends after the complete 18,512-byte MakerNote; the removed image and
+/// thumbnail data are irrelevant to the encrypted LensData carrier. The IFD0
+/// next-directory pointer is cleared because its thumbnail was removed.
+const D810_EXIF: &[u8] = include_bytes!("fixtures/nikon/d810-exif.nef");
+
+fn d810_carrier(extension: &str) -> tempfile::NamedTempFile {
+    let mut file = tempfile::Builder::new()
+        .suffix(extension)
+        .tempfile()
+        .expect("create D810 metadata carrier");
+    if extension == ".jpg" {
+        let app1_len = u16::try_from(D810_EXIF.len() + 8).expect("EXIF fits in JPEG APP1");
+        file.write_all(b"\xff\xd8\xff\xe1").unwrap();
+        file.write_all(&app1_len.to_be_bytes()).unwrap();
+        file.write_all(b"Exif\0\0").unwrap();
+    }
+    file.write_all(D810_EXIF).unwrap();
+    if extension == ".jpg" {
+        file.write_all(b"\xff\xd9").unwrap();
+    }
+    file
+}
 
 #[test]
 fn d810_encrypted_lens_data_has_generated_occurrences() {
-    let path = fixtures::required_combined_fixture_path("Nikon/NikonD810.jpg");
-    let metadata = read_metadata(&path).expect("read required Nikon D810 carrier");
+    let carrier = d810_carrier(".jpg");
+    let metadata = read_metadata(carrier.path()).expect("read pinned Nikon D810 EXIF carrier");
     for (name, source_index, stored, native_value, printed) in [
         ("ExitPupilPosition", 4, 21, 2048.0 / 21.0, "97.5 mm"),
         ("AFAperture", 5, 36, 2.0_f64.powf(36.0 / 24.0), "2.8"),
@@ -79,15 +102,77 @@ fn d810_encrypted_lens_data_has_generated_occurrences() {
 }
 
 #[test]
+fn nef_lens_data_uses_the_same_generated_owner_as_jpeg() {
+    let carrier = d810_carrier(".nef");
+    let metadata = read_metadata(carrier.path()).expect("read pinned D810 NEF carrier");
+    for (name, printed) in [
+        ("ExitPupilPosition", "97.5 mm"),
+        ("AFAperture", "2.8"),
+        ("FocusPosition", "0x04"),
+        ("LensFStops", "6.00"),
+    ] {
+        let key = format!("Nikon:{name}");
+        let rows: Vec<_> = metadata
+            .project_occurrences(ValueChannel::PrintConv)
+            .filter(|(candidate, _, _)| *candidate == key)
+            .collect();
+        assert_eq!(rows.len(), 1, "{key}: one public RAW occurrence");
+        assert_eq!(rows[0].1.origin.module, Some("Nikon"));
+        assert_eq!(rows[0].1.origin.table, Some("LensData0204"));
+        assert_eq!(rows[0].2.as_ref(), &TagValue::String(printed.to_owned()));
+        assert_eq!(metadata.get_string(&key), Some(printed));
+    }
+    assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
+}
+
+#[test]
+fn engine_silence_suppresses_nef_generated_fields_without_hiding_residuals() {
+    let carrier = d810_carrier(".nef");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args([
+            "-j",
+            "-G1",
+            "-s",
+            "-Nikon:ExitPupilPosition",
+            "-Nikon:AFAperture",
+            "-Nikon:FocusPosition",
+            "-Nikon:LensFStops",
+            "-Nikon:MinFocalLength",
+        ])
+        .arg(carrier.path())
+        .env("OXIDEX_GENSHARE_SILENCE", "engine")
+        .output()
+        .expect("run RAW engine knockout");
+    assert!(output.status.success(), "{output:?}");
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let row = &rows[0];
+    for name in [
+        "ExitPupilPosition",
+        "AFAperture",
+        "FocusPosition",
+        "LensFStops",
+    ] {
+        assert!(
+            row.get(format!("Nikon:{name}")).is_none(),
+            "{name}: no hand fallback"
+        );
+    }
+    assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
+}
+
+#[test]
 fn encrypted_field_respects_cli_request_and_numeric_projection() {
-    let path = fixtures::required_combined_fixture_path("Nikon/NikonD810.jpg");
+    let carrier = d810_carrier(".jpg");
     let run = |numeric: bool| {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"));
         command.args(["-G1", "-s", "-Nikon:ExitPupilPosition"]);
         if numeric {
             command.arg("--no-print-conv");
         }
-        let output = command.arg(&path).output().expect("run oxidex request");
+        let output = command
+            .arg(carrier.path())
+            .output()
+            .expect("run oxidex request");
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).expect("utf8 CLI output")
     };
@@ -105,8 +190,8 @@ fn encrypted_field_respects_cli_request_and_numeric_projection() {
 
 #[test]
 fn engine_silence_does_not_resurrect_hand_copies_on_real_d810() {
-    let path = fixtures::required_combined_fixture_path("Nikon/NikonD810.jpg");
-    let file = std::fs::read(&path).expect("read required D810 carrier bytes");
+    let carrier = d810_carrier(".jpg");
+    let file = std::fs::read(carrier.path()).expect("read pinned D810 carrier bytes");
     let marker = b"Nikon\0\x02\x11\0\0";
     let offset = file
         .windows(marker.len())
