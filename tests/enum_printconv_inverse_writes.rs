@@ -1517,10 +1517,12 @@ fn duplicate_enum_rows_never_write_the_wrong_row() {
         .iter()
         .filter(|(id, _)| table.tag(*id).is_some())
         .count();
-    assert!(
-        present == 0 || present == modern.len(),
-        "partial Exif 3.1 enum rows"
-    );
+    let expected = match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => 0,
+        "13.59" => modern.len(),
+        pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+    };
+    assert_eq!(present, expected, "selected source Exif 3.1 enum rows");
     if present == 0 {
         // Selected 11.78/12.64 have only Sony's SubIFD destinations. A
         // parser can invert Auto to 1, but that code must never be created

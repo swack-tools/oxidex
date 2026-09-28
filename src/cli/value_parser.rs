@@ -3010,6 +3010,11 @@ mod tests {
     #[test]
     fn registry_absent_transcribed_enum_rows_still_invert() {
         let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        let modern = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => false,
+            "13.59" => true,
+            pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+        };
         for (id, name, label, code) in [
             (0xa411, "ShadingCorrection", "Yes", 1),
             (0xa412, "NoiseReduction", "No", 0),
@@ -3018,6 +3023,11 @@ mod tests {
             assert!(
                 get_tag_descriptor(&key).is_none(),
                 "{key} gained a registry row"
+            );
+            assert_eq!(
+                table.tag(id).is_some(),
+                modern,
+                "selected source row {name}"
             );
             match table.tag(id) {
                 Some(row) => {
@@ -3247,10 +3257,12 @@ mod tests {
             .iter()
             .filter(|(id, _)| table.tag(*id).is_some())
             .count();
-        assert!(
-            present == 0 || present == modern_rows.len(),
-            "partial Exif 3.1 enum rows"
-        );
+        let expected = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => 0,
+            "13.59" => modern_rows.len(),
+            pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+        };
+        assert_eq!(present, expected, "selected source Exif 3.1 enum rows");
         if present == 0 {
             for (name, label) in [
                 ("ChromaticAberrationCorrection", "Auto"),
