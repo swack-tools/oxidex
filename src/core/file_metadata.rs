@@ -656,9 +656,20 @@ mod tests {
             // Font.pm and LNK.pm declare these the same way RIFF and
             // QuickTime do -- in the module, so `%mimeType` has no row.
             ("afm", "application/x-font-afm"),
-            ("url", "application/x-mswinurl"),
         ] {
             assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
+        }
+        // LNK.pm's URL reader and the .url lookup were added after 12.64.
+        // A selected older source must not claim that format from the suffix.
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => {
+                assert!(crate::filetype::identify_by_extension("url").is_none());
+                assert_eq!(identify_extension("url", b"").2, UNKNOWN_MIME_TYPE);
+            }
+            "13.59" => {
+                assert_eq!(identify_extension("url", b"").2, "application/x-mswinurl");
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
         }
     }
 
