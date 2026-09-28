@@ -359,10 +359,15 @@ fn dispatch_structured_in_tiff(
 
 #[test]
 fn stacked_image_uses_generated_direct_wildcard_and_unknown_forms() {
+    let (live_composite, nd64) = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => ("Unknown (1 7)", "Unknown (3 64)"),
+        "12.64" | "13.59" => ("Live Composite (7 images)", "ND64 (6EV)"),
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     for (pair, expected) in [
         ((0, 0), "No"),
-        ((1, 7), "Live Composite (7 images)"),
-        ((3, 64), "ND64 (6EV)"),
+        ((1, 7), live_composite),
+        ((3, 64), nd64),
         ((7, 3), "Unknown (7 3)"),
     ] {
         let mut tags = HashMap::new();
@@ -764,6 +769,11 @@ fn zoomed_preview_pair_reaches_the_real_olympus_raw_reader() {
 
 #[test]
 fn raw_reader_replays_generated_duplicates_with_typed_forms_and_attribution() {
+    let (live_composite, nd64) = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => ("Unknown (1 7)", "Unknown (3 64)"),
+        "12.64" | "13.59" => ("Live Composite (7 images)", "ND64 (6EV)"),
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     let data = orf_with_makernote(&stacked_note_pairs(&[(1, 7), (3, 64)]));
     let metadata = oxidex::parsers::raw::metadata::parse_raw_metadata(
         &data,
@@ -790,8 +800,8 @@ fn raw_reader_replays_generated_duplicates_with_typed_forms_and_attribution() {
             .map(|(_, occurrence, _)| { occurrence.project(ValueChannel::PrintConv).into_owned() })
             .collect::<Vec<_>>(),
         [
-            TagValue::new_string("Live Composite (7 images)"),
-            TagValue::new_string("ND64 (6EV)"),
+            TagValue::new_string(live_composite),
+            TagValue::new_string(nd64),
         ]
     );
     assert_eq!(
@@ -808,10 +818,7 @@ fn raw_reader_replays_generated_duplicates_with_typed_forms_and_attribution() {
             .collect::<Vec<_>>(),
         [TagId::Numeric(0x0804), TagId::Numeric(0x0804)]
     );
-    assert_eq!(
-        metadata.get_string("Olympus:StackedImage"),
-        Some("ND64 (6EV)")
-    );
+    assert_eq!(metadata.get_string("Olympus:StackedImage"), Some(nd64));
 }
 
 #[test]

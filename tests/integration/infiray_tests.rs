@@ -261,11 +261,23 @@ fn printed(metadata: &Metadata, tag: &str) -> Option<String> {
 #[test]
 fn infiray_appn_records_match_exiftool() {
     let metadata = read_infiray();
+    // The IJPEG APPn records were added after 11.78. That source prints none
+    // of the 81 rows; 12.64 and 13.59 print the complete record set.
+    let records_declared = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => false,
+        "12.64" | "13.59" => true,
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     let mut wrong = Vec::new();
     for (tag, expected) in EXPECTED {
         match printed(&metadata, tag) {
-            Some(ref actual) if actual == *expected => {}
-            other => wrong.push(format!("{}: expected {:?}, got {:?}", tag, expected, other)),
+            Some(ref actual) if records_declared && actual == *expected => {}
+            None if !records_declared => {}
+            other => wrong.push(format!(
+                "{tag}: expected {:?}, got {:?}",
+                records_declared.then_some(expected),
+                other
+            )),
         }
     }
     assert!(

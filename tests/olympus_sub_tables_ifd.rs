@@ -351,9 +351,6 @@ fn olympus_e1_jpg_sub_table_tags_match_the_pinned_oracle() {
             // hand: the third AFPoint alternative (`!~ /^(E-M|OM-)/`),
             // withheld for its E-P1 RawConv
             ("Olympus:AFPoint", "Center (horizontal)"),
-            // engine: AFPointDetails' second alternative (older bodies),
-            // printed raw; the hand pass skips it
-            ("Olympus:AFPointDetails", "0"),
             // engine: `Count => 2` joined-key hash, `'0 0' => 'Off'`
             ("Olympus:ExternalFlash", "Off"),
             ("Olympus:ExternalFlashBounce", "Bounce or Off"),
@@ -368,6 +365,16 @@ fn olympus_e1_jpg_sub_table_tags_match_the_pinned_oracle() {
             ("Composite:FOV", "47.2 deg (0.62 m)"),
             ("Composite:HyperfocalDistance", "5.93 m"),
         ],
+    );
+    // Olympus.pm 11.78 has no AFPointDetails alternative for this E-1;
+    // 12.64 and 13.59 print its raw value through the later declaration.
+    assert_eq!(
+        shown(&metadata, "Olympus:AFPointDetails").as_deref(),
+        match oxidex::exiftool_oracle::repo_pin() {
+            "11.78" => None,
+            "12.64" | "13.59" => Some("0"),
+            pin => panic!("unreviewed ExifTool pin {pin}"),
+        }
     );
 }
 

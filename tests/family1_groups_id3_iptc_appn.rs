@@ -3,8 +3,9 @@
 //! non-standard (trailer) IPTC, and the InfiRay / GoPro / Adobe JPEG APPn
 //! records. Family 0 and the storage keys are unchanged.
 //!
-//! Every expectation is the pinned ExifTool 13.59 oracle's own output
-//! (`-ver` 13.59, `OOXML.docx` probe `DOCX`) on the named `t/images` file:
+//! The positive expectations are ExifTool 13.59's own output
+//! (`-ver` 13.59, `OOXML.docx` probe `DOCX`) on the named `t/images` file.
+//! The InfiRay records are absent in selected 11.78 and asserted absent there:
 //!
 //! ```text
 //! MP3.mp3       -G1 -s -Title          [ID3v2_2] Title : ExifTool Test
@@ -56,6 +57,19 @@ fn case(file: &str, args: &[&str]) -> Option<Vec<String>> {
     let path = path.to_str().unwrap().to_string();
     all.push(&path);
     Some(lines(&run(&all)))
+}
+
+fn case_allow_empty(file: &str, args: &[&str]) -> Option<Vec<String>> {
+    let path = pinned_fixture_path(file)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(args)
+        .arg(path)
+        .output()
+        .expect("runs oxidex");
+    assert!(output.status.success(), "{output:?}");
+    Some(lines(
+        &String::from_utf8(output.stdout).expect("UTF-8 output"),
+    ))
 }
 
 #[test]
@@ -128,15 +142,34 @@ fn adobe_app14_reports_the_adobe_group() {
 
 #[test]
 fn infiray_records_report_the_infiray_group() {
-    let Some(version) = case("InfiRay.jpg", &["-G1", "-s", "-IJPEGVersion"]) else {
+    let Some(version) = case_allow_empty("InfiRay.jpg", &["-G1", "-s", "-IJPEGVersion"]) else {
         return;
     };
-    assert_eq!(version, vec!["[InfiRay] IJPEGVersion : 0 2 0 1"]);
-    let version_g0 = case("InfiRay.jpg", &["-G0", "-s", "-IJPEGVersion"]).unwrap();
-    assert_eq!(version_g0, vec!["[APP2] IJPEGVersion : 0 2 0 1"]);
+    let declared = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => false,
+        "12.64" | "13.59" => true,
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
+    assert_eq!(
+        version,
+        if declared {
+            vec!["[InfiRay] IJPEGVersion : 0 2 0 1"]
+        } else {
+            vec![]
+        }
+    );
+    let version_g0 = case_allow_empty("InfiRay.jpg", &["-G0", "-s", "-IJPEGVersion"]).unwrap();
+    assert_eq!(
+        version_g0,
+        if declared {
+            vec!["[APP2] IJPEGVersion : 0 2 0 1"]
+        } else {
+            vec![]
+        }
+    );
     // APP3 (JPEG.pm's ImagingData), APP6 MixMode, APP8 Isothermal and APP9
     // Sensor each reach the output through a different merge.
-    let rest = case(
+    let rest = case_allow_empty(
         "InfiRay.jpg",
         &[
             "-G1",
@@ -150,12 +183,16 @@ fn infiray_records_report_the_infiray_group() {
     .unwrap();
     assert_eq!(
         rest,
-        vec![
-            "[InfiRay] ImagingData : (Binary data 20 bytes, use -b option to extract)",
-            "[InfiRay] MixMode : 0",
-            "[InfiRay] IsothermalMax : 80",
-            "[InfiRay] IRSensorName : P2_USB_IR",
-        ]
+        if declared {
+            vec![
+                "[InfiRay] ImagingData : (Binary data 20 bytes, use -b option to extract)",
+                "[InfiRay] MixMode : 0",
+                "[InfiRay] IsothermalMax : 80",
+                "[InfiRay] IRSensorName : P2_USB_IR",
+            ]
+        } else {
+            vec![]
+        }
     );
 }
 

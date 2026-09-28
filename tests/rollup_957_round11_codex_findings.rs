@@ -192,11 +192,16 @@ fn an_out_of_range_pdf_date_is_refused_through_the_library() {
         let theirs = copy_into(&dir, Path::new(PDF), "theirs.pdf");
         let before = fs::read(&theirs).unwrap();
         let o = oracle_run(oracle, &["-PDF:CreateDate=2020:13:02 03:04:05"], &theirs);
+        let warning = match exiftool_oracle::repo_pin() {
+            "11.78" => "Invalid date/time (use YYYY",
+            "12.64" | "13.59" => "Month '13' out of range 1..12",
+            pin => panic!("unreviewed ExifTool pin {pin}"),
+        };
         assert!(
-            String::from_utf8_lossy(&o.stderr).contains("out of range"),
+            String::from_utf8_lossy(&o.stderr).contains(warning),
             "{o:?}"
         );
-        assert_eq!(fs::read(&theirs).unwrap(), before, "13.59 refuses it too");
+        assert_eq!(fs::read(&theirs).unwrap(), before, "native refuses it too");
     }
 }
 

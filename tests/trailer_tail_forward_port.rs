@@ -678,14 +678,19 @@ fn pinned_exiftool_jpeg_walks_vivo_then_samsung() {
         return;
     };
     let metadata = Metadata::from_path(&path).expect("ExifTool.jpg parses");
-    // Pinned ExifTool 13.59: Vivo (340 bytes at 0x64a6), then Samsung.
+    // This carrier gains the Vivo and Samsung trailer values in 13.59.
+    let later = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => false,
+        "13.59" => true,
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        later.then_some("SoundShot_000")
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some(concat!(
+        later.then_some(concat!(
             "{\"com.android.camera.joint.fullview.orientation\":0,",
             "\"com.android.camera.hdr\":20737,\"com.android.camera.fisheye\":-1,",
             "\"com.android.camera.joint.conshoot\":0,",
