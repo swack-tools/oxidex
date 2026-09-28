@@ -2,9 +2,9 @@
 
 The bounded fixtures retain the selected library's effective tables and full
 processor/helper bodies. Their capture_scope names the full dump and dump tool.
-The 12.64 acceptance is limited to ItemList `data`, direct Keys lookup, and
-movie-level UserData explicit Format rows; other ProcessMOV routes stay outside
-these generators. 11.78 remains blocked because its reader branches differ.
+Acceptance is limited to ItemList `data`, direct Keys lookup, and movie-level
+UserData explicit Format rows; other ProcessMOV routes stay outside these
+generators. Reader differences are emitted as source-selected capabilities.
 """
 
 import json
@@ -17,6 +17,7 @@ from unittest.mock import patch
 import quicktime_generated_specs as itemlist
 import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
+import quicktime_protocol_caps as caps
 
 
 HERE = Path(__file__).resolve().parent
@@ -65,14 +66,21 @@ class HistoricalContracts(unittest.TestCase):
         self.assertEqual(result["identity_counts"]["generated"], 0)
         itemlist.require_nonempty_supported(result, "ItemList")
 
-    def test_1178_is_explicitly_blocked_instead_of_emitting_empty_readers(self):
-        results = self.compile_all("11.78", source("11.78"))
+    def test_1178_emits_reviewed_native_subset(self):
+        document = source("11.78")
+        results = self.compile_all("11.78", document)
         self.assertEqual({name: result["identity_counts"]["source_records"] for name, result in results.items()},
                          {"ItemList": 320, "Keys": 55, "UserData": 182})
+        self.assertEqual({name: result["identity_counts"]["generated"] for name, result in results.items()},
+                         {"ItemList": 73, "Keys": 48, "UserData": 17})
+        self.assertIn("PlayListID", {row["name"] for row in results["ItemList"]["specs"]})
         for name, result in results.items():
-            self.assertEqual(result["identity_counts"]["generated"], 0)
-            with self.assertRaisesRegex(ValueError, "source rows but no generated specs"):
-                itemlist.require_nonempty_supported(result, name)
+            self.assertIsNone(result["protocol"]["reason"], name)
+            itemlist.require_nonempty_supported(result, name)
+        for name, table in (("ItemList", "ItemList"), ("Keys", "Keys")):
+            recorded = results[name]["protocol"]["processor_contract" if name == "ItemList" else "processor"]["__deparse_sha256"]
+            body = document["modules"]["QuickTime"]["tables"][table]["meta"]["PROCESS_PROC"]["__deparse"]
+            self.assertEqual(recorded, hashlib.sha256(body.encode()).hexdigest())
 
     def test_1264_protocol_mutations_fail_closed_and_trigger_empty_guard(self):
         document = source("12.64")

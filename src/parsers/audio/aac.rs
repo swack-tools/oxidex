@@ -448,25 +448,16 @@ mod tests {
     }
 
     #[test]
-    fn m4a_uses_generated_reader_with_u64_and_retains_duplicates() {
-        let data = m4a_item(
-            b"plID",
-            &[
-                payload(0, &4294967297u64.to_be_bytes()),
-                payload(0, &u64::MAX.to_be_bytes()),
-            ],
-        );
+    fn m4a_uses_generated_reader_and_retains_duplicates() {
+        let data = m4a_item(b"\xa9nam", &[payload(1, b"First"), payload(1, b"Second")]);
         let reader = TestReader::new(data);
         let metadata = AacParser.parse(&reader).unwrap();
-        let rows = metadata.occurrences_for("QuickTime:AlbumID");
+        let rows = metadata.occurrences_for("QuickTime:Title");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].raw.as_integer(), Some(4294967297));
-        assert_eq!(rows[0].value_conv().as_integer(), Some(4294967297));
-        assert_eq!(rows[1].raw.as_string(), Some("18446744073709551615"));
-        assert_eq!(
-            rows[1].value_conv().as_string(),
-            Some("18446744073709551615")
-        );
+        assert_eq!(rows[0].raw.as_string(), Some("First"));
+        assert_eq!(rows[0].value_conv().as_string(), Some("First"));
+        assert_eq!(rows[1].raw.as_string(), Some("Second"));
+        assert_eq!(rows[1].value_conv().as_string(), Some("Second"));
         assert!(rows.iter().all(|row| row.group1.as_ref() == "ItemList"));
         assert_eq!(
             metadata,

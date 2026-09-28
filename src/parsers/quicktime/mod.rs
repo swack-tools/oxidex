@@ -47,6 +47,7 @@ use crate::core::{FileReader, MetadataMap};
 mod atom_parser;
 mod generated_itemlist_specs;
 mod generated_keys_specs;
+mod generated_protocol_caps;
 mod generated_userdata_specs;
 pub(crate) mod itemlist_reader;
 mod keys_reader;

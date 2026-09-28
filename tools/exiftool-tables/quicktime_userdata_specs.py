@@ -27,6 +27,7 @@ RUST = ROOT / 'src/parsers/quicktime/generated_userdata_specs.rs'
 # whose prototypes have not yet loaded; both complete native bodies reviewed.
 PROCESSOR_HASHES = (EXPECTED_PROCESSOR_DEPARSE_SHA256, '75e2459dd90d641982d657ad29835470e9753f17c144ce1332f86f00c7e33522')
 PROCESSOR_HASHES_BY_VERSION = {
+    '11.78': ('f70ea96a1287580357cc67365144b20ea273b47fc2de37baf24b8bf26ccb5303',),
     '12.64': ('3121d19e978bbaf944c0d9698ce597234bb5dbb889dc2c1e4d3e42b11c02b58d',),
     '13.59': PROCESSOR_HASHES,
 }
@@ -53,10 +54,27 @@ HISTORICAL_1264_SOURCE_SHA = {
     'Image/ExifTool/XMP.pm': '120b31867a35a45f68b25ce9212be36cbf08c6f0be9b0870d5e3a06aeb6b01ea',
 }
 HISTORICAL_1264_FOUNDTAG_SHA = '556d3e68356a16a4c4b226cdc2960913963db8519293ce8f2ac686269d8a1718'
+HISTORICAL_1178_SOURCE_SHA = {
+    'Image/ExifTool.pm': 'caa6fe4ac1ab1bf7be369caffac635b460be8dcf1943354ff6a68a9f789f23aa',
+    'Image/ExifTool/Charset.pm': 'c380b6f66da803852b3ffa50554062ffbdadfc152d672f0bc0e837ecdb2d2da6',
+    'Image/ExifTool/XMP.pm': 'de5c1713333ee444ec89a8d3c358a87399d2b4f0c544e5be6f3c9a61ecac9350',
+}
+HISTORICAL_1178_FOUNDTAG_SHA = '8e785d704bef4eeeb84841df46edb8970a98d6732ff495ea3a02657e1712c52e'
+HISTORICAL_1178_XMP_ISUTF8_SHA = '68bb2cb70b3b2570170992662107a17c60818f278a09c01d4792892382e2ac32'
 
 def helpers_for_version(version):
     if version == '13.59':
         return HELPERS
+    if version == '11.78':
+        # ProcessMOV calls XMP::IsUTF8 before that helper moved to the core.
+        # The core fact is recorded as unavailable; validate it separately.
+        helpers = {name: ((HISTORICAL_1178_FOUNDTAG_SHA,) if name == 'Image::ExifTool::FoundTag' else hashes,
+                          file, HISTORICAL_1178_SOURCE_SHA[file])
+                   for name, (hashes, file, _) in HELPERS.items()
+                   if name != 'Image::ExifTool::IsUTF8'}
+        helpers['Image::ExifTool::XMP::IsUTF8'] = ((HISTORICAL_1178_XMP_ISUTF8_SHA,),
+            'Image/ExifTool/XMP.pm', HISTORICAL_1178_SOURCE_SHA['Image/ExifTool/XMP.pm'])
+        return helpers
     if version != '12.64':
         return {}
     return {name: ((HISTORICAL_1264_FOUNDTAG_SHA,) if name == 'Image::ExifTool::FoundTag' else hashes,
@@ -100,7 +118,12 @@ def protocol_reason(doc, table):
             return 'unsupported_userdata_caller:'+name
     deps = p.get('dependencies', {})
     helpers = helpers_for_version(version)
-    if set(deps) != set(helpers):
+    if version == '11.78':
+        unavailable = deps.get('Image::ExifTool::IsUTF8', {})
+        if unavailable.get('resolved') is not False or unavailable.get('reason') != 'code_ref_unavailable':
+            return 'unsupported_userdata_utf8_binding'
+    expected_names = set(helpers) | ({'Image::ExifTool::IsUTF8'} if version == '11.78' else set())
+    if set(deps) != expected_names:
         return 'unsupported_userdata_dependencies'
     for name,(hashes,file,sha) in helpers.items():
         f = deps[name]

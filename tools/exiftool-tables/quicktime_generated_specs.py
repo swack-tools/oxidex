@@ -30,9 +30,11 @@ EXPECTED_PROCESSOR_DEPARSE_SHA256 = "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be
 # 13.59. Its different FoundTag bookkeeping and track group override do not
 # affect this reader's movie-level scalar subset. Keep each complete source
 # body digest as a change detector after that branch review, not as a claim
-# that every ProcessMOV route is implemented. 11.78 is deliberately absent:
-# its QuickTimeFormat and language/text routes differ.
+# that every ProcessMOV route is implemented. 11.78's data branch omits
+# explicit integer width shortening, and its QuickTimeFormat omits 8-byte
+# implicit integers; generated protocol capabilities select those semantics.
 REVIEWED_PROCESSOR_SHA256 = {
+    "11.78": "f70ea96a1287580357cc67365144b20ea273b47fc2de37baf24b8bf26ccb5303",
     "12.64": "3121d19e978bbaf944c0d9698ce597234bb5dbb889dc2c1e4d3e42b11c02b58d",
     "13.59": EXPECTED_PROCESSOR_DEPARSE_SHA256,
 }
@@ -127,6 +129,8 @@ def reader_protocol_reason(document):
     if not isinstance(dependencies, dict):
         return "missing_or_changed_reader_protocol:dependencies"
     for key, (name, body_sha256s) in EXPECTED_READER_PROTOCOL["dependencies"].items():
+        if document.get("exiftool_version") == "11.78" and key == "quicktime_format":
+            body_sha256s = ("946e15b0adf06c124498eca70cb7a0afdb49f595c5edda5810810af79b6a9e26",)
         fact = dependencies.get(key)
         if not isinstance(fact, dict):
             return f"missing_or_changed_reader_protocol:{key}"

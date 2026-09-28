@@ -440,6 +440,13 @@ sub quicktime_userdata_reader_protocol_fact {
                     Image::ExifTool::XMP::FixUTF8)) {
         $dependencies{$name} = code_source_fact($name, $lib_abs, undef, undef, 0);
     }
+    # Before IsUTF8 moved into Image::ExifTool, ProcessMOV calls the XMP
+    # helper on UserData text. Record that selected source body when the core
+    # binding is unavailable, rather than treating its absence as no decoding.
+    if (!$dependencies{'Image::ExifTool::IsUTF8'}{resolved}) {
+        $dependencies{'Image::ExifTool::XMP::IsUTF8'} = code_source_fact(
+            'Image::ExifTool::XMP::IsUTF8', $lib_abs, undef, undef, 0);
+    }
     return {
         kind => 'quicktime_userdata_reader_protocol_v1',
         caller_processors => {
