@@ -1,0 +1,25 @@
+{
+  "capabilities": {
+    "implicit_int64": true,
+    "mdta_retry_full_key": true,
+    "mdta_strip_generic_com": true,
+    "shorten_explicit_width": true,
+    "userdata_xmp_isutf8": false
+  },
+  "generated_counts": {
+    "ItemList": 92,
+    "Keys": 70,
+    "UserData": 17
+  },
+  "main_mdat_names": {
+    "offset": "MediaDataOffset",
+    "size": "MediaDataSize"
+  },
+  "schema": "quicktime_protocol_caps_v1",
+  "source": {
+    "exiftool_version": "13.59",
+    "process_keys_sha256": "294ea57533595f3e988c8042e2588f0fa874e46bd456af55936633273f051c76",
+    "quicktime_format_sha256": "c29829e95ea7df45de2cde0527d51d953583c9c73b26c52931f4bb91b2223883",
+    "userdata_utf8_helper": "Image::ExifTool::IsUTF8"
+  }
+}
