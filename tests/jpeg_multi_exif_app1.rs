@@ -451,6 +451,27 @@ fn public_byte_writers_refuse_partial_multi_app1_rewrites() {
 }
 
 #[test]
+fn absent_bare_exif_deletion_stays_unchanged_across_two_app1_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = copy(dir.path(), CANON);
+    let original = std::fs::read(&path).unwrap();
+    remove_tag(&path, "CalibrationIlluminant1").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-CalibrationIlluminant1=")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 image files unchanged"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn a_read_map_write_names_each_changed_exif_key() {
     let dir = tempfile::tempdir().unwrap();
     let mut problems = Vec::new();

@@ -68,7 +68,23 @@ pub(crate) fn refuse_multi_exif_app1_writes_from_reader(
     let Some(blocks) = multiple_exif_app1_records_from_reader(reader) else {
         return Ok(());
     };
-    let keys = exif_family_request_keys(baseline, metadata, removed, assigned);
+    // The planner normally proves an absent deletion before writer guards.
+    // This guard runs earlier to avoid a partial write, so use that same
+    // physical check here: a bare name may be absent from every APP1 while
+    // a rowless entry in one block must still be refused.
+    let active_removed: Vec<String> = removed
+        .iter()
+        .filter(|key| {
+            if key.contains(':') {
+                !crate::core::operations::removal_is_no_op_with_reader(key, baseline, reader)
+                    .unwrap_or(false)
+            } else {
+                !crate::core::operations::bare_removal_is_no_op_with_reader(key, baseline, reader)
+            }
+        })
+        .cloned()
+        .collect();
+    let keys = exif_family_request_keys(baseline, metadata, &active_removed, assigned);
     refuse_keys(blocks, keys)
 }
 
