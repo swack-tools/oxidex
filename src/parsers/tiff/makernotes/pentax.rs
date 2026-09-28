@@ -6389,6 +6389,82 @@ mod tests {
         tags
     }
 
+    // All eleven labels below are declared by native Pentax.pm::BatteryInfo
+    // in 11.78, 12.64 and 13.59. The two historical generated trees omit
+    // five of them; this is a transcription gap, not native absence.
+    fn battery_generated_labels(pin: &str) -> &'static [&'static str] {
+        match pin {
+            "11.78" | "12.64" => &[
+                "PowerSource",
+                "BodyBatteryState",
+                "BodyBatteryADLoad",
+                "GripBatteryADLoad",
+                "BodyBatteryVoltage3",
+                "BodyBatteryVoltage4",
+            ],
+            "13.59" => &[
+                "PowerSource",
+                "BodyBatteryState",
+                "GripBatteryState",
+                "BodyBatteryADNoLoad",
+                "BodyBatteryADLoad",
+                "GripBatteryADNoLoad",
+                "GripBatteryADLoad",
+                "BodyBatteryVoltage1",
+                "BodyBatteryVoltage2",
+                "BodyBatteryVoltage3",
+                "BodyBatteryVoltage4",
+            ],
+            _ => panic!("unknown Pentax BatteryInfo native source pin {pin}"),
+        }
+    }
+
+    fn assert_battery_source_and_generated_labels() {
+        let pin = crate::exiftool_tables::EXIFTOOL_VERSION;
+        let generated = battery_generated_labels(pin);
+        // Native declaration inventory, taken independently from all three
+        // Pentax.pm sources. This keeps current support from disappearing
+        // silently when a generated table loses a native field.
+        const NATIVE: &[&str] = &[
+            "PowerSource",
+            "BodyBatteryState",
+            "GripBatteryState",
+            "BodyBatteryADNoLoad",
+            "BodyBatteryADLoad",
+            "GripBatteryADNoLoad",
+            "GripBatteryADLoad",
+            "BodyBatteryVoltage1",
+            "BodyBatteryVoltage2",
+            "BodyBatteryVoltage3",
+            "BodyBatteryVoltage4",
+        ];
+        for label in NATIVE {
+            let present = PENTAX_BATTERYINFO.fields.iter().any(|f| f.name == *label);
+            assert_eq!(
+                present,
+                generated.contains(label),
+                "Pentax::BatteryInfo {label}: native {pin} declares this label; generated absence is a coverage omission"
+            );
+        }
+    }
+
+    fn assert_battery_keys(tags: &HashMap<String, String>, expected: &[&str]) {
+        let mut actual: Vec<&str> = tags.keys().map(String::as_str).collect();
+        actual.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(actual, expected, "exact Pentax BatteryInfo ownership set");
+    }
+
+    #[test]
+    fn battery_native_source_contracts_are_explicit() {
+        for pin in ["11.78", "12.64", "13.59"] {
+            let _ = battery_generated_labels(pin);
+        }
+        assert!(std::panic::catch_unwind(|| battery_generated_labels("14.00")).is_err());
+        assert_battery_source_and_generated_labels();
+    }
+
     /// `combined-samples/Pentax/PentaxK10D.jpg` tag 0x0216: the exact 6 record
     /// bytes `exiftool -v3` prints, against the exact values `exiftool -a -G1
     /// -s` reports for that file.
@@ -6399,6 +6475,7 @@ mod tests {
     /// two bytes of `BodyBatteryVoltage1` on a K-5.
     #[test]
     fn test_battery_info_matches_exiftool_on_k10d_bytes() {
+        assert_battery_source_and_generated_labels();
         let tags = decode_for(
             &PENTAX_BATTERYINFO,
             &[0x02, 0x41, 0xa5, 0xa0, 0x05, 0x01],
@@ -6406,11 +6483,48 @@ mod tests {
         );
         assert_eq!(tags["Pentax:PowerSource"], "Body Battery");
         assert_eq!(tags["Pentax:BodyBatteryState"], "Full");
-        assert_eq!(tags["Pentax:GripBatteryState"], "Empty or Missing");
-        assert_eq!(tags["Pentax:BodyBatteryADNoLoad"], "165 (7.3V, 28%)");
+        if crate::exiftool_tables::EXIFTOOL_VERSION == "13.59" {
+            assert_eq!(tags["Pentax:GripBatteryState"], "Empty or Missing");
+            assert_eq!(tags["Pentax:BodyBatteryADNoLoad"], "165 (7.3V, 28%)");
+            assert_eq!(tags["Pentax:GripBatteryADNoLoad"], "5");
+        } else {
+            for label in [
+                "GripBatteryState",
+                "BodyBatteryADNoLoad",
+                "GripBatteryADNoLoad",
+            ] {
+                assert!(
+                    !tags.contains_key(&format!("Pentax:{label}")),
+                    "historical generator omission of native Pentax::{label} must be explicit"
+                );
+            }
+        }
         assert_eq!(tags["Pentax:BodyBatteryADLoad"], "160 (7.0V, 23%)");
-        assert_eq!(tags["Pentax:GripBatteryADNoLoad"], "5");
         assert_eq!(tags["Pentax:GripBatteryADLoad"], "1");
+        if crate::exiftool_tables::EXIFTOOL_VERSION == "13.59" {
+            assert_battery_keys(
+                &tags,
+                &[
+                    "Pentax:PowerSource",
+                    "Pentax:BodyBatteryState",
+                    "Pentax:GripBatteryState",
+                    "Pentax:BodyBatteryADNoLoad",
+                    "Pentax:BodyBatteryADLoad",
+                    "Pentax:GripBatteryADNoLoad",
+                    "Pentax:GripBatteryADLoad",
+                ],
+            );
+        } else {
+            assert_battery_keys(
+                &tags,
+                &[
+                    "Pentax:PowerSource",
+                    "Pentax:BodyBatteryState",
+                    "Pentax:BodyBatteryADLoad",
+                    "Pentax:GripBatteryADLoad",
+                ],
+            );
+        }
         // The K10D has no voltage reading at all -- those alternatives belong
         // to other bodies, and emitting one here would put a plausible number
         // under a real tag name.
@@ -6422,6 +6536,7 @@ mod tests {
     /// are one `int16u` of centivolts rather than two independent A/D readings.
     #[test]
     fn test_battery_info_matches_exiftool_on_k5iis_bytes() {
+        assert_battery_source_and_generated_labels();
         let tags = decode_for(
             &PENTAX_BATTERYINFO,
             &[
@@ -6431,10 +6546,42 @@ mod tests {
         );
         assert_eq!(tags["Pentax:PowerSource"], "Body Battery");
         assert_eq!(tags["Pentax:BodyBatteryState"], "Full");
-        assert_eq!(tags["Pentax:BodyBatteryVoltage1"], "6.86 V");
-        assert_eq!(tags["Pentax:BodyBatteryVoltage2"], "6.55 V");
+        if crate::exiftool_tables::EXIFTOOL_VERSION == "13.59" {
+            assert_eq!(tags["Pentax:BodyBatteryVoltage1"], "6.86 V");
+            assert_eq!(tags["Pentax:BodyBatteryVoltage2"], "6.55 V");
+        } else {
+            for label in ["BodyBatteryVoltage1", "BodyBatteryVoltage2"] {
+                assert!(
+                    !tags.contains_key(&format!("Pentax:{label}")),
+                    "historical generator omission of native Pentax::{label} must be explicit"
+                );
+            }
+        }
         assert_eq!(tags["Pentax:BodyBatteryVoltage3"], "7.08 V");
         assert_eq!(tags["Pentax:BodyBatteryVoltage4"], "6.76 V");
+        if crate::exiftool_tables::EXIFTOOL_VERSION == "13.59" {
+            assert_battery_keys(
+                &tags,
+                &[
+                    "Pentax:PowerSource",
+                    "Pentax:BodyBatteryState",
+                    "Pentax:BodyBatteryVoltage1",
+                    "Pentax:BodyBatteryVoltage2",
+                    "Pentax:BodyBatteryVoltage3",
+                    "Pentax:BodyBatteryVoltage4",
+                ],
+            );
+        } else {
+            assert_battery_keys(
+                &tags,
+                &[
+                    "Pentax:PowerSource",
+                    "Pentax:BodyBatteryState",
+                    "Pentax:BodyBatteryVoltage3",
+                    "Pentax:BodyBatteryVoltage4",
+                ],
+            );
+        }
         assert!(!tags.contains_key("Pentax:BodyBatteryADNoLoad"));
         assert!(!tags.contains_key("Pentax:GripBatteryADNoLoad"));
     }

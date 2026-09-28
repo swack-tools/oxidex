@@ -2014,7 +2014,10 @@ fn af_point_forms(v: i64, model: &str) -> Option<(String, String)> {
             ),
         ));
     }
-    if !is_em_or_om_model(model) {
+    // Olympus.pm 11.78 has only three alternatives: E-M/OM bodies fall
+    // through the same final hash as other models. Its E-M5 carrier prints
+    // raw 0 as "Left (or n/a)"; 12.64 added the fourth raw alternative.
+    if !is_em_or_om_model(model) || crate::exiftool_tables::IFD_EXIFTOOL_VERSION == "11.78" {
         // Olympus.pm:3447  RawConv => '($val or $$self{Model} ne "E-P1") ? $val : undef',
         // (the E-P1 always writes 0, so a zero there is meaningless)
         if v == 0 && model == "E-P1" {
@@ -2090,7 +2093,9 @@ fn af_point_details_forms(v: i64, model: &str) -> (String, String) {
 /// sides.
 fn focus_info_engine_reports(id: u16, model: &str) -> bool {
     match id {
-        0x0308 => is_em_or_om_model(model),
+        0x0308 => {
+            crate::exiftool_tables::IFD_EXIFTOOL_VERSION != "11.78" && is_em_or_om_model(model)
+        }
         0x031B => !is_em_or_om_model(model),
         _ => false,
     }
@@ -2996,6 +3001,11 @@ mod focus_info_model_conditional_tests {
     /// or not at all. `""` is the payload-only path with no `Model`.
     #[test]
     fn focus_info_hand_pass_emits_exactly_the_withheld_alternatives() {
+        let pin = crate::exiftool_tables::IFD_EXIFTOOL_VERSION;
+        assert!(
+            matches!(pin, "11.78" | "12.64" | "13.59"),
+            "unknown Olympus FocusInfo native source pin {pin}"
+        );
         let table = ALL_IFD_TABLES
             .iter()
             .find(|t| t.module == "Olympus" && t.table == "FocusInfo")
@@ -3024,6 +3034,13 @@ mod focus_info_model_conditional_tests {
             "",
         ];
         for id in [0x0308u16, 0x031B, 0x1500] {
+            if pin == "11.78" && id == 0x031B {
+                assert!(
+                    table.variant_group(id).is_none(),
+                    "11.78 Olympus.pm has no FocusInfo 0x031b declaration; a generated entry would be a provenance error"
+                );
+                continue;
+            }
             let group = table
                 .variant_group(id)
                 .unwrap_or_else(|| panic!("{id:#06x} is a _variants group of Olympus::FocusInfo"));
@@ -3167,6 +3184,15 @@ mod focus_info_model_conditional_tests {
     /// E-Mxxx / OM-x get no conversion at all (`Olympus.pm:3456-3459`).
     #[test]
     fn af_point_em_om_models_print_raw() {
+        if crate::exiftool_tables::IFD_EXIFTOOL_VERSION == "11.78" {
+            // OlympusE-M5.jpg, raw 0: native 11.78's three-alternative
+            // table selects the final hash and prints Left (or n/a).
+            assert_eq!(
+                af_point_forms(0, "E-M5"),
+                Some(("0".to_string(), "Left (or n/a)".to_string()))
+            );
+            return;
+        }
         assert_eq!(
             af_point_forms(12740, "OM-3"),
             Some(("12740".to_string(), "12740".to_string()))

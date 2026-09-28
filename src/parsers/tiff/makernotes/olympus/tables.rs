@@ -1234,7 +1234,7 @@ static EQUIPMENT_UNSUPPLIED: &[u16] = &[];
 /// row nothing reports, which is an honest absence. See
 /// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
 /// regeneration that starts withholding a row now reported fails loudly.
-static CAMERA_SETTINGS_UNSUPPLIED: &[u16] = &[
+static CAMERA_SETTINGS_UNSUPPLIED_CURRENT: &[u16] = &[
     0x030a, // withheld, no hand conversion
     0x030b, // SubjectDetectInfo, a SubDirectory
     0x0903, // withheld, no hand conversion
@@ -1255,7 +1255,7 @@ static RAW_DEVELOPMENT_UNSUPPLIED: &[u16] = &[];
 /// row nothing reports, which is an honest absence. See
 /// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
 /// regeneration that starts withholding a row now reported fails loudly.
-static RAW_DEVELOPMENT2_UNSUPPLIED: &[u16] = &[
+static RAW_DEVELOPMENT2_UNSUPPLIED_CURRENT: &[u16] = &[
     0x8000, // RawDevSubIFD, a SubDirectory whose target is not enabled
 ];
 
@@ -1273,7 +1273,7 @@ static IMAGE_PROCESSING_UNSUPPLIED: &[u16] = &[];
 /// row nothing reports, which is an honest absence. See
 /// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
 /// regeneration that starts withholding a row now reported fails loudly.
-static FOCUS_INFO_UNSUPPLIED: &[u16] = &[
+static FOCUS_INFO_UNSUPPLIED_CURRENT: &[u16] = &[
     0x0305, // FocusDistance -- `parse_focus_info_model_conditional`, which also feeds the `value_forms` channel Composite DOF/FOV read
     0x0328, // AFInfo, a SubDirectory whose target is not enabled
     0x1500, // SensorTemperature -- `parse_focus_info_sensor_temperature` (two model/count-conditional conversions)
@@ -1292,6 +1292,57 @@ static RAW_INFO_UNSUPPLIED: &[u16] = &[];
 mod tests {
     use super::*;
     use crate::parsers::tiff::makernotes::olympus::ifd::apply_conv;
+
+    // Checked against the three retained Olympus.pm trees, independently of
+    // generated output. An absent native row is distinct from a declared row
+    // the generator omitted. Unknown source pins have no inferred contract.
+    fn source_contract(pin: &str, table: &str) -> (&'static [u16], &'static [u16]) {
+        match (pin, table) {
+            ("11.78", "CameraSettings") => (&[0x0903, 0x0904], &[0x0903, 0x0904]),
+            ("12.64", "CameraSettings") => (&[0x0309, 0x0903, 0x0904], &[0x0309, 0x0903, 0x0904]),
+            ("13.59", "CameraSettings") => (
+                &[0x0309, 0x030a, 0x030b, 0x0903, 0x0904],
+                CAMERA_SETTINGS_UNSUPPLIED_CURRENT,
+            ),
+            ("11.78" | "12.64", "RawDevelopment2") => (&[], &[]),
+            ("13.59", "RawDevelopment2") => (&[0x8000], RAW_DEVELOPMENT2_UNSUPPLIED_CURRENT),
+            ("11.78", "FocusInfo") => (
+                &[0x0305, 0x0308, 0x0328, 0x1500, 0x1600],
+                &[0x0305, 0x0308, 0x0328, 0x1500, 0x1600],
+            ),
+            ("12.64" | "13.59", "FocusInfo") => (
+                &[0x0305, 0x0308, 0x031b, 0x0328, 0x1500, 0x1600],
+                FOCUS_INFO_UNSUPPLIED_CURRENT,
+            ),
+            _ => panic!("no Olympus native source contract for {pin}::{table}"),
+        }
+    }
+
+    fn assert_source_contract(table: &str, candidate_ids: &[u16]) -> &'static [u16] {
+        let pin = crate::exiftool_tables::IFD_EXIFTOOL_VERSION;
+        let (declared, unsupplied) = source_contract(pin, table);
+        let generated = generated(table);
+        for id in candidate_ids {
+            let present = generated.tags.iter().any(|t| t.id == *id)
+                || generated.variants.iter().any(|g| g.id == *id);
+            assert_eq!(
+                present,
+                declared.contains(id),
+                "Olympus::{table} {id:#06x}: generated declaration differs from native {pin} source; a declared missing row is a generator omission"
+            );
+        }
+        unsupplied
+    }
+
+    #[test]
+    fn retained_native_source_contracts_are_explicit() {
+        for pin in ["11.78", "12.64", "13.59"] {
+            for table in ["CameraSettings", "RawDevelopment2", "FocusInfo"] {
+                let _ = source_contract(pin, table);
+            }
+        }
+        assert!(std::panic::catch_unwind(|| source_contract("14.00", "FocusInfo")).is_err());
+    }
 
     fn conv_of(table: &'static [TagDef], id: u16) -> &'static TagDef {
         table.iter().find(|d| d.id == id).expect("tag in table")
@@ -1454,11 +1505,13 @@ mod tests {
 
     #[test]
     fn camera_settings_residual_is_exactly_the_generated_tables_remainder() {
+        let unsupplied =
+            assert_source_contract("CameraSettings", &[0x0309, 0x030a, 0x030b, 0x0903, 0x0904]);
         assert_residual_matches_the_generated_withholding(
             "CameraSettings",
             CAMERA_SETTINGS_RESIDUAL,
             CAMERA_SETTINGS_ENGINE_MISRENDERS,
-            CAMERA_SETTINGS_UNSUPPLIED,
+            unsupplied,
         );
         assert_misrenders_are_overrides(
             "CameraSettings",
@@ -1484,11 +1537,12 @@ mod tests {
 
     #[test]
     fn raw_development2_residual_is_exactly_the_generated_tables_remainder() {
+        let unsupplied = assert_source_contract("RawDevelopment2", &[0x8000]);
         assert_residual_matches_the_generated_withholding(
             "RawDevelopment2",
             RAW_DEVELOPMENT2_RESIDUAL,
             RAW_DEVELOPMENT2_ENGINE_MISRENDERS,
-            RAW_DEVELOPMENT2_UNSUPPLIED,
+            unsupplied,
         );
         assert_misrenders_are_overrides(
             "RawDevelopment2",
@@ -1532,11 +1586,15 @@ mod tests {
     /// (`focus_info_hand_pass_emits_exactly_the_withheld_alternatives`).
     #[test]
     fn focus_info_residual_is_exactly_the_generated_tables_remainder() {
+        let unsupplied = assert_source_contract(
+            "FocusInfo",
+            &[0x0305, 0x0308, 0x031b, 0x0328, 0x1500, 0x1600],
+        );
         assert_residual_matches_the_generated_withholding(
             "FocusInfo",
             FOCUS_INFO_RESIDUAL,
             FOCUS_INFO_ENGINE_MISRENDERS,
-            FOCUS_INFO_UNSUPPLIED,
+            unsupplied,
         );
         assert_misrenders_are_overrides(
             "FocusInfo",
