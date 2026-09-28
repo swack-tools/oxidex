@@ -543,6 +543,7 @@ perl_re!(
     TO_DEG_SOUTH_WEST,
     r"(?i-u)[^A-Z](?:S(?:outh)?|W(?:est)?)[\t\n\x0B\x0C\r ]*\n?\z"
 );
+perl_re!(TO_DEG_1178_SOUTH_WEST, r"(?i-u)[^A-Z](?:S|W)\n?\z");
 perl_re!(
     XMP_DATE,
     r"(?-u)^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}:[0-9]{2})(:[0-9]{2})?[\t\n\x0B\x0C\r ]*([^\t\n\x0B\x0C\r ]*)\n?\z"
@@ -834,6 +835,8 @@ pub fn canon_ev_inv(val: &MemberVal) -> HelperResult {
 }
 
 /// `Image::ExifTool::GPS::ToDegrees($val [, $doSign [, $coord]])`:
+/// 11.78 has no `$coord` argument and recognizes only terminal `S` or `W`.
+/// 12.64/13.59 add pair selection and long direction names.
 ///
 /// ```perl
 /// return '' if $val =~ /\b(inf|undef)\b/;
@@ -849,11 +852,27 @@ pub fn canon_ev_inv(val: &MemberVal) -> HelperResult {
 /// return $deg;
 /// ```
 pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> HelperResult {
+    let source = selected_port_source("Image::ExifTool::GPS::ToDegrees")
+        .ok_or(HelperError::Refused("unverified ToDegrees source release"))?;
+    to_degrees_for_source(source, val, do_sign, coord)
+}
+
+fn to_degrees_for_source(
+    source_digest: &str,
+    val: &MemberVal,
+    do_sign: &MemberVal,
+    coord: &MemberVal,
+) -> HelperResult {
+    let pair_and_long_suffix = match source_digest {
+        "2a673a743dfb66f36972400c549b96bcc1876d95e8d241da25f789fcf17cc539" => false,
+        "c9137f3bf19849ae0b73ab1d2eb49444e845d264a6eafeaf8ca17362e4a8c54d" => true,
+        _ => return Err(HelperError::Refused("unverified ToDegrees source release")),
+    };
     let mut s = val.perl_bytes().into_owned();
     if TO_DEG_INVALID.is_match(&s) {
         return Ok(MemberVal::Str(String::new()));
     }
-    if coord.is_truthy() {
+    if pair_and_long_suffix && coord.is_truthy() {
         let c = coord.perl_bytes();
         if c.as_ref() == b"lat" || c.as_ref() == b"lon" {
             if let Some(m) = TO_DEG_PAIR.captures(&s) {
@@ -884,7 +903,11 @@ pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> He
         return Err(BEYOND_2_53);
     }
     let negate = if do_sign.is_truthy() {
-        TO_DEG_SOUTH_WEST.is_match(&s)
+        if pair_and_long_suffix {
+            TO_DEG_SOUTH_WEST.is_match(&s)
+        } else {
+            TO_DEG_1178_SOUTH_WEST.is_match(&s)
+        }
     } else {
         deg < 0.0
     };
@@ -892,7 +915,9 @@ pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> He
 }
 
 /// `Image::ExifTool::GPS::ToDMS($et, $val [, $doPrintConv [, $ref]])`
-/// (GPS.pm, pinned 13.59) -- every branch except `$doPrintConv eq '1'` with
+/// (GPS.pm) -- 11.78 treats mode 3 as the ordinary XMP print format;
+/// 12.64/13.59 instead return signed numeric components in mode 3.
+/// Every branch except `$doPrintConv eq '1'` with
 /// a Perl-true `CoordFormat` option (a user `sprintf` format), which refuses.
 /// A `$ref` carrying a `%` or a regex metacharacter would change the format
 /// or the XMP trailing-zero substitution it is interpolated into; refused.
@@ -902,6 +927,24 @@ pub fn to_dms(
     do_print_conv: &MemberVal,
     ref_: &MemberVal,
 ) -> HelperResult {
+    let source = selected_port_source("Image::ExifTool::GPS::ToDMS")
+        .ok_or(HelperError::Refused("unverified ToDMS source release"))?;
+    to_dms_for_source(source, session, val, do_print_conv, ref_)
+}
+
+fn to_dms_for_source(
+    source_digest: &str,
+    session: &Session,
+    val: &MemberVal,
+    do_print_conv: &MemberVal,
+    ref_: &MemberVal,
+) -> HelperResult {
+    let mode_three_keeps_sign = match source_digest {
+        "00d7ec75c5a1ad1d67e215c182390a922f9c7995afa3e9491230a019645e8b72" => false,
+        "87e718031f1cf07c5fce36efb6cb8fc107aa9f0c19577a24ca912c16d5833366"
+        | "b27f5e39644a3b90c81c4ca36a0baf06c3eaae9039f9e6220d816ab7039216dc" => true,
+        _ => return Err(HelperError::Refused("unverified ToDMS source release")),
+    };
     let dpc_bytes = do_print_conv.perl_bytes();
     let dpc_is = |s: &str| do_print_conv.is_truthy() && dpc_bytes.as_ref() == s.as_bytes();
     // unless (length $val)
@@ -940,7 +983,7 @@ pub fn to_dms(
             Some(spaced)
         };
     } else {
-        if dpc_is("3") {
+        if mode_three_keeps_sign && dpc_is("3") {
             neg = v < 0.0;
             do_print = false;
         }
@@ -1421,11 +1464,35 @@ pub fn convert_xmp_date(val: &MemberVal, unsure: &MemberVal) -> MemberVal {
     val.clone()
 }
 
-/// `Image::ExifTool::ConvertFileSize($val [, $et])`: SI units, or binary
-/// ones when `$et` is given and its `ByteUnit` option is exactly `Binary`.
-/// Both branches are ported (the v1 `exprs.rs` port has the SI one only).
+/// `Image::ExifTool::ConvertFileSize($val [, $et])`: 11.78 always uses
+/// 1024-based divisors with kB/MB/GB labels; 12.64 always uses SI divisors;
+/// 13.59 optionally uses 1024-based divisors and KiB/MiB/GiB labels when
+/// `$et` has `ByteUnit=Binary`.
 pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperResult {
-    let binary = session.is_some_and(|s| s.option("ByteUnit").perl_bytes().as_ref() == b"Binary");
+    let source = selected_port_source("Image::ExifTool::ConvertFileSize").ok_or(
+        HelperError::Refused("unverified ConvertFileSize source release"),
+    )?;
+    convert_file_size_for_source(source, val, session)
+}
+
+fn convert_file_size_for_source(
+    source_digest: &str,
+    val: &MemberVal,
+    session: Option<&Session>,
+) -> HelperResult {
+    let (binary_scale, binary_label) = match source_digest {
+        "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e" => (true, false),
+        "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117" => (false, false),
+        "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e" => (
+            session.is_some_and(|s| s.option("ByteUnit").perl_bytes().as_ref() == b"Binary"),
+            true,
+        ),
+        _ => {
+            return Err(HelperError::Refused(
+                "unverified ConvertFileSize source release",
+            ));
+        }
+    };
     let v = val.perl_num().as_f64();
     let bytes = || {
         let mut out = val.perl_bytes().into_owned();
@@ -1434,21 +1501,26 @@ pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperRe
     };
     let unit =
         |p: usize, div: f64, u: &str| MemberVal::Str(format!("{} {u}", sprintf_f(p, v / div)));
-    let out = if binary {
+    let out = if binary_scale {
+        let (k, m, g) = if binary_label {
+            ("KiB", "MiB", "GiB")
+        } else {
+            ("kB", "MB", "GB")
+        };
         if v < 2048.0 {
             bytes()
         } else if v < 10240.0 {
-            unit(1, 1024.0, "KiB")
+            unit(1, 1024.0, k)
         } else if v < 2_097_152.0 {
-            unit(0, 1024.0, "KiB")
+            unit(0, 1024.0, k)
         } else if v < 10_485_760.0 {
-            unit(1, 1_048_576.0, "MiB")
+            unit(1, 1_048_576.0, m)
         } else if v < 2_147_483_648.0 {
-            unit(0, 1_048_576.0, "MiB")
+            unit(0, 1_048_576.0, m)
         } else if v < 10_737_418_240.0 {
-            unit(1, 1_073_741_824.0, "GiB")
+            unit(1, 1_073_741_824.0, g)
         } else {
-            unit(0, 1_073_741_824.0, "GiB")
+            unit(0, 1_073_741_824.0, g)
         }
     } else if v < 2000.0 {
         bytes()
@@ -2313,6 +2385,136 @@ mod tests {
             }
             other => panic!("no dispatch for {other}"),
         }
+    }
+
+    /// The three source-varying ports can be replayed against a retained
+    /// native capture even while the checkout still selects 13.59. The
+    /// caller names that capture with `OXIDEX_SIZE_GPS_CAPTURE`; the normal
+    /// test run uses its compiled selected-source capture. The external
+    /// replay tests the per-source bodies; a generated historical checkout
+    /// still has to prove that its compiled public wrappers select them.
+    #[test]
+    fn size_and_gps_ports_match_the_named_native_capture() {
+        let external = std::env::var("OXIDEX_SIZE_GPS_CAPTURE").ok();
+        let cap: Value = if let Some(path) = &external {
+            serde_json::from_slice(&std::fs::read(path).expect("named native capture"))
+                .expect("named capture JSON")
+        } else {
+            capture()
+        };
+        let version = if external.is_some() {
+            cap["exiftool_version"].as_str()
+        } else {
+            cap["capture"]["exiftool_version"].as_str()
+        }
+        .expect("capture source pin");
+        assert!(matches!(version, "11.78" | "12.64" | "13.59"));
+        let mut matched = 0usize;
+        let mut refused = 0usize;
+        let mut failures = Vec::new();
+        for (name, expected_count) in [
+            ("Image::ExifTool::ConvertFileSize", 786),
+            ("Image::ExifTool::GPS::ToDMS", 2940),
+            ("Image::ExifTool::GPS::ToDegrees", 343),
+        ] {
+            let cases = cap["helpers"][name]["cases"].as_array().expect("cases");
+            assert_eq!(cases.len(), expected_count, "{version} {name}");
+            let source = selected_port_source_for_version(version, name)
+                .expect("reviewed selected helper source");
+            assert_eq!(
+                Some(source),
+                cap["helpers"][name]["source_sha256"].as_str(),
+                "{version} {name}: source digest"
+            );
+            for case in cases {
+                let args: Vec<MemberVal> = case["args"]
+                    .as_array()
+                    .expect("args")
+                    .iter()
+                    .map(arg)
+                    .collect();
+                let a = |i: usize| args.get(i).cloned().unwrap_or(MemberVal::Undef);
+                let mut session = Session::new();
+                if let Some(opts) = case.get("options").and_then(Value::as_object) {
+                    for (k, v) in opts {
+                        session.set_option(k, arg(v));
+                    }
+                }
+                let got = match name {
+                    "Image::ExifTool::ConvertFileSize" => convert_file_size_for_source(
+                        source,
+                        &a(0),
+                        case.get("with_session").map(|_| &session),
+                    ),
+                    "Image::ExifTool::GPS::ToDMS" => {
+                        to_dms_for_source(source, &session, &a(0), &a(1), &a(2))
+                    }
+                    "Image::ExifTool::GPS::ToDegrees" => {
+                        to_degrees_for_source(source, &a(0), &a(1), &a(2))
+                    }
+                    _ => unreachable!(),
+                };
+                match got {
+                    Err(HelperError::Refused(_)) => refused += 1,
+                    Err(HelperError::Dies(_)) if case.get("die").is_some() => matched += 1,
+                    Ok(value)
+                        if case.get("die").is_none()
+                            && out_bytes(&value) == expected(&case["out"][0]) =>
+                    {
+                        matched += 1
+                    }
+                    result => failures.push(format!(
+                        "{name} args {} options {}: {result:?}",
+                        case["args"],
+                        case.get("options").unwrap_or(&Value::Null)
+                    )),
+                }
+            }
+        }
+        eprintln!(
+            "size/GPS native {version}: {matched} matched, {refused} refused, {} mismatched",
+            failures.len()
+        );
+        // All three retained captures exercise the same 4,069 call shapes.
+        // A new blanket refusal must not turn a byte mismatch green.
+        assert_eq!(matched, 3632, "{version}: lost proven helper cases");
+        assert_eq!(refused, 437, "{version}: changed refusal envelope");
+        assert!(
+            failures.is_empty(),
+            "{}",
+            failures
+                .iter()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    #[test]
+    fn size_and_gps_ports_refuse_an_unreviewed_source() {
+        let val = MemberVal::Str("12.5".to_string());
+        let session = Session::new();
+        assert_eq!(
+            convert_file_size_for_source("unreviewed", &val, None),
+            Err(HelperError::Refused(
+                "unverified ConvertFileSize source release"
+            ))
+        );
+        assert_eq!(
+            to_dms_for_source(
+                "unreviewed",
+                &session,
+                &val,
+                &MemberVal::Undef,
+                &MemberVal::Undef
+            ),
+            Err(HelperError::Refused("unverified ToDMS source release"))
+        );
+        assert_eq!(
+            to_degrees_for_source("unreviewed", &val, &MemberVal::Undef, &MemberVal::Undef),
+            Err(HelperError::Refused("unverified ToDegrees source release"))
+        );
     }
 
     /// `$toLocal` renders in the host zone on both sides (localtime /
