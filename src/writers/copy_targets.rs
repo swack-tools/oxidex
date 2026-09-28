@@ -142,6 +142,13 @@ fn realised_directories(
     }
 }
 
+/// Whether this file has a destination directory map for copied tags. An
+/// absent map must not turn selected source requests into an empty successful
+/// plan; the caller refuses that copy after it has checked for source matches.
+pub(crate) fn has_copy_directory_model(format: FileFormat, tiff_structured: bool) -> bool {
+    realised_directories(format, tiff_structured).is_some()
+}
+
 fn candidates(name: &str) -> &'static [CopyTarget] {
     let lower = name.to_ascii_lowercase();
     COPY_TARGETS

@@ -346,11 +346,25 @@ pub fn write_plan_file(
             proven_sets += apply_sets(scratch, &before_copy)?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
+                // ExifTool evaluates the physical maker note block against
+                // the Make after later CLI requests. A later deletion leaves
+                // no Make; a later set supplies that exact final value.
+                let final_make_override = after_copy
+                    .iter()
+                    .rev()
+                    .find(|(tag, _)| supersedes_copy(tag, "IFD0:Make"))
+                    .map(|(_, value)| value.to_str().filter(|v| !v.is_empty()).map(str::to_owned));
                 copy = Some(
-                    copy_metadata_report_retaining(src, scratch, filters, |key| {
-                        !plan.copy_before_clear
-                            && !after_copy.iter().any(|(tag, _)| supersedes_copy(tag, key))
-                    })
+                    copy_metadata_report_retaining(
+                        src,
+                        scratch,
+                        filters,
+                        |key| {
+                            !plan.copy_before_clear
+                                && !after_copy.iter().any(|(tag, _)| supersedes_copy(tag, key))
+                        },
+                        final_make_override,
+                    )
                     .map_err(|e| {
                         format!(
                             "Failed to copy metadata from '{}' to '{}': {}",

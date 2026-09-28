@@ -2348,6 +2348,7 @@ pub fn clear_all_metadata(path: &Path) -> Result<WriteOutcome> {
 /// * `src` - Path to the source file to copy metadata from
 /// * `dest` - Path to the destination file to copy metadata to
 /// * `tags` - Optional slice of tag names to copy. If `None`, all tags are copied.
+///   `Some(&[])` selects no tags and leaves the destination untouched.
 ///
 /// # Returns
 ///
@@ -2435,8 +2436,9 @@ pub struct CopyReport {
 
 /// [`copy_metadata`], reporting how many tags were written.
 ///
-/// With a filter, each entry is one ExifTool `-TagsFromFile` argument, as
-/// pinned 13.59 reads it:
+/// `None` selects all source tags; `Some(&[])` selects none. With a nonempty
+/// filter, each entry is one ExifTool `-TagsFromFile` argument, as pinned
+/// 13.59 reads it:
 /// * `all` (or `*`, `all:all`): every source tag, as a copy without a
 ///   filter; beside other selectors too (`-all -Make` is a copy-all);
 /// * `GROUP:all`, and a tag or group name with wildcards (`*Model`,
@@ -2477,7 +2479,7 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_report_retaining(src, dest, tags, |_| true)
+    copy_metadata_report_retaining(src, dest, tags, |_| true, None)
 }
 
 /// Resolves and validates the copy, retaining only destination sets that
@@ -2487,10 +2489,25 @@ pub(crate) fn copy_metadata_report_retaining(
     dest: &Path,
     tags: Option<&[String]>,
     retain: impl Fn(&str) -> bool,
+    // The final Make supplied by CLI requests after this copy. `Some(None)`
+    // means a later request deletes Make; `None` means use this copy's result.
+    final_make_override: Option<Option<String>>,
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
+    // The public Option is semantic: CLI's bare -TagsFromFile maps its empty
+    // vector to None before this call, while Some(empty) selects no source
+    // tags and never needs to inspect or write the destination.
+    if tags.is_some_and(|tags| tags.is_empty()) {
+        return Ok(CopyReport::default());
+    }
     let selectors = crate::core::tags_from_file::CopySelectors::parse(tags.unwrap_or(&[]))?;
-    crate::core::tags_from_file::copy_tags(&source_metadata, dest, &selectors, retain)
+    crate::core::tags_from_file::copy_tags(
+        &source_metadata,
+        dest,
+        &selectors,
+        retain,
+        final_make_override,
+    )
 }
 
 // ============================================================================

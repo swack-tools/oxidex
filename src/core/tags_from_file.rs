@@ -29,8 +29,8 @@ use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
 use crate::writers::copy_targets::{
-    CopyMode, CopyRequest, Destination, DestinationFile, destinations, is_copyable,
-    is_protected_binary_source, retained_destinations,
+    CopyMode, CopyRequest, Destination, DestinationFile, destinations, has_copy_directory_model,
+    is_copyable, is_protected_binary_source, retained_destinations,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -369,10 +369,11 @@ struct Planned<'a> {
     filter: Option<&'a str>,
 }
 
-/// A selection (`all`, a wildcard, `GROUP:all`) copies the source's maker
-/// note block whole: 13.59 creates `ExifIFD:MakerNote<Make>` from the
-/// source's, so every maker-note tag the source carries reappears in the
-/// destination. oxidex does not copy a maker note block; it names each.
+/// A selection of the physical `ExifIFD:MakerNote<Make>` source block copies
+/// it whole. Pinned 13.59 selects the block with `all`, `EXIF:all`, or
+/// `ExifIFD:all`, but not `Canon:all` or `MakerNotes:all`, even though its
+/// decoded rows use those latter family groups. oxidex does not copy the
+/// block; it names each row only when the physical block was selected.
 ///
 /// The block is written only where its `MakerNotes::Main` `Condition`
 /// holds for the destination's Make as the write leaves it (13.59:
@@ -386,6 +387,7 @@ fn maker_note_rows<'a>(
     format: FileFormat,
     surgical: bool,
     final_make: Option<String>,
+    retain: impl Fn(&str) -> bool,
 ) -> Vec<(String, &'a TagOccurrence)> {
     let holds_exif = matches!(format, FileFormat::JPEG | FileFormat::PNG) || surgical;
     if final_make.is_none() || final_make != printed_make(source) {
@@ -401,6 +403,7 @@ fn maker_note_rows<'a>(
     };
     let block = format!("MakerNote{group1}");
     if !holds_exif
+        || !retain(&format!("ExifIFD:{block}"))
         || selectors
             .selections("ExifIFD", "ExifIFD", &block)
             .is_empty()
@@ -459,6 +462,7 @@ pub(crate) fn copy_tags(
     dest: &Path,
     selectors: &CopySelectors,
     retain: impl Fn(&str) -> bool,
+    final_make_override: Option<Option<String>>,
 ) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
@@ -555,6 +559,31 @@ pub(crate) fn copy_tags(
             })
             .collect();
         let Some((source_key, winner)) = arbitrate_rows(rows) else {
+            // ExifTool exposes the physical ExifIFD:MakerNote<vendor> source
+            // block even when a reader exposes only its decoded MakerNotes
+            // rows. A named request for that block is strict: its absence
+            // from MetadataMap must not turn a native block copy into a
+            // successful no-match. Keep group and ordered exclusion rules on
+            // the synthetic ExifIFD source, not on decoded vendor rows.
+            let physical_block = source_name
+                .get(..9)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("MakerNote"))
+                && is_copyable(source_name, CopyMode::Named)
+                && source_group
+                    .as_deref()
+                    .is_none_or(|group| copy_group_matches(group, "ExifIFD", "ExifIFD"))
+                && !selectors.excluded_after(*position, "ExifIFD", "ExifIFD", source_name)
+                && source_metadata.keyed_occurrences().any(|(_, occurrence)| {
+                    family0_label(occurrence) == "MakerNotes"
+                        && format!("MakerNote{}", family1_label(occurrence))
+                            .eq_ignore_ascii_case(source_name)
+                });
+            if physical_block && retain(&format!("ExifIFD:{source_name}")) {
+                return Err(ExifToolError::tag_not_written(
+                    filter,
+                    "the source carries this physical maker note block, which oxidex cannot copy",
+                ));
+            }
             continue; // the source does not carry it
         };
         let (dest_group, dest_name) = match dest_spec.rsplit_once(':') {
@@ -588,6 +617,11 @@ pub(crate) fn copy_tags(
         .collect();
     ordered.sort_by_key(|(position, _)| *position);
     let (requests, sources): (Vec<_>, Vec<_>) = ordered.into_iter().map(|(_, pair)| pair).unzip();
+    if !requests.is_empty() && !has_copy_directory_model(format, surgical) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Copy destination format {format:?} has no modeled writable directories"
+        )));
+    }
     let mut planned: Vec<Planned> = Vec::new();
     // Native availability distinguishes an invalid named request from one
     // whose valid destinations were all cancelled by later requests.
@@ -804,14 +838,21 @@ pub(crate) fn copy_tags(
             .collect();
         report.uncopied_tags.extend(consequences);
     }
-    let final_make = writes
-        .iter()
-        .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
-        .map(|(key, value, _)| printed_text(value, key))
-        .or_else(|| printed_make(&dest_baseline));
-    for (group1, occurrence) in
-        maker_note_rows(source_metadata, selectors, format, surgical, final_make)
-    {
+    let final_make = final_make_override.unwrap_or_else(|| {
+        writes
+            .iter()
+            .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
+            .map(|(key, value, _)| printed_text(value, key))
+            .or_else(|| printed_make(&dest_baseline))
+    });
+    for (group1, occurrence) in maker_note_rows(
+        source_metadata,
+        selectors,
+        format,
+        surgical,
+        final_make,
+        &retain,
+    ) {
         report.uncopied_tags.push(TagNotWritten::new(
             format!("{group1}:{}", occurrence.name),
             "13.59 copies the source's maker note block whole; oxidex does not copy a \
