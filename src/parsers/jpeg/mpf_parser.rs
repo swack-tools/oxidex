@@ -1173,7 +1173,13 @@ mod tests {
         assert_eq!(decode_image_type(0x0002_0001), "Multi-frame Panorama");
         assert_eq!(decode_image_type(0x0002_0003), "Multi-angle");
         assert_eq!(decode_image_type(0x0000_0000), "Undefined");
-        assert_eq!(decode_image_type(0x0005_0000), "Gain Map Image");
+        // MPF.pm first declares 0x050000 in 13.59; older native maps do not.
+        let gain_map = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => "Unknown (0x50000)",
+            "13.59" => "Gain Map Image",
+            other => panic!("unsupported ExifTool source {other}"),
+        };
+        assert_eq!(decode_image_type(0x0005_0000), gain_map);
         // The high flag/format bits must be masked off before the lookup.
         assert_eq!(decode_image_type(0xE003_0000), "Baseline MP Primary Image");
         assert_eq!(decode_image_type(0x00AB_CDEF), "Unknown (0xabcdef)");

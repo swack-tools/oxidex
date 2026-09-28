@@ -11779,16 +11779,28 @@ mod rational_array_tests {
                 Some("136"),
                 "route {route}"
             );
+            // Canon.pm 11.78 has no FileInfo RFLensType row; 12.64/13.59
+            // declare it at 0x3d and read the zero from this record.
+            let rf_type = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                "11.78" => None,
+                "12.64" | "13.59" => Some("0"),
+                other => panic!("unsupported ExifTool source {other}"),
+            };
             assert_eq!(
                 metadata.value_form("Canon:RFLensType"),
-                Some("0"),
+                rf_type,
                 "route {route}"
             );
             metadata.insert("EXIF:FocalLength", TagValue::new_string("20"));
             crate::composite::apply(&mut metadata);
+            let lens = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                "11.78" => "Tamron SP 15-30mm f/2.8 Di VC USD",
+                "12.64" | "13.59" => "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                other => panic!("unsupported ExifTool source {other}"),
+            };
             assert_eq!(
                 metadata.get_string("Composite:LensID"),
-                Some("Tamron SP 15-30mm f/2.8 Di VC USD (A012)"),
+                Some(lens),
                 "route {route}"
             );
         }

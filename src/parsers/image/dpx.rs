@@ -156,8 +156,8 @@ mod tests {
         h[776..780].copy_from_slice(&1556u32.to_be_bytes());
         h[780..784].copy_from_slice(&0u32.to_be_bytes()); // DataSign
         h[800] = 50; // ComponentsConfiguration: R, G, B
-        h[801] = 1; // TransferCharacteristic: Printing density
-        h[802] = 1; // ColorimetricSpecification: Printing density
+        h[801] = 6; // TransferCharacteristic: release-specific ITU-R spelling
+        h[802] = 6; // ColorimetricSpecification: same release-specific spelling
         h[803] = 10; // BitDepth
         h[820..823].copy_from_slice(b"CPD");
         h[1556..1574].copy_from_slice(b"SPIRIT-4K DATACINE");
@@ -207,14 +207,41 @@ mod tests {
         assert_eq!(metadata.get_string("File:FrameID"), Some(""));
         assert_eq!(metadata.get_string("File:SlateInformation"), Some(""));
         assert_eq!(metadata.get_string("File:UserID"), Some("Thomson BTS"));
-        assert_eq!(
-            metadata.get("File:TimeCode"),
-            Some(&TagValue::Integer(4117))
-        );
-        assert_eq!(
-            metadata.get("File:OriginalFrameRate"),
-            Some(&TagValue::Float(0.0))
-        );
+        // DPX.pm 11.78 has neither row; its offset 1724 is FrameRate.
+        // DPX.pm 12.64/13.59 add both rows and change enum 6's spelling.
+        match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => {
+                assert_eq!(metadata.get("File:TimeCode"), None);
+                assert_eq!(metadata.get("File:OriginalFrameRate"), None);
+                assert_eq!(metadata.get("File:FrameRate"), Some(&TagValue::Float(0.0)));
+                assert_eq!(metadata.get("File:TransferCharacteristic"), None);
+                assert_eq!(metadata.get("File:ColorimetricSpecification"), None);
+            }
+            version @ ("12.64" | "13.59") => {
+                assert_eq!(
+                    metadata.get("File:TimeCode"),
+                    Some(&TagValue::Integer(4117))
+                );
+                assert_eq!(
+                    metadata.get("File:OriginalFrameRate"),
+                    Some(&TagValue::Float(0.0))
+                );
+                let spelling = if version == "12.64" {
+                    "ITU-R 704-4"
+                } else {
+                    "ITU-R 709-4"
+                };
+                assert_eq!(
+                    metadata.get_string("File:TransferCharacteristic"),
+                    Some(spelling)
+                );
+                assert_eq!(
+                    metadata.get_string("File:ColorimetricSpecification"),
+                    Some(spelling)
+                );
+            }
+            other => panic!("unsupported ExifTool source {other}"),
+        }
         // The RawConv-carrying fields stay omitted rather than approximated:
         // Image2..8Description (`RawConv '$val=~/[^\xff]/ ? $val : undef'`),
         // AspectRatio (`RawConv` + Rationalize PrintConv), ShutterAngle and

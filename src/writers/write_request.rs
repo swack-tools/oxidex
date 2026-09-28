@@ -925,10 +925,22 @@ mod tests {
         // A member's own group replaces the request's; `#` reaches every one.
         let grouped = expand_write_shortcut("XMP:CommonIFD0#").unwrap();
         assert_eq!(grouped[1], "IFD0:Make#");
-        assert_eq!(
-            expand_write_shortcut("ImageDataMD5").unwrap(),
-            ["ImageDataHash"]
-        );
+        // Shortcuts.pm 11.78 declares CommonIFD0 but no ImageDataMD5
+        // alias. The alias appears in both 12.64 and 13.59 sources.
+        match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => {
+                assert!(SHORTCUTS.iter().all(|(name, _)| *name != "ImageDataMD5"));
+                assert!(expand_write_shortcut("ImageDataMD5").is_none());
+            }
+            "12.64" | "13.59" => {
+                assert!(SHORTCUTS.iter().any(|(name, _)| *name == "ImageDataMD5"));
+                assert_eq!(
+                    expand_write_shortcut("ImageDataMD5").unwrap(),
+                    ["ImageDataHash"]
+                );
+            }
+            other => panic!("unsupported ExifTool source {other}"),
+        }
         assert!(expand_write_shortcut("Make").is_none());
         assert!(expand_write_shortcut("IFD0:Artist").is_none());
     }
