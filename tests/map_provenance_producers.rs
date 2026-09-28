@@ -149,12 +149,52 @@ fn the_producer_matcher_sees_every_result_spelling() {
 
 type Producer = fn(&Path) -> Result<oxidex::core::MetadataMap, String>;
 
+/// A release without Garmin.pm has no FIT message or field table to hand
+/// out. Check the selected generated protocol's explicit module-absence
+/// state, rather than treating any empty producer result as acceptable.
+fn selected_fit_module_is_absent() -> bool {
+    let generated = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/exiftool_tables/fit_tables.rs"),
+    )
+    .unwrap();
+    let protocol = generated
+        .split_once("pub(crate) static FIT_PROTOCOL: FitProtocol = FitProtocol {")
+        .expect("generated FIT protocol declaration")
+        .1;
+    match oxidex::exiftool_oracle::repo_pin() {
+        pin @ ("11.78" | "12.64") => {
+            assert!(
+                protocol.contains(&format!("exiftool_version: \"{pin}\""))
+                    && protocol.contains("refusal: Some(FitUnavailable::ModuleAbsent {")
+                    && protocol.contains("base_types: &[]")
+                    && protocol.contains("messages: &[]")
+                    && protocol.contains("common: &FIT_TABLE_MODULE_ABSENT")
+                    && protocol.contains("header_name: None")
+                    && generated.contains("fields: &[]"),
+                "ExifTool {pin} must have a generated module-absence protocol with no FIT rows"
+            );
+            true
+        }
+        "13.59" => {
+            assert!(
+                protocol.contains("refusal: None")
+                    && protocol.contains("base_types: FIT_BASE_TYPES")
+                    && protocol.contains("messages: FIT_MESSAGES")
+                    && protocol.contains("header_name: Some(\"ProtocolVersion\")"),
+                "ExifTool 13.59 must have an admitted FIT protocol"
+            );
+            false
+        }
+        pin => panic!("FIT producer support has not been checked for ExifTool {pin}"),
+    }
+}
+
 /// Each public producer the widened matcher newly covers, run on its pinned
-/// t/images sample: every row it hands out is read from the file
+/// combined-corpus sample: every supported row it hands out is read from the file
 /// (`MetadataMap::is_assigned` false), the provenance `write_metadata`
 /// reads to tell a caller's set from a carried row. At e4d2d79a the
 /// producers that build their map with `insert` handed out assignments.
-/// (Producers with no t/images sample they parse -- `iWork.numbers` is the
+/// (Producers with no combined sample they parse -- `iWork.numbers` is the
 /// pre-2013 XML format `parse_numbers_metadata` rejects -- are covered by the
 /// tripwire above;
 /// `metadata_extractor::extract_metadata` is crate-private and checked with
@@ -162,6 +202,7 @@ type Producer = fn(&Path) -> Result<oxidex::core::MetadataMap, String>;
 #[test]
 fn newly_covered_producers_hand_out_read_rows() {
     use oxidex::parsers::*;
+    let fit_module_absent = selected_fit_module_is_absent();
     macro_rules! on_reader {
         ($f:path) => {
             (|path: &Path| {
@@ -611,7 +652,14 @@ fn newly_covered_producers_hand_out_read_rows() {
             }
         };
         checked += 1;
-        if map.is_empty() {
+        if *name == "parse_fit_metadata" && fit_module_absent {
+            if !map.is_empty() {
+                failures.push(format!(
+                    "{name} on {sample}: absent Garmin module produced {} FIT rows",
+                    map.len()
+                ));
+            }
+        } else if map.is_empty() {
             failures.push(format!("{name} on {sample}: no rows"));
         }
         let assigned: Vec<&String> = map.keys().filter(|key| map.is_assigned(key)).collect();
