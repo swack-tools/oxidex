@@ -529,7 +529,8 @@ impl DirEngineRows {
                     name: intern(row.name),
                     group0: intern("EXIF"),
                     group1: intern("IFD2"),
-                    group2: None,
+                    // Exif::Main declares GROUPS => { 2 => 'Image' }.
+                    group2: Some(intern("Image")),
                     instance: Instance::default(),
                     raw: row.display.clone(),
                     value: Some(value),
