@@ -1992,10 +1992,11 @@ fn file_makernote_census(
     } else {
         match format {
             FileFormat::JPEG => jpeg_exif_payloads(file_bytes).ok(),
-            FileFormat::PNG => match crate::writers::png_writer::png_exif_payloads(reader) {
-                Ok(payloads) => Some(payloads.unwrap_or_default()),
-                Err(_) => None,
-            },
+            // `None` is a raw EXIF profile, not an empty set of eXIf
+            // chunks. The maker-note census cannot prove what it holds.
+            FileFormat::PNG => crate::writers::png_writer::png_exif_payloads(reader)
+                .ok()
+                .flatten(),
             _ => return MakerNoteCensus::default(),
         }
     };

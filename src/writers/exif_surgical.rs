@@ -2531,6 +2531,9 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). Unwalked directories are recorded separately below; a zero
     /// count proves absence only when their uncertainty flags are clear.
     pub tag_bearing: usize,
+    /// A pinned MakerNotes::Main root proven from the physical value and
+    /// camera data when exactly one tag-bearing note exists.
+    pub identified_single_root: Option<&'static str>,
     /// The direct IFD1 subset of `tag_bearing`, removed by `IFD1:All`.
     pub ifd1_tag_bearing: usize,
     /// Tag-bearing 0x927C entries outside ExifIFD and its Interop child,
@@ -2558,6 +2561,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        identified_single_root: None,
         ifd1_tag_bearing: usize::MAX,
         surviving_exif_ifd_clear: usize::MAX,
         uncertain_outside_ifd1: true,
@@ -2895,6 +2899,16 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     &make,
                     &model,
                 ) {
+                    census.identified_single_root = if census.tag_bearing == 0
+                        && crate::core::tiff_helpers::selected_headerless_nikon_note(
+                            &entry.value,
+                            &make,
+                            &model,
+                        ) {
+                        Some("MakerNoteNikon3")
+                    } else {
+                        None
+                    };
                     census.tag_bearing += 1;
                     if entry.ifd == IfdKind::Ifd1 {
                         census.ifd1_tag_bearing += 1;
@@ -2914,6 +2928,9 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     continue;
                 };
                 census.notes += notes;
+                if notes > 0 {
+                    census.identified_single_root = None;
+                }
                 census.tag_bearing += notes;
                 if entry.ifd == IfdKind::Ifd1 {
                     census.ifd1_tag_bearing += notes;
@@ -4262,7 +4279,17 @@ pub(crate) fn exif_request_is_no_op(
                 removals_name_nothing(&scan, baseline, removed, false)
                     && exif_family_removals_proven_absent(block, &scan, removed)
             }
-            Err(_) => !removed.iter().any(|key| key.starts_with("EXIF:")),
+            // An unreadable block cannot prove a defined family tag absent.
+            // A name absent from the pinned source's TagLookup, however, is
+            // never a write target in any directory of that block.
+            Err(_) => !removed.iter().any(|key| {
+                key.strip_prefix("EXIF:").is_some_and(|name| {
+                    let name = name.strip_suffix('#').unwrap_or(name);
+                    crate::writers::write_request::exiftool_tag_exists(name)
+                        || !key_addresses(key).is_empty()
+                        || name.starts_with("0x")
+                })
+            }),
         })
         && group_blocks
             .iter()

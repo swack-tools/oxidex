@@ -2784,6 +2784,18 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
         || matches!(prefix.split_last(), Some((b'\n', body)) if text_then_nuls(body))
 }
 
+/// Whether pinned MakerNotes::Main selects its headerless Nikon directory.
+/// The earlier conditions in that ordered table take precedence over the
+/// Nikon Make fallback. This proves a root group, not the note's tag values.
+pub(crate) fn selected_headerless_nikon_note(data: &[u8], make: &str, model: &str) -> bool {
+    let prefix = &data[..data.len().min(128)];
+    ci_starts_with(make, "NIKON")
+        && !claimed_before_minolta(make, model, prefix)
+        && !prefix.starts_with(b"MINOL\0")
+        && !prefix.starts_with(b"CAMER\0")
+        && !prefix.starts_with(b"MOT\0")
+}
+
 /// Applies ExifTool's condition-specific names to the MakerNote (0x927C)
 /// values it stores as plain values rather than parsed subdirectories:
 /// `MakerNoteSamsung1a`, `MakerNoteUnknownText` and `MakerNoteUnknownBinary`

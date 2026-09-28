@@ -1173,6 +1173,20 @@ fn makernote_may_hold_in_groups(
     // APP7's (a group no root claims). A note ExifTool reads as one value,
     // or a JPEG preview, bears no tags and is not counted
     // (`exif_surgical::makernote_census`).
+    // An otherwise rowless note can still have a physically proven root.
+    // Pinned MakerNotes::Main selects a headerless Nikon note by its ordered
+    // conditions; that root has no Pentax Artist address. Keep other notes
+    // unknown until their actual root is established.
+    if !ciff && !uncertain_note && tag_bearing == 1 && decoded.is_empty() {
+        if let Some(root) = census
+            .identified_single_root
+            .and_then(|entry| MAKERNOTE_ROOTS.iter().find(|root| root.entry == entry))
+        {
+            if !groups.iter().any(|group| root.closure.contains(group)) {
+                return None;
+            }
+        }
+    }
     let exif_decoded = super::exif_surgical::exif_makernote_row_groups(baseline);
     let ciff_reaches = |group: &str| {
         ciff && MAKERNOTE_ROOTS
