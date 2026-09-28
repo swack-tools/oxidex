@@ -1065,6 +1065,120 @@ fn third_review_round_shapes_match_the_oracle_or_are_refused() {
     );
 }
 
+/// A physically present CIFF APP0 with no surfaced field is still a possible
+/// second destination for bare names in the CIFF root. ExifTool recognizes
+/// this signature, but an empty payload has no row for our reader to census.
+#[test]
+fn hidden_ciff_app0_is_not_inferred_absent_from_rows() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let writer = std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap();
+    let ciff = b"\xff\xe0\0\x10II\x1a\0\0\0HEAPJPGM";
+    let jpeg = [&writer[..2], ciff, &writer[2..]].concat();
+    run_args(
+        oracle,
+        &jpeg,
+        "jpg",
+        "Writer.jpg + undecoded CIFF APP0",
+        "FocalLength",
+        &["-FocalLength#=50".to_string()],
+        Expect::Refused,
+    )
+    .unwrap();
+}
+
+/// Exif::Main's non-Adobe DNGPrivateData route can carry a writable Pentax
+/// note even when our DNG reader surfaces no row from that note.
+#[test]
+fn pentax_dng_private_note_is_counted_without_reader_rows() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let pentax = fixtures::required_t_images_fixture_path("Pentax.jpg");
+    let note = oracle
+        .command()
+        .args(["-b", "-MakerNotePentax"])
+        .arg(pentax)
+        .output()
+        .unwrap();
+    assert!(note.status.success());
+    assert!(note.stdout.starts_with(b"AOC\0MM"));
+    let mut private = b"PENTAX \0".to_vec();
+    private.extend_from_slice(&note.stdout[4..]);
+
+    let mut dng = std::fs::read(fixtures::required_t_images_fixture_path("DNG.dng")).unwrap();
+    assert_eq!(&dng[..4], b"MM\0*");
+    let u16_at =
+        |bytes: &[u8], at: usize| u16::from_be_bytes(bytes[at..at + 2].try_into().unwrap());
+    let u32_at =
+        |bytes: &[u8], at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+    let ifd = u32_at(&dng, 4) as usize;
+    let entry = (0..u16_at(&dng, ifd) as usize)
+        .map(|i| ifd + 2 + 12 * i)
+        .find(|&at| u16_at(&dng, at) == 0xc634)
+        .expect("DNGPrivateData entry");
+    assert_eq!(u16_at(&dng, entry + 2), 1); // BYTE
+    let offset = u32::try_from(dng.len()).unwrap();
+    dng[entry + 4..entry + 8].copy_from_slice(&(private.len() as u32).to_be_bytes());
+    dng[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
+    dng.extend_from_slice(&private);
+
+    let dir = tempfile::tempdir().unwrap();
+    let before = dir.path().join("before.dng");
+    let after = dir.path().join("after.dng");
+    std::fs::write(&before, &dng).unwrap();
+    std::fs::write(&after, &dng).unwrap();
+    let original_rows = oracle_rows(oracle, &before, "Contrast");
+    assert!(
+        original_rows
+            .iter()
+            .any(|row| row.contains("[Pentax] Contrast"))
+    );
+    let native = oracle
+        .command()
+        .args(["-m", "-overwrite_original", "-Contrast#=2"])
+        .arg(&after)
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let changed_rows = oracle_rows(oracle, &after, "Contrast");
+    assert!(
+        changed_rows
+            .iter()
+            .any(|row| row == "[Pentax] Contrast : 2")
+    );
+    run_args(
+        oracle,
+        &dng,
+        "dng",
+        "DNG.dng + PENTAX private note",
+        "Contrast",
+        &["-Contrast#=2".to_string()],
+        Expect::Refused,
+    )
+    .unwrap();
+    for args in [
+        ["-MakerNotes:All=", "-Contrast#=2"],
+        ["-Contrast#=2", "-MakerNotes:All="],
+    ] {
+        run_args(
+            oracle,
+            &dng,
+            "dng",
+            "DNG.dng + PENTAX private note and deletion",
+            "Contrast",
+            &args.map(str::to_string),
+            Expect::Declined,
+        )
+        .unwrap();
+    }
+}
+
 /// 4112472786: the Sigma `Software` candidate is not read-only in
 /// practice -- pinned 13.59 `-Software=x` on Sigma.jpg edits `[Sigma]
 /// Software` beside `[IFD0] Software` (`-v2`: "Writing Sigma:Software if

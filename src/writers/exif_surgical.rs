@@ -391,9 +391,8 @@ pub(crate) fn resolve_tiff_group_removals(
             .find(|entry| entry.ifd == IfdKind::Ifd0 && entry.tag_id == tag_id)
             .map(|entry| entry.value.as_slice())
     };
-    let dng_makernote = ifd0_value(DNG_PRIVATE_DATA).is_some_and(|data| {
-        crate::parsers::raw::metadata::dng_adobe_makernote_count(data).unwrap_or(1) > 0
-    });
+    let dng_makernote = ifd0_value(DNG_PRIVATE_DATA)
+        .is_some_and(|data| dng_private_makernote_count(data).unwrap_or(1) > 0);
     // The embedded JPEG's EXIF, if the file has one ExifTool writes into.
     let embedded = ifd0_value(PANASONIC_JPG_FROM_RAW)
         .and_then(|jpeg| jpeg_exif_payload(jpeg).ok().flatten())
@@ -2476,6 +2475,9 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). A block the scan cannot walk counts as one, as does any count
     /// that cannot be made at all -- absence is what callers rely on.
     pub tag_bearing: usize,
+    /// A physical JPEG APP0 CIFF container, including one whose fields the
+    /// reader does not surface. Decoded rows cannot prove its absence.
+    pub ciff: bool,
     /// What the rest of the request deletes ([`RequestDeletions`]).
     pub deletions: RequestDeletions,
 }
@@ -2486,6 +2488,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        ciff: true,
         deletions: RequestDeletions {
             makernotes: false,
             ciff: false,
@@ -2530,9 +2533,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     census.tag_bearing += 1;
                 }
             } else if entry.ifd == IfdKind::Ifd0 && entry.tag_id == DNG_PRIVATE_DATA {
-                let Some(notes) =
-                    crate::parsers::raw::metadata::dng_adobe_makernote_count(&entry.value)
-                else {
+                let Some(notes) = dng_private_makernote_count(&entry.value) else {
                     // A decoded prefix cannot identify a truncated successor.
                     return MakerNoteCensus::UNKNOWN;
                 };
@@ -2542,6 +2543,22 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
         }
     }
     census
+}
+
+/// Exif::Main 0xc634 routes these non-Adobe values directly to maker-note
+/// tables. A syntactically recognized container may hold tags even if our
+/// reader emits no row. Unrelated private data does not imply a note.
+fn dng_private_makernote_count(data: &[u8]) -> Option<usize> {
+    if data.starts_with(b"Adobe\0") {
+        return crate::parsers::raw::metadata::dng_adobe_makernote_count(data);
+    }
+    Some(usize::from(
+        data.starts_with(b"PENTAX \0")
+            || data.starts_with(b"SAMSUNG\0")
+            || (data.starts_with(b"RICOH\0")
+                && matches!(data.get(6..8), Some(b"II") | Some(b"MM")))
+            || data.starts_with(b"[ae_dbg_info:"),
+    ))
 }
 
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a
@@ -4006,6 +4023,17 @@ pub(crate) fn jpeg_exif_payload(file_bytes: &[u8]) -> Result<Option<Vec<u8>>> {
         .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec()))
 }
 
+/// Physical CIFF APP0 presence under ExifTool.pm's `HEAPJPGM` signature.
+pub(crate) fn jpeg_has_ciff(file_bytes: &[u8]) -> Result<bool> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader)?;
+    Ok(segments.iter().any(|s| {
+        s.marker == 0xFFE0
+            && matches!(s.data.get(..2), Some(b"II") | Some(b"MM"))
+            && s.data.get(6..14) == Some(b"HEAPJPGM")
+    }))
+}
+
 /// A JPEG without its Canon CIFF APP0 segments (`(II|MM)....HEAPJPGM`), or
 /// `None` when it has none. Pinned ExifTool 13.59 files every CIFF tag under
 /// MakerNotes and so drops the whole segment on `MakerNotes:All`
@@ -4293,8 +4321,9 @@ pub(crate) fn makernote_row_groups(baseline: &MetadataMap) -> std::collections::
     makernote_row_groups_where(baseline, |_| true)
 }
 
-/// Whether `baseline` holds a row of a JPEG's CIFF segment (a separate
-/// APP0 maker-note block): the reader keys every such row `CIFF:<name>`
+/// Whether `baseline` surfaces a row of a JPEG's CIFF segment (a separate
+/// APP0 maker-note block). This is not a physical presence test: a valid
+/// segment may produce no row. The reader keys every surfaced row `CIFF:<name>`
 /// (`parsers::jpeg::ciff_app0`), whatever family-1 group it records -- a
 /// segment holding only a nested `Canon::FocalLength` row records `Canon`,
 /// so its family-1 groups alone miss it.
@@ -4902,6 +4931,14 @@ mod tests {
     use crate::core::tag_value::TagValue;
 
     #[test]
+    fn ciff_presence_uses_app0_bytes_not_decoded_rows() {
+        let mut jpeg = b"\xff\xd8\xff\xe0\0\x10II\x1a\0\0\0HEAPJPGM\xff\xd9".to_vec();
+        assert!(jpeg_has_ciff(&jpeg).unwrap());
+        jpeg[16] = b'X'; // no longer HEAPJPGM
+        assert!(!jpeg_has_ciff(&jpeg).unwrap());
+    }
+
+    #[test]
     fn dng_makernote_census_uses_adobe_record_boundaries() {
         let record = |tag: &[u8; 4], payload: &[u8]| {
             let mut bytes = tag.to_vec();
@@ -4928,6 +4965,27 @@ mod tests {
         let foreign = record(b"XxxN", b"payload MakN text");
         let census = census_for(&foreign);
         assert_eq!((census.notes, census.tag_bearing), (0, 0));
+
+        // Exif::Main 0xc634 reaches these notes without Adobe framing.
+        for private in [
+            &b"PENTAX \0II\0\0"[..],
+            &b"SAMSUNG\0II\0\0"[..],
+            &b"RICOH\0II\0\0"[..],
+            &b"RICOH\0MM\0\0"[..],
+            &b"[ae_dbg_info: hidden]"[..],
+        ] {
+            let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+            tiff.extend_from_slice(&1u16.to_le_bytes());
+            tiff.extend_from_slice(&DNG_PRIVATE_DATA.to_le_bytes());
+            tiff.extend_from_slice(&7u16.to_le_bytes());
+            tiff.extend_from_slice(&(private.len() as u32).to_le_bytes());
+            tiff.extend_from_slice(&26u32.to_le_bytes());
+            tiff.extend_from_slice(&0u32.to_le_bytes());
+            tiff.extend_from_slice(private);
+            let census = makernote_census(&[&tiff], &[42]);
+            assert_eq!((census.notes, census.tag_bearing), (1, 1));
+        }
+        assert_eq!(dng_private_makernote_count(b"other private data"), Some(0));
 
         let mut padded = record(b"XxxN", b"odd");
         padded.extend_from_slice(&record(b"MakN", b"II\0\0\0\0"));

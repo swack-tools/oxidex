@@ -97,6 +97,25 @@ if (($ENV{OXIDEX_MN_MODE} // '') eq 'names') {
         my @infos = Image::ExifTool::TagLookup::FindTagInfo($name);
         my %mn;
         foreach my $info (@infos) {
+            # Writer.pl::SetNewValue checks WRITE_PROC first (which can
+            # autoload and mutate Writable), then the tag/table flags.
+            my $table = $$info{Table};
+            my $write_proc = $$table{WRITE_PROC};
+            if ($$table{SRC_TABLE} and not $write_proc) {
+                my $src = Image::ExifTool::GetTagTable($$table{SRC_TABLE});
+                $write_proc = $$src{WRITE_PROC};
+            }
+            if ($write_proc) {
+                unless (ref $write_proc) {
+                    my $module = $write_proc;
+                    $module =~ s/::\w+$// and eval "require $module";
+                }
+                no strict 'refs';
+                next unless &$write_proc();
+            }
+            my $writable = $$info{Writable};
+            next unless $writable or ($$table{WRITABLE} and
+                not defined $writable and not $$info{SubDirectory});
             my @g = $et->GetGroup($info);
             $mn{$g[1]} = 1 if $g[0] eq 'MakerNotes';
             print join("\t", 'GPS', $name, $g[0], $g[1]), "\n" if $gpsnames{$name};

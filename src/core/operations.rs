@@ -2003,7 +2003,14 @@ fn file_makernote_census(
         return MakerNoteCensus::UNKNOWN;
     };
     let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-    makernote_census(&blocks, EXIF_BLOCK_MAGICS)
+    let mut census = makernote_census(&blocks, EXIF_BLOCK_MAGICS);
+    if matches!(format, FileFormat::JPEG) {
+        census.ciff = match crate::writers::exif_surgical::jpeg_has_ciff(file_bytes) {
+            Ok(present) => present,
+            Err(_) => return MakerNoteCensus::UNKNOWN,
+        };
+    }
+    census
 }
 
 /// Whether deleting `key` from the file at `path` changes nothing: the map

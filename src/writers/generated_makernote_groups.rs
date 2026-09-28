@@ -3010,9 +3010,7 @@ pub(crate) const MAKERNOTE_CANDIDATES: &[(&str, &[&str])] = &[
     ("matrixselectthreshold2", &["KodakIFD"]),
     (
         "maxaperture",
-        &[
-            "Canon", "Kodak", "KodakIFD", "Minolta", "Nikon", "Olympus", "Pentax",
-        ],
+        &["Canon", "KodakIFD", "Minolta", "Nikon", "Olympus", "Pentax"],
     ),
     ("maxapertureatmaxfocal", &["FujiFilm", "Nikon", "Olympus"]),
     ("maxapertureatminfocal", &["FujiFilm", "Nikon", "Olympus"]),
@@ -3826,7 +3824,6 @@ pub(crate) const MAKERNOTE_CANDIDATES: &[(&str, &[&str])] = &[
             "Sony",
         ],
     ),
-    ("scenemodeused", &["Kodak"]),
     ("scenerecognition", &["FujiFilm"]),
     ("sceneselect", &["Sanyo"]),
     ("screentips", &["NikonCustom"]),

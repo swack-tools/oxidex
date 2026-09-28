@@ -951,9 +951,23 @@ pub(crate) fn makernote_may_hold(
     // edit; a CIFF segment (a separate APP0 maker-note block) survives it
     // unless the deletion is `MakerNotes:All`, which takes CIFF too.
     let deletions = census.deletions;
-    let ciff = super::exif_surgical::has_ciff_rows(baseline);
+    let ciff = census.ciff;
     if deletions.makernotes && (!ciff || deletions.ciff) {
         return None;
+    }
+    // An APP0 CIFF can be physically present while none of its fields is
+    // surfaced. In that case no decoded row narrows its root table.
+    if ciff
+        && !deletions.ciff
+        && !super::exif_surgical::has_ciff_rows(baseline)
+        && MAKERNOTE_ROOTS.iter().any(|root| {
+            root.entry == "CIFF" && groups.iter().any(|group| root.closure.contains(group))
+        })
+    {
+        return Some(format!(
+            "the file carries a CIFF APP0 maker note oxidex cannot identify, where ExifTool \
+             also writes {name} if the note holds it, which oxidex cannot write"
+        ));
     }
     if deletions.makernotes {
         // Only the CIFF segment's rows remain: its root's groups.
@@ -1431,19 +1445,25 @@ mod tests {
         assert!(makernote_may_hold("WhiteBalance", &canon, &exif_ifd_all).is_none());
         let mut ciff = canon.clone();
         ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
-        assert!(makernote_may_hold("FocalLength", &ciff, &exif_ifd_all).is_some());
+        let exif_ifd_all_ciff = || MakerNoteCensus {
+            ciff: true,
+            ..exif_ifd_all()
+        };
+        assert!(makernote_may_hold("FocalLength", &ciff, &exif_ifd_all_ciff).is_some());
         // A CIFF segment holding only a nested Canon row (keyed
         // `CIFF:FocalLength`, family 1 `Canon`) is still a CIFF segment
         // that `ExifIFD:All` keeps (pinned 13.59 updates its FocalLength).
         let mut ciff_only = MetadataMap::new();
         ciff_only.insert_with_group1("CIFF:FocalLength", TagValue::new_string("5 mm"), "Canon");
         let exif_ifd_all_no_note = || MakerNoteCensus {
+            ciff: true,
             deletions: super::super::exif_surgical::RequestDeletions::of("ExifIFD:All"),
             ..no_note()
         };
         assert!(makernote_may_hold("FocalLength", &ciff_only, &exif_ifd_all_no_note).is_some());
         // `MakerNotes:All` takes the CIFF segment too.
         let makernotes_all = || MakerNoteCensus {
+            ciff: true,
             deletions: super::super::exif_surgical::RequestDeletions::of("MakerNotes:All"),
             ..one_note()
         };
@@ -1495,7 +1515,11 @@ mod tests {
             "Canon",
         );
         // `Lens` has only a Nikon maker-note candidate.
-        let err = makernote_may_hold("Lens", &ciff, &one_note).unwrap();
+        let one_note_ciff = || MakerNoteCensus {
+            ciff: true,
+            ..one_note()
+        };
+        let err = makernote_may_hold("Lens", &ciff, &one_note_ciff).unwrap();
         assert!(err.contains("cannot identify"), "{err}");
         // Without a CIFF segment a Canon row is the EXIF note's.
         let mut canon = MetadataMap::new();
@@ -1519,6 +1543,30 @@ mod tests {
         );
         let empty = MetadataMap::new();
         assert!(makernote_may_hold("FocusMode", &empty, &one_note).is_some());
+        // Sony Tag2010c/e rows have no per-tag Writable, but their tables
+        // declare WRITABLE=1; SetNewValue treats them as effective candidates.
+        assert!(
+            MAKERNOTE_CANDIDATES
+                .iter()
+                .any(|(name, groups)| { *name == "digitalzoomratio" && groups.contains(&"Sony") })
+        );
+        // Kodak::SubIFD2 declares Writable, but its WRITE_PROC returns
+        // false on SetNewValue's no-argument capability probe.
+        assert!(
+            !MAKERNOTE_CANDIDATES
+                .iter()
+                .any(|(name, groups)| { *name == "scenemodeused" && groups.contains(&"Kodak") })
+        );
+        assert!(
+            !MAKERNOTE_CANDIDATES
+                .iter()
+                .any(|(name, groups)| { *name == "maxaperture" && groups.contains(&"Kodak") })
+        );
+        assert!(
+            MAKERNOTE_CANDIDATES
+                .iter()
+                .any(|(name, groups)| { *name == "focusmode" && groups.contains(&"Nikon") })
+        );
         for gps in [
             "GPSVersionID",
             "GPSDateStamp",
