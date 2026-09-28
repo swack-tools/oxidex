@@ -271,6 +271,42 @@ fn failed_batch_keeps_conversion_warning_and_original_files() {
     assert_eq!(sha(&second), before_second);
 }
 
+/// Classification is a command warning even when the per-file write preflight
+/// refuses read-only targets. Directory and explicit-list batches warn once.
+#[test]
+fn readonly_batches_keep_conversion_warning_without_writing() {
+    for directory_mode in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let first = copy_into(&dir, JPEG, "first.jpg");
+        let second = copy_into(&dir, JPEG, "second.jpg");
+        let before_first = sha(&first);
+        let before_second = sha(&second);
+        for file in [&first, &second] {
+            let mut permissions = fs::metadata(file).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(file, permissions).unwrap();
+        }
+        let output = if directory_mode {
+            run(dir.path(), &["-ColorSpace=bogus", "-IFD0:Artist=x"])
+        } else {
+            oxidex(&["-ColorSpace=bogus", "-IFD0:Artist=x", s(&first), s(&second)])
+        };
+        assert_eq!(output.status.code(), Some(1), "{}", out(&output));
+        assert!(out(&output).contains("2 files weren't updated due to errors"));
+        assert_eq!(
+            err(&output)
+                .matches("Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)")
+                .count(),
+            1,
+            "{}",
+            err(&output)
+        );
+        assert_eq!(err(&output).matches("File is read-only").count(), 2);
+        assert_eq!(sha(&first), before_first);
+        assert_eq!(sha(&second), before_second);
+    }
+}
+
 // --- P1-1: -TagsFromFile goes through the write resolution gate ---------
 
 /// ExifTool 13.59, `-TagsFromFile sample_with_exif_xmp.jpg -XMP:Title

@@ -582,14 +582,13 @@ pub fn write_file(
     write_file_with_warnings(path, modifications, raw_values, on_commit).0
 }
 
-/// Batch form of [`write_file`], returning destination-aware command warnings
-/// so its caller can print each warning once across all files.
-pub fn write_file_with_warnings(
+/// Classify a file's sets before permission checks or transaction execution.
+/// Warnings belong to the command even when a later preflight or write fails.
+pub fn prepare_write_file(
     path: &Path,
     modifications: &[(String, OsString)],
     raw_values: bool,
-    on_commit: impl FnOnce() -> Result<(), String>,
-) -> (Result<WriteOutcome, String>, Vec<String>) {
+) -> (WritePlan, Vec<String>) {
     // `raw_values` is `--no-print-conv` (ExifTool's `-n`), as
     // [`WritePlan::from_args`] reads it for one file: the multi-file path
     // used to build its plan without it, so `--no-print-conv
@@ -604,7 +603,18 @@ pub fn write_file_with_warnings(
         raw_values,
         ..Default::default()
     };
-    let (plan, warnings) = plan.for_file(path);
+    plan.for_file(path)
+}
+
+/// Variant of [`write_file`] that retains destination-aware warnings alongside
+/// either a successful write or a transaction error.
+pub fn write_file_with_warnings(
+    path: &Path,
+    modifications: &[(String, OsString)],
+    raw_values: bool,
+    on_commit: impl FnOnce() -> Result<(), String>,
+) -> (Result<WriteOutcome, String>, Vec<String>) {
+    let (plan, warnings) = prepare_write_file(path, modifications, raw_values);
     (
         write_plan_file(path, &plan, on_commit).map(|done| done.outcome),
         warnings,

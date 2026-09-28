@@ -10,7 +10,9 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file_with_warnings};
+use crate::cli::write_transaction::{
+    WriteOutcome, partition_defined, prepare_write_file, write_plan_file,
+};
 use crate::core::MetadataMap;
 use crate::core::operations::read_metadata_report_with_detector_and_options;
 use crate::core::read_report::{ParseStatus, ReadReport};
@@ -539,6 +541,7 @@ fn apply_modifications(
     modifications: &[(String, OsString)],
     args: &CliArgs,
 ) -> (std::result::Result<WriteOutcome, String>, Vec<String>) {
+    let (plan, warnings) = prepare_write_file(path, modifications, !args.exiftool_compat());
     // Every write target is checked as the single-file write checks it
     // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
     // over a file list does: a read-only file is refused, never replaced.
@@ -550,14 +553,14 @@ fn apply_modifications(
         Err(e) => {
             return (
                 Err(format!("Cannot access file '{}': {}", path.display(), e)),
-                Vec::new(),
+                warnings,
             );
         }
     };
     if target.permissions().readonly() {
         return (
             Err(format!("File is read-only: {}", path.display())),
-            Vec::new(),
+            warnings,
         );
     }
     // Preserve original file times if requested
@@ -577,10 +580,8 @@ fn apply_modifications(
             .map_err(|e| e.to_string())
     };
 
-    let (outcome, warnings) =
-        write_file_with_warnings(path, modifications, !args.exiftool_compat(), backup);
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
+    let outcome = match write_plan_file(path, &plan, backup) {
+        Ok(done) => done.outcome,
         Err(error) => return (Err(error), warnings),
     };
 
