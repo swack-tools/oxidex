@@ -1266,6 +1266,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut makernote_tags,
                             &mut value_forms,
                         )
+                    } else if make.trim().eq_ignore_ascii_case("leica camera ag")
+                        && crate::parsers::tiff::makernotes::leica::is_leica_makernote(mn_data)
+                        && let Some((payload_offset, payload_len)) = makernote_location
+                    {
+                        let ctx = MakerNoteContext::in_tiff(data, payload_offset, payload_len, 0);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
+                        )
                     } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
                         && is_olympus_make(make)
                         && is_olympus_structured_makernote(mn_data)

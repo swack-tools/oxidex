@@ -535,6 +535,34 @@ fn subdir_bytes<'a>(
     values?.read(entry.value_offset, len)
 }
 
+/// Resolve a WB value only when it does not overlap the IFD that declares it.
+/// Both display and typed channels must use this same physical check.
+fn leica5_wb_bytes<'a>(
+    entry: &IfdEntry,
+    entry_bytes: &'a [u8],
+    values: Option<LeicaValues<'a>>,
+    directory: std::ops::Range<usize>,
+) -> Option<&'a [u8]> {
+    let len = usize::try_from(entry.value_count)
+        .ok()?
+        .checked_mul(tiff_type_size(entry.field_type)?)?;
+    if len > 4 {
+        let values = values?;
+        let start = values
+            .base
+            .checked_add(usize::try_from(entry.value_offset).ok()?)?;
+        if super::makernote_context::value_overlaps_directory(
+            start,
+            len,
+            directory.start,
+            directory.end,
+        ) {
+            return None;
+        }
+    }
+    subdir_bytes(entry, entry_bytes, values)
+}
+
 /// Decode the actual TIFF field type and count for Leica5/Leica8 0x0413.
 /// The source declares rational64u[3] for writing, but ExifTool reads the
 /// recorded field type and count: a short[3] prints three integers, while a
@@ -544,11 +572,12 @@ fn leica5_wb_rgb_levels(
     entry_bytes: &[u8],
     values: Option<LeicaValues<'_>>,
     byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
 ) -> Option<String> {
     if !matches!(entry.field_type, 3 | 5) {
         return None;
     }
-    let bytes = subdir_bytes(entry, entry_bytes, values)?;
+    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
     let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
     let count = usize::try_from(entry.value_count).ok()?;
     let mut parts = Vec::new();
@@ -584,8 +613,9 @@ fn leica5_wb_stored(
     entry_bytes: &[u8],
     values: Option<LeicaValues<'_>>,
     byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
 ) -> Option<TagValue> {
-    let bytes = subdir_bytes(entry, entry_bytes, values)?;
+    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
     let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
     let values = (0..usize::try_from(entry.value_count).ok()?)
         .map(|index| match entry.field_type {
@@ -1176,8 +1206,9 @@ impl MakerNoteParser for LeicaMakerNoteParser {
 impl LeicaMakerNoteParser {
     /// Routes a payload to the decoder for its layout.
     ///
-    /// `ctx` is the enclosing TIFF block when the caller knows it; only Leica9
-    /// needs it, and only for its two rational exposure measurements.
+    /// `ctx` is the enclosing TIFF block when the caller knows it. Leica3,
+    /// Leica8 and Leica9 use TIFF-relative offsets; Leica5 can reach values
+    /// beyond the MakerNote's declared extent through its located window.
     fn parse_payload(
         &self,
         data: &[u8],
@@ -1329,6 +1360,18 @@ impl LeicaMakerNoteParser {
             ));
         }
 
+        // Leica5 offsets index a payload-relative window; Leica8 offsets
+        // index the enclosing TIFF. Keep the declaring IFD in that same
+        // coordinate space before following a WB value pointer.
+        let wb_directory = (|| {
+            let start = if layout == LeicaLayout::Leica8 {
+                ctx?.payload_offset().checked_add(offset)?
+            } else {
+                offset
+            };
+            Some(start..start.checked_add(required_size)?)
+        })();
+
         // Parse each IFD entry
         for i in 0..entry_count {
             let entry_offset = 2 + (i as usize * 12);
@@ -1361,38 +1404,49 @@ impl LeicaMakerNoteParser {
 
             if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
                 && tag_id == leica5::WB_RGB_LEVELS
-                && let Some(rows) = occurrences.as_mut()
             {
                 if leica5_wb_admitted()
-                    && let Some(printed) =
-                        leica5_wb_rgb_levels(&entry, entry_data, values, byte_order)
-                    && let Some(stored) = leica5_wb_stored(&entry, entry_data, values, byte_order)
+                    && let Some(directory) = wb_directory.clone()
+                    && let Some(printed) = leica5_wb_rgb_levels(
+                        &entry,
+                        entry_data,
+                        values,
+                        byte_order,
+                        directory.clone(),
+                    )
                 {
-                    rows.push((
-                        "Leica:WB_RGBLevels".to_string(),
-                        TagOccurrence {
-                            id: TagId::Numeric(leica5::WB_RGB_LEVELS),
-                            name: intern("WB_RGBLevels"),
-                            group0: intern("MakerNotes"),
-                            group1: intern("Leica"),
-                            group2: Some(intern("Camera")),
-                            instance: Instance::default(),
-                            raw: TagValue::String(printed.clone()),
-                            value: Some(TagValue::String(printed.clone())),
-                            print: Some(TagValue::String(printed)),
-                            stored: Some(stored),
-                            priority: 1,
-                            is_list: false,
-                            order: 0,
-                            origin: Provenance {
-                                module: Some("Panasonic"),
-                                table: Some("Leica5"),
-                                byte_range: ctx.and_then(|ctx| {
-                                    leica5_wb_byte_range(ctx, layout, &entry, entry_offset)
-                                }),
+                    if let Some(rows) = occurrences.as_mut()
+                        && let Some(stored) =
+                            leica5_wb_stored(&entry, entry_data, values, byte_order, directory)
+                    {
+                        rows.push((
+                            "Leica:WB_RGBLevels".to_string(),
+                            TagOccurrence {
+                                id: TagId::Numeric(leica5::WB_RGB_LEVELS),
+                                name: intern("WB_RGBLevels"),
+                                group0: intern("MakerNotes"),
+                                group1: intern("Leica"),
+                                group2: Some(intern("Camera")),
+                                instance: Instance::default(),
+                                raw: TagValue::String(printed.clone()),
+                                value: Some(TagValue::String(printed.clone())),
+                                print: Some(TagValue::String(printed)),
+                                stored: Some(stored),
+                                priority: 1,
+                                is_list: false,
+                                order: 0,
+                                origin: Provenance {
+                                    module: Some("Panasonic"),
+                                    table: Some("Leica5"),
+                                    byte_range: ctx.and_then(|ctx| {
+                                        leica5_wb_byte_range(ctx, layout, &entry, entry_offset)
+                                    }),
+                                },
                             },
-                        },
-                    ));
+                        ));
+                    } else if occurrences.is_none() {
+                        tags.insert("Leica:WB_RGBLevels".to_string(), printed);
+                    }
                 }
                 continue;
             }
@@ -1672,17 +1726,6 @@ impl LeicaMakerNoteParser {
             leica5::CAMERA_IFD => {
                 if let Some(dir) = subdir_bytes(entry, entry_bytes, values) {
                     parse_camera_ifd(dir, tags);
-                }
-            }
-            leica5::WB_RGB_LEVELS => {
-                // Bind the hand decoder to the active source declaration.
-                // All three reviewed pins currently declare this row, but a
-                // future source change must not let the id alone name it.
-                if leica5_wb_admitted()
-                    && let Some(printed) =
-                        leica5_wb_rgb_levels(entry, entry_bytes, values, byte_order)
-                {
-                    tags.insert("Leica:WB_RGBLevels".to_string(), printed);
                 }
             }
             _ => {}
@@ -2400,6 +2443,7 @@ mod tests {
                 &entry_bytes,
                 Some(LeicaValues { block, base: 0 }),
                 ByteOrder::LittleEndian,
+                0..0,
             )
         };
         // Mutations of LeicaX1.jpg under the pinned 13.59 oracle: Count=2
@@ -2442,6 +2486,7 @@ mod tests {
                     base: 0
                 }),
                 ByteOrder::LittleEndian,
+                0..0,
             )
             .as_deref(),
             Some("undef inf 0.7231638418")

@@ -458,7 +458,7 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
                 if part == "undef" {
                     Ok(0.0)
                 } else {
-                    part.parse()
+                    part.parse() // typed-value-projection: reparse red_blue_balance_levels
                 }
             })
             .collect::<Result<Vec<f64>, _>>()
@@ -1927,6 +1927,16 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // `int($val * 1e6 + 0.5) * 1e-6`.
         ("Exif", "RedBalance" | "BlueBalance") => {
             let value = red_blue_balance(i, name == "BlueBalance")?;
+            if !value.is_finite() {
+                let printed = if value.is_nan() {
+                    "NaN"
+                } else if value.is_sign_negative() {
+                    "-Inf"
+                } else {
+                    "Inf"
+                };
+                return Computed::new(printed, printed);
+            }
             let millionths = (value * 1e6 + 0.5) as i64;
             let absolute = millionths.unsigned_abs();
             let sign = if millionths < 0 { "-" } else { "" };
