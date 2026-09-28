@@ -799,6 +799,35 @@ impl NonStandardIptcGroups {
     }
 }
 
+/// Whether this one segment is an APP13 Photoshop segment whose 8BIM
+/// resources actually carry the standard IPTC (0x0404) resource -- as
+/// opposed to an APP13 that merely starts with the `"Photoshop 3.0\0"`
+/// signature but holds no IPTC resource (an IRB of other Photoshop
+/// resources only, e.g. a bare thumbnail or print-flags block).
+///
+/// File position among an APP13 that never yields IPTC data doesn't
+/// describe when ExifTool's IPTC directory is actually found, so a caller
+/// arbitrating IPTC against another format by file order (bare-name
+/// priority between IPTC and XMP, `core::operations::app13_precedes_xmp`)
+/// must filter to segments this returns `true` for, not every segment with
+/// the Photoshop signature.
+pub fn app13_segment_carries_iptc_resource(segment: &Segment) -> bool {
+    if segment.marker != APP13_MARKER || !segment.data.starts_with(PHOTOSHOP_SIGNATURE) {
+        return false;
+    }
+    let mut current = &segment.data[PHOTOSHOP_SIGNATURE.len()..];
+    while current.len() > 4 && current.starts_with(EIGHTBIM_SIGNATURE) {
+        let Ok((remaining, block)) = parse_image_resource_block(current) else {
+            break;
+        };
+        if block.id == IPTC_RESOURCE_ID {
+            return true;
+        }
+        current = remaining;
+    }
+    false
+}
+
 /// How many IPTC (0x0404) resources the APP13 Photoshop segments carry, found
 /// by the same walk [`extract_iptc_values_from_segments`] reads them with.
 ///
@@ -1038,6 +1067,46 @@ mod tests {
             app13_iptc_resource_count(&[Segment::new(0xFFE1, 0, &one)]),
             0
         );
+    }
+
+    #[test]
+    fn app13_segment_carries_iptc_resource_requires_the_0404_block() {
+        fn resource(id: u16, data: &[u8]) -> Vec<u8> {
+            let mut out = b"8BIM".to_vec();
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&[0, 0]); // empty name, padded
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(data);
+            if data.len() % 2 == 1 {
+                out.push(0);
+            }
+            out
+        }
+        // A Photoshop APP13 that carries only a thumbnail resource (0x040c)
+        // -- the signature is present, but no IPTC directory is inside, so
+        // `process_iptc_segments` reads nothing from it.
+        let mut empty = PHOTOSHOP_SIGNATURE.to_vec();
+        empty.extend(resource(0x040c, b"thumb"));
+        assert!(!app13_segment_carries_iptc_resource(&Segment::new(
+            APP13_MARKER,
+            0,
+            &empty
+        )));
+
+        // A Photoshop APP13 that does carry the standard IPTC resource.
+        let iptc = b"\x1c\x02\x00\x00\x02\x00\x02";
+        let mut real = PHOTOSHOP_SIGNATURE.to_vec();
+        real.extend(resource(0x0404, iptc));
+        assert!(app13_segment_carries_iptc_resource(&Segment::new(
+            APP13_MARKER,
+            0,
+            &real
+        )));
+
+        // Not an APP13 at all.
+        assert!(!app13_segment_carries_iptc_resource(&Segment::new(
+            0xFFE1, 0, &real
+        )));
     }
 
     #[test]
