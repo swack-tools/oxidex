@@ -544,6 +544,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     let mut dng_priority_dir: Option<String> = None;
+    // Bound total DNG child-directory work across all pointers in this file.
+    let mut dng_subifd_budget = 128usize;
     // Non-DNG chain/SubIFD arbitration is separate from the DNG entry-order state.
     let mut priority_dir_set = false;
 
@@ -780,22 +782,23 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate()
                             {
                                 let offset = u64::from(read_u32(offset_bytes, byte_order));
-                                if let Ok(sub_tags) = parse_ifd(&reader, offset, byte_order) {
-                                    let directory = if index == 0 {
-                                        "SubIFD".to_string()
-                                    } else {
-                                        format!("SubIFD{index}")
-                                    };
-                                    emit_dng_subifd(
-                                        data,
-                                        &sub_tags,
-                                        index,
-                                        &directory,
-                                        byte_order,
-                                        &mut metadata,
-                                        &mut dng_priority_dir,
-                                    );
-                                }
+                                let directory = if index == 0 {
+                                    "SubIFD".to_string()
+                                } else {
+                                    format!("SubIFD{index}")
+                                };
+                                emit_dng_subifd(
+                                    &reader,
+                                    data,
+                                    offset,
+                                    index,
+                                    &directory,
+                                    byte_order,
+                                    &mut metadata,
+                                    &mut dng_priority_dir,
+                                    &mut Vec::new(),
+                                    &mut dng_subifd_budget,
+                                );
                             }
                             continue;
                         }
@@ -2241,18 +2244,64 @@ fn read_tiff_numeric_array(
 }
 
 /// Emit a DNG child at its pointer's position in the parent IFD walk.
+/// ExifTool 13.59 revisits a self-referencing SubIFD once before stopping.
+/// Keep that duplicate occurrence, while bounding malformed pointer graphs.
+#[allow(clippy::too_many_arguments)]
 fn emit_dng_subifd(
+    reader: &dyn FileReader,
     data: &[u8],
-    sub_tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
+    offset: u64,
     sub_index: usize,
     directory: &str,
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
     priority_dir: &mut Option<String>,
+    active_offsets: &mut Vec<u64>,
+    remaining: &mut usize,
 ) {
-    extract_dng_subifd_preview(data, sub_tags, sub_index, byte_order, metadata);
-    for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
+    const MAX_DNG_SUBIFD_DEPTH: usize = 16;
+    if offset == 0
+        || active_offsets.len() >= MAX_DNG_SUBIFD_DEPTH
+        || *remaining == 0
+        || active_offsets
+            .iter()
+            .filter(|&&seen| seen == offset)
+            .count()
+            >= 2
+    {
+        return;
+    }
+    *remaining -= 1;
+    let Ok(sub_tags) = parse_ifd(reader, offset, byte_order) else {
+        return;
+    };
+    active_offsets.push(offset);
+    extract_dng_subifd_preview(data, &sub_tags, sub_index, byte_order, metadata);
+    for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
         let bytes = raw_bytes.as_ref();
+        if *tag_id == 0x014A {
+            for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate() {
+                let child_offset = u64::from(read_u32(offset_bytes, byte_order));
+                let child_directory = if index == 0 {
+                    "SubIFD".to_string()
+                } else {
+                    format!("SubIFD{index}")
+                };
+                emit_dng_subifd(
+                    reader,
+                    data,
+                    child_offset,
+                    index,
+                    &child_directory,
+                    byte_order,
+                    metadata,
+                    priority_dir,
+                    active_offsets,
+                    remaining,
+                );
+            }
+            continue;
+        }
         let (name, value) = if *tag_id == 0x828D
             && let Some(dim) = format_cfa_repeat_pattern_dim(bytes, byte_order)
         {
@@ -2308,6 +2357,7 @@ fn emit_dng_subifd(
             value,
         );
     }
+    active_offsets.pop();
 }
 
 /// Exif.pm 0xfe/0xff select the first full-resolution directory in entry
@@ -3967,6 +4017,113 @@ mod dng_integer_array_tests {
 #[cfg(test)]
 mod dng_thumbnail_tiff_tests {
     use super::*;
+
+    // Mirrors the independent 512-byte TIFF probe. The child pointer is
+    // varied to exercise a grandchild, absent/malformed links, and a cycle.
+    fn nested_dng_probe(child_pointer: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 512];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_ifd = |data: &mut [u8], offset: usize, entries: &[(u16, u32)]| {
+            data[offset..offset + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (index, (tag, value)) in entries.iter().enumerate() {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&1u32.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        write_ifd(
+            &mut data,
+            8,
+            &[(0x00FE, 1), (0x0100, 16), (0x0101, 12), (0x014A, 128)],
+        );
+        write_ifd(
+            &mut data,
+            128,
+            &[
+                (0x00FE, 0),
+                (0x0100, 1000),
+                (0x0101, 800),
+                (0x014A, child_pointer),
+            ],
+        );
+        write_ifd(
+            &mut data,
+            256,
+            &[(0x00FE, 1), (0x0100, 2222), (0x0101, 1111)],
+        );
+        data
+    }
+
+    fn dng_width_occurrences(data: &[u8]) -> Vec<(String, i64)> {
+        parse_raw_metadata(data, RawFormat::AdobeDNG)
+            .expect("synthetic DNG")
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "ImageWidth")
+            .map(|o| (o.group1.to_string(), o.raw.as_integer().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn dng_nested_subifd_keeps_exiftool_occurrence_order_and_group() {
+        assert_eq!(
+            dng_width_occurrences(&nested_dng_probe(256)),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 2222)
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_ignores_zero_and_out_of_bounds_pointers() {
+        for pointer in [0, 65500] {
+            assert_eq!(
+                dng_width_occurrences(&nested_dng_probe(pointer)),
+                [("IFD0".into(), 16), ("SubIFD".into(), 1000)]
+            );
+        }
+    }
+
+    #[test]
+    fn dng_nested_subifd_cycle_keeps_one_native_duplicate_then_stops() {
+        assert_eq!(
+            dng_width_occurrences(&nested_dng_probe(128)),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 1000)
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_shared_sibling_retains_both_occurrences() {
+        let mut data = nested_dng_probe(256);
+        let pointer = 8 + 2 + 3 * 12;
+        data[pointer + 4..pointer + 8].copy_from_slice(&2u32.to_le_bytes());
+        data[pointer + 8..pointer + 12].copy_from_slice(&400u32.to_le_bytes());
+        data[400..408].copy_from_slice(&[128, 0, 0, 0, 0, 1, 0, 0]);
+        assert_eq!(
+            dng_width_occurrences(&data),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 2222),
+                ("SubIFD1".into(), 2222),
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_two_node_cycle_is_bounded() {
+        let mut data = nested_dng_probe(256);
+        data[256..258].copy_from_slice(&4u16.to_le_bytes());
+        data[294..306].copy_from_slice(&[0x4A, 0x01, 4, 0, 1, 0, 0, 0, 128, 0, 0, 0]);
+        assert_eq!(dng_width_occurrences(&data).len(), 5);
+    }
 
     #[test]
     fn dng_full_resolution_subifd_preserves_physical_priority_fields() {
