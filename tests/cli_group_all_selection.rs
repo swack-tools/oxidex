@@ -126,7 +126,10 @@ fn unmodeled_selectors_are_refused_by_name_with_a_failing_exit() {
         &["-s", "-Time:all"][..],
         &["-s", "-Copy1:Make"][..],
         &["-s", "-AllDates"][..],
+        &["-s", "-ls-l"][..],
         &["-s", "-Make#"][..],
+        &["-s", "-EXIF:*:Make"][..],
+        &["-s", "-EXIF:all", "--EXIF:*:Make"][..],
         &["-s", "-EXIF:all", "--Main:all"][..],
         &["-s", "--a"][..],
     ] {
@@ -136,6 +139,25 @@ fn unmodeled_selectors_are_refused_by_name_with_a_failing_exit() {
         assert!(!output.status.success(), "{args:?} must fail");
         assert!(output.stdout.is_empty(), "{args:?} printed rows");
         assert!(stderr.contains(selector), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn multipart_star_group_is_invalid_in_pinned_set_found_tags() {
+    // ExifTool 13.59 SetFoundTags validates the entire group with
+    // /^[-\w:]*$/ before calling GroupMatches. The latter skips `*`, but
+    // public read requests and exclusions never reach it for `EXIF:*`.
+    for flags in [
+        &["-G1", "-s", "-EXIF:*:Make"][..],
+        &["-G1", "-s", "-EXIF:all", "--EXIF:*:Make"][..],
+    ] {
+        let output = oxidex(flags, Path::new(REPO_FIXTURE));
+        assert!(!output.status.success(), "{flags:?}");
+        assert!(output.stdout.is_empty(), "{flags:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid group name"),
+            "{flags:?}"
+        );
     }
 }
 
@@ -212,6 +234,43 @@ fn leica_x1_public_read_selectors_match_pinned_oracle() {
         &["-G1", "-s", "-0EXIF:all"][..],
         &["-G1", "-s", "-EXIF:all", "--ISO"][..],
         &["-G1", "-s", "-EXIF:all", "-x", "ISO"][..],
+    ] {
+        let expected = oracle
+            .command()
+            .args(flags)
+            .arg(&file)
+            .output()
+            .expect("oracle read");
+        assert!(expected.status.success(), "oracle failed for {flags:?}");
+        assert!(
+            !expected.stdout.is_empty(),
+            "oracle selection empty for {flags:?}"
+        );
+        let actual = oxidex(flags, &file);
+        assert!(
+            actual.status.success(),
+            "oxidex failed for {flags:?}: {}",
+            String::from_utf8_lossy(&actual.stderr)
+        );
+        assert_eq!(actual.stdout, expected.stdout, "selector {flags:?}");
+    }
+}
+
+#[test]
+#[ignore = "explicit CI replay against pinned ExifTool 13.59 t/images/Apple.jpg"]
+fn apple_pinned_t_images_read_selectors_match_pinned_oracle() {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned capable 13.59 oracle");
+    let file = fixtures::required_t_images_fixture_path("Apple.jpg");
+    for flags in [
+        &["-G1", "-s", "-EXIF:all"][..],
+        &["-s", "-M*"][..],
+        &["-G1", "-s", "-exif:ALL"][..],
+        &["-G1", "-s", "-0EXIF:all"][..],
+        &["-G1", "-s", "-EXIF:all", "--ISO"][..],
+        &["-G1", "-s", "-EXIF:all", "-x", "ISO"][..],
+        &["-G1", "-s", "-EXIF:*"][..],
+        &["-G1", "-s", "-EXIF:all:Make"][..],
+        &["-G1", "-s", "-EXIF:all", "--EXIF:all:Make"][..],
     ] {
         let expected = oracle
             .command()

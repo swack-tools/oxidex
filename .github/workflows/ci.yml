@@ -433,6 +433,16 @@ jobs:
           # Require Real Audio and both Canon autofocus replays; an empty or
           # accidentally narrowed selection must not turn this check green.
           grep -F 'test result: ok. 3 passed; 0 failed;' "$RUNNER_TEMP/serial-native-replay.log"
+      - name: Compare public read selectors with pinned native processor
+        env:
+          EXIFTOOL_PERL: perl
+        run: |
+          set -euo pipefail
+          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          cargo test --all-features --test cli_group_all_selection \
+            apple_pinned_t_images_read_selectors_match_pinned_oracle \
+            -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/read-selector-native-replay.log"
+          grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/read-selector-native-replay.log"
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp

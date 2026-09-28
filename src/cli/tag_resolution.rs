@@ -28,6 +28,7 @@ use crate::cli::args::CliArgs;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use crate::core::{MetadataMap, TagValue};
+use crate::writers::generated_tag_exists::SHORTCUTS;
 use std::collections::{HashMap, HashSet};
 
 /// Maps a stored occurrence's `group0` to ExifTool's real family-0 group.
@@ -410,22 +411,6 @@ const UNMODELED_FAMILY6_GROUPS: &[&str] = &[
     "ifd64",
 ];
 
-/// ExifTool's built-in shortcut tags (`Image::ExifTool::Shortcuts::Main`,
-/// 13.59), which `ExpandShortcuts` replaces with a tag list before any
-/// matching. OxiDex does not expand them, so it refuses them by name.
-const EXIFTOOL_SHORTCUTS: &[&str] = &[
-    "AllDates",
-    "Common",
-    "Canon",
-    "Nikon",
-    "MakerNotes",
-    "Unsafe",
-    "ColorSpaceTags",
-    "CommonIFD0",
-    "LargeTags",
-    "ImageDataMD5",
-];
-
 /// One `:`-separated part of a selector's group qualifier, as
 /// `GroupMatches` reads it: an optional leading family number and a
 /// case-insensitive name.
@@ -495,10 +480,12 @@ fn is_tag_char(c: char) -> bool {
 }
 
 /// Parses one group-qualifier part; `Ok(None)` for an `all` part, which
-/// `GroupMatches` skips (`next if $grp eq '*' or $grp eq 'all'`), so
+/// `GroupMatches` skips, so
 /// `-EXIF:all:all` is `-EXIF:all`. An all-only group on a named tag,
 /// such as `-1all:Make`, uses ordinary winner arbitration; only a direct
-/// `-all:Make` requests every copy.
+/// `-all:Make` requests every copy. Although `GroupMatches` also skips `*`,
+/// `SetFoundTags` first rejects it inside a multipart group such as
+/// `EXIF:*:Make` (`Invalid group name 'EXIF:*'` in pinned 13.59).
 fn parse_group_part(selector: &str, part: &str) -> Result<Option<GroupPart>, String> {
     let digits = part.chars().take_while(char::is_ascii_digit).count();
     let (family, name) = part.split_at(digits);
@@ -590,9 +577,9 @@ fn parse_selector(token: &str, exclusion: bool) -> Result<TagSelector, String> {
     if tag.is_empty() || !tag.chars().all(|c| is_tag_char(c) || c == '*' || c == '?') {
         return refuse("invalid tag name");
     }
-    if EXIFTOOL_SHORTCUTS
+    if SHORTCUTS
         .iter()
-        .any(|shortcut| shortcut.eq_ignore_ascii_case(tag))
+        .any(|(shortcut, _)| shortcut.eq_ignore_ascii_case(tag))
     {
         return refuse(&format!(
             "'{tag}' is an ExifTool shortcut, which OxiDex does not expand"
