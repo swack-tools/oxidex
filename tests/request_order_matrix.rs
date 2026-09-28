@@ -67,6 +67,10 @@ const TIFF: &str = "tests/fixtures/tiff/sample.tif";
 /// deletion cancels in 13.59.
 const NAMED_REFUSALS: &[(&str, &str)] = &[
     (
+        "the selected physical maker note block cannot be copied by oxidex",
+        "oxidex cannot copy the selected physical maker note block",
+    ),
+    (
         "cannot write the XMP",
         "oxidex writes no XMP packet (JPEG, PNG, PDF, TIFF)",
     ),
@@ -1298,20 +1302,14 @@ fn canon_flash_slot_source_and_historical_copy_readbacks() {
     };
     let source_value = read(&source)[&tag].clone();
     assert!(!source_value.is_null(), "selected source has no {tag}");
-    // The four regression cases are the older FlashActivity copy contract.
-    // The current FlashModel source contract is covered by the reader check;
-    // its by-name copy behavior has a separate destination policy.
-    if field.name == "FlashModel" {
-        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
-            .args(["-j", "-G1", "-s"])
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let rust_source: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(rust_source[0][&tag], source_value);
-        return;
-    }
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-j", "-G1", "-s"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let rust_source: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rust_source[0][&tag], source_value);
     let root = tempfile::tempdir().unwrap();
     for (dest, ext) in [(JPEG_NO_GPS, "jpg"), (PNG, "png")] {
         for selector in ["-all", "-EXIF:all"] {
@@ -1321,6 +1319,7 @@ fn canon_flash_slot_source_and_historical_copy_readbacks() {
             let rust = dir.join(format!("rust.{ext}"));
             fs::copy(dest, &native).unwrap();
             fs::copy(dest, &rust).unwrap();
+            let original = fs::read(&rust).unwrap();
             let args = ["-TagsFromFile", source.to_str().unwrap(), selector];
             let native_write = oracle.command().args(args).arg(&native).output().unwrap();
             assert!(
@@ -1333,13 +1332,21 @@ fn canon_flash_slot_source_and_historical_copy_readbacks() {
                 .arg(&rust)
                 .output()
                 .unwrap();
-            assert!(
-                rust_write.status.success(),
-                "{}",
-                String::from_utf8_lossy(&rust_write.stderr)
-            );
             assert_eq!(read(&native)[&tag], source_value, "native {ext} {selector}");
-            assert_eq!(read(&rust)[&tag], source_value, "rust {ext} {selector}");
+            if rust_write.status.success() {
+                // A successful copy must pass an independent native readback.
+                assert_eq!(read(&rust)[&tag], source_value, "rust {ext} {selector}");
+            } else {
+                // Until the physical maker note writer is implemented, refuse
+                // that selected block by name before changing destination bytes.
+                assert!(
+                    String::from_utf8_lossy(&rust_write.stderr).contains("ExifIFD:MakerNoteCanon"),
+                    "rust {ext} {selector}: {}",
+                    String::from_utf8_lossy(&rust_write.stderr)
+                );
+                assert_eq!(fs::read(&rust).unwrap(), original, "rust {ext} {selector}");
+                assert_ne!(read(&rust)[&tag], source_value, "rust {ext} {selector}");
+            }
         }
     }
 }

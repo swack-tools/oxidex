@@ -374,12 +374,12 @@ struct Planned<'a> {
 /// it whole. Pinned 13.59 selects the block with `all`, `EXIF:all`, or
 /// `ExifIFD:all`, but not `Canon:all` or `MakerNotes:all`, even though its
 /// decoded rows use those latter family groups. oxidex does not copy the
-/// block; it names each row only when the physical block was selected.
+/// block; a selected physical block must refuse the copy before any write.
 ///
 /// The block is written only where its `MakerNotes::Main` `Condition`
 /// holds for the destination's Make as the write leaves it (13.59:
 /// `-TagsFromFile Canon.jpg -all --Make` into a non-Canon JPEG writes no
-/// Canon maker note). oxidex does not evaluate those conditions; it names
+/// Canon maker note). oxidex does not evaluate those conditions; it refuses
 /// the block when that Make is the source's own -- the Make the source's
 /// block was selected by -- and names nothing otherwise.
 fn maker_note_rows<'a>(
@@ -776,6 +776,32 @@ pub(crate) fn copy_tags(
             }
         }
     }
+    // A maker note is a physical EXIF block, not the set of decoded Canon
+    // rows. Selected copies cannot safely omit it and report an update.
+    // Check before the write loop so both API and CLI leave bytes untouched.
+    let final_make = final_make_override.unwrap_or_else(|| {
+        writes
+            .iter()
+            .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
+            .map(|(key, value, _)| printed_text(value, key))
+            .or_else(|| printed_make(&dest_baseline))
+    });
+    if let Some((group1, _)) = maker_note_rows(
+        source_metadata,
+        selectors,
+        format,
+        surgical,
+        final_make,
+        &retain,
+    )
+    .first()
+    {
+        return Err(ExifToolError::tag_not_written(
+            format!("ExifIFD:MakerNote{group1}"),
+            "the selected physical maker note block cannot be copied by oxidex",
+        ));
+    }
+
     // One write transaction; a selected tag the writer refuses is skipped
     // and named, a named one refuses the copy.
     // ExifTool queues copied sets: a later replacement removes the pending
@@ -848,28 +874,6 @@ pub(crate) fn copy_tags(
             .collect();
         report.uncopied_tags.extend(consequences);
     }
-    let final_make = final_make_override.unwrap_or_else(|| {
-        writes
-            .iter()
-            .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
-            .map(|(key, value, _)| printed_text(value, key))
-            .or_else(|| printed_make(&dest_baseline))
-    });
-    for (group1, occurrence) in maker_note_rows(
-        source_metadata,
-        selectors,
-        format,
-        surgical,
-        final_make,
-        &retain,
-    ) {
-        report.uncopied_tags.push(TagNotWritten::new(
-            format!("{group1}:{}", occurrence.name),
-            "13.59 copies the source's maker note block whole; oxidex does not copy a \
-             maker note block",
-        ));
-    }
-
     let mut seen = std::collections::HashSet::new();
     report
         .uncopied_tags
