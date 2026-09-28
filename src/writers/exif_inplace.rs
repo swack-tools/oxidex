@@ -453,11 +453,6 @@ fn shift_block_dates(
             tag.key()
         )));
     }
-    // There is no requested physical date to patch. In particular, an
-    // unrelated directory type cannot make an absent-date shift fail.
-    if !located.iter().any(|entry| targets.contains(&entry.tag)) {
-        return Ok(0);
-    }
     // One value may back several entries (an IFD0 and an ExifIFD ModifyDate
     // pointing at the same 20 bytes, or ModifyDate and DateTimeOriginal).
     // Pinned ExifTool 13.59 shifts each entry once from its own old value

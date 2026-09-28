@@ -58,23 +58,42 @@ fn readable_count19_tiff_date_is_refused_atomically() {
     assert_eq!(std::fs::read(&ours).unwrap(), bytes);
 }
 
-// This tests the helper's absent-target ordering. Pinned ExifTool 13.59
-// refuses this synthetic type-13 ImageWidth during its TIFF writer walk, so
-// the absent half is a local policy check rather than a parity assertion.
+// Pinned ExifTool validates the TIFF writer's graph even when the requested
+// date is absent. An unsupported field must not bypass that validation.
 #[test]
-fn absent_date_skips_unrelated_type13_graph_but_present_date_refuses() {
+fn unsupported_type13_graph_is_refused_with_absent_or_present_date() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let absent = minimal_tiff(&[(0x0100, 13, 1, 8)], b"");
     let path = dir.path().join("absent.tif");
     std::fs::write(&path, &absent).unwrap();
     let spec = build_shift_spec("1:0:0 0:0:0", ShiftOperation::Add).unwrap();
-    let shifted = oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
+    let error = oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
         &path,
         &[ExifDateTag::ModifyDate],
         &spec,
     )
-    .unwrap();
-    assert_eq!(shifted, Some(0));
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incomplete EXIF directory graph"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), absent);
+    let native = oracle
+        .command()
+        .args(["-overwrite_original", "-ModifyDate+=1:0:0 0:0:0"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!native.status.success(), "{native:?}");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("IFD format not handled"),
+        "{native:?}"
+    );
     assert_eq!(std::fs::read(&path).unwrap(), absent);
 
     let present = minimal_tiff(
@@ -93,6 +112,18 @@ fn absent_date_skips_unrelated_type13_graph_but_present_date_refuses() {
             .to_string()
             .contains("incomplete EXIF directory graph"),
         "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), present);
+    let native = oracle
+        .command()
+        .args(["-overwrite_original", "-ModifyDate+=1:0:0 0:0:0"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!native.status.success(), "{native:?}");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("IFD format not handled"),
+        "{native:?}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), present);
 }
