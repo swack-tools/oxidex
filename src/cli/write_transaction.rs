@@ -22,7 +22,7 @@
 //! set is exactly that case.
 
 use crate::cli::args::CliArgs;
-use crate::cli::value_parser::parse_cli_tag_value_os;
+use crate::cli::value_parser::parse_cli_tag_value_os_with_mode;
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
 use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report_retaining};
 use crate::core::write_transaction::{
@@ -96,6 +96,13 @@ pub struct WritePlan {
     pub warnings: Vec<String>,
     /// Whether any `-TAG=VALUE` was given, defined or not.
     requested_sets: bool,
+    /// ExifTool's `-n` (oxidex's own `-n` is already dry-run, so this is
+    /// `--no-print-conv` here): every `-TAG=VALUE` in `sets` is the tag's
+    /// raw/machine value, with no PrintConv label lookup at all. A single
+    /// `-TAG#=VALUE` gets the same treatment regardless of this flag
+    /// (`apply_sets` checks the tag name's own trailing `#`, independent of
+    /// this global setting).
+    pub raw_values: bool,
     /// Whether `-TagsFromFile` came before the last `-all=`: the copy is
     /// then applied first and cleared with the rest.
     copy_before_clear: bool,
@@ -118,6 +125,12 @@ const ALL_DATES: &[&str] = &["DateTimeOriginal", "CreateDate", "ModifyDate"];
 /// may land in any group (a shift of `CreateDate` shifts `PDF:CreateDate` in
 /// a PDF), and stays `exif` for a family request naming another tag.
 fn date_address(tag: &str) -> (Option<String>, String) {
+    // A per-tag raw suffix (`-DateTimeOriginal#=`) names the same field:
+    // comparing `datetimeoriginal#` with `datetimeoriginal` let a raw set
+    // slip past the set/shift conflict refusal and overwrite the shifted
+    // date, where pinned 13.59 keeps the shift (Codex pre-review of PR #959,
+    // round 5).
+    let tag = tag.strip_suffix('#').unwrap_or(tag);
     let (group, name) = match tag.rsplit_once(':') {
         Some((group, name)) => (Some(group.to_ascii_lowercase()), name),
         None => (None, tag),
@@ -163,6 +176,7 @@ impl WritePlan {
     /// nothing touched): a combination oxidex cannot apply faithfully.
     pub fn from_args(args: &CliArgs) -> Result<Self, String> {
         let raw_sets = args.plain_tag_modifications_with_positions();
+        let raw_values = !args.exiftool_compat();
         let clear_at = args.clear_all_position();
         // Every name is judged (and an undefined one warned about) wherever
         // it stands, as ExifTool's `SetNewValue` judges each; only then does
@@ -184,6 +198,27 @@ impl WritePlan {
             };
             let (mut warned, defined) = partition_defined(&expanded);
             warnings.append(&mut warned);
+            // A value `SetNewValue` cannot convert is ExifTool's warning, and
+            // that one request is dropped before any file is opened -- once
+            // per command, wherever the request stands (a set a later `-all=`
+            // supersedes is still judged): pinned 13.59 prints `Can't convert
+            // IFD0:Orientation (not in PrintConv)` once for two files and for
+            // `-IFD0:Orientation=6 -all=`, writes Artist beside it in
+            // `-IFD0:Orientation=6 -IFD0:Artist=x`, and says `Nothing to do.`
+            // only when no request is left (Codex pre-review of PR #959,
+            // round 5).
+            let defined: Vec<(String, OsString)> = defined
+                .into_iter()
+                .filter(
+                    |(tag, value)| match unconvertible_value_warning(tag, value, raw_values) {
+                        Some(warning) => {
+                            warnings.push(warning);
+                            false
+                        }
+                        None => true,
+                    },
+                )
+                .collect();
             if clear_at.is_none_or(|clear| *at > clear) {
                 if args
                     .tags_from_file_position
@@ -221,6 +256,7 @@ impl WritePlan {
             sets,
             warnings,
             requested_sets: !raw_sets.is_empty(),
+            raw_values,
             copy_before_clear: args.tags_from_file.is_some()
                 && matches!(
                     (args.tags_from_file_position, clear_at),
@@ -254,7 +290,11 @@ impl WritePlan {
         // shift beside an `IFD0:CreateDate` set writes both), so the
         // addresses are compared, not the leaf names.
         for (shift_tag, _, _) in &plan.shifts {
-            let shifted: Vec<&str> = if shift_tag.eq_ignore_ascii_case("AllDates") {
+            let shifted: Vec<&str> = if shift_tag
+                .strip_suffix('#')
+                .unwrap_or(shift_tag)
+                .eq_ignore_ascii_case("AllDates")
+            {
                 ALL_DATES.to_vec()
             } else {
                 vec![shift_tag.as_str()]
@@ -343,7 +383,7 @@ pub fn write_plan_file(
                 })
                 .cloned()
                 .collect();
-            proven_sets += apply_sets(scratch, &before_copy)?;
+            proven_sets += apply_sets(scratch, &before_copy, plan.raw_values)?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 // ExifTool evaluates the physical maker note block against
@@ -382,7 +422,7 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            proven_sets += apply_sets(scratch, after_copy)?;
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values)?;
             Ok(())
         },
     )?;
@@ -445,14 +485,21 @@ fn supersedes_copy(tag: &str, copied: &str) -> bool {
 pub fn write_file(
     path: &Path,
     modifications: &[(String, OsString)],
+    raw_values: bool,
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
+    // `raw_values` is `--no-print-conv` (ExifTool's `-n`), as
+    // [`WritePlan::from_args`] reads it for one file: the multi-file path
+    // used to build its plan without it, so `--no-print-conv
+    // -IFD0:Orientation=6 a.jpg b.jpg` refused the raw code the one-file
+    // form writes (pinned 13.59 writes both files).
     let plan = WritePlan {
         sets: modifications
             .iter()
             .map(|(tag, value)| (canonical_request_tag(tag), value.clone()))
             .collect(),
         requested_sets: !modifications.is_empty(),
+        raw_values,
         ..Default::default()
     };
     write_plan_file(path, &plan, on_commit).map(|done| done.outcome)
@@ -464,24 +511,78 @@ pub fn write_file(
 /// String made Integer/Rational/DateTime tags unsettable), then all of them
 /// are resolved, written in one pass, and proven together -- or none is.
 /// Returns how many sets were proven in effect.
-fn apply_sets(scratch: &Path, sets: &[(String, OsString)]) -> Result<usize, String> {
+///
+/// `global_raw_values` is `plan.raw_values` (ExifTool's `-n`, always applying
+/// to every set here). A tag's own trailing `#` (`canonical_request_tag`
+/// leaves it on the name, e.g. `"IFD0:Orientation#"`) is stripped here,
+/// before the name reaches either the value parser or the write key: the
+/// address resolvers downstream (`write_request::canonical_write_key`,
+/// `resolve_write_key`) have no `#` handling of their own and either pass a
+/// malformed `"IFD0:Orientation#"` key straight into the writer (which then
+/// refuses it as "not a known EXIF tag") or, for a bare name, resolve the
+/// address correctly but only after the value was already parsed -- and
+/// mistyped -- as a `String`. Stripping it here, once, before either of
+/// those things happens, is what makes `#` actually mean "this one tag's
+/// value is raw" instead of failing outright.
+fn apply_sets(
+    scratch: &Path,
+    sets: &[(String, OsString)],
+    global_raw_values: bool,
+) -> Result<usize, String> {
     if sets.is_empty() {
         return Ok(0);
     }
     let mut changes = Vec::with_capacity(sets.len());
-    for (tag_name, value) in sets {
+    for (set_tag, value) in sets {
+        let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {
+            Some(base) => (base, true),
+            None => (set_tag.as_str(), global_raw_values),
+        };
         if value.is_empty() {
             // Empty value = delete tag (ExifTool -TAG= syntax)
-            changes.push(TagChange::delete(tag_name.clone()));
-        } else {
-            let tag_value = parse_cli_tag_value_os(tag_name, value)
-                .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
-            changes.push(TagChange::set(tag_name.clone(), tag_value));
+            changes.push(TagChange::delete(write_tag.to_string()));
+            continue;
         }
+        // Conversion refusals ExifTool only warns about were already
+        // dropped (and warned about, once) by `WritePlan::from_args`.
+        let tag_value = parse_cli_tag_value_os_with_mode(write_tag, value, raw_mode)
+            .map_err(|e| format!("Invalid value for {}: {}", write_tag, e))?;
+        changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
     apply_tag_changes_counted(scratch, &changes)
         .map(|(_, proven_sets)| proven_sets)
         .map_err(|e| describe_set_failure(&e, sets))
+}
+
+/// ExifTool's warning (without the `Warning: ` prefix `main` adds) when
+/// `SetNewValue` cannot convert `value` for `tag` -- see
+/// [`is_not_in_print_conv_reason`] -- and `None` for a value that converts, a
+/// deletion, or a refusal of any other kind (which the transaction reports).
+fn unconvertible_value_warning(tag: &str, value: &OsString, raw_values: bool) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    let (tag, raw_mode) = match tag.strip_suffix('#') {
+        Some(base) => (base, true),
+        None => (tag, raw_values),
+    };
+    let err = parse_cli_tag_value_os_with_mode(tag, value, raw_mode).err()?;
+    err.invalid_tag_value_reason()
+        .filter(|reason| is_not_in_print_conv_reason(reason))
+        .map(str::to_string)
+}
+
+/// Whether `reason` is a refusal ExifTool's `SetNewValue` reports as a
+/// warning and drops the one request for: a value that matches no entry (or
+/// more than one) of a tag's PrintConv hash, or a string longer than its
+/// Count allows. [`WritePlan::from_args`] warns once and drops that set.
+/// A failed PrintConvInv routine (`ConvertParameter`: `Error converting
+/// value ... (PrintConvInv)`) is not one of these: 13.59 reports the file
+/// unchanged there, not `Nothing to do.`.
+fn is_not_in_print_conv_reason(reason: &str) -> bool {
+    reason.ends_with("(not in PrintConv)")
+        || reason.ends_with("(matches more than one PrintConv)")
+        || reason.starts_with("String too long for ")
 }
 
 /// When every refused tag is one ExifTool itself names this way
@@ -510,13 +611,14 @@ fn sorry_refusal_message(refused: &[crate::error::TagNotWritten]) -> Option<Stri
     Some(message)
 }
 
-/// Whether [`describe_set_failure`] produced ExifTool's own warning text
-/// (see [`sorry_refusal_message`]) rather than oxidex's `Failed to ...`
-/// wrapping -- the two need different framing in `main.rs`'s `finish_write`:
-/// ExifTool's own words are printed as-is, oxidex's diagnosis gets an
-/// `Error:` prefix.
+/// Whether a failure message is ExifTool's own warning text -- either
+/// [`sorry_refusal_message`]'s (`Warning: Sorry, ... \nNothing to do.`, the
+/// PNG `XMP` literal-text-chunk case) -- rather than oxidex's
+/// own `Failed to ...` / `Invalid value for ...` wrapping. The two need
+/// different framing in `main.rs`'s `finish_write`: ExifTool's own words are
+/// printed as-is, oxidex's diagnosis gets an `Error:` prefix.
 pub fn is_exiftool_refusal_message(message: &str) -> bool {
-    message.starts_with("Warning: Sorry, ") && message.ends_with("\nNothing to do.")
+    message.starts_with("Warning: ") && message.ends_with("\nNothing to do.")
 }
 
 /// The CLI's message for a failed `-TAG=` transaction: which request failed,

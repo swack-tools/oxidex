@@ -515,6 +515,9 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
             // A borrowed engine name: added below under the name's own id.
         }
 
+        if let Some(refusal) = crate::writers::write_request::exif_duplicate_row_misaddressed(key) {
+            return Err(refusal);
+        }
         if requires_subifd_write(key) {
             return Err(ExifToolError::tag_not_written(
                 key.to_string(),

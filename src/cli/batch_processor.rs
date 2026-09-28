@@ -560,7 +560,7 @@ fn apply_modifications(
             .map_err(|e| e.to_string())
     };
 
-    let outcome = write_file(path, modifications, backup)?;
+    let outcome = write_file(path, modifications, !args.exiftool_compat(), backup)?;
 
     // Restore file times if requested
     if outcome == WriteOutcome::Updated

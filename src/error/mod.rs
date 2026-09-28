@@ -122,6 +122,21 @@ impl ExifToolError {
         }
     }
 
+    /// The bare `reason` of an [`ExifToolError::InvalidTagValue`], without
+    /// the `Invalid value for tag '...': ` wrapping `Display` adds --
+    /// `None` for any other variant. Lets a caller recognize a specific
+    /// reason string (e.g. `value_parser`'s `(not in PrintConv)` /
+    /// `(matches more than one PrintConv)` phrasing, which is ExifTool's own
+    /// wording and needs its own `Warning: ... / Nothing to do.` framing
+    /// rather than oxidex's `Invalid value for ...` diagnosis) without
+    /// re-parsing the `Display` string.
+    pub fn invalid_tag_value_reason(&self) -> Option<&str> {
+        match self {
+            ExifToolError::InvalidTagValue { reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+
     /// Creates a new UnsupportedFormat error
     pub fn unsupported_format<S: Into<String>>(message: S) -> Self {
         ExifToolError::UnsupportedFormat {

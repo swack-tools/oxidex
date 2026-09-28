@@ -120,18 +120,13 @@ fn unrelated_or_group_deletions_across_copy_still_refuse_atomically() {
 }
 
 #[test]
-fn later_raw_assignment_cancels_deletion_before_its_own_refusal() {
-    // Raw assignments are currently unsupported by the writer. The canceled
-    // deletion must not run: refusal must name the later assignment instead.
-    for (delete, set, refused) in [
-        ("-IFD0:Make=", "-IFD0:Make#=Acme", "IFD0:Make#"),
-        ("-IFD0:Make#=", "-EXIF:Make#=Acme", "EXIF:Make#"),
+fn later_raw_assignment_cancels_single_tag_deletion_across_copy() {
+    // A later raw assignment is writable and cancels the earlier deletion,
+    // including when the two requests name the same tag through aliases.
+    for (delete, set) in [
+        ("-IFD0:Make=", "-IFD0:Make#=Acme"),
+        ("-IFD0:Make#=", "-EXIF:Make#=Acme"),
     ] {
-        ordered_case(
-            delete,
-            set,
-            false,
-            &format!("Failed to modify tag '{refused}'"),
-        );
+        ordered_case(delete, set, true, "");
     }
 }
