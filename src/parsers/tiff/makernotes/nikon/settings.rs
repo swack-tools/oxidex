@@ -308,12 +308,15 @@ pub fn parse_nikon_settings(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{TestedSource, tested_source};
     use super::*;
 
     fn settings_supported() -> bool {
         // 11.78 has no NikonSettings.pm; later selected sources carry this
         // directory. A missing individual row in a populated table is a bug.
-        !SETTINGS_TAGS.is_empty()
+        let supported = !SETTINGS_TAGS.is_empty();
+        assert_eq!(supported, tested_source() != TestedSource::V1178);
+        supported
     }
 
     fn header(entries: &[(u16, u32)]) -> Vec<u8> {

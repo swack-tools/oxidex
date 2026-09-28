@@ -23,6 +23,26 @@ pub mod sub_ifds;
 pub mod sub_tables;
 pub mod value_reader;
 
+/// Independently reviewed Nikon source inventories for fixture assertions.
+/// The pin is selected with the native source, before any generator runs.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestedSource {
+    V1178,
+    V1264,
+    V1359,
+}
+
+#[cfg(test)]
+fn tested_source() -> TestedSource {
+    match crate::exiftool_oracle::REPO_PIN.trim() {
+        "11.78" => TestedSource::V1178,
+        "12.64" => TestedSource::V1264,
+        "13.59" => TestedSource::V1359,
+        pin => panic!("Nikon source inventory has not been reviewed for {pin}"),
+    }
+}
+
 use super::nikon_capture_data;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -2371,7 +2391,13 @@ mod tests {
     fn focus_shift_supported() -> bool {
         // 11.78 has no encrypted table transcription; 12.64's SeqInfoZ9
         // is explicitly refused because its PrintConv is not represented.
-        binary_data::table_index("SeqInfoZ9").is_some()
+        let supported = binary_data::table_index("SeqInfoZ9").is_some();
+        assert_eq!(supported, tested_source() == TestedSource::V1359);
+        assert_eq!(
+            binary_data::table_index("MenuSettingsZ9").is_some(),
+            supported
+        );
+        supported
     }
 
     /// Oracle: `a_fs_ps0.tif` -> `On: Frame 3 of 100`. FocusShiftNumberShots
@@ -2554,7 +2580,13 @@ mod tests {
             IntervalLayout::D6 => "SeqInfoD6",
             IntervalLayout::Z7II => "IntervalInfoZ7II",
         };
-        binary_data::table_index(table).is_some()
+        let supported = binary_data::table_index(table).is_some();
+        let expected = match layout {
+            IntervalLayout::Z9 => tested_source() == TestedSource::V1359,
+            IntervalLayout::D6 | IntervalLayout::Z7II => tested_source() != TestedSource::V1178,
+        };
+        assert_eq!(supported, expected, "{table} transcription changed");
+        supported
     }
 
     /// Oracle: `{z9,d6,z7ii}_full.tif` -> `On: Interval 2 of 5 Frame 1 of 3`.

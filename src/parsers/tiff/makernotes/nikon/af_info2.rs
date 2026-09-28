@@ -521,7 +521,23 @@ pub fn parse_af_info2(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{TestedSource, tested_source};
     use super::*;
+
+    fn source_has_81_105() -> bool {
+        let expected = tested_source() != TestedSource::V1178;
+        assert_eq!(!AF_POINTS_81.is_empty(), expected);
+        assert_eq!(!AF_POINTS_105.is_empty(), expected);
+        expected
+    }
+
+    fn source_has_231_299_405() -> bool {
+        let expected = tested_source() == TestedSource::V1359;
+        assert_eq!(!af_points::AF_POINTS_231.is_empty(), expected);
+        assert_eq!(!af_points::AF_POINTS_299.is_empty(), expected);
+        assert_eq!(!af_points::AF_POINTS_405.is_empty(), expected);
+        expected
+    }
 
     #[test]
     fn area_mode_table_follows_the_detection_method() {
@@ -683,7 +699,7 @@ mod tests {
         data[0x0a] = 0x01; // AFPointsUsed bit-number 1 -> "E5"
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
-        if AF_POINTS_81.is_empty() {
+        if !source_has_81_105() {
             // The selected source has no 81-point lookup: never invent a point.
             assert!(!tags.contains_key("Nikon:AFPointsUsed"));
             assert!(!tags.contains_key("Nikon:PrimaryAFPoint"));
@@ -719,7 +735,7 @@ mod tests {
         data[0x0a] = 0x01;
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, None, &mut tags);
-        if AF_POINTS_105.is_empty() {
+        if !source_has_81_105() {
             assert!(!tags.contains_key("Nikon:AFPointsUsed"));
             assert!(!tags.contains_key("Nikon:PrimaryAFPoint"));
         } else {
@@ -752,6 +768,7 @@ mod tests {
         data[10] = 0x01; // AFPointsUsed bit index 0 -> AF_POINTS_405[0]
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z 9"), &mut tags);
+        source_has_231_299_405();
         if let Some(point) = af_points::AF_POINTS_405.first() {
             assert_eq!(tags["Nikon:AFPointsUsed"], *point);
         } else {
@@ -778,6 +795,7 @@ mod tests {
         data[10] = 0x01;
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z f"), &mut tags);
+        source_has_231_299_405();
         if let Some(point) = af_points::AF_POINTS_299.first() {
             assert_eq!(tags["Nikon:AFPointsUsed"], *point);
         } else {
@@ -793,6 +811,7 @@ mod tests {
         data[10] = 0x01;
         let mut tags = HashMap::new();
         parse_af_info2(&data, ByteOrder::BigEndian, Some("NIKON Z50_2"), &mut tags);
+        source_has_231_299_405();
         if let Some(point) = af_points::AF_POINTS_231.first() {
             assert_eq!(tags["Nikon:AFPointsUsed"], *point);
         } else {

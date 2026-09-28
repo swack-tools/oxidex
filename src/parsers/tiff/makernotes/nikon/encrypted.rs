@@ -332,6 +332,7 @@ fn parse_encrypted(
 
 #[cfg(test)]
 mod dispatch_tests {
+    use super::super::{TestedSource, tested_source};
     use super::*;
     use crate::parsers::tiff::makernotes::nikon::binary_data::table_index;
 
@@ -370,10 +371,12 @@ mod dispatch_tests {
     }
 
     fn d80_decryption_supported() -> bool {
-        SHOT_INFO_ROOTS
+        let supported = SHOT_INFO_ROOTS
             .iter()
             .find(|root| root.name == "ShotInfoD80")
-            .is_some_and(|root| root.encrypted.is_some())
+            .is_some_and(|root| root.encrypted.is_some());
+        assert_eq!(supported, tested_source() != TestedSource::V1178);
+        supported
     }
 
     #[test]
