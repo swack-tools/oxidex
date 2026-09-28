@@ -579,6 +579,12 @@ mod tests {
             );
         }
         for id in (0..=u16::MAX).filter(|&id| hand_subtable(id)) {
+            // Native Canon::Main has no WBInfo (0x0029) declaration in
+            // 11.78; it first appears as a SubDirectory in 12.64.
+            if id == 0x0029 && super::super::selected_source_pin() == "11.78" {
+                assert!(!ids.contains(&id) && !is_edge(table, id));
+                continue;
+            }
             // FocusBracketingInfo and LevelInfo first appear in 13.59.
             if [0x4053, 0x4059].contains(&id) && super::super::selected_source_pin() != "13.59" {
                 assert!(!is_edge(table, id));

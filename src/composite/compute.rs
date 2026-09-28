@@ -3800,11 +3800,17 @@ mod tests {
     #[test]
     fn iso_volume_size_multiplies_the_block_geometry() {
         // combined-samples/ISO.iso: VolumeBlockCount 190976,
-        // VolumeBlockSize 2048 -> 391118848 bytes -> "391 MB".
+        // VolumeBlockSize 2048 -> 391118848 bytes. Native 11.78's
+        // ConvertFileSize uses 1024-unit MB; 12.64/13.59 use 1000-unit MB.
         let computed = compute("ISO", "VolumeSize", &[Some("190976"), Some("2048")], None)
             .expect("VolumeSize fires");
         assert_eq!(computed.value, "391118848");
-        assert_eq!(computed.print, "391 MB");
+        let expected = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => "373 MB",
+            "12.64" | "13.59" => "391 MB",
+            other => panic!("unverified native ConvertFileSize source: {other}"),
+        };
+        assert_eq!(computed.print, expected);
     }
 
     #[test]

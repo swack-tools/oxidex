@@ -663,13 +663,36 @@ mod tests {
             tables += usize::from(here > 0);
         }
         let source = selected_binary_source_census();
+        // Native declarations still contain these three CODE refs, but
+        // ConvertFileSize is now reproduced for Palm::MOBI and both
+        // RIFF::ds64 fields in the historical generated output.
+        let (recovered, recovered_tables) = match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => (3, 2),
+            "13.59" => (0, 0),
+            other => panic!("unverified print conversion census source: {other}"),
+        };
+        for (module, table, name) in [
+            ("Palm", "MOBI", "UncompressedTextLength"),
+            ("RIFF", "DS64", "RIFFSize64"),
+            ("RIFF", "DS64", "DataSize64"),
+        ] {
+            let field = find_table(module, table)
+                .and_then(|t| t.fields.iter().find(|f| f.name == name))
+                .unwrap_or_else(|| panic!("native {module}::{table} {name} was not transcribed"));
+            assert!(
+                !field.omitted.print_conv && !matches!(field.print_conv, PrintConv::None),
+                "{module}::{table} {name} must carry the verified ConvertFileSize conversion"
+            );
+        }
         assert_eq!(
-            refused, source.print_conv_refused,
-            "fields whose PrintConv the generator refused"
+            refused + recovered,
+            source.print_conv_refused,
+            "native CODE-ref fields: refused plus verified lowerings"
         );
         assert_eq!(
-            tables, source.print_conv_tables,
-            "tables carrying at least one such field"
+            tables + recovered_tables,
+            source.print_conv_tables,
+            "native tables carrying a refused or verified CODE ref"
         );
     }
 
@@ -829,21 +852,32 @@ mod tests {
                 "NikonZ30.jpg",
             ),
         ];
-        for (table, name, raw, want, carrier) in NIKON {
-            let t = find_table("Nikon", table).expect("Nikon table is in the generated set");
-            let rendered: Vec<String> = t
-                .variants
-                .iter()
-                .flat_map(|g| g.alternatives.iter().map(|(_, f)| f))
-                .filter(|f| f.name == *name)
-                .filter_map(|f| runtime::render(f.print_conv, &DecodedValue::Integer(*raw)))
-                .collect();
-            assert!(
-                rendered.iter().any(|r| r == want),
-                "Nikon::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} for \
+        match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => {
+                // These native releases have Nikon::AFInfo2, but no
+                // AFInfo2V0300 hash or matching FocusPosition carriers.
+                assert!(find_table("Nikon", "AFInfo2V0300").is_none());
+            }
+            "13.59" => {
+                for (table, name, raw, want, carrier) in NIKON {
+                    let t =
+                        find_table("Nikon", table).expect("Nikon table is in the generated set");
+                    let rendered: Vec<String> = t
+                        .variants
+                        .iter()
+                        .flat_map(|g| g.alternatives.iter().map(|(_, f)| f))
+                        .filter(|f| f.name == *name)
+                        .filter_map(|f| runtime::render(f.print_conv, &DecodedValue::Integer(*raw)))
+                        .collect();
+                    assert!(
+                        rendered.iter().any(|r| r == want),
+                        "Nikon::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} for \
                  the raw value {raw}, but no alternative's PrintConv rendered it \
                  (got {rendered:?})",
-            );
+                    );
+                }
+            }
+            other => panic!("unverified native Nikon source: {other}"),
         }
     }
 
