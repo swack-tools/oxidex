@@ -11263,7 +11263,9 @@ mod tests {
                     let expected = match (selected_source_pin(), key) {
                         ("11.78", "Canon:ShutterMode" | "Canon:RFLensType")
                         | ("11.78" | "12.64", "Canon:AntiFlicker") => None,
-                        ("12.64", "Canon:RFLensType") if raw == 324 => Some("Unknown (324)"),
+                        ("12.64", name) if name == "Canon:RFLensType" && raw == 324 => {
+                            Some("Unknown (324)")
+                        }
                         _ => expected,
                     };
                     assert_eq!(
