@@ -816,28 +816,56 @@ mod creation_tests {
         out
     }
 
-    /// The entries pinned ExifTool 13.59 writes into a directory it creates
-    /// (WriteExif.pl 13.59:25-50), as its own output holds them.
+    /// The entries the selected ExifTool writes into a directory it creates.
+    /// WriteExif.pl's `%mandatory` has the extra resolution and Flashpix
+    /// defaults in 11.78/12.64; 13.59 makes those entries optional.
     #[test]
     fn created_directory_entries_are_writeexifs() {
         for (order, ffff, one) in [
             (TiffByteOrder::Little, vec![0xff, 0xff], vec![1, 0]),
             (TiffByteOrder::Big, vec![0xff, 0xff], vec![0, 1]),
         ] {
-            assert_eq!(
-                fields("ExifIFD", order),
-                vec![
-                    (0x9000, 7, 4, b"0232".to_vec()),
-                    (0x9101, 7, 4, vec![1, 2, 3, 0]),
-                    (0xa001, 3, 1, ffff),
-                ]
-            );
+            let older = match crate::exiftool_oracle::repo_pin() {
+                "11.78" | "12.64" => true,
+                "13.59" => false,
+                pin => panic!("unprobed mandatory-default entries for ExifTool {pin}"),
+            };
+            let mut exif = vec![
+                (0x9000, 7, 4, b"0232".to_vec()),
+                (0x9101, 7, 4, vec![1, 2, 3, 0]),
+            ];
+            if older {
+                exif.push((0xa000, 7, 4, b"0100".to_vec()));
+            }
+            exif.push((0xa001, 3, 1, ffff));
+            assert_eq!(fields("ExifIFD", order), exif);
             assert_eq!(fields("GPS", order), vec![(0x0000, 1, 4, vec![2, 3, 0, 0])]);
             assert_eq!(
                 fields("InteropIFD", order),
                 vec![(0x0002, 7, 4, b"0100".to_vec())]
             );
-            assert_eq!(fields("IFD0", order), vec![(0x0213, 3, 1, one)]);
+            let mut ifd0 = Vec::new();
+            if older {
+                let rational = match order {
+                    TiffByteOrder::Little => vec![72, 0, 0, 0, 1, 0, 0, 0],
+                    TiffByteOrder::Big => vec![0, 0, 0, 72, 0, 0, 0, 1],
+                };
+                ifd0.extend([
+                    (0x011a, 5, 1, rational.clone()),
+                    (0x011b, 5, 1, rational),
+                    (
+                        0x0128,
+                        3,
+                        1,
+                        match order {
+                            TiffByteOrder::Little => vec![2, 0],
+                            TiffByteOrder::Big => vec![0, 2],
+                        },
+                    ),
+                ]);
+            }
+            ifd0.push((0x0213, 3, 1, one));
+            assert_eq!(fields("IFD0", order), ifd0);
         }
     }
 
@@ -938,8 +966,14 @@ mod creation_tests {
                 }
             }
         }
-        // IFD0 1, IFD1 4, ExifIFD 3, GPS 1, InteropIFD 1 -- in both orders.
-        assert_eq!(checked, 20);
+        // Exact native `%mandatory` cardinality in both byte orders:
+        // 11.78/12.64: 4+4+4+1+1; 13.59: 1+4+3+1+1.
+        let expected = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => 28,
+            "13.59" => 20,
+            pin => panic!("unprobed mandatory-default cardinality for ExifTool {pin}"),
+        };
+        assert_eq!(checked, expected);
     }
 
     /// A default the recipe gains is packed from its transcribed row, not
