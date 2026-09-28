@@ -3,6 +3,12 @@
     "dump_tool_sha256": "b9000a0be27e4d9bd350730234f5104deba0d2ac32b06b49edbd41b8228c76eb",
     "full_dump_sha256": "933f0c6b585b2b6039d68c9ac1f553fb596ba33f4b889f589d2b19bba444f068",
     "kind": "verbatim selected tables from hydrated dump",
+    "main_mdat_augmentation": {
+      "fact_sha256": "6f5eee1eea3b5b83da3270736f488841f4e1c7062df31433b7998cda3eedf857",
+      "method": "pinned Perl 5.38.2 direct Main mdat declarations",
+      "source_file": "Image/ExifTool/QuickTime.pm",
+      "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
+    },
     "perl_version": "5.38.2",
     "projection": "effective hydrated rows with authenticated wrapper removal",
     "source_commit": "6f34cff4a9771107edaf5a1198eabe7238c7594a",
@@ -5542,6 +5548,17 @@
       "3": "ShiftJIS",
       "4": "UTF8",
       "5": "UTF16"
+    }
+  },
+  "quicktime_main_mdat_tags": {
+    "mdat-offset": {
+      "Name": "MediaDataOffset",
+      "RawConv": "$$self{MediaDataOffset} = $val"
+    },
+    "mdat-size": {
+      "Name": "MediaDataSize",
+      "Notes": "\n            not a real tag ID, this tag represents the size of the 'mdat' data in bytes\n            and is used in the AvgBitrate calculation\n        ",
+      "RawConv": "$$self{MediaDataSize} = $val"
     }
   },
   "quicktime_userdata_reader_protocol": {

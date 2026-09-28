@@ -408,12 +408,16 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 owned[index] = resolve_indexed(map, &mut names, dep);
             }
             if comp.module == "QuickTime" && comp.name == "AvgBitrate" {
-                // QuickTime.pm:8657-8665 walks every MediaDataSize occurrence
-                // with NextTagKey. The sum belongs only to this composite's
-                // input: each mdat-size's own ValueConv is its payload length.
+                // Native RawConv walks every occurrence of its selected
+                // required size tag via NextTagKey. Keep individual values.
+                let Some((_, size_dependency)) = comp.require.iter().find(|(index, _)| *index == 0)
+                else {
+                    continue;
+                };
+                let size_key = size_dependency.replacen("::", ":", 1);
                 let total = map
                     .occurrences()
-                    .filter(|occurrence| occurrence.lookup_key_eq("QuickTime:MediaDataSize"))
+                    .filter(|occurrence| occurrence.lookup_key_eq(&size_key))
                     .try_fold(0u64, |sum, occurrence| {
                         sum.checked_add(occurrence_value_string(occurrence)?.parse::<u64>().ok()?)
                     });

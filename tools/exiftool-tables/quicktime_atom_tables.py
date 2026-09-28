@@ -168,6 +168,16 @@ def report(raw: bytes):
     for key, length in (("source_commit", 40), ("full_dump_sha256", 64), ("dump_tool_sha256", 64)):
         if not re.fullmatch(r"[a-f0-9]{" + str(length) + "}", str(capture.get(key, ""))):
             raise ValueError("missing or malformed capture provenance: " + key)
+    if "quicktime_main_mdat_tags" in document:
+        augmentation = capture.get("main_mdat_augmentation")
+        if (not isinstance(augmentation, dict)
+                or augmentation.get("method") not in (
+                    "pinned Perl 5.38.2 direct Main mdat declarations",
+                    "hydrated full dump Main mdat declarations")
+                or augmentation.get("source_file") != "Image/ExifTool/QuickTime.pm"
+                or not re.fullmatch(r"[a-f0-9]{64}", str(augmentation.get("source_sha256", "")))
+                or augmentation.get("fact_sha256") != digest(document["quicktime_main_mdat_tags"])):
+            raise ValueError("missing or malformed QuickTime Main mdat source augmentation")
     if not re.fullmatch(r"\d+\.\d+\.\d+", str(capture.get("perl_version", ""))):
         raise ValueError("missing Perl capture version")
     tool_sha256 = hashlib.sha256((ROOT / "tools/exiftool-tables/dump_tables.pl").read_bytes()).hexdigest()

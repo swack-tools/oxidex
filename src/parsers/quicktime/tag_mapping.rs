@@ -134,8 +134,11 @@ static ATOM_TO_TAG: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::ne
     m.insert("INFO", "QuickTime:Information");
 
     // Media data atoms
-    m.insert("mdat_offset", "QuickTime:MediaDataOffset");
-    m.insert("mdat_size", "QuickTime:MediaDataSize");
+    m.insert(
+        "mdat_offset",
+        super::generated_protocol_caps::MDAT_OFFSET_TAG,
+    );
+    m.insert("mdat_size", super::generated_protocol_caps::MDAT_SIZE_TAG);
 
     m
 });

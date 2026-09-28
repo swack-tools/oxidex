@@ -21,6 +21,65 @@ OLD_KEYS = keys.REVIEWED_PROCESSOR_SHA256["11.78"]
 NEW_KEYS = {keys.REVIEWED_PROCESSOR_SHA256["12.64"], keys.REVIEWED_PROCESSOR_SHA256["13.59"]}
 
 
+def selected_main_mdat_rows(document):
+    """Read bounded native rows, or the same two rows from a normal full dump."""
+    rows = document.get("quicktime_main_mdat_tags")
+    if rows is not None:
+        return rows
+    try:
+        tags = document["modules"]["QuickTime"]["tables"]["Main"]["tags"]
+        rows = {key: tags[key] for key in ("mdat-size", "mdat-offset")}
+    except (KeyError, TypeError) as exc:
+        raise ValueError("missing QuickTime Main mdat declarations") from exc
+    normalized = {}
+    for key, row in rows.items():
+        if not isinstance(row, dict):
+            raise ValueError("malformed QuickTime Main mdat declaration")
+        row = dict(row)
+        shorthand = row.pop("_shorthand", None)
+        if shorthand is not None and shorthand is not True:
+            raise ValueError("unreviewed QuickTime Main mdat shorthand")
+        if shorthand is True:
+            if set(row) != {"Name"}:
+                raise ValueError("unreviewed QuickTime Main mdat shorthand")
+            normalized[key] = row["Name"]
+            continue
+        if "RawConv" in row and isinstance(row["RawConv"], dict):
+            conversion = row["RawConv"]
+            if set(conversion) != {"kind", "expr"} or conversion["kind"] != "expr":
+                raise ValueError("unreviewed QuickTime Main mdat conversion")
+            row["RawConv"] = conversion["expr"]
+        normalized[key] = row
+    return normalized
+
+
+def main_mdat_names(document):
+    """Admit only reviewed native Main pseudo-tags and their conversion controls."""
+    rows = selected_main_mdat_rows(document)
+    expected = {
+        "MovieDataSize": ({"Name": "MovieDataSize", "Notes": "ignored"},
+                          "MovieDataOffset"),
+        "MediaDataSize": ({"Name": "MediaDataSize", "RawConv": "$$self{MediaDataSize} = $val", "Notes": "ignored"},
+                          "MediaDataOffset"),
+    }
+    if not isinstance(rows, dict) or set(rows) != {"mdat-size", "mdat-offset"}:
+        raise ValueError("missing or changed QuickTime Main mdat declarations")
+    size = rows["mdat-size"]
+    if not isinstance(size, dict) or not isinstance(size.get("Name"), str):
+        raise ValueError("unsupported QuickTime Main mdat-size declaration")
+    accepted = expected.get(size["Name"])
+    if accepted is None or not isinstance(size.get("Notes"), str):
+        raise ValueError("unsupported QuickTime Main mdat-size declaration")
+    if {k: v for k, v in size.items() if k != "Notes"} != {k: v for k, v in accepted[0].items() if k != "Notes"}:
+        raise ValueError("unreviewed QuickTime Main mdat-size conversion")
+    offset = rows["mdat-offset"]
+    expected_offset = ("MovieDataOffset" if size["Name"] == "MovieDataSize" else
+                       {"Name": "MediaDataOffset", "RawConv": "$$self{MediaDataOffset} = $val"})
+    if offset != expected_offset:
+        raise ValueError("unreviewed QuickTime Main mdat-offset conversion")
+    return size["Name"], accepted[1]
+
+
 def compile_document(document):
     if document.get("exiftool_version") != (ROOT / ".exiftool-version").read_text().strip():
         raise ValueError("source differs from repository pin")
@@ -44,11 +103,15 @@ def compile_document(document):
                         "userdata_xmp_isutf8": False}
     else:
         raise ValueError("unreviewed combination of QuickTime source protocols")
+    size_name, offset_name = main_mdat_names(document)
+    if (size_name == "MovieDataSize") != (fmt == OLD_FORMAT):
+        raise ValueError("QuickTime Main mdat names disagree with selected reader protocol")
     return {"schema": "quicktime_protocol_caps_v1",
             "source": {"exiftool_version": document["exiftool_version"],
                        "quicktime_format_sha256": fmt, "process_keys_sha256": key_body,
                        "userdata_utf8_helper": "Image::ExifTool::XMP::IsUTF8" if old_utf8 else "Image::ExifTool::IsUTF8"},
             "capabilities": capabilities,
+            "main_mdat_names": {"size": size_name, "offset": offset_name},
             "generated_counts": {name: result["identity_counts"]["generated"] for name, result in results.items()}}
 
 
@@ -59,6 +122,8 @@ def render_rust(result):
         if name == "userdata_xmp_isutf8":
             continue  # validated provenance; both helpers share this reader's UTF-8 behavior
         lines.append(f"pub(crate) const {name.upper()}: bool = {'true' if value else 'false'};")
+    for key, value in result["main_mdat_names"].items():
+        lines.append(f'pub(crate) const MDAT_{key.upper()}_TAG: &str = "QuickTime:{value}";')
     return "\n".join(lines) + "\n"
 
 
