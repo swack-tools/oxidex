@@ -1267,6 +1267,83 @@ fn date_and_copy_cases() -> Vec<(String, PathBuf, Vec<String>)> {
     cases
 }
 
+#[test]
+fn canon_flash_slot_source_and_historical_copy_readbacks() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no selected native ExifTool oracle");
+        return;
+    };
+    let source = fixtures::required_t_images_fixture_path("Canon.jpg");
+    let field = oxidex::exiftool_tables::find_table("Canon", "CameraSettings")
+        .unwrap()
+        .fields
+        .iter()
+        .find(|field| field.index == 28 && field.sub.is_none())
+        .unwrap();
+    assert!(matches!(field.name, "FlashActivity" | "FlashModel"));
+    let tag = format!("Canon:{}", field.name);
+    let read = |path: &Path| -> serde_json::Value {
+        let output = oracle
+            .command()
+            .args(["-j", "-G1", "-s"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()[0].clone()
+    };
+    let source_value = read(&source)[&tag].clone();
+    assert!(!source_value.is_null(), "selected source has no {tag}");
+    // The four regression cases are the older FlashActivity copy contract.
+    // The current FlashModel source contract is covered by the reader check;
+    // its by-name copy behavior has a separate destination policy.
+    if field.name == "FlashModel" {
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(["-j", "-G1", "-s"])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let rust_source: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(rust_source[0][&tag], source_value);
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    for (dest, ext) in [(JPEG_NO_GPS, "jpg"), (PNG, "png")] {
+        for selector in ["-all", "-EXIF:all"] {
+            let dir = root.path().join(format!("{ext}-{}", &selector[1..]));
+            fs::create_dir(&dir).unwrap();
+            let native = dir.join(format!("native.{ext}"));
+            let rust = dir.join(format!("rust.{ext}"));
+            fs::copy(dest, &native).unwrap();
+            fs::copy(dest, &rust).unwrap();
+            let args = ["-TagsFromFile", source.to_str().unwrap(), selector];
+            let native_write = oracle.command().args(args).arg(&native).output().unwrap();
+            assert!(
+                native_write.status.success(),
+                "{}",
+                String::from_utf8_lossy(&native_write.stderr)
+            );
+            let rust_write = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .args(args)
+                .arg(&rust)
+                .output()
+                .unwrap();
+            assert!(
+                rust_write.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rust_write.stderr)
+            );
+            assert_eq!(read(&native)[&tag], source_value, "native {ext} {selector}");
+            assert_eq!(read(&rust)[&tag], source_value, "rust {ext} {selector}");
+        }
+    }
+}
+
 /// A `-TagsFromFile SRC SELECTOR...` command with nothing else: (source,
 /// the filters `copy_metadata_report` takes -- each selector with the one
 /// `-` the CLI strips).
