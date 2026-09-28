@@ -502,6 +502,123 @@ fn mie_makernote_deletion_respects_requested_vendor() {
     );
 }
 
+/// A physical MakerNotes::Main entry can be addressed through all three
+/// pinned 13.59 group spellings, including the numeric `#` form. Its name
+/// selects the physical root, not a writable child-field candidate group.
+#[test]
+fn mie_physical_makernote_roots_use_one_scope_for_all_group_aliases() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let writer = std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap();
+    let source = |name: &str| {
+        let image = std::fs::read(fixtures::required_t_images_fixture_path(name)).unwrap();
+        [
+            writer.as_slice(),
+            &mie_holding_exif(&jpeg_exif_tiff(&image)),
+        ]
+        .concat()
+    };
+    const CANON_SELECTED: &[Case] = &[
+        (&["-MakerNotes:MakerNoteCanon="], "MakerNoteCanon"),
+        (&["-ExifIFD:MakerNoteCanon="], "MakerNoteCanon"),
+        (&["-EXIF:MakerNoteCanon="], "MakerNoteCanon"),
+        (&["-MakerNotes:MakerNoteCanon#="], "MakerNoteCanon"),
+        (&["-ExifIFD:MakerNoteCanon#="], "MakerNoteCanon"),
+        (&["-EXIF:MakerNoteCanon#="], "MakerNoteCanon"),
+    ];
+    const NIKON_SELECTED: &[Case] = &[
+        (&["-MakerNotes:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-ExifIFD:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-EXIF:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-MakerNotes:MakerNoteNikon#="], "MakerNoteNikon"),
+        (&["-ExifIFD:MakerNoteNikon#="], "MakerNoteNikon"),
+        (&["-EXIF:MakerNoteNikon#="], "MakerNoteNikon"),
+    ];
+    const NIKON3_SELECTED: &[Case] = &[
+        (&["-MakerNotes:MakerNoteNikon3="], "MakerNoteNikon3"),
+        (&["-ExifIFD:MakerNoteNikon3="], "MakerNoteNikon3"),
+        (&["-EXIF:MakerNoteNikon3="], "MakerNoteNikon3"),
+    ];
+    const CANON_OTHER: &[Case] = &[
+        (&["-MakerNotes:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-ExifIFD:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-EXIF:MakerNoteNikon="], "MakerNoteNikon"),
+    ];
+    const NIKON_OTHER: &[Case] = &[
+        (&["-MakerNotes:MakerNoteNikon3="], "MakerNoteNikon3"),
+        (&["-ExifIFD:MakerNoteNikon3="], "MakerNoteNikon3"),
+        (&["-EXIF:MakerNoteNikon3="], "MakerNoteNikon3"),
+    ];
+    const NIKON3_OTHER: &[Case] = &[
+        (&["-MakerNotes:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-ExifIFD:MakerNoteNikon="], "MakerNoteNikon"),
+        (&["-EXIF:MakerNoteNikon="], "MakerNoteNikon"),
+    ];
+    for (label, image, selected, selected_count, other) in [
+        ("Canon", "Canon.jpg", CANON_SELECTED, 6, CANON_OTHER),
+        ("Nikon", "NikonD70.jpg", NIKON_SELECTED, 6, NIKON_OTHER),
+        ("Nikon3", "Nikon.jpg", NIKON3_SELECTED, 3, NIKON3_OTHER),
+    ] {
+        let carrying = source(image);
+        assert_eq!(
+            grade(oracle, label, "jpg", &carrying, selected),
+            Ok(selected_count)
+        );
+        assert_eq!(grade(oracle, label, "jpg", &carrying, other), Ok(0));
+    }
+
+    // A sibling edit succeeds alone. When a physical-root deletion follows,
+    // the transaction must refuse before committing that sibling.
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("writer-artist.jpg");
+    std::fs::write(&main, &writer).unwrap();
+    let setup = oracle
+        .command()
+        .args(["-m", "-overwrite_original", "-IFD0:Artist=SiblingArtist"])
+        .arg(&main)
+        .output()
+        .unwrap();
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let prepared = std::fs::read(&main).unwrap();
+    let canon = std::fs::read(fixtures::required_t_images_fixture_path("Canon.jpg")).unwrap();
+    let carrying = [
+        prepared.as_slice(),
+        &mie_holding_exif(&jpeg_exif_tiff(&canon)),
+    ]
+    .concat();
+    let sibling = dir.path().join("sibling-alone.jpg");
+    std::fs::write(&sibling, &carrying).unwrap();
+    let alone = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Artist=")
+        .arg(&sibling)
+        .output()
+        .unwrap();
+    assert!(
+        alone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&alone.stderr)
+    );
+    assert_ne!(std::fs::read(&sibling).unwrap(), carrying);
+    assert_eq!(
+        grade(
+            oracle,
+            "Canon root plus writable sibling",
+            "jpg",
+            &carrying,
+            &[(
+                &["-IFD0:Artist=", "-ExifIFD:MakerNoteCanon="],
+                "MakerNoteCanon"
+            )],
+        ),
+        Ok(1),
+    );
+}
+
 /// PR #966 review threads, each graded against the oracle as above:
 ///
 /// - 4112546168: a set a later deletion of the same field overrides is not
