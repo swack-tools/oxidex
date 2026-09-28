@@ -84,7 +84,7 @@ pub(crate) const NAMED_POINTER_TAGS: &[u16] = &[0x5028];
 /// 0x0201/0x0202 preview pair, SamsungRawPointers, ImageOffset,
 /// AlphaOffset) and ThumbnailStripOffsets/ByteCounts. IFD1's thumbnail
 /// pair is structural and checked on its own (the thumbnail check).
-const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
+pub(crate) const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
     (0x0111, 0x0117),
     (0x0120, 0x0121),
     (0x0144, 0x0145),
@@ -264,6 +264,28 @@ pub(crate) fn group_has_content(
     }
 }
 
+/// Whether `scan` walked a directory the group-wide removal `group`
+/// deletes, empty or not: pinned ExifTool 13.59 deletes an empty GPS IFD
+/// or ExifIFD with its IFD0 pointer (Writer.jpg + a MIE whose EXIF's IFD0
+/// points at an empty GPS IFD: `-GPS:All=` 357 -> 335 bytes; an empty
+/// ExifIFD and `-ExifIFD:All=` the same), which [`group_has_content`],
+/// counting entries, does not see.
+pub(crate) fn group_directory_walked(group: GroupRemoval, scan: &ExifScan) -> bool {
+    let walked = |ifds: &[IfdKind]| {
+        scan.raw_entry_counts
+            .iter()
+            .any(|(ifd, _)| ifds.contains(ifd))
+    };
+    match group {
+        GroupRemoval::Carrier => true,
+        GroupRemoval::ExifIfd => walked(&[IfdKind::ExifIfd, IfdKind::Interop]),
+        GroupRemoval::Gps => walked(&[IfdKind::Gps]),
+        GroupRemoval::Ifd1 => walked(&[IfdKind::Ifd1]),
+        GroupRemoval::Interop => walked(&[IfdKind::Interop]),
+        GroupRemoval::MakerNotes => false,
+    }
+}
+
 /// The EXIF rows a write sets: the planned rows of `desired` whose value is
 /// not `original_map`'s. After a carrier- or group-wide removal these, and
 /// only these, are written back (delete first, then set).
@@ -378,6 +400,20 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002e;
 /// IFD0 0xc634 DNGPrivateData, whose Adobe `MakN` record carries a maker
 /// note ExifTool files under MakerNotes.
 const DNG_PRIVATE_DATA: u16 = 0xc634;
+
+/// Whether `entry` is an IFD0 `DNGPrivateData` with an Adobe `MakN` record:
+/// a maker note ExifTool files under MakerNotes (`MakerNotes:All` deletes
+/// it).
+fn is_dng_makernote(entry: &RawEntry) -> bool {
+    entry.ifd == IfdKind::Ifd0
+        && entry.tag_id == DNG_PRIVATE_DATA
+        && crate::parsers::raw::metadata::dng_adobe_makernote_count(&entry.value).unwrap_or(1) > 0
+}
+
+/// Whether `scan` carries a `DNGPrivateData` maker note ([`is_dng_makernote`]).
+pub(crate) fn has_dng_makernote(scan: &ExifScan) -> bool {
+    scan.entries.iter().any(is_dng_makernote)
+}
 
 /// Resolves the group-wide `<group>:All` removals of a write to a
 /// TIFF-structured file (`file_bytes`, read by the reader into `baseline`)
@@ -1219,6 +1255,7 @@ pub(crate) fn tag_value_to_field_for_key(
         ));
     }
     let hint = match key.rsplit(':').next() {
+        Some(leaf) if leaf.eq_ignore_ascii_case("AmbientTemperature") => Some(10),
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),
         _ => hint,
@@ -2143,6 +2180,33 @@ fn plan_exif_write_inner(
     // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
     let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
 
+    // An ExifIFD this write creates gets WriteExif's mandatory entries
+    // (WriteExif.pl 13.59:714-719; `exif_ifd_creation`), as the TIFF
+    // writer's does: without them pinned ExifTool's `-validate` reports
+    // "Missing required JPEG ExifIFD tag 0x9000 ExifVersion" (and 0x9101,
+    // 0xa001) on a JPEG it would have written complete.
+    if !plan.exif_ifd.is_empty() && !scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd) {
+        let set: Vec<u16> = plan.exif_ifd.iter().map(|entry| entry.tag_id).collect();
+        for edit in
+            crate::writers::exif_ifd_creation::created_exif_ifd_entries(scan.byte_order, &set)?
+        {
+            if let crate::writers::tiff_surgical::entry_edits::EntryMutation::Set {
+                field_type,
+                count,
+                bytes,
+            } = edit.mutation
+            {
+                plan.exif_ifd.push(OutEntry {
+                    tag_id: edit.tag_id,
+                    field_type,
+                    count,
+                    value: bytes,
+                    native_endian: false,
+                });
+            }
+        }
+    }
+
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the
     // entries this same write sets there: delete first, then set, as pinned
@@ -2531,6 +2595,11 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). Unwalked directories are recorded separately below; a zero
     /// count proves absence only when their uncertainty flags are clear.
     pub tag_bearing: usize,
+    /// Physical note entries this block files under MakerNotes, including
+    /// previews. The source fallback values filed under EXIF are excluded.
+    /// Unlike `tag_bearing`, this is a group-clear decision, not a bare-name
+    /// write-candidate count.
+    pub makernotes_group_entries: usize,
     /// A pinned MakerNotes::Main root proven from the physical value and
     /// camera data when exactly one tag-bearing note exists.
     pub identified_single_root: Option<&'static str>,
@@ -2561,6 +2630,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        makernotes_group_entries: usize::MAX,
         identified_single_root: None,
         ifd1_tag_bearing: usize::MAX,
         surviving_exif_ifd_clear: usize::MAX,
@@ -2594,6 +2664,20 @@ impl MakerNoteCensus {
 /// entries rather than walking. Offset pairs locate data, not another IFD,
 /// so they do not by themselves make the note census incomplete.
 const UNWALKED_EXIF_DIRECTORIES: &[u16] = &[0x014a, 0x0190, 0x8290, 0x888a, 0xc51b, 0xc6f5, 0xfe00];
+
+/// A source-declared EXIF child that this scanner did not walk. A group-wide
+/// MIE deletion cannot prove GPS, ExifIFD or Interop absence beyond one of
+/// these edges. The maker-note census uses its narrower note-bearing variant
+/// below (GPSInfo itself cannot hold a MakerNote).
+pub(crate) fn has_unwalked_exif_directory(ifd: IfdKind, tag_id: u16) -> bool {
+    if ifd == IfdKind::Gps {
+        return false;
+    }
+    UNWALKED_EXIF_DIRECTORIES.contains(&tag_id)
+        || (tag_id == EXIF_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == GPS_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
+}
 
 /// An Exif::Main edge outside the scanner's supported placement can hide a
 /// MakerNote in a child directory. ExifOffset and InteropOffset are modelled
@@ -2894,6 +2978,15 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
         for entry in &scan.entries {
             if is_makernote_entry(entry.ifd, entry.tag_id) {
                 census.notes += 1;
+                if entry.ifd != IfdKind::ExifIfd
+                    || !crate::core::tiff_helpers::makernote_is_exif_fallback(
+                        &entry.value,
+                        &make,
+                        &model,
+                    )
+                {
+                    census.makernotes_group_entries += 1;
+                }
                 if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
                     &entry.value,
                     &make,
@@ -2928,6 +3021,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     continue;
                 };
                 census.notes += notes;
+                census.makernotes_group_entries += notes;
                 if notes > 0 {
                     census.identified_single_root = None;
                 }
@@ -3895,6 +3989,12 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_rewrite(
+        file_bytes,
+        &original_map,
+        desired,
+        removed,
+    )?;
     // A created IFD0 takes its resolution from a JFIF APP0 segment read
     // before the EXIF one (WriteExif.pl 13.59:705-711): the segments ahead
     // of the existing EXIF APP1, or the leading APP0 run a new one follows.
@@ -4299,6 +4399,19 @@ pub(crate) fn exif_request_is_no_op(
                         .iter()
                         .filter_map(|key| group_removal(key))
                         .all(|group| {
+                            // The read map combines every JPEG APP1. Its
+                            // unknown-note row cannot classify another
+                            // block's note. Use each block's physical census
+                            // and selected source fallback instead.
+                            if group == GroupRemoval::MakerNotes && group_blocks.len() > 1 {
+                                let census = makernote_census(&[*block], magics);
+                                if census.makernotes_group_entries > 0
+                                    || census.uncertain_outside_ifd1
+                                    || census.uncertain_ifd1
+                                {
+                                    return false;
+                                }
+                            }
                             if group_has_content(group, &scan, baseline) {
                                 return false;
                             }

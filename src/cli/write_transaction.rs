@@ -31,7 +31,7 @@ use crate::core::operations::{
 };
 use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
-    GroupDeletions, ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
+    GroupDeletions, ScratchStep, TagChange, apply_tag_changes_counted_among, transact_with,
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
@@ -344,6 +344,7 @@ impl WritePlan {
                 .enumerate()
                 .filter(|(_, (_, value))| value.is_empty())
                 .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+            None,
         );
         let baseline = read_metadata(path).ok();
         let census = conversion_makernote_census(path);
@@ -503,7 +504,7 @@ pub fn write_plan_file(
                 })
                 .cloned()
                 .collect();
-            proven_sets += apply_sets(scratch, &before_copy, plan.raw_values)?;
+            proven_sets += apply_sets(scratch, &before_copy, plan.raw_values, &[])?;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 // ExifTool evaluates the physical maker note block against
@@ -542,7 +543,18 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            proven_sets += apply_sets(scratch, after_copy, plan.raw_values)?;
+            let mut siblings: Vec<String> =
+                plan.shifts.iter().map(|(tag, _, _)| tag.clone()).collect();
+            // A retained TagsFromFile destination is a set in this command,
+            // even though the CLI applied it in an earlier transaction.
+            // Cross-directory deletion must see it beside later explicit
+            // sets, just as ExifTool's one WriteExif pass does.
+            if !plan.copy_before_clear {
+                if let Some(report) = &copy {
+                    siblings.extend(report.copied_destinations.iter().cloned());
+                }
+            }
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values, &siblings)?;
             Ok(())
         },
     )?;
@@ -659,7 +671,7 @@ pub fn write_file_with_warnings(
 ///
 /// `global_raw_values` is `plan.raw_values` (ExifTool's `-n`, always applying
 /// to every set here). A tag's own trailing `#` (`canonical_request_tag`
-/// leaves it on the name, e.g. `"IFD0:Orientation#"`) is stripped here,
+/// leaves it on the name, for example `"IFD0:Orientation#"`) is stripped here,
 /// before the name reaches either the value parser or the write key: the
 /// address resolvers downstream (`write_request::canonical_write_key`,
 /// `resolve_write_key`) have no `#` handling of their own and either pass a
@@ -673,6 +685,7 @@ fn apply_sets(
     scratch: &Path,
     sets: &[(String, OsString)],
     global_raw_values: bool,
+    siblings: &[String],
 ) -> Result<usize, String> {
     if sets.is_empty() {
         return Ok(0);
@@ -686,6 +699,7 @@ fn apply_sets(
             .enumerate()
             .filter(|(_, (_, value))| value.is_empty())
             .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+        None,
     );
     // Read once for every bare name the loop types (`Some(None)` when the
     // file cannot be read: the name is typed as spelled, and the
@@ -744,7 +758,7 @@ fn apply_sets(
         };
         changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
-    apply_tag_changes_counted(scratch, &changes)
+    apply_tag_changes_counted_among(scratch, &changes, siblings)
         .map(|(_, proven_sets)| proven_sets)
         .map_err(|e| describe_set_failure(&e, sets))
 }

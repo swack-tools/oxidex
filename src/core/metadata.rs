@@ -23,7 +23,7 @@
 //!     .unwrap();
 //! ```
 
-use crate::core::operations::{read_metadata, write_metadata};
+use crate::core::operations::{read_metadata, write_metadata, write_metadata_in_call_order};
 use crate::core::write_transaction::WriteOutcome;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::Result;
@@ -52,6 +52,7 @@ use std::path::{Path, PathBuf};
 pub struct Metadata {
     map: MetadataMap,
     source_path: Option<PathBuf>,
+    mutations: Vec<String>,
 }
 
 impl Metadata {
@@ -69,6 +70,7 @@ impl Metadata {
         Self {
             map: MetadataMap::new(),
             source_path: None,
+            mutations: Vec::new(),
         }
     }
 
@@ -100,6 +102,7 @@ impl Metadata {
         Ok(Self {
             map,
             source_path: Some(path.to_path_buf()),
+            mutations: Vec::new(),
         })
     }
 
@@ -188,6 +191,7 @@ impl Metadata {
     /// # Ok::<(), oxidex::error::ExifToolError>(())
     /// ```
     pub fn set_tag<V: Into<TagValue>>(mut self, tag: &str, value: V) -> Self {
+        self.mutations.push(tag.to_string());
         self.map.insert(tag, value.into());
         self
     }
@@ -196,11 +200,13 @@ impl Metadata {
     ///
     /// Use this for imperative-style modifications.
     pub fn insert<V: Into<TagValue>>(&mut self, tag: &str, value: V) {
+        self.mutations.push(tag.to_string());
         self.map.insert(tag, value.into());
     }
 
     /// Removes a tag
     pub fn remove(&mut self, tag: &str) -> Option<TagValue> {
+        self.mutations.push(tag.to_string());
         self.map.remove(tag)
     }
 
@@ -228,7 +234,7 @@ impl Metadata {
     /// [`crate::error::ExifToolError::TagsNotWritten`] naming each key, and
     /// the file is untouched.
     pub fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<WriteOutcome> {
-        write_metadata(path.as_ref(), &self.map)
+        write_metadata_in_call_order(path.as_ref(), &self.map, &self.mutations)
     }
 
     /// Saves metadata back to the source file
@@ -255,7 +261,7 @@ impl Metadata {
     /// ```
     pub fn save(&self) -> Result<WriteOutcome> {
         match &self.source_path {
-            Some(path) => write_metadata(path, &self.map),
+            Some(path) => write_metadata_in_call_order(path, &self.map, &self.mutations),
             None => Err(crate::error::ExifToolError::IoError(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "No source path - use write_to() instead",

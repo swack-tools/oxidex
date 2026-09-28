@@ -330,3 +330,19 @@ fn an_explicit_same_text_xp_set_is_not_discarded() {
         }
     }
 }
+
+/// An absent XMP family cannot bypass the PNG writer's CRC guard. The
+/// family-empty shortcut still names a damaged carrier and must refuse
+/// before returning unchanged.
+#[test]
+fn absent_xmp_deletion_still_refuses_a_bad_png_crc() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("bad-crc.png");
+    let mut bytes = fs::read(PNG_TEXT).unwrap();
+    assert_eq!(&bytes[12..16], b"IHDR");
+    bytes[32] ^= 1; // Corrupt IHDR's checked CRC, not image data.
+    fs::write(&file, &bytes).unwrap();
+    let error = remove_tag(&file, "XMP:Title").unwrap_err();
+    assert!(error.to_string().contains("CRC"), "{error}");
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+}

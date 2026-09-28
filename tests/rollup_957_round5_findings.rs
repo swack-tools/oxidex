@@ -286,9 +286,9 @@ fn oracle_counts_a_same_value_set_before_a_no_op_deletion() {
 
 /// A writer's refusal of one tag is `TagsNotWritten` naming it -- which the
 /// C ABI reports as `EXIFTOOL_ERR_TAG_NOT_WRITTEN` with the tag list -- not
-/// `UnsupportedFormat`: the RW2 guards (`IFD0:Artist` on a Panasonic RAW
-/// whose JpgFromRaw would need the edit too), and the in-place TIFF writer's
-/// entry and directory removals.
+/// `UnsupportedFormat`: individual XMP tag deletion is unsupported on JPEG,
+/// and the RW2 guard refuses `IFD0:Artist` when its JpgFromRaw would need
+/// the edit too. The surgical TIFF writer can now remove individual IFD0 entries.
 #[test]
 fn writer_refusals_of_one_tag_are_typed() {
     let dir = TempDir::new().unwrap();
@@ -299,14 +299,45 @@ fn writer_refusals_of_one_tag_are_typed() {
         }
         other => panic!("{tag}: {other:?}"),
     };
-    let tiff = copy_into(&dir, Path::new(TIFF), "a.tif");
-    typed(remove_tag(&tiff, "IFD0:Make"), "IFD0:Make");
-    typed(remove_tag(&tiff, "EXIF:All"), "EXIF:All");
-    let (code, named) = ffi(&tiff, &[Call::Remove("IFD0:Make")]);
+    let xmp = copy_into(&dir, Path::new(JPEG_XMP), "a.jpg");
+    let before = fs::read(&xmp).unwrap();
+    typed(remove_tag(&xmp, "XMP-dc:Title"), "XMP-dc:Title");
+    assert_eq!(fs::read(&xmp).unwrap(), before);
+    let (code, named) = ffi(&xmp, &[Call::Remove("XMP-dc:Title")]);
     assert_eq!(
         (code, named),
-        (EXIFTOOL_ERR_TAG_NOT_WRITTEN, vec!["IFD0:Make".to_string()])
+        (
+            EXIFTOOL_ERR_TAG_NOT_WRITTEN,
+            vec!["XMP-dc:Title".to_string()]
+        )
     );
+    assert_eq!(fs::read(&xmp).unwrap(), before);
+
+    // The old TIFF refusal expectation is obsolete. Native 13.59 and both
+    // public OxiDex paths delete the IFD0 Make row from this fixture.
+    let tiff = copy_into(&dir, Path::new(TIFF), "a.tif");
+    let ffi_tiff = copy_into(&dir, Path::new(TIFF), "ffi.tif");
+    let native = exiftool_oracle::graded().map(|oracle| {
+        let native = copy_into(&dir, Path::new(TIFF), "native.tif");
+        let native_out = oracle_run(oracle, &["-overwrite_original", "-IFD0:Make="], &native);
+        assert!(native_out.status.success(), "{native_out:?}");
+        assert_eq!(out(&native_out), "    1 image files updated\n");
+        native
+    });
+    remove_tag(&tiff, "IFD0:Make").expect("TIFF Make removal");
+    assert_eq!(ffi(&ffi_tiff, &[Call::Remove("IFD0:Make")]).0, EXIFTOOL_OK);
+    for path in [&tiff, &ffi_tiff].into_iter().chain(native.as_ref()) {
+        let entries = oxidex::writers::exif_surgical::scan_exif_entries(&fs::read(path).unwrap())
+            .unwrap()
+            .entries;
+        assert!(
+            entries.into_iter().all(|entry| {
+                entry.ifd != oxidex::writers::exif_surgical::IfdKind::Ifd0 || entry.tag_id != 0x010f
+            }),
+            "IFD0 Make survived in {}",
+            path.display()
+        );
+    }
 
     if let Some(rw2) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") {
         let rw2 = copy_into(&dir, &rw2, "a.rw2");

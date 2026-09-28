@@ -2879,6 +2879,23 @@ pub(crate) fn makernote_value_holds_no_tags(data: &[u8], make: &str, model: &str
     special_makernote_value("MakerNote", data, make, model).is_some()
 }
 
+/// Whether the selected source fallback files this physical note under EXIF
+/// instead of MakerNotes. A JPEG preview also holds no maker tags, but its
+/// `File:PreviewImage` is removed by `-MakerNotes:All=` in pinned 13.59, so
+/// `makernote_value_holds_no_tags` cannot answer this group-clear question.
+pub(crate) fn makernote_is_exif_fallback(data: &[u8], make: &str, model: &str) -> bool {
+    special_makernote_value("ExifIFD:MakerNote", data, make, model)
+        .as_ref()
+        .is_some_and(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "ExifIFD:MakerNoteUnknownText"
+                    | "ExifIFD:MakerNoteUnknownBinary"
+                    | "ExifIFD:MakerNoteSamsung1a"
+            )
+        })
+}
+
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],
