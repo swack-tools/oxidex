@@ -10,7 +10,7 @@
       "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
     },
     "module": "Kodak",
-    "owner": "residual",
+    "owner": "generated",
     "provenance_schema": "source-carrier/v1",
     "refusal": null,
     "source_binding": {
@@ -22,7 +22,7 @@
     },
     "source_release": "13.59",
     "source_sha256": "a5cd12e7f01cdbf751fa360f63fbe1e0317ff333efca3ee8366107cc45df94af",
-    "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+    "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
     "table": "Main"
   },
   {
@@ -36,7 +36,7 @@
       "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
     },
     "module": "Kodak",
-    "owner": "residual",
+    "owner": "generated",
     "provenance_schema": "source-carrier/v1",
     "refusal": null,
     "source_binding": {
@@ -48,7 +48,7 @@
     },
     "source_release": "13.59",
     "source_sha256": "93f52fc1f3090c2d204ed14ecfca1a69f6256e3b3d1613f3c0c84c712c47d07c",
-    "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+    "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
     "table": "Main"
   },
   {

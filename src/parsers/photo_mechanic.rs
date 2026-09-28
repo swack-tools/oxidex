@@ -69,6 +69,16 @@ pub fn parse_photo_mechanic_trailer(file: &[u8]) -> MetadataMap {
     })
 }
 
+/// Where the Photo Mechanic trailer [`parse_photo_mechanic_trailer`] reads
+/// ends, if the file has one -- for ordering it against the other trailers
+/// ExifTool processes from the end of the file inwards (`ProcessTrailers`,
+/// ExifTool.pm:7019). A position inside the trailer (the end of its IPTC
+/// records) orders it exactly as its end would, since trailers never overlap.
+pub fn photo_mechanic_trailer_position(file: &[u8]) -> Option<usize> {
+    let data = find_trailer(file)?;
+    Some(data.as_ptr() as usize - file.as_ptr() as usize + data.len())
+}
+
 /// Finds the IPTC record block of the outermost valid Photo Mechanic
 /// trailer.
 ///

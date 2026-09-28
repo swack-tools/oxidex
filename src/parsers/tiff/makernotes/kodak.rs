@@ -14,31 +14,25 @@
 //! * `MakerNoteKodak1b`: payload starts `"KDK"` (but not `"KDK INFO"`),
 //!   same `Start`, `ByteOrder => 'LittleEndian'`.
 //!
-//! `exiftool_tables::find_table("Kodak","Main")` already carries this
-//! table's real field offsets (verified against `Kodak.pm` and against
-//! `combined-samples/Kodak.jpg`'s actual bytes), but its `FIRST_ENTRY => 8`
-//! is *not* a byte-offset shift -- `ExifTool.pm`'s only use of
-//! `FIRST_ENTRY` is to bound the synthetic-tag range `-U` walks
-//! (`ExifTool.pm:9901-9906`), and Kodak.pm's own tag keys (`0x00`, `0x09`,
-//! `0x0c`, ...) already equal the fields' byte offsets in the
-//! `Start`-shifted record directly (`KodakModel` at key `0x00` sits at file
-//! offset `$valuePtr+8+0`, verified against the sample's raw hex).
-//! `exiftool_tables::BinaryTable::byte_offset` computes `(index -
-//! first_entry) * format_size`, which would shift every field here by -8
-//! bytes -- untested by anything else in this crate, since every other
-//! transcribed table happens to have `first_entry: 0`. Rather than call it
-//! and risk that shift, this reads each field's offset directly from
-//! `field.index`, the same number `Kodak.pm` declares.
+//! Both walk the transcribed `exiftool_tables::find_table("Kodak","Main")`
+//! over the `Start`-shifted record. Its `FIRST_ENTRY => 8` only bounds the
+//! synthetic-tag range `-U` walks (`ExifTool.pm:9901-9906`); every field sits
+//! at `index * increment` from the record start (`ProcessBinaryData`), which
+//! is what the engine reads -- verified field by field against the pinned
+//! oracle's `-G1 -a -s` on `t/images/Kodak.jpg`. The hand reader this
+//! replaces read eight of the table's 25 fields, so `MeteringMode`,
+//! `ExposureTime` and `FNumber` never reached the file and the ExifIFD copies
+//! answered a bare `-MeteringMode` that ExifTool answers from `Kodak::Main`
+//! (found later, at the MakerNote's position in the ExifIFD, at the same
+//! default priority -- `ExifTool.pm:9564`).
 
 #![allow(dead_code)]
 
-use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::tag_occurrence::intern;
-use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
+use crate::core::{Instance, Provenance, TagOccurrence};
 use crate::exiftool_tables::Ctx;
 use crate::exiftool_tables::session::Session;
 use crate::exiftool_tables::{Dir, find_table, process_binary_data};
-use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
@@ -67,31 +61,6 @@ pub(crate) fn is_type2(data: &[u8]) -> bool {
 /// `MakerNotes.pm:255`, `:265`: both Kodak1a and Kodak1b `Start
 /// => '$valuePtr + 8'`, past the signature + 2-byte pad.
 const KODAK_MAIN_START: usize = 8;
-
-/// Kodak.pm:1-227 field names this parser reads, each verified against
-/// `combined-samples/Kodak.jpg` (`exiftool -G1 -s -a`, 13.59 pinned oracle).
-/// Offsets are relative to the `Start`-shifted record (i.e. `field.index`
-/// straight from `exiftool_tables::find_table("Kodak","Main")` -- see the
-/// module doc comment for why this doesn't go through
-/// `BinaryTable::byte_offset`).
-mod field_offset {
-    /// Kodak.pm:52-55: `string[8]`.
-    pub const KODAK_MODEL: usize = 0x00;
-    /// Kodak.pm:65-68: `int16u`.
-    pub const KODAK_IMAGE_WIDTH: usize = 0x0c;
-    /// Kodak.pm:69-72: `int16u`.
-    pub const KODAK_IMAGE_HEIGHT: usize = 0x0e;
-    /// Kodak.pm:73-77: `int16u`.
-    pub const YEAR_CREATED: usize = 0x10;
-    /// Kodak.pm:78-84: `int8u[2]`.
-    pub const MONTH_DAY_CREATED: usize = 0x12;
-    /// Kodak.pm:85-91: `int8u[4]`, formatted as hh:mm:ss.hh.
-    pub(super) const TIME_CREATED: usize = 0x14;
-    /// Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
-    pub const TOTAL_ZOOM: usize = 0x62;
-    /// Kodak.pm:231-235: `int16u`, zero is `Off`.
-    pub(super) const DATE_TIME_STAMP: usize = 0x64;
-}
 
 /// Kodak MakerNote parser implementation
 pub struct KodakParser;
@@ -127,188 +96,64 @@ impl KodakParser {
         rows
     }
 
-    /// Reads `Kodak::Main` (see the module doc comment) out of `record`,
-    /// the `Start`-shifted bytes (i.e. `payload[8..]`), in `order`.
-    fn parse_main_record(
+    /// Walks `Kodak::Main` (Kodak.pm:36-227, `ProcessBinaryData`) over the
+    /// `Start`-shifted record through the transcribed table. The byte order
+    /// is the signature's (see the module doc comment), not the enclosing
+    /// TIFF's. `None` for a payload that is neither Kodak1a nor Kodak1b.
+    fn main_rows(
         &self,
-        record: &[u8],
-        order: ByteOrder,
-        tags: &mut HashMap<String, String>,
-    ) {
-        let reader = EndianReader::new(record, order.to_io_byte_order());
-
-        // KodakModel: string[8], truncated at the first NUL -- ExifTool's
-        // ReadValue behavior for a `string[n]` (does not trim whitespace,
-        // per binary_subdir.rs's note on the same rule).
-        if let Some(bytes) = record.get(field_offset::KODAK_MODEL..field_offset::KODAK_MODEL + 8) {
-            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-            if end > 0 {
-                tags.insert(
-                    "Kodak:KodakModel".to_string(),
-                    String::from_utf8_lossy(&bytes[..end]).into_owned(),
-                );
-            }
-        }
-
-        if let Some(v) = reader.u16_at(field_offset::KODAK_IMAGE_WIDTH) {
-            tags.insert("Kodak:KodakImageWidth".to_string(), v.to_string());
-        }
-        if let Some(v) = reader.u16_at(field_offset::KODAK_IMAGE_HEIGHT) {
-            tags.insert("Kodak:KodakImageHeight".to_string(), v.to_string());
-        }
-        if let Some(v) = reader.u16_at(field_offset::YEAR_CREATED) {
-            tags.insert("Kodak:YearCreated".to_string(), v.to_string());
-        }
-
-        // MonthDayCreated: int8u[2], ValueConv 'sprintf("%.2d:%.2d",split(" ",
-        // $val))' -- month and day, zero-padded, colon-joined.
-        if let Some(bytes) =
-            record.get(field_offset::MONTH_DAY_CREATED..field_offset::MONTH_DAY_CREATED + 2)
-        {
-            tags.insert(
-                "Kodak:MonthDayCreated".to_string(),
-                format!("{:02}:{:02}", bytes[0], bytes[1]),
-            );
-        }
-
-        // TimeCreated: Kodak.pm's `%.2d:%.2d:%.2d.%.2d` ValueConv.
-        if let Some(bytes) = record.get(field_offset::TIME_CREATED..field_offset::TIME_CREATED + 4)
-        {
-            tags.insert(
-                "Kodak:TimeCreated".to_string(),
-                format!(
-                    "{:02}:{:02}:{:02}.{:02}",
-                    bytes[0], bytes[1], bytes[2], bytes[3]
-                ),
-            );
-        }
-
-        // TotalZoom: int16u, ValueConv '$val / 100' (no PrintConv, so the
-        // ValueConv'd number prints directly -- Perl's default number
-        // stringification, which perl_number reproduces).
-        if let Some(v) = reader.u16_at(field_offset::TOTAL_ZOOM) {
-            tags.insert(
-                "Kodak:TotalZoom".to_string(),
-                perl_number(f64::from(v) / 100.0),
-            );
-        }
-
-        if let Some(v) = reader.u16_at(field_offset::DATE_TIME_STAMP) {
-            tags.insert(
-                "Kodak:DateTimeStamp".to_string(),
-                if v == 0 {
-                    "Off".to_string()
-                } else {
-                    format!("Mode {v}")
-                },
-            );
-        }
-    }
-
-    fn main_occurrences(&self, ctx: &MakerNoteContext<'_>) -> Vec<(String, TagOccurrence)> {
-        let data = ctx.payload();
+        data: &[u8],
+        cond_ctx: &mut Ctx<'_>,
+    ) -> Option<Vec<crate::exiftool_tables::Emitted>> {
         let order = if data.starts_with(b"KDK INFO") {
             ByteOrder::BigEndian
         } else if data.starts_with(b"KDK") {
             ByteOrder::LittleEndian
         } else {
-            return Vec::new();
+            return None;
         };
-        let Some(record) = data.get(KODAK_MAIN_START..) else {
-            return Vec::new();
-        };
-        let reader = EndianReader::new(record, order.to_io_byte_order());
+        let record = data.get(KODAK_MAIN_START..)?;
         let mut rows = Vec::new();
-
-        if let Some(bytes) = record.get(field_offset::TIME_CREATED..field_offset::TIME_CREATED + 4)
-        {
-            let raw = TagValue::new_string(format!(
-                "{} {} {} {}",
-                bytes[0], bytes[1], bytes[2], bytes[3]
-            ));
-            let stored = TagValue::Array(
-                bytes
-                    .iter()
-                    .map(|byte| TagValue::Integer(i64::from(*byte)))
-                    .collect(),
+        if let Some(table) = find_table("Kodak", "Main") {
+            process_binary_data(
+                table,
+                Dir::whole(record, order.to_io_byte_order()),
+                cond_ctx,
+                &mut rows,
             );
-            let value = TagValue::new_string(format!(
-                "{:02}:{:02}:{:02}.{:02}",
-                bytes[0], bytes[1], bytes[2], bytes[3]
-            ));
-            rows.push((
-                "Kodak:TimeCreated".to_string(),
-                kodak_occurrence(
-                    0x0014,
-                    "TimeCreated",
-                    "Time",
-                    stored,
-                    raw,
-                    value.clone(),
-                    value,
-                    ctx.payload_base() + (KODAK_MAIN_START + field_offset::TIME_CREATED) as u64,
-                    4,
-                ),
-            ));
         }
-
-        if let Some(v) = reader.u16_at(field_offset::DATE_TIME_STAMP) {
-            let raw = TagValue::Integer(i64::from(v));
-            rows.push((
-                "Kodak:DateTimeStamp".to_string(),
-                kodak_occurrence(
-                    0x0064,
-                    "DateTimeStamp",
-                    "Camera",
-                    raw.clone(),
-                    raw.clone(),
-                    raw,
-                    TagValue::new_string(if v == 0 {
-                        "Off".to_string()
-                    } else {
-                        format!("Mode {v}")
-                    }),
-                    ctx.payload_base() + (KODAK_MAIN_START + field_offset::DATE_TIME_STAMP) as u64,
-                    2,
-                ),
-            ));
-        }
-        rows
+        Some(rows)
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn kodak_occurrence(
-    id: u16,
-    name: &'static str,
-    group2: &'static str,
-    stored: TagValue,
-    raw: TagValue,
-    value: TagValue,
-    print: TagValue,
-    byte_start: u64,
-    byte_len: u64,
-) -> TagOccurrence {
-    TagOccurrence {
-        id: crate::core::TagId::Numeric(id),
-        name: intern(name),
-        group0: intern("MakerNotes"),
-        group1: intern("Kodak"),
-        group2: Some(intern(group2)),
-        instance: Instance::default(),
-        stored: Some(stored),
-        raw,
-        value: Some(value),
-        print: Some(print),
-        priority: 1,
-        is_list: false,
-        order: 0,
-        origin: Provenance {
-            module: Some("Kodak"),
-            table: Some("Main"),
-            byte_range: Some(byte_start..byte_start + byte_len),
+/// One engine row as the occurrence the MakerNote merge records, at the
+/// row's own `FoundTag` priority (`PRIORITY => 0` / `Avoid`, ExifTool.pm:9469-9473).
+fn engine_occurrence(row: crate::exiftool_tables::Emitted) -> (String, TagOccurrence) {
+    let key = format!("{}:{}", row.group1, row.name);
+    let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+    (
+        key,
+        TagOccurrence {
+            id: row.source_id,
+            name: intern(row.name),
+            group0: intern(row.group0),
+            group1: intern(row.group1),
+            group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
+            instance: Instance::default(),
+            raw: row.value.clone(),
+            value: Some(value),
+            print: Some(row.value),
+            stored: Some(row.stored),
+            priority: u8::from(!(row.low_priority || row.avoid)),
+            is_list: row.is_list,
+            order: 0,
+            origin: Provenance {
+                module: Some(row.module),
+                table: Some(row.table),
+                byte_range: None,
+            },
         },
-    }
+    )
 }
 
 impl MakerNoteParser for KodakParser {
@@ -326,86 +171,61 @@ impl MakerNoteParser for KodakParser {
         _byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        if is_type2(data) {
-            let mut members = HashMap::new();
-            let mut cond_ctx = Ctx::new(&mut members);
-            for row in self.type2_rows(data, &mut cond_ctx) {
-                if let Some(text) = engine_value_text(&row.value) {
-                    tags.insert(format!("{}:{}", row.group1, row.name), text);
-                }
-            }
-            return Ok(());
-        }
-        // Byte order is signature-determined for Kodak1a/1b (see the module
-        // doc comment), not inherited from the enclosing TIFF -- ignore the
-        // caller's `byte_order` the same way Casio Type2 and Sanyo resolve
-        // their own.
-        let order = if data.starts_with(b"KDK INFO") {
-            ByteOrder::BigEndian
-        } else if data.starts_with(b"KDK") {
-            ByteOrder::LittleEndian
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let rows = if is_type2(data) {
+            self.type2_rows(data, &mut cond_ctx)
         } else {
-            // Not a Kodak1a/1b payload (could be Type2/3/4/5/6 or another
+            // Not a Kodak1a/1b payload (could be Type3/4/5/6 or another
             // vendor's rebrand) -- none of those are implemented here.
-            return Ok(());
+            self.main_rows(data, &mut cond_ctx).unwrap_or_default()
         };
-        let Some(record) = data.get(KODAK_MAIN_START..) else {
-            return Ok(());
-        };
-        self.parse_main_record(record, order, tags);
+        for row in rows {
+            if let Some(text) = engine_value_text(&row.value) {
+                tags.insert(format!("{}:{}", row.group1, row.name), text);
+            }
+        }
         Ok(())
     }
 
     fn parse_with_context_and_values_and_session_and_occurrences(
         &self,
         ctx: &MakerNoteContext<'_>,
-        byte_order: ByteOrder,
-        model: Option<&str>,
+        _byte_order: ByteOrder,
+        _model: Option<&str>,
         _session: &mut Session,
-        _cond_ctx: &mut Ctx<'_>,
-        tags: &mut HashMap<String, String>,
+        cond_ctx: &mut Ctx<'_>,
+        _tags: &mut HashMap<String, String>,
         _value_forms: &mut HashMap<String, String>,
         occurrences: &mut Vec<(String, TagOccurrence)>,
     ) -> Result<(), String> {
-        if is_type2(ctx.payload()) {
-            for row in self.type2_rows(ctx.payload(), _cond_ctx) {
-                let key = format!("{}:{}", row.group1, row.name);
-                let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
-                occurrences.push((
-                    key,
-                    TagOccurrence {
-                        id: row.source_id,
-                        name: intern(row.name),
-                        group0: intern(row.group0),
-                        group1: intern(row.group1),
-                        group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
-                        instance: Instance::default(),
-                        raw: row.stored.clone(),
-                        value: Some(value),
-                        print: Some(row.value),
-                        stored: Some(row.stored),
-                        priority: u8::from(!(row.low_priority || row.avoid)),
-                        is_list: row.is_list,
-                        order: 0,
-                        origin: Provenance {
-                            module: Some(row.module),
-                            table: Some(row.table),
-                            byte_range: None,
-                        },
-                    },
-                ));
-            }
-            return Ok(());
-        }
-        self.parse_with_model(ctx.payload(), byte_order, model, tags)?;
-        let rows = self.main_occurrences(ctx);
-        if rows.iter().any(|(key, _)| key == "Kodak:TimeCreated") {
-            tags.remove("Kodak:TimeCreated");
-        }
-        if rows.iter().any(|(key, _)| key == "Kodak:DateTimeStamp") {
-            tags.remove("Kodak:DateTimeStamp");
-        }
-        occurrences.extend(rows);
+        let rows = if is_type2(ctx.payload()) {
+            self.type2_rows(ctx.payload(), cond_ctx)
+        } else {
+            self.main_rows(ctx.payload(), cond_ctx).unwrap_or_default()
+        };
+        occurrences.extend(rows.into_iter().map(|row| {
+            // These two Main fields already exposed exact source coordinates
+            // before the engine migration. Preserve that public provenance.
+            let extent = if row.table == "Main" {
+                match row.name {
+                    "TimeCreated" => Some((20u64, 4u64)),
+                    "DateTimeStamp" => Some((100, 2)),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let (key, mut occurrence) = engine_occurrence(row);
+            occurrence.origin.byte_range = extent.and_then(|(offset, len)| {
+                let start = ctx
+                    .payload_base()
+                    .checked_add(KODAK_MAIN_START as u64)?
+                    .checked_add(offset)?;
+                Some(start..start.checked_add(len)?)
+            });
+            (key, occurrence)
+        }));
         Ok(())
     }
 }
@@ -473,5 +293,72 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn main_time_fields_retain_their_source_ranges() {
+        let mut tiff = vec![0u8; 40];
+        tiff.extend(b"KDK INFO");
+        tiff.extend([0u8; 108]);
+        let ctx = MakerNoteContext::in_tiff(&tiff, 40, 116, 1000);
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let mut rows = Vec::new();
+        KodakParser::new()
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &ctx,
+                ByteOrder::BigEndian,
+                None,
+                &mut Session::new(),
+                &mut cond_ctx,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+                &mut rows,
+            )
+            .unwrap();
+        for (name, range) in [("TimeCreated", 1068..1072), ("DateTimeStamp", 1148..1150)] {
+            let row = rows.iter().find(|(_, o)| o.name.as_ref() == name).unwrap();
+            assert_eq!(row.1.origin.byte_range, Some(range), "{name}");
+        }
+    }
+
+    /// `engine_occurrence`'s `raw` must carry the display form
+    /// (`row.value`, PrintConv'd), matching every other generated adapter
+    /// (`panasonic_generated_occurrence`) -- not `row.stored`, the file's
+    /// typed source value. `MetadataMap::get`/`iter`/serialization all
+    /// project through `raw` (`TagSink::get`, `core/tag_sink.rs`); only the
+    /// CLI resolver explicitly re-selects `print`, so this bug was invisible
+    /// there. `Kodak::Main`'s `MeteringMode` (index 28, `IntEnum(0 =>
+    /// "Multi-segment", 1 => "Center-weighted average", 2 => "Spot")`) is
+    /// stored as a plain integer, so a `raw: row.stored` regression would
+    /// leave `TagValue::Integer(1)` where ExifTool's label belongs.
+    #[test]
+    fn test_engine_occurrence_raw_is_the_display_form_not_the_stored_form() {
+        use crate::core::TagValue;
+
+        let mut data = b"KDK INFO".to_vec();
+        let mut record = vec![0u8; 108];
+        record[28] = 1; // MeteringMode: Center-weighted average
+        data.extend_from_slice(&record);
+
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let parser = KodakParser::new();
+        let rows = parser
+            .main_rows(&data, &mut cond_ctx)
+            .expect("KDK INFO payload parses as Kodak::Main");
+        let metering_row = rows
+            .into_iter()
+            .find(|row| row.name == "MeteringMode")
+            .expect("Kodak::Main emits MeteringMode");
+        assert_eq!(metering_row.stored, TagValue::Integer(1));
+
+        let (key, occurrence) = engine_occurrence(metering_row);
+        assert_eq!(key, "Kodak:MeteringMode");
+        assert_eq!(
+            occurrence.raw,
+            TagValue::new_string("Center-weighted average"),
+            "raw must be the PrintConv'd display form, not the stored integer"
+        );
     }
 }
