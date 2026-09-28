@@ -194,8 +194,7 @@ pub struct ResolvedOccurrence<'a> {
     /// The literal public key retained by `MetadataMap`, independent of the
     /// occurrence's canonical source identity and true family groups.
     pub lookup_key: String,
-    /// FoundTag copy number for selected rows. Full-list projections did not
-    /// pass through `exiftool_keys` and retain their existing ordering rule.
+    /// FoundTag copy number when duplicate occurrences are projected.
     pub copy: Option<u32>,
 }
 
@@ -1400,13 +1399,15 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     if args.group_display.is_some() || args.all_tags || short_text {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
         let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
-            raw_metadata
-                .all_occurrences()
-                .filter(|(key, _)| surviving_keys.contains(key.as_str()))
-                .map(|(lookup_key, occurrence)| ResolvedOccurrence {
-                    occurrence,
-                    lookup_key,
-                    copy: None,
+            // Full and requested listings must replay the same FoundTag
+            // duplicate numbering. The display map reserves the bare key for
+            // copy zero, which can be either the first or a later occurrence.
+            exiftool_keys(raw_metadata, |key| surviving_keys.contains(key))
+                .into_iter()
+                .map(|key| ResolvedOccurrence {
+                    occurrence: key.occurrence,
+                    lookup_key: key.lookup_key.to_string(),
+                    copy: Some(key.copy),
                 })
                 .collect()
         } else {
@@ -1855,6 +1856,69 @@ mod tests {
         );
         assert_eq!(projected.get_string("File:Comment"), Some("winner"));
         assert_eq!(projected.get_string("File:Comment (2)"), Some("first"));
+    }
+
+    #[test]
+    fn full_duplicate_projection_preserves_the_found_tag_winner() {
+        use crate::cli::output_formatter::{CsvFormatter, JsonFormatter, OutputFormatter};
+
+        for (later_priority, later_instance, bare, displaced) in [
+            (0, Instance(1), "101.3 kPa", "99.9 kPa"),
+            (9, Instance(2), "101.3 kPa", "99.9 kPa"),
+            (1, Instance(1), "99.9 kPa", "101.3 kPa"),
+        ] {
+            let mut metadata = MetadataMap::new();
+            metadata.record_occurrence(
+                "Olympus:ManometerPressure".to_string(),
+                canonical_occurrence(1013, 101.3, "101.3 kPa", 1, Instance(1)),
+            );
+            metadata.record_occurrence(
+                "Olympus:ManometerPressure".to_string(),
+                canonical_occurrence(999, 99.9, "99.9 kPa", later_priority, later_instance),
+            );
+            assert_eq!(metadata.get_string("Olympus:ManometerPressure"), Some(bare));
+
+            for selected in [false, true] {
+                for csv in [false, true] {
+                    let mut args = canonical_cli_args(
+                        if selected {
+                            &["ManometerPressure"]
+                        } else {
+                            &[]
+                        },
+                        true,
+                        false,
+                        None,
+                    );
+                    args.json = !csv;
+                    args.csv = csv;
+                    let projected = output_map(&metadata, &args);
+                    assert_eq!(
+                        projected.get_string("Olympus:ManometerPressure"),
+                        Some(bare),
+                        "selected={selected} csv={csv} priority={later_priority}"
+                    );
+                    assert_eq!(
+                        projected.get_string("Olympus:ManometerPressure (2)"),
+                        Some(displaced),
+                        "selected={selected} csv={csv} priority={later_priority}"
+                    );
+                    if csv {
+                        let rendered = CsvFormatter.format(&projected, None);
+                        assert!(rendered.contains(&format!("Olympus:ManometerPressure,{bare}")));
+                        assert!(
+                            rendered
+                                .contains(&format!("Olympus:ManometerPressure (2),{displaced}"))
+                        );
+                    } else {
+                        let rendered: serde_json::Value =
+                            serde_json::from_str(&JsonFormatter.format(&projected, None)).unwrap();
+                        assert_eq!(rendered[0]["Olympus:ManometerPressure"], bare);
+                        assert_eq!(rendered[0]["Olympus:ManometerPressure (2)"], displaced);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
