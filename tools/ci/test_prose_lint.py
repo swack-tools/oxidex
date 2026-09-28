@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -40,6 +41,24 @@ class ProseHookTests(unittest.TestCase):
         payload.update(extra)
         return subprocess.run(['bash', str(HOOK)], input=json.dumps(payload), env=self.env,
                               text=True, capture_output=True, cwd=self.repo)
+
+    def test_claude_missing_vale_warns_before_loading_python_helper(self):
+        # This models a fresh Claude environment with no optional dependencies.
+        (self.bin / 'vale').unlink()
+        (self.bin / 'bash').symlink_to(shutil.which('bash'))
+        self.env['PATH'] = str(self.bin)
+        result = self.invoke('Edit', {'file_path': str(self.repo/'doc with spaces.md')})
+        self.assertEqual(result.returncode, 0, result)
+        self.assertIn('install vale', result.stderr.lower())
+        self.assertFalse(self.log.exists())
+
+    def test_claude_missing_python_warns_and_skips(self):
+        (self.bin / 'bash').symlink_to(shutil.which('bash'))
+        self.env['PATH'] = str(self.bin)
+        result = self.invoke('Write', {'file_path': str(self.repo/'doc with spaces.md')})
+        self.assertEqual(result.returncode, 0, result)
+        self.assertIn('install python3', result.stderr.lower())
+        self.assertFalse(self.log.exists())
 
     def test_registration_dispatches_codex_patch_payload(self):
         payload = {'command': '*** Begin Patch\n*** Update File: doc with spaces.md\n*** End Patch'}
