@@ -567,16 +567,33 @@ pub fn convert_fraction(val: &MemberVal) -> HelperResult {
     Ok(MemberVal::Float(num.as_f64() / den.as_f64()))
 }
 
-/// `Image::ExifTool::Exif::PrintExposureTime($secs)`: the `IsFloat` gate
-/// (non-numbers returned as they are, comma decimals rewritten), then the
-/// existing numeric port [`crate::core::formatters::exif_print_conv::print_exposure_time`]
-/// -- except where `int(0.5 + 1/$secs)` leaves `i64`, where Perl's `%d`
-/// wraps and the delegated port saturates, which this port reproduces itself.
+/// `Image::ExifTool::Exif::PrintExposureTime($secs)`: 12.64/13.59 first call
+/// `IsFloat` (non-numbers returned as they are, comma decimals rewritten),
+/// while 11.78 has no such gate and numerically coerces every input. Then
+/// the existing numeric port
+/// [`crate::core::formatters::exif_print_conv::print_exposure_time`]
+/// handles finite values -- except where `int(0.5 + 1/$secs)` leaves `i64`,
+/// where Perl's `%d` wraps and the delegated port saturates.
 pub fn print_exposure_time(val: &MemberVal) -> HelperResult {
-    let (ok, secs) = is_float(val);
-    if !ok.is_truthy() {
-        return Ok(secs);
-    }
+    print_exposure_time_for_source(super::EXIFTOOL_VERSION, val)
+}
+
+fn print_exposure_time_for_source(source_version: &str, val: &MemberVal) -> HelperResult {
+    let secs = match source_version {
+        "11.78" => val.clone(),
+        "12.64" | "13.59" => {
+            let (ok, secs) = is_float(val);
+            if !ok.is_truthy() {
+                return Ok(secs);
+            }
+            secs
+        }
+        _ => {
+            return Err(HelperError::Refused(
+                "unverified PrintExposureTime source release",
+            ));
+        }
+    };
     // NV context: `sprintf("%.1f", "-0")` is `-0.0` (see `MemberVal::perl_nv`).
     let v = secs.perl_nv();
     if v < 0.25001 && v > 0.0 {
@@ -586,9 +603,12 @@ pub fn print_exposure_time(val: &MemberVal) -> HelperResult {
             return Ok(MemberVal::Str(format!("1/{}", sprintf_d(i, false))));
         }
     }
-    Ok(MemberVal::Str(
-        crate::core::formatters::exif_print_conv::print_exposure_time(v),
-    ))
+    let printed = if v.is_finite() {
+        crate::core::formatters::exif_print_conv::print_exposure_time(v)
+    } else {
+        sprintf_f(1, v)
+    };
+    Ok(MemberVal::Str(printed))
 }
 
 /// `Image::ExifTool::Exif::PrintFNumber($val)`:
@@ -1807,6 +1827,40 @@ mod tests {
 
     fn capture() -> Value {
         serde_json::from_str(CAPTURE).expect("capture is JSON")
+    }
+
+    #[test]
+    fn print_exposure_time_uses_selected_native_source_gate() {
+        // Pinned Perl 5.38.2 calls into the retained Exif.pm subs. 11.78
+        // sub hash 90f77cb8..., 12.64/13.59 sub hash 2326b19e....
+        let cases = [
+            ("inf", "Inf", "inf"),
+            ("undef", "0", "undef"),
+            ("1 2", "1", "1 2"),
+            ("1,5", "1", "1.5"),
+            ("12abc", "12", "12abc"),
+            ("0x1A", "0", "0x1A"),
+            ("-0", "-0", "-0"),
+            ("1/250", "1", "1/250"),
+            ("NaN", "NaN", "NaN"),
+        ];
+        for (input, old, newer) in cases {
+            let val = MemberVal::Str(input.into());
+            for (source, expected) in [("11.78", old), ("12.64", newer), ("13.59", newer)] {
+                let got = print_exposure_time_for_source(source, &val).unwrap();
+                assert_eq!(
+                    got.perl_bytes().as_ref(),
+                    expected.as_bytes(),
+                    "{source} {input}"
+                );
+            }
+        }
+        assert!(matches!(
+            print_exposure_time_for_source("14.00", &MemberVal::Int(1)),
+            Err(HelperError::Refused(
+                "unverified PrintExposureTime source release"
+            ))
+        ));
     }
 
     fn hex_bytes(h: &str) -> Vec<u8> {
