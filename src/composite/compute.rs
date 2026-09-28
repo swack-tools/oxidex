@@ -451,7 +451,16 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
         let Some(levels) = input else { continue };
         let Ok(levels) = levels
             .split_whitespace()
-            .map(str::parse)
+            // `GetRational64u(0, 0)` yields the literal `undef`. Perl uses it
+            // as numeric zero in RedBlueBalance; a rejected parse would lose
+            // both Leica X1 composites even though ExifTool emits them.
+            .map(|part| {
+                if part == "undef" {
+                    Ok(0.0)
+                } else {
+                    part.parse()
+                }
+            })
             .collect::<Result<Vec<f64>, _>>()
         else {
             continue;
@@ -2692,6 +2701,17 @@ mod tests {
         rb[8] = Some("412 290");
         assert_eq!(c("RedBalance", &rb).as_deref(), Some("1.609375"));
         assert_eq!(c("BlueBalance", &rb).as_deref(), Some("1.132813"));
+    }
+
+    #[test]
+    fn white_balance_undef_rational_coerces_to_zero_like_pinned_perl() {
+        let mut rgb = vec![None; 11];
+        rgb[6] = Some("undef 1 0.7231638418");
+        assert_eq!(c("RedBalance", &rgb).as_deref(), Some("0"));
+        assert_eq!(c("BlueBalance", &rgb).as_deref(), Some("0.723164"));
+        rgb[6] = Some("0.5182186235 inf 0.7231638418");
+        assert_eq!(c("RedBalance", &rgb).as_deref(), Some("0"));
+        assert_eq!(c("BlueBalance", &rgb).as_deref(), Some("0"));
     }
 
     #[test]
