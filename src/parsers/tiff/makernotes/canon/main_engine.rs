@@ -795,9 +795,9 @@ mod tests {
                     .flat_map(|g| g.alternatives.iter().map(|(_, t)| t)),
             )
             .filter_map(|tag| tag.subdir.map(|edge| (tag, edge)));
-        let mut checked = 0;
+        let mut edge_ids = Vec::new();
         for (tag, edge) in edges {
-            checked += 1;
+            edge_ids.push(tag.id);
             let enabled = find_ifd_table(edge.module, edge.table).is_some_and(|t| t.enabled())
                 || find_table(edge.module, edge.table).is_some_and(|t| t.enabled());
             assert!(
@@ -807,13 +807,30 @@ mod tests {
                 tag.id, tag.name, edge.module, edge.table
             );
         }
-        let minimum = match super::super::selected_source_pin() {
-            "11.78" => 96,
-            "12.64" => 100,
-            "13.59" => 101,
-            _ => unreachable!(),
-        };
-        assert!(checked >= minimum, "only {checked} Canon::Main edges found");
+        edge_ids.sort_unstable();
+        // Native Canon.pm Main SubDirectory declarations. Repeated ids are
+        // distinct conditional alternatives, so retain their multiplicity.
+        let base: &[u16] = &[
+            0x0001, 0x0002, 0x0004, 0x0005, 0x000a, 0x000f, 0x0011, 0x0012, 0x001d, 0x0024, 0x0025,
+            0x0026, 0x0027, 0x002f, 0x0035, 0x003c, 0x0090, 0x0091, 0x0092, 0x0093, 0x0096, 0x0098,
+            0x0099, 0x009a, 0x00a0, 0x00a9, 0x00aa, 0x00b0, 0x00b1, 0x00b6, 0x00e0, 0x4003, 0x4013,
+            0x4016, 0x4018, 0x4019, 0x4020, 0x4021, 0x4024, 0x4025, 0x4028, 0x403f,
+        ];
+        let (camera_info, color_data, additions): (usize, usize, &[u16]) =
+            match super::super::selected_source_pin() {
+                "11.78" => (32, 10, &[]),
+                "12.64" => (32, 12, &[0x0029, 0x4026]),
+                "13.59" => (36, 13, &[0x0029, 0x4026, 0x4053, 0x4059]),
+                _ => unreachable!(),
+            };
+        let mut expected = base.to_vec();
+        expected.extend(std::iter::repeat_n(0x000d, camera_info));
+        expected.extend(std::iter::repeat_n(0x000f, 9));
+        expected.extend(std::iter::repeat_n(0x4001, color_data));
+        expected.extend(std::iter::repeat_n(0x4015, 3));
+        expected.extend_from_slice(additions);
+        expected.sort_unstable();
+        assert_eq!(edge_ids, expected, "native Canon::Main edge alternatives");
     }
 
     /// Plain `insert` is exact only if no `Canon::Main` row is low priority

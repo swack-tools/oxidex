@@ -553,7 +553,15 @@ fn decode_fuji_tone(value: i32) -> String {
         0 => "0 (normal)".to_string(),
         16 => "-1 (medium soft)".to_string(),
         32 => "-2 (soft)".to_string(),
-        other => perl_number(f64::from(-other) / 16.0),
+        other => {
+            if include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim()
+                == "13.59"
+            {
+                perl_number(f64::from(-other) / 16.0)
+            } else {
+                format!("Unknown ({other})")
+            }
+        }
     }
 }
 
