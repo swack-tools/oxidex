@@ -3507,35 +3507,47 @@ fn rebuild_relocated_makernote(
 ///     $hdrLen += 12 if $len >= 18 and substr($$dataPt, $start+6, 4) eq "\0\0\0\x01";
 /// ```
 fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut MetadataMap) {
-    if !data.starts_with(b"Adobe\0") {
-        return;
-    }
-
-    let mut pos = 6usize;
-    while pos + 8 <= data.len() {
-        let Some(record_tag) = data.get(pos..pos + 4) else {
-            return;
-        };
-        let Some(size) = read_tiff_u32(&data[pos + 4..pos + 8], ByteOrder::BigEndian) else {
-            return;
-        };
-        pos += 8;
-        let Ok(size) = usize::try_from(size) else {
-            return;
-        };
-        let Some(block) = pos.checked_add(size).and_then(|end| data.get(pos..end)) else {
-            return; // truncated record: ExifTool's `last if $pos + $size > $end`
-        };
-
+    let _ = walk_dng_adobe_records(data, |record_tag, block| {
         if record_tag == b"MakN" {
             parse_adobe_makn_record(block, make, metadata);
         }
+    });
+}
 
-        pos += size;
-        if size & 1 == 1 {
-            pos += 1;
+/// Count maker-note records at Adobe DNG record boundaries, never bytes
+/// inside another record's payload. `None` means truncated framing and
+/// lets write guards retain their conservative refusal for unknown data.
+pub(crate) fn dng_adobe_makernote_count(data: &[u8]) -> Option<usize> {
+    let mut count = 0;
+    walk_dng_adobe_records(data, |record_tag, _| {
+        if record_tag == b"MakN" {
+            count += 1;
         }
+    })?;
+    Some(count)
+}
+
+/// DNG.pm::ProcessAdobeData: big-endian lengths and even-sized records.
+/// Reading retains each complete record before any truncated successor.
+fn walk_dng_adobe_records(data: &[u8], mut visit: impl FnMut(&[u8], &[u8])) -> Option<()> {
+    if !data.starts_with(b"Adobe\0") {
+        return Some(());
     }
+    let mut pos = 6usize;
+    while data.len().saturating_sub(pos) >= 8 {
+        let record_tag = &data[pos..pos + 4];
+        let size = usize::try_from(read_tiff_u32(
+            &data[pos + 4..pos + 8],
+            ByteOrder::BigEndian,
+        )?)
+        .ok()?;
+        pos += 8;
+        let end = pos.checked_add(size)?;
+        let block = data.get(pos..end)?;
+        visit(record_tag, block);
+        pos = end.checked_add(size & 1)?;
+    }
+    (pos == data.len()).then_some(())
 }
 
 // Canon ValueConv belongs to the occurrence being inserted, before winner
@@ -10759,6 +10771,33 @@ mod backlog_group_1_printconv_tests {
         let mut metadata = MetadataMap::new();
         extract_dng_adobe_private_data(&blob, "Canon", &mut metadata);
         assert_eq!(metadata.len(), 0);
+    }
+
+    #[test]
+    fn adobe_record_framing_refuses_truncation_but_visits_complete_prefix() {
+        let mut complete = b"Adobe\0XxxN".to_vec();
+        complete.extend_from_slice(&4u32.to_be_bytes());
+        complete.extend_from_slice(b"MakN");
+        assert_eq!(dng_adobe_makernote_count(&complete), Some(0));
+        for tail in [&b"Mak"[..], &b"MakN\0\0\0\x06II"[..]] {
+            let mut truncated = complete.clone();
+            truncated.extend_from_slice(tail);
+            let mut visited = Vec::new();
+            assert_eq!(
+                walk_dng_adobe_records(&truncated, |tag, _| visited.push(tag.to_vec())),
+                None
+            );
+            assert_eq!(visited, vec![b"XxxN".to_vec()]);
+            assert_eq!(dng_adobe_makernote_count(&truncated), None);
+        }
+        let mut missing_pad = b"Adobe\0XxxN".to_vec();
+        missing_pad.extend_from_slice(&3u32.to_be_bytes());
+        missing_pad.extend_from_slice(b"odd");
+        assert_eq!(dng_adobe_makernote_count(&missing_pad), None);
+        missing_pad.push(0);
+        assert_eq!(dng_adobe_makernote_count(&missing_pad), Some(0));
+        assert_eq!(dng_adobe_makernote_count(b"Adobe\0"), Some(0));
+        assert_eq!(dng_adobe_makernote_count(b"foreign MakN"), Some(0));
     }
 
     /// Anything that is not Adobe's container is left alone.

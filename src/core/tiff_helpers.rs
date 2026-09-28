@@ -2275,6 +2275,13 @@ fn kodak7_serial(val: &[u8]) -> bool {
 /// the value (Exif.pm:6717) - and `make`/`model` the trimmed DataMembers.
 #[allow(clippy::too_many_lines)]
 fn claimed_before_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
+    claimed_before_minolta(make, model, val) || claimed_from_minolta_to_samsung1a(make, model, val)
+}
+
+/// [`claimed_before_samsung1a`]'s entries before `MakerNoteMinolta`
+/// (MakerNotes.pm 13.59:38-492, `MakerNoteApple` through `MakerNoteKyocera`).
+#[allow(clippy::too_many_lines)]
+fn claimed_before_minolta(make: &str, model: &str, val: &[u8]) -> bool {
     // MakerNoteApple: $$valPt =~ /^Apple iOS\0/
     if val.starts_with(b"Apple iOS\0") {
         return true;
@@ -2491,6 +2498,13 @@ fn claimed_before_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
     if val.starts_with(b"KYOCERA") {
         return true;
     }
+    false
+}
+
+/// [`claimed_before_samsung1a`]'s entries from `MakerNoteMinolta` on
+/// (MakerNotes.pm 13.59:495-942), once every earlier entry has failed.
+#[allow(clippy::too_many_lines)]
+fn claimed_from_minolta_to_samsung1a(make: &str, model: &str, val: &[u8]) -> bool {
     // MakerNoteMinolta (Make and !^(MINOL|CAMER|MLY0|KC|\+M\+M|\xd7)) plus the
     // MakerNoteMinolta3 catch-all on the same /^(Konica Minolta|Minolta)/i.
     if ci_starts_with(make, "Konica Minolta") || ci_starts_with(make, "Minolta") {
@@ -2810,6 +2824,30 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
 /// `Condition` for `MakerNoteUnknown` is empty (it always matches), and the
 /// JPEG test lives in the ProcessProc, which sees `$dirLen` -- the entire
 /// value.
+/// Whether pinned ExifTool reads the MakerNote (0x927C) value `data` of a
+/// block whose IFD0 says `make`/`model` as one value that holds no tags --
+/// `MakerNoteSamsung1a`, `MakerNoteUnknownText`, `MakerNoteUnknownBinary`,
+/// or a JPEG `ProcessUnknownOrPreview` reports as `PreviewImage` (see
+/// [`special_makernote_value`]) -- so that no maker-note tag of it can be
+/// edited.
+pub(crate) fn makernote_value_holds_no_tags(data: &[u8], make: &str, model: &str) -> bool {
+    let prefix = &data[..data.len().min(128)];
+    // MakerNoteMinolta3 (MakerNotes.pm 13.59:516-526): a Minolta Make whose
+    // note starts with a prefix `MakerNoteMinolta` excludes
+    // (`MLY0|KC|+M+M|\xd7`, or `MINOL`/`CAMER` without the NUL
+    // `MakerNoteMinolta2` needs) is one `Binary` value with no table.
+    let minolta = ci_starts_with(make, "Konica Minolta") || ci_starts_with(make, "Minolta");
+    if minolta && !claimed_before_minolta(make, model, prefix) {
+        let excluded = any_prefix(
+            prefix,
+            &[b"MINOL", b"CAMER", b"MLY0", b"KC", b"+M+M", b"\xd7"],
+        );
+        let minolta2 = prefix.starts_with(b"MINOL\0") || prefix.starts_with(b"CAMER\0");
+        return excluded && !minolta2;
+    }
+    special_makernote_value("MakerNote", data, make, model).is_some()
+}
+
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],

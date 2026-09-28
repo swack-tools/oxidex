@@ -182,6 +182,7 @@ STATIC_ARTIFACTS = (
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
     Artifact("tag-exists", 2, "tag_exists_codegen", "src/writers/generated_tag_exists.rs"),
     Artifact("copy-targets", 2, "copy_targets_codegen", "src/writers/generated_copy_targets.rs"),
+    Artifact("makernote-groups", 2, "makernote_groups_codegen", "src/writers/generated_makernote_groups.rs"),
 )
 
 
