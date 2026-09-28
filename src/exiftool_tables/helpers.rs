@@ -1826,7 +1826,28 @@ mod tests {
         include_str!("../../tools/exiftool-tables/testdata/helper_oracle_outputs.json");
 
     fn capture() -> Value {
-        serde_json::from_str(CAPTURE).expect("capture is JSON")
+        let cap: Value = serde_json::from_str(CAPTURE).expect("capture is JSON");
+        assert_eq!(
+            cap["capture"]["exiftool_version"].as_str(),
+            Some(super::super::EXIFTOOL_VERSION),
+            "helper oracle capture must come from the selected ExifTool source"
+        );
+        cap
+    }
+
+    #[test]
+    fn helper_capture_scope_is_explicit() {
+        let cap = capture();
+        if super::super::EXIFTOOL_VERSION == "13.59" {
+            assert!(cap["capture"].get("scope").is_none());
+            assert!(!cap["residuals"].as_object().expect("residuals").is_empty());
+        } else {
+            assert_eq!(
+                cap["capture"]["scope"],
+                "helpers only; residual and charset behaviour unqualified"
+            );
+            assert!(cap["residuals"].as_object().expect("residuals").is_empty());
+        }
     }
 
     #[test]
@@ -2229,6 +2250,10 @@ mod tests {
     #[test]
     fn decode_dependencies_and_charset_tables_match_the_capture() {
         let cap = capture();
+        assert!(
+            cap["capture"].get("scope").is_none(),
+            "selected-source helper-only capture does not qualify charset behaviour"
+        );
         for helper in ["Image::ExifTool::Decode", "Image::ExifTool::Encode"] {
             let deps = cap["helpers"][helper]["dependencies"]
                 .as_object()

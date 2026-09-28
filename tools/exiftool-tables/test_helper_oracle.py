@@ -28,6 +28,20 @@ PINNED = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cac
 
 
 class Capture(unittest.TestCase):
+    def test_reviewed_source_pins_fail_closed(self):
+        version = CAPTURE["capture"]["exiftool_version"]
+        pins = json.loads(H.SOURCE_PINS.read_text(encoding="utf-8"))
+        self.assertEqual(set(pins), {"11.78", "12.64", "13.59"})
+        sources = {name: (None, digest) for name, digest in pins[version]["helpers"].items()}
+        H.verify_selected_sources(version, sources, pins[version]["dependencies"])
+        with self.assertRaises(SystemExit):
+            H.verify_selected_sources("14.00", sources, pins[version]["dependencies"])
+        changed = dict(sources)
+        name = next(iter(changed))
+        changed[name] = (None, "0" * 64)
+        with self.assertRaises(SystemExit):
+            H.verify_selected_sources(version, changed, pins[version]["dependencies"])
+
     def test_registry_and_capture_agree(self):
         self.assertEqual([h["perl"] for h in H.HELPERS if h["perl"] in CAPTURE["helpers"]],
                          [h["perl"] for h in H.HELPERS])
@@ -91,6 +105,13 @@ class Capture(unittest.TestCase):
         self.assertEqual(cap["exiftool_version"],
                          (H.REPO / ".exiftool-version").read_text().strip())
         self.assertEqual(cap["tz"], "UTC")
+        if cap["exiftool_version"] == "13.59":
+            self.assertNotIn("scope", cap)
+            self.assertTrue(CAPTURE["residuals"])
+        else:
+            self.assertEqual(cap["scope"],
+                             "helpers only; residual and charset behaviour unqualified")
+            self.assertEqual(CAPTURE["residuals"], {})
 
 
 class ExactSource(unittest.TestCase):
@@ -128,6 +149,8 @@ class ExactSource(unittest.TestCase):
 class PinnedTree(unittest.TestCase):
     def test_pinned_subs_fold_to_the_captured_digests(self):
         sources = H.pinned_sources(PINNED / "lib")
+        H.verify_selected_sources(CAPTURE["capture"]["exiftool_version"], sources,
+                                  H.dependency_sources(PINNED / "lib"))
         for name, h in CAPTURE["helpers"].items():
             self.assertEqual(sources[name][1], h["source_sha256"], name)
 

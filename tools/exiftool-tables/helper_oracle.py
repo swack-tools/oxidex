@@ -21,10 +21,12 @@ proofs, both made here against the PINNED tree and interpreter only:
    refusal, which is counted and must be one the port documents. A port
    that returns a different answer fails the build.
 
-The capture is committed (`testdata/helper_oracle_outputs.json`) so cargo
-can check it without Perl; `--check` re-runs the pinned Perl and requires the
-committed capture to reproduce byte for byte, which is how the capture
-itself is proven rather than trusted.
+The selected-source capture is committed (`testdata/helper_oracle_outputs.json`)
+so cargo can check it without Perl; `--check` re-runs the pinned Perl and
+requires the capture to reproduce byte for byte. Historical captures use
+`--helpers-only` because the residual and charset behaviour contracts have
+not yet been qualified for those releases. The capture marks that limit;
+the Rust charset check fails explicitly until it is resolved.
 
 Instrument (AGENTS.md): pinned perl 5.38.2 (`$EXIFTOOL_PERL`), the pinned
 ExifTool tree (`$OXIDEX_PINNED_EXIFTOOL`), asserted with `-ver` against
@@ -33,6 +35,7 @@ number is produced; TZ=UTC for both sides.
 
     python3 tools/exiftool-tables/helper_oracle.py --write   # regenerate
     python3 tools/exiftool-tables/helper_oracle.py --check   # prove it
+    python3 tools/exiftool-tables/helper_oracle.py --write --helpers-only  # historical pin
 """
 import argparse
 import hashlib
@@ -52,6 +55,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 HARNESS = HERE / "helper_oracle.pl"
 CAPTURE = HERE / "testdata" / "helper_oracle_outputs.json"
+SOURCE_PINS = HERE / "testdata" / "helper_source_pins.json"
 PINNED_PERL_VERSION = "v5.38.2"
 
 # Exif::Main conversion rows kept on the hand residual path. A residual is
@@ -812,7 +816,21 @@ def pinned_residual_sources(perl, et_lib):
     return selected
 
 
-def build(perl, et_dir):
+def verify_selected_sources(version, sources, dependencies):
+    """Admit only reviewed helper and dependency bodies for this release."""
+    pins = json.loads(SOURCE_PINS.read_text(encoding="utf-8"))
+    admitted = pins.get(version)
+    if admitted is None:
+        sys.exit(f"no reviewed helper source pins for ExifTool {version}")
+    actual = {name: digest for name, (_, digest) in sources.items()}
+    for kind, found in (("helpers", actual), ("dependencies", dependencies)):
+        if found != admitted[kind]:
+            changed = sorted(name for name in found.keys() | admitted[kind].keys()
+                             if found.get(name) != admitted[kind].get(name))
+            sys.exit(f"ExifTool {version} {kind} differ from reviewed native sources: {changed}")
+
+
+def build(perl, et_dir, helpers_only=False):
     pv, ver = instrument(perl, et_dir)
     et_lib = Path(et_dir) / "lib"
     sources = pinned_sources(et_lib)
@@ -828,16 +846,19 @@ def build(perl, et_dir):
     missing = [d for d, digest in deps.items() if digest is None]
     if missing:
         sys.exit(f"dependency subs absent from the pinned tree: {missing}")
+    verify_selected_sources(ver, sources, deps)
     helpers = {}
-    residuals = pinned_residual_sources(perl, et_lib)
-    r_cases = residual_cases()
-    r_results = run_perl(perl, et_lib, r_cases)
-    for case, result in zip(r_cases, r_results):
-        entry = {"input": case["input"]}
-        if "byte_order" in case:
-            entry["byte_order"] = case["byte_order"]
-        entry.update(result)
-        residuals[case["residual_id"]]["cases"].append(entry)
+    residuals = {}
+    if not helpers_only:
+        residuals = pinned_residual_sources(perl, et_lib)
+        r_cases = residual_cases()
+        r_results = run_perl(perl, et_lib, r_cases)
+        for case, result in zip(r_cases, r_results):
+            entry = {"input": case["input"]}
+            if "byte_order" in case:
+                entry["byte_order"] = case["byte_order"]
+            entry.update(result)
+            residuals[case["residual_id"]]["cases"].append(entry)
     for h in HELPERS:
         src, digest = sources[h["perl"]]
         helpers[h["perl"]] = {
@@ -853,7 +874,7 @@ def build(perl, et_dir):
                 entry[k] = c[k]
         entry.update(r)
         helpers[c["helper"]]["cases"].append(entry)
-    return {
+    result = {
         "capture": {
             "tool": "tools/exiftool-tables/helper_oracle.py",
             "perl": str(Path(perl).resolve()),
@@ -877,6 +898,9 @@ def build(perl, et_dir):
         "helpers": helpers,
         "residuals": residuals,
     }
+    if helpers_only:
+        result["capture"]["scope"] = "helpers only; residual and charset behaviour unqualified"
+    return result
 
 
 def portable_capture(capture):
@@ -929,12 +953,17 @@ def main():
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
+    ap.add_argument("--helpers-only", action="store_true",
+                    help="capture historical helper probes without claiming residual/charset qualification")
     ap.add_argument("--perl", default=os.environ.get("EXIFTOOL_PERL"))
     ap.add_argument("--exiftool-dir", default=os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
     args = ap.parse_args()
     if not args.perl or not args.exiftool_dir:
         sys.exit("need --perl/--exiftool-dir (or EXIFTOOL_PERL/OXIDEX_PINNED_EXIFTOOL)")
-    capture = build(args.perl, args.exiftool_dir)
+    selected = (REPO / ".exiftool-version").read_text().strip()
+    if args.helpers_only != (selected != "13.59"):
+        sys.exit("13.59 requires the full capture; historical pins require --helpers-only")
+    capture = build(args.perl, args.exiftool_dir, helpers_only=args.helpers_only)
     text = render(capture)
     n = sum(len(h["cases"]) for h in capture["helpers"].values())
     rn = sum(len(r["cases"]) for r in capture["residuals"].values())
@@ -948,16 +977,19 @@ def main():
         print(f"MISMATCH: re-running the pinned Perl does not reproduce "
               f"{CAPTURE.relative_to(REPO)}", file=sys.stderr)
         return 1
-    tables = codegen_charsets.generate(args.perl, args.exiftool_dir, oracle_env(),
-                                       capture["capture"]["exiftool_version"])
-    if codegen_charsets.OUT.read_text(encoding="utf-8") != tables:
-        print(f"MISMATCH: the pinned tree does not regenerate "
-              f"{codegen_charsets.OUT.relative_to(REPO)}", file=sys.stderr)
-        return 1
+    if not args.helpers_only:
+        tables = codegen_charsets.generate(args.perl, args.exiftool_dir, oracle_env(),
+                                           capture["capture"]["exiftool_version"])
+        if codegen_charsets.OUT.read_text(encoding="utf-8") != tables:
+            print(f"MISMATCH: the pinned tree does not regenerate "
+                  f"{codegen_charsets.OUT.relative_to(REPO)}", file=sys.stderr)
+            return 1
     print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} portable capture "
           f"({n} helper cases, {rn} residual cases, "
-          f"{len(capture['truthiness'])} truthiness cases), and the "
-          f"pinned tree regenerates {codegen_charsets.OUT.relative_to(REPO)}")
+          f"{len(capture['truthiness'])} truthiness cases)"
+          + ("; residual and charset behaviour remain unqualified"
+             if args.helpers_only else
+             f", and the pinned tree regenerates {codegen_charsets.OUT.relative_to(REPO)}"))
     return 0
 
 
