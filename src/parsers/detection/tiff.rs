@@ -17,7 +17,7 @@ use super::helpers::matches_at_offset;
 /// # TIFF Variants
 ///
 /// - Standard TIFF: II/MM + 0x002A (42)
-/// - Panasonic RW2: II + 0x0055 (85)
+/// - Panasonic RW2: II/MM + 0x0055 (85)
 /// - Olympus ORF: II + "RO" or "RS", MM + "OR"
 /// - Canon CR2: II + 0x002A + "CR\x02\x00" at offset 8
 /// - Canon CRW: II + 0x001A + "HEAPCCDR" at offset 6
@@ -65,6 +65,7 @@ pub fn detect_tiff_variants(data: &[u8]) -> Option<FileFormat> {
         ([0x49, 0x49, 0x52, 0x4F], "Olympus ORF (RO)"),
         ([0x49, 0x49, 0x52, 0x53], "Olympus ORF (RS)"),
         ([0x4D, 0x4D, 0x00, 0x2A], "standard BE"),
+        ([0x4D, 0x4D, 0x00, 0x55], "Panasonic RW2 BE"),
         ([0x4D, 0x4D, 0x4F, 0x52], "Olympus ORF (OR)"),
     ];
 
@@ -75,4 +76,16 @@ pub fn detect_tiff_variants(data: &[u8]) -> Option<FileFormat> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_both_panasonic_raw_byte_orders() {
+        for header in [b"II\x55\0", b"MM\0\x55"] {
+            assert_eq!(detect_tiff_variants(header), Some(FileFormat::TIFF));
+        }
+    }
 }
