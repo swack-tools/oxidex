@@ -23,7 +23,7 @@ features:
     link: /architecture/
     linkText: Architecture
   - icon: 🎯
-    title: 16,684 Tag Definitions
+    title: 16,683 Tag Definitions
     details: 77.5% measured extraction conformance against pinned ExifTool, across 126 file types, in the last published coverage report. It is historical evidence, not a v2.0.0-beta.1 parity receipt; a definition says a tag exists, not that OxiDex extracts it.
     link: /guide/exiftool-parity
     linkText: How parity is measured
