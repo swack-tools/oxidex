@@ -256,6 +256,54 @@ fn oxidex(args: &[&str], path: &Path) -> std::process::Output {
         .unwrap()
 }
 
+#[test]
+fn leica_ifd2_layout_has_image_family2_in_public_output() {
+    let Some(path) = fixtures::pinned_combined_fixture_path("Leica/LeicaCL.jpg") else {
+        return;
+    };
+    for (args, expected) in [
+        (
+            vec![
+                "-j",
+                "-G2",
+                "-IFD2:ImageWidth",
+                "-IFD2:PhotometricInterpretation",
+            ],
+            serde_json::json!({
+                "Image:ImageWidth": 1620,
+                "Image:PhotometricInterpretation": "YCbCr",
+            }),
+        ),
+        (
+            vec![
+                "-j",
+                "-G2",
+                "--no-print-conv",
+                "-IFD2:ImageWidth",
+                "-IFD2:PhotometricInterpretation",
+            ],
+            serde_json::json!({
+                "Image:ImageWidth": 1620,
+                "Image:PhotometricInterpretation": 6,
+            }),
+        ),
+        (
+            vec!["-j", "-G0:1", "-IFD2:ImageWidth"],
+            serde_json::json!({"EXIF:IFD2:ImageWidth": 1620}),
+        ),
+    ] {
+        let output = oxidex(&args, &path);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let mut rows: Vec<serde_json::Value> =
+            serde_json::from_slice(&output.stdout).expect("JSON output");
+        let mut row = rows.pop().expect("one image");
+        row.as_object_mut()
+            .expect("JSON object")
+            .remove("SourceFile");
+        assert_eq!(row, expected, "{args:?}");
+    }
+}
+
 /// Tags whose values are offsets a different layout moves: compared by what
 /// they locate instead (the PreviewImage and ThumbnailImage bytes, the
 /// sub-directories' contents).
