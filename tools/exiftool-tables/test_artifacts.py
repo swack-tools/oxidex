@@ -20,8 +20,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 72)
-        self.assertEqual(len(all_items), 73 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 73)
+        self.assertEqual(len(all_items), 74 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
                          {"quicktime-keys-specs", "quicktime-keys-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_userdata_specs")},
@@ -30,7 +30,7 @@ class ManifestTests(unittest.TestCase):
                          {"conv-registry", "conv-exif-main", "conv-exif-main-ledger",
                           "conv-exif-main-worklist"})
         self.assertEqual(len(artifacts.select(1)), 48 + members)
-        self.assertEqual(len(artifacts.select(2)), 25)
+        self.assertEqual(len(artifacts.select(2)), 26)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
         self.assertTrue(all(a.path.endswith('.rs') for a in artifacts.select(kind='rust')))

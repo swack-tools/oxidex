@@ -22,15 +22,21 @@
 //! set is exactly that case.
 
 use crate::cli::args::CliArgs;
-use crate::cli::value_parser::parse_cli_tag_value_os_with_mode;
+use crate::cli::value_parser::{declared_alias, parse_cli_tag_value_os_with_mode};
 use crate::core::date_shift::{ShiftOperation, shift_metadata_dates};
-use crate::core::operations::{CopyReport, clear_all_metadata, copy_metadata_report_retaining};
+use crate::core::metadata_map::MetadataMap;
+use crate::core::operations::{
+    CopyReport, clear_all_metadata, conversion_makernote_census, copy_metadata_report_retaining,
+    read_metadata, resolve_write_tag_in_request,
+};
+use crate::core::tag_value::TagValue;
 use crate::core::write_transaction::{
-    ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
+    GroupDeletions, ScratchStep, TagChange, apply_tag_changes_counted, transact_with,
 };
 use crate::error::ExifToolError;
 use crate::writers::write_request::{
-    canonical_request_tag, expand_write_shortcut, sorry_not_writable, undefined_tag_warning,
+    candidate_applies_to_file, canonical_request_tag, expand_write_shortcut, group_deletion,
+    rejected_bare_conversion, sorry_not_writable, undefined_tag_warning,
 };
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -111,6 +117,9 @@ pub struct WritePlan {
     /// applies a command's requests in order (13.59: `-TagsFromFile SRC
     /// -Make -IFD0:Make=` deletes the copied Make).
     sets_before_copy: usize,
+    /// Defined sets removed by a later `-all=` still need their conversion
+    /// warning, which ExifTool emits while reading the command line.
+    sets_before_clear: Vec<(String, OsString)>,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
@@ -183,6 +192,7 @@ impl WritePlan {
         // a later `-all=` remove the values assigned before it.
         let mut warnings = Vec::new();
         let mut sets = Vec::new();
+        let mut sets_before_clear = Vec::new();
         let mut sets_before_copy = 0;
         for (at, tag, value) in &raw_sets {
             // A `Shortcuts::Main` name (`AllDates`, `CommonIFD0`, ...) stands
@@ -209,15 +219,20 @@ impl WritePlan {
             // round 5).
             let defined: Vec<(String, OsString)> = defined
                 .into_iter()
-                .filter(
-                    |(tag, value)| match unconvertible_value_warning(tag, value, raw_values) {
+                .filter(|(tag, value)| {
+                    let warning = if tag.contains(':') {
+                        unconvertible_value_warning(tag, value, raw_values)
+                    } else {
+                        bare_conversion_warning(tag, value, raw_values, |_| true)
+                    };
+                    match warning {
                         Some(warning) => {
                             warnings.push(warning);
                             false
                         }
                         None => true,
-                    },
-                )
+                    }
+                })
                 .collect();
             if clear_at.is_none_or(|clear| *at > clear) {
                 if args
@@ -227,6 +242,8 @@ impl WritePlan {
                     sets_before_copy += defined.len();
                 }
                 sets.extend(defined);
+            } else {
+                sets_before_clear.extend(defined);
             }
         }
         let mut shifts = Vec::new();
@@ -263,6 +280,7 @@ impl WritePlan {
                     (Some(copy), Some(clear)) if copy <= clear
                 ),
             sets_before_copy,
+            sets_before_clear,
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -310,6 +328,108 @@ impl WritePlan {
             }
         }
         Ok(plan)
+    }
+
+    /// Classify bare values at the destination this file would write. This
+    /// must run before the transaction: a failed PrintConv lookup is a
+    /// per-request warning, while an unresolved/unsupported destination is
+    /// still the transaction's whole-file refusal.
+    pub fn for_file(&self, path: &Path) -> (Self, Vec<String>) {
+        let mut plan = self.clone();
+        let mut warnings = Vec::new();
+        let deletions = GroupDeletions::plan(
+            path,
+            self.sets
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, value))| value.is_empty())
+                .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+        );
+        let baseline = read_metadata(path).ok();
+        let census = conversion_makernote_census(path);
+        let cleared_baseline = MetadataMap::new();
+        let cleared_census = crate::writers::exif_surgical::MakerNoteCensus::default();
+        let classify = |at: usize, tag: &str, value: &OsString, with_deletions: bool| {
+            if value.is_empty() {
+                return None;
+            }
+            let bare = tag.strip_suffix('#').unwrap_or(tag);
+            if bare.contains(':') {
+                return None; // already classified in from_args
+            }
+            // A surviving set after `-all=` is applied to the stripped
+            // scratch carrier. The original maker note cannot make one of
+            // its native candidates eligible there. A later TagsFromFile
+            // may repopulate the carrier; only sets before that copy have a
+            // provably empty effective carrier.
+            let cleared = with_deletions
+                && self.clear_all
+                && (self.copy_from.is_none()
+                    || self.copy_before_clear
+                    || at < self.sets_before_copy);
+            let effective = if cleared {
+                Some(&cleared_baseline)
+            } else {
+                baseline.as_ref()
+            };
+            let effective_census = if cleared { cleared_census } else { census };
+            if let Some(metadata) = effective
+                && let Some(warning) =
+                    bare_conversion_warning(tag, value, self.raw_values, |candidate| {
+                        candidate_applies_to_file(candidate, bare, metadata, effective_census)
+                    })
+            {
+                return Some(warning);
+            }
+            let typed = effective.and_then(|metadata| {
+                resolve_write_tag_in_request(
+                    path,
+                    bare,
+                    metadata,
+                    if with_deletions {
+                        deletions.for_set_at(at)
+                    } else {
+                        Default::default()
+                    },
+                )
+                .ok()
+            });
+            // An unresolved name is left to the write planner. Parsing it
+            // against an arbitrary EXIF alias could hide a real refusal.
+            typed.and_then(|mut key| {
+                // Resolution returns the physical key without request
+                // syntax. Keep `#` so this request still bypasses PrintConv.
+                if tag.ends_with('#') {
+                    key.push('#');
+                }
+                unconvertible_value_warning(&key, value, self.raw_values)
+            })
+        };
+        let mut sets_before_copy = 0;
+        plan.sets = self
+            .sets
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (tag, value))| match classify(at, tag, value, true) {
+                Some(warning) => {
+                    warnings.push(warning);
+                    None
+                }
+                None => {
+                    if at < self.sets_before_copy {
+                        sets_before_copy += 1;
+                    }
+                    Some((tag.clone(), value.clone()))
+                }
+            })
+            .collect();
+        plan.sets_before_copy = sets_before_copy;
+        for (at, (tag, value)) in self.sets_before_clear.iter().enumerate() {
+            if let Some(warning) = classify(at, tag, value, false) {
+                warnings.push(warning);
+            }
+        }
+        (plan, warnings)
     }
 
     /// Whether the command line asks for any write at all.
@@ -488,6 +608,16 @@ pub fn write_file(
     raw_values: bool,
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
+    write_file_with_warnings(path, modifications, raw_values, on_commit).0
+}
+
+/// Classify a file's sets before permission checks or transaction execution.
+/// Warnings belong to the command even when a later preflight or write fails.
+pub fn prepare_write_file(
+    path: &Path,
+    modifications: &[(String, OsString)],
+    raw_values: bool,
+) -> (WritePlan, Vec<String>) {
     // `raw_values` is `--no-print-conv` (ExifTool's `-n`), as
     // [`WritePlan::from_args`] reads it for one file: the multi-file path
     // used to build its plan without it, so `--no-print-conv
@@ -502,7 +632,22 @@ pub fn write_file(
         raw_values,
         ..Default::default()
     };
-    write_plan_file(path, &plan, on_commit).map(|done| done.outcome)
+    plan.for_file(path)
+}
+
+/// Variant of [`write_file`] that retains destination-aware warnings alongside
+/// either a successful write or a transaction error.
+pub fn write_file_with_warnings(
+    path: &Path,
+    modifications: &[(String, OsString)],
+    raw_values: bool,
+    on_commit: impl FnOnce() -> Result<(), String>,
+) -> (Result<WriteOutcome, String>, Vec<String>) {
+    let (plan, warnings) = prepare_write_file(path, modifications, raw_values);
+    (
+        write_plan_file(path, &plan, on_commit).map(|done| done.outcome),
+        warnings,
+    )
 }
 
 /// Applies every `-TAG=VALUE` of one file through the library's write
@@ -532,8 +677,22 @@ fn apply_sets(
     if sets.is_empty() {
         return Ok(0);
     }
+    // The request's group deletions, so a bare name is typed by the address
+    // the transaction writes it at in their presence
+    // (`-MakerNotes:All= -ColorSpace#=2`: ExifIFD:ColorSpace, an integer).
+    let deletions = GroupDeletions::plan(
+        scratch,
+        sets.iter()
+            .enumerate()
+            .filter(|(_, (_, value))| value.is_empty())
+            .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+    );
+    // Read once for every bare name the loop types (`Some(None)` when the
+    // file cannot be read: the name is typed as spelled, and the
+    // transaction reports the read failure).
+    let mut baseline = None;
     let mut changes = Vec::with_capacity(sets.len());
-    for (set_tag, value) in sets {
+    for (at, (set_tag, value)) in sets.iter().enumerate() {
         let (write_tag, raw_mode) = match set_tag.strip_suffix('#') {
             Some(base) => (base, true),
             None => (set_tag.as_str(), global_raw_values),
@@ -543,10 +702,46 @@ fn apply_sets(
             changes.push(TagChange::delete(write_tag.to_string()));
             continue;
         }
-        // Conversion refusals ExifTool only warns about were already
-        // dropped (and warned about, once) by `WritePlan::from_args`.
-        let tag_value = parse_cli_tag_value_os_with_mode(write_tag, value, raw_mode)
-            .map_err(|e| format!("Invalid value for {}: {}", write_tag, e))?;
+        // A bare name the value parser has no declared type for is typed by
+        // the address the transaction will write it at (`ColorSpace` ->
+        // `ExifIFD:ColorSpace`): typed by the bare name, `-ColorSpace#=1`
+        // stayed a string and was refused as a type mismatch. A name that
+        // does not resolve is left to the transaction, which refuses it
+        // with the resolver's reason -- not a value error for an address
+        // that was never going to be written.
+        let resolved = if !write_tag.contains(':') && declared_alias(write_tag).is_none() {
+            baseline
+                .get_or_insert_with(|| read_metadata(scratch).ok())
+                .as_ref()
+                .map(|metadata| {
+                    resolve_write_tag_in_request(
+                        scratch,
+                        write_tag,
+                        metadata,
+                        deletions.for_set_at(at),
+                    )
+                })
+        } else {
+            None
+        };
+        let typed_as = match &resolved {
+            Some(Ok(key)) => key.as_str(),
+            _ => write_tag,
+        };
+        // A later group deletion may cancel this set (13.59: `-ColorSpace#=junk
+        // -EXIF:All=` warns and deletes EXIF), which only the transaction's
+        // planner decides: a value its address cannot type then goes on as
+        // the string it was, for the planner to cancel or the writer to refuse.
+        let cancellable = sets[at + 1..].iter().any(|(tag, later)| {
+            later.is_empty() && group_deletion(tag.strip_suffix('#').unwrap_or(tag)).is_some()
+        });
+        let tag_value = match parse_cli_tag_value_os_with_mode(typed_as, value, raw_mode) {
+            Ok(tag_value) => tag_value,
+            Err(_) if matches!(resolved, Some(Err(_))) || (resolved.is_some() && cancellable) => {
+                TagValue::String(value.to_string_lossy().into_owned())
+            }
+            Err(e) => return Err(format!("Invalid value for {}: {}", write_tag, e)),
+        };
         changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
     apply_tag_changes_counted(scratch, &changes)
@@ -570,6 +765,22 @@ fn unconvertible_value_warning(tag: &str, value: &OsString, raw_values: bool) ->
     err.invalid_tag_value_reason()
         .filter(|reason| is_not_in_print_conv_reason(reason))
         .map(str::to_string)
+}
+
+fn bare_conversion_warning(
+    tag: &str,
+    value: &OsString,
+    raw_values: bool,
+    applicable: impl Fn(
+        &crate::writers::generated_setnewvalue_address_rules::StaticNativeLookupCandidate,
+    ) -> bool,
+) -> Option<String> {
+    if raw_values || value.is_empty() || tag.ends_with('#') {
+        return None;
+    }
+    let text = value.to_str()?;
+    let (group, reason) = rejected_bare_conversion(tag, text, applicable)?;
+    Some(format!("Can't convert {group}:{tag} ({reason})"))
 }
 
 /// Whether `reason` is a refusal ExifTool's `SetNewValue` reports as a
