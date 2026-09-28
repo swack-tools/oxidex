@@ -892,15 +892,12 @@ fn parse_xmp_packet(
         if !legacy.has(&legacy_tag) {
             legacy.push(&legacy_tag, &tag, &values.join(", "));
         }
-        // A prior pass can record only the first rdf:li as scalar text. The
-        // flattened walk knows the full nested collection, so retain its
-        // transport even when that text has already claimed the tag. Keep a
-        // list supplied by a more specific pass if one already exists.
-        if values.len() > 1 && !list_elements.iter().any(|(existing, _)| existing == &tag) {
-            list_elements.push((tag.clone(), values.clone()));
-        }
         if results.iter().any(|(t, _)| *t == tag) {
             continue;
+        }
+        if values.len() > 1 {
+            list_elements.retain(|(existing, _)| existing != &tag);
+            list_elements.push((tag.clone(), values.clone()));
         }
         results.push((tag, values.join(", ")));
     }
@@ -2116,7 +2113,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                         push_value(
                             flat_id,
                             value,
-                            container_allows_repeated_fields,
+                            // Literal list items belong to one collection even
+                            // without an enclosing resource-valued list item.
+                            // Repeated struct fields still keep their scalar
+                            // policy, including fields of unknown schemas.
+                            container_allows_repeated_fields
+                                || (is_rdf_li(&tag_name, &resolver)
+                                    && resource_entry_depth.is_none()),
                             resource_entry_depth.map(|_| resource_entry_index),
                         );
                     }
@@ -7045,6 +7048,19 @@ mod top_level_struct_tests {
   </rdf:Bag></test:StructList2>
  </rdf:Description>
 </rdf:RDF>"#;
+        let typed = parse_xmp_typed(xml).unwrap();
+        for (tag, expected) in [
+            ("XMP-test:StructList2Item1", "c1-1"),
+            ("XMP-test:StructList2Item2", "c2-1"),
+        ] {
+            assert_eq!(
+                typed
+                    .iter()
+                    .find(|(name, _)| name == tag)
+                    .map(|(_, value)| value),
+                Some(&XmpValue::Scalar(expected.to_string()))
+            );
+        }
         let tags = extract_list_struct_values(xml).unwrap();
         assert_eq!(
             tags.iter()
