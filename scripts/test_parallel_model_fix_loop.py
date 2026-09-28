@@ -2825,6 +2825,24 @@ class ListOpenSweepPrsTests(unittest.TestCase):
         payload = _gh_pr_list(_gh_pr_entry(160, "sweep/tags-2026-07-26-4", isDraft=True))
         self.assertEqual(list_open_sweep_prs("/repo", lambda args, repo: (0, payload, "")), [])
 
+    def test_publication_checks_drafts_without_adopting_or_trusting_forks(self):
+        payload = _gh_pr_list(
+            _gh_pr_entry(160, "sweep/tags-2026-07-26-4", isDraft=True),
+            _gh_pr_entry(161, "sweep/tags-2026-07-26-5"),
+            _gh_pr_entry(162, "sweep/tags-2026-07-26-6", isDraft=True,
+                         isCrossRepository=True),
+            _gh_pr_entry(163, "sweep/tags-2026-07-26-7", isDraft=True,
+                         baseRefName="release/1.x"),
+        )
+        runner = lambda args, repo: (0, payload, "")
+        # Exercise the real publication callback, not a re-spelled filter.
+        with patch("overlord_sweep.run_sweep",
+                   side_effect=lambda **kw: kw["open_sweep_prs_fn"]()):
+            represented = parallel_model_fix_loop.default_sweep_fn(
+                repo_root="/repo", run_gh=runner)
+        self.assertEqual([p["number"] for p in represented], [160, 161])
+        self.assertEqual([p["number"] for p in list_open_sweep_prs("/repo", runner)], [161])
+
     def test_a_cross_repository_pr_is_never_adopted(self):
         # swack-tools/oxidex is PUBLIC with forks, and headRefName for a
         # cross-repo PR is the BARE branch name -- so a fork branch named
@@ -3140,6 +3158,19 @@ class AutoPublishRoundTests(unittest.TestCase):
                 return 0, self.APPROVED_REVIEW, ""
             return merge_rc, "Merged\n", "" if merge_rc == 0 else "not mergeable"
         return run_gh
+
+    def test_default_sweep_receives_the_publish_identity_runner(self):
+        pinned = self._run_gh("[]")
+        captured = []
+        with patch.object(parallel_model_fix_loop, "default_sweep_fn",
+                          side_effect=lambda **kw: captured.append(kw) or {"status": "no_news"}):
+            result = auto_publish_round(
+                repo_root=self.tmp / "repo", cache_dir="/unused", home=self.tmp / "home",
+                ensure_worktree_fn=self._ensure_worktree_fn, run_gh=pinned,
+                log_fn=lambda *a: None,
+            )
+        self.assertEqual(result["status"], "no_news")
+        self.assertIs(captured[0]["run_gh"], pinned)
 
     def _publish(self, sweep_result, run_gh, **overrides):
         kwargs = dict(
@@ -3537,6 +3568,8 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
         )
 
         self.assertEqual(result["status"], "published_awaiting_review")
+        # The final formatting pass commits only after lint can bisect the
+        # original squad lines.
         self.assertTrue(result["sweep"]["fmt"]["committed"])
 
         # What origin ACTUALLY received on the head branch -- the fix
