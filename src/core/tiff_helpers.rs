@@ -4456,10 +4456,18 @@ fn parse_makernote_with_session(
     // group, so decode it with the same code (ported from origin/main
     // 47037a04).
     if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
-        for (tag, value) in
-            crate::parsers::xmp::google_hdrp::decode_hdrp_makernote_bytes(ctx.payload())
-        {
-            metadata.insert(tag, TagValue::String(value));
+        use crate::parsers::xmp::google_hdrp::{
+            HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
+        };
+        for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
+            let priority = hdrp_tag_priority(&tag);
+            metadata.insert_occurrence(
+                tag,
+                TagValue::String(value),
+                priority,
+                HDRP_GROUP1,
+                crate::core::Instance::default(),
+            );
         }
         return;
     }

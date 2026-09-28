@@ -108,23 +108,36 @@ pub fn parse_sigma_makernote(
         if let Some((name, value)) = decode_tag(*tag_id, *field_type, *count, bytes, order, version)
         {
             let key = format!("MakerNotes:{name}");
-            if is_priority_zero_duplicate(*tag_id, version) {
-                // 0x003b Firmware and 0x003c WhiteBalance are `Priority => 0`
-                // duplicates of 0x0017 and 0x0007 (Sigma.pm). ExifTool keeps
-                // the first extraction as the default value, but `-a` still
-                // reports the second: SigmaDP2.x3f prints `Sigma:Firmware`
-                // and `Sigma:WhiteBalance` twice each under pinned 13.59.
-                // A priority-0 occurrence never displaces an existing winner
-                // (`TagSink::record`), and wins only when it is alone.
-                metadata.insert_occurrence(
-                    key,
-                    value,
-                    0,
-                    SIGMA_GROUP1,
-                    crate::core::Instance::default(),
-                );
+            let raw = no_print_conv_value(*tag_id, *field_type, *count, bytes, order, name);
+            if is_priority_zero(*tag_id, *field_type, version) {
+                // Sigma.pm's `Priority => 0` entries (see
+                // `is_priority_zero`). ExifTool keeps the first extraction as
+                // the default value, but `-a` still reports this one:
+                // SigmaDP2.x3f prints `Sigma:Firmware` and
+                // `Sigma:WhiteBalance` twice each under pinned 13.59. A
+                // priority-0 occurrence never displaces an existing winner
+                // (`TagSink::record`), and wins only when it is alone -- so
+                // SigmaDP2.x3f's bare `-Contrast` is SigmaRaw's `0.0` and
+                // `-Software` IFD0's, as ExifTool reports.
+                match raw {
+                    Some(raw) => metadata.insert_occurrence_with_raw(
+                        key,
+                        value,
+                        raw,
+                        0,
+                        SIGMA_GROUP1,
+                        crate::core::Instance::default(),
+                    ),
+                    None => metadata.insert_occurrence(
+                        key,
+                        value,
+                        0,
+                        SIGMA_GROUP1,
+                        crate::core::Instance::default(),
+                    ),
+                };
             } else if metadata.get(&key).is_none() {
-                match no_print_conv_value(*tag_id, *field_type, *count, bytes, order, name) {
+                match raw {
                     Some(raw) => {
                         metadata.insert_with_group1_and_value(key, value, raw, SIGMA_GROUP1);
                     }
@@ -379,11 +392,29 @@ fn decode_tag(
     Some(value)
 }
 
-/// Whether `tag_id` is one of `Sigma.pm`'s `Priority => 0` restatements of an
-/// earlier tag of the same name: 0x003b Firmware (of 0x0017) and 0x003c
-/// WhiteBalance (of 0x0007), both conditional on `MakerNoteSigmaVer < 3`.
-fn is_priority_zero_duplicate(tag_id: u16, version: u8) -> bool {
-    version < 3 && matches!(tag_id, 0x003B | 0x003C)
+/// Whether the entry is one of `Sigma::Main`'s `Priority => 0` tags
+/// (Sigma.pm 13.59; `FoundTag` reads the tag's own `Priority`,
+/// ExifTool.pm:9469-9473):
+///
+/// * 0x000d-0x0011 Contrast/Shadow/Highlight/Saturation/Sharpness in their
+///   numeric spelling (Sigma.pm:314-378: the `$format eq "string"`
+///   alternative has no priority, the other `Priority => 0`);
+/// * 0x0018 Software (Sigma.pm:411-415);
+/// * with `MakerNoteSigmaVer < 3`, 0x0031 FNumber, 0x0032 ExposureTime,
+///   0x003b Firmware and 0x003c WhiteBalance, restatements of earlier tags
+///   (Sigma.pm:629-646, 691-702);
+/// * with `MakerNoteSigmaVer >= 3`, 0x0049 FNumber, 0x004a ExposureTime and
+///   0x0058 WhiteBalance, and 0x0057 Firmware2 in its string spelling
+///   (Sigma.pm:718-735, 775-786).
+fn is_priority_zero(tag_id: u16, field_type: u16, version: u8) -> bool {
+    match tag_id {
+        0x000D..=0x0011 => field_type != TYPE_STRING,
+        0x0018 => true,
+        0x0031 | 0x0032 | 0x003B | 0x003C => version < 3,
+        0x0049 | 0x004A | 0x0058 => version >= 3,
+        0x0057 => field_type == TYPE_STRING,
+        _ => false,
+    }
 }
 
 /// The value `-n` prints for a tag [`decode_tag`] stored as its PrintConv
@@ -647,11 +678,24 @@ mod tests {
     /// the pinned oracle's `-a` reports both occurrences on SigmaDP2.x3f.
     #[test]
     fn priority_zero_restatements_are_legacy_only() {
-        assert!(is_priority_zero_duplicate(0x003B, 2));
-        assert!(is_priority_zero_duplicate(0x003C, 2));
-        assert!(!is_priority_zero_duplicate(0x003B, 3));
-        assert!(!is_priority_zero_duplicate(0x0017, 2));
-        assert!(!is_priority_zero_duplicate(0x0007, 2));
+        assert!(is_priority_zero(0x003B, TYPE_STRING, 2));
+        assert!(is_priority_zero(0x003C, TYPE_STRING, 2));
+        assert!(!is_priority_zero(0x003B, TYPE_STRING, 3));
+        assert!(!is_priority_zero(0x0017, TYPE_STRING, 2));
+        assert!(!is_priority_zero(0x0007, TYPE_STRING, 2));
+    }
+
+    #[test]
+    fn numeric_adjustments_and_software_are_priority_zero() {
+        // Sigma.pm:314-378: only the non-string alternative is `Priority => 0`.
+        assert!(is_priority_zero(0x000D, TYPE_RATIONAL_U, 2));
+        assert!(!is_priority_zero(0x000D, TYPE_STRING, 2));
+        assert!(is_priority_zero(0x0011, TYPE_RATIONAL_U, 3));
+        // Sigma.pm:411-415.
+        assert!(is_priority_zero(0x0018, TYPE_STRING, 2));
+        // Sigma.pm:718-735: the version-3 restatements.
+        assert!(is_priority_zero(0x0049, TYPE_RATIONAL_U, 3));
+        assert!(!is_priority_zero(0x0049, TYPE_RATIONAL_U, 2));
     }
 
     #[test]

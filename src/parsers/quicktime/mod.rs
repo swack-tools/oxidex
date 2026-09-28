@@ -162,6 +162,22 @@ pub fn parse_quicktime_metadata_from_bytes_with_options(
     })
 }
 
+/// CR3-only composition with rows belonging to a moov UUID directory.
+/// The shared extractor interleaves those rows with actual moov children.
+pub(crate) fn parse_quicktime_with_moov_uuid(
+    data: &[u8],
+    is_cr3: bool,
+    uuid: [u8; 16],
+    rows: MetadataMap,
+) -> Result<MetadataMap, String> {
+    crate::core::metadata_map::file_rows(|| {
+        let atoms = atom_parser::parse_atoms(data)
+            .map_err(|e| format!("Failed to parse atoms: {e}"))?
+            .1;
+        metadata_extractor::extract_metadata_with_moov_uuid(&atoms, is_cr3, Some((uuid, rows)))
+    })
+}
+
 /// Validate QuickTime/MP4 file signature.
 ///
 /// QuickTime/MP4 files should contain either:
