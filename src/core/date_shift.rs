@@ -5,6 +5,7 @@
 //! - Subtract offset: `-EXIF:DateTime-=0:0:5 0:0:0` (subtract 5 days)
 //! - Set absolute: `-EXIF:DateTime=2025:01:15 10:30:00` (set to specific date/time)
 
+use super::FileReader;
 use super::operations::{read_metadata, write_metadata};
 use super::tag_value::TagValue;
 use crate::core::FileFormat;
@@ -439,7 +440,13 @@ pub fn shift_metadata_dates(
     if format == FileFormat::JPEG {
         return shift_jpeg_dates(path, tag_pattern, &spec);
     }
-    shift_map_dates(path, tag_pattern, &spec)
+    shift_map_dates(
+        path,
+        format == FileFormat::PNG,
+        tag_pattern,
+        offset_or_value,
+        &spec,
+    )
 }
 
 /// JPEG path: patch EXIF date/time values in place. Never rewrites the EXIF
@@ -460,7 +467,13 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
 }
 
 /// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
-fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+fn shift_map_dates(
+    path: &Path,
+    is_png: bool,
+    tag_pattern: &str,
+    offset_or_value: &str,
+    spec: &ShiftSpec,
+) -> Result<()> {
     let mut metadata = read_metadata(path)?;
     let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
 
@@ -500,6 +513,34 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
         modified += 1;
     }
 
+    // In the selected 11.78 WritePNG.pl, AddChunks accepts the negative
+    // "unknown" IsOverwriting result for an absent shifted PNG text tag.
+    // SetNewValue leaves the signed shift operand as its new value, and the
+    // create-date inverse leaves it literal. Later AddChunks requires > 0,
+    // so it does not create this tag. This applies only to the PNG text
+    // CreateDate target, never an absent EXIF date.
+    if is_png
+        && crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+        && (all_dates || key_matches_pattern("PNG:CreateDate", tag_pattern))
+        && !metadata.contains_key("PNG:CreateDate")
+        && let ShiftSpec::Relative { op, .. } = spec
+    {
+        if png_has_create_date_chunk(path)? {
+            return Err(ExifToolError::parse_error(
+                "Cannot shift an unreadable existing PNG create-date chunk",
+            ));
+        }
+        let shift = match op {
+            ShiftOperation::Add => format!("+{}", offset_or_value.trim_start_matches(['+', '-'])),
+            ShiftOperation::Subtract => {
+                format!("-{}", offset_or_value.trim_start_matches(['+', '-']))
+            }
+            ShiftOperation::Set => unreachable!(),
+        };
+        metadata.insert("PNG:CreateDate", TagValue::new_string(shift));
+        modified += 1;
+    }
+
     if modified == 0 {
         // Nothing to shift: the file is left as it is (13.59: `unchanged`).
         return Ok(());
@@ -508,10 +549,59 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
     Ok(())
 }
 
+fn png_has_create_date_chunk(path: &Path) -> Result<bool> {
+    use crate::parsers::png::chunk_parser::parse_chunk;
+
+    let reader = MMapReader::new(path)?;
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(&reader, offset)?;
+        if chunk.is_text_chunk() && chunk.data.starts_with(b"create-date\0") {
+            return Ok(true);
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone, Timelike};
+
+    #[test]
+    fn png_absent_create_date_shift_follows_selected_addchunks_guard() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/png/sample.png");
+        for (operation, literal) in [
+            (ShiftOperation::Add, "+1:0:0 0:0:0"),
+            (ShiftOperation::Subtract, "-1:0:0 0:0:0"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("sample.png");
+            std::fs::copy(&fixture, &file).unwrap();
+            assert!(
+                read_metadata(&file)
+                    .unwrap()
+                    .get("PNG:CreateDate")
+                    .is_none()
+            );
+            shift_metadata_dates(&file, "AllDates", "1:0:0 0:0:0", operation).unwrap();
+            let actual = read_metadata(&file)
+                .unwrap()
+                .get_string("PNG:CreateDate")
+                .map(str::to_owned);
+            let expected =
+                crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+                    .then_some(literal.to_owned());
+            assert_eq!(
+                actual, expected,
+                "the selected AddChunks guard controls absent PNG CreateDate"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_offset_full_form() {

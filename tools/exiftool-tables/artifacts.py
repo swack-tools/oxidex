@@ -141,6 +141,7 @@ STATIC_ARTIFACTS = (
     Artifact("mandatory-default-ledger", 1, "mandatory_defaults_codegen", "tools/exiftool-tables/mandatory_defaults_ledger.json"),
     Artifact("raw-jfif-rules", 1, "raw_jfif_codegen", "src/writers/generated_raw_jfif.rs"),
     Artifact("raw-jfif-ledger", 1, "raw_jfif_codegen", "tools/exiftool-tables/raw_jfif_ledger.json"),
+    Artifact("png-shift-contract", 1, "png_shift_contract", "src/writers/generated_png_shift_contract.rs"),
     Artifact("setnewvalue-address-rules", 1, "setnewvalue_address_rust_codegen", "src/writers/generated_setnewvalue_address_rules.rs"),
     Artifact("setnewvalue-address-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_address_ledger.json"),
     Artifact("setnewvalue-ownership-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_ownership_ledger.json"),

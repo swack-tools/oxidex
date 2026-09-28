@@ -76,7 +76,11 @@ elif mode=='chosen-perl':
         assert name.startswith('gen_'),name
         print('generated explicit-A '+name)
 else:
-    if name=='analyze.py': dump(args[0])
+    if name=='png_shift_contract.py':
+        assert pathlib.Path(args[0]).resolve()==lib
+        assert flag('--output')==artifact('png_shift_contract')
+        output(flag('--output'),name)
+    elif name=='analyze.py': dump(args[0])
     elif name=='verify_exprs.py':
         dump(args[0]);assert flag('--et-lib')==lib
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -385,6 +389,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('mandatory_defaults_codegen.py'), int(full))
                 self.assertEqual(names.count('capture_raw_jfif_fact.pl'), int(full))
                 self.assertEqual(names.count('raw_jfif_codegen.py'), int(full))
+                self.assertEqual(names.count('png_shift_contract.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_addressing.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))

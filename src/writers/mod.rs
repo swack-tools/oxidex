@@ -12,6 +12,7 @@ pub(crate) mod makernote_guard;
 // Generated from the pinned ExifTool's IsOffset/OffsetPair inventory.
 pub(crate) mod makernote_offset_pairs;
 // Source-selected addresses remain internal until public file parity is proved.
+pub(crate) mod generated_png_shift_contract;
 pub(crate) mod generated_public_write;
 pub(crate) mod generated_setnewvalue_address_rules;
 pub(crate) mod generated_setnewvalue_public_migration_rules;

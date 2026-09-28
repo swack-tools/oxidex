@@ -72,6 +72,10 @@ if [[ ! -d "$LIB" && -z "${OXIDEX_EXIFTOOL_LIB:-}" ]]; then
 fi
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB" >&2; exit 1; }
 
+echo ">> selecting PNG absent-date shift behavior from native source"
+python3 "$HERE/png_shift_contract.py" "$LIB" \
+    --output "$(artifact_path png-shift-contract)"
+
 echo ">> extracting tag tables from Perl symbol table"
 # Keep writer capture separate from reader hydration. Hydration attaches a
 # large native object graph; traversing it again in the writer projection is
