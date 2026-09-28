@@ -76,7 +76,18 @@ elif mode=='chosen-perl':
         assert name.startswith('gen_'),name
         print('generated explicit-A '+name)
 else:
-    if name=='png_shift_contract.py':
+    if name in ('helper_oracle.py', 'codegen_charsets.py'):
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        assert flag('--exiftool-dir')==lib.parent
+        path=artifact(name.removesuffix('.py'))
+        if '--check' in args:
+            assert name=='helper_oracle.py'
+            assert path.read_text()=='generated explicit-A '+name+'\n'
+            assert artifact('codegen_charsets').read_text()=='generated explicit-A codegen_charsets.py\n'
+        else:
+            assert '--write' in args
+            output(path,name)
+    elif name=='png_shift_contract.py':
         assert pathlib.Path(args[0]).resolve()==lib
         assert flag('--output')==artifact('png_shift_contract')
         output(flag('--output'),name)
@@ -390,6 +401,9 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('capture_raw_jfif_fact.pl'), int(full))
                 self.assertEqual(names.count('raw_jfif_codegen.py'), int(full))
                 self.assertEqual(names.count('png_shift_contract.py'), int(full))
+                self.assertEqual(names.count('helper_oracle.py'), int(full))
+                self.assertEqual(names.count('codegen_charsets.py'), int(full))
+                self.assertEqual(names.count('helper_oracle.py:check'), int(full))
                 self.assertEqual(names.count('setnewvalue_addressing.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))
@@ -399,6 +413,9 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
                 if full:
+                    self.assertLess(names.index('helper_oracle.py'), names.index('codegen_charsets.py'))
+                    self.assertLess(names.index('codegen_charsets.py'), names.index('helper_oracle.py:check'))
+                    self.assertLess(names.index('helper_oracle.py:check'), names.index('dump_tables.pl'))
                     self.assertEqual(len(dump_calls), 3)
                     self.assertEqual(dump_calls[0]['argv'], [str(self.source / 'lib')])
                     self.assertEqual(dump_calls[1]['argv'],
@@ -496,7 +513,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'capture_raw_jfif_fact.pl', 'raw_jfif_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
+        for leaf in ('helper_oracle.py', 'codegen_charsets.py', 'helper_oracle.py:check', 'serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'capture_raw_jfif_fact.pl', 'raw_jfif_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
