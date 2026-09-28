@@ -46,7 +46,9 @@
 use std::collections::HashMap;
 
 use crate::core::metadata_map::MetadataMap;
-use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+use crate::core::tag_occurrence::{
+    Instance, Provenance, SHIM_DEFAULT_PRIORITY, TagOccurrence, intern,
+};
 use crate::core::tag_value::TagValue;
 use crate::core::tiff_helpers::trimmed_data_member;
 use crate::exiftool_tables::session::{MemberVal, Session};
@@ -488,6 +490,61 @@ impl DirEngineRows {
             if keep(row.name, metadata) {
                 record(row, self.stored_forms, metadata, key(row.name));
             }
+        }
+    }
+
+    /// Publishes only Exif::Main's seven image-layout fields from a JPEG's
+    /// chained IFD2. Each row retains the numeric id of the physical entry
+    /// that generated it and the IFD2 family-1 label. None of these seven
+    /// source fields has a ValueConv, so their stored form is also their
+    /// `-n` value; their generated display remains the PrintConv form.
+    /// Preview pointer fields are intentionally left to the hand collector.
+    pub(crate) fn finish_ifd2_image_layout(self, metadata: &mut MetadataMap) {
+        const FIELDS: [(u16, &str); 7] = [
+            (0x0100, "ImageWidth"),
+            (0x0101, "ImageHeight"),
+            (0x0102, "BitsPerSample"),
+            (0x0106, "PhotometricInterpretation"),
+            (0x0115, "SamplesPerPixel"),
+            (0x011c, "PlanarConfiguration"),
+            (0x0212, "YCbCrSubSampling"),
+        ];
+        for row in self.rows.iter().filter(|row| !row.consumed) {
+            let Some(&id) = self.ids.get(row.entry_index) else {
+                continue;
+            };
+            if !FIELDS.contains(&(id, row.name)) {
+                continue;
+            }
+            let Some(tag) = self.table.tag(id).filter(|tag| tag.value_conv.is_none()) else {
+                continue;
+            };
+            let key = format!("IFD2:{}", row.name);
+            let stored = row.stored.clone();
+            let value = stored.clone().unwrap_or_else(|| row.no_print_conv.clone());
+            metadata.record_occurrence(
+                key,
+                TagOccurrence {
+                    id: oxidex_tags::TagId::Numeric(id),
+                    name: intern(row.name),
+                    group0: intern("EXIF"),
+                    group1: intern("IFD2"),
+                    group2: None,
+                    instance: Instance::default(),
+                    raw: row.display.clone(),
+                    value: Some(value),
+                    print: Some(row.display.clone()),
+                    stored,
+                    priority: row.priority,
+                    is_list: tag.flags.list,
+                    order: 0,
+                    origin: Provenance {
+                        module: Some("Exif"),
+                        table: Some("Main"),
+                        byte_range: None,
+                    },
+                },
+            );
         }
     }
 
