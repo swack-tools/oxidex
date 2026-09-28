@@ -528,6 +528,7 @@ class RouteLedgerTests(unittest.TestCase):
         "src/parsers/flir_fpf.rs",
         "src/parsers/jpeg/app_segments/infiray.rs",
         "src/parsers/macho/metadata_extractor.rs",
+        "src/parsers/raw/metadata.rs",
         "src/parsers/specialized/fits.rs",
         "src/parsers/tiff/geotiff_parser.rs",
         "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
@@ -537,7 +538,7 @@ class RouteLedgerTests(unittest.TestCase):
         "src/parsers/tiff/makernotes/sony/binary_data.rs",
     )
 
-    def test_exact_task8_boundary_finds_repair_guards_and_keyed_stays_unreachable(self):
+    def test_exact_task8_boundary_finds_repair_guards_and_keyed_carrier(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             repository = pathlib.Path(td) / "repo"
             run_root = pathlib.Path(td) / "run"
@@ -559,6 +560,8 @@ class RouteLedgerTests(unittest.TestCase):
                     handle.write(source + "\n")
             with (repository / "src/main.rs").open("a", encoding="utf-8") as handle:
                 handle.write("process_serial_directory(input);\n")
+            with (repository / "src/parsers/raw/metadata.rs").open("a", encoding="utf-8") as handle:
+                handle.write("process_keyed_directory(table, block, ctx, sink);\n")
 
             ledger = attribute._route_ledger(repository, run_root)
 
@@ -568,7 +571,7 @@ class RouteLedgerTests(unittest.TestCase):
             )
             self.assertTrue(all(ledger["guard_sites"][token] for token in attribute.TOKENS))
             self.assertTrue(ledger["production_reachable"]["serial"])
-            self.assertFalse(ledger["production_reachable"]["keyed"])
+            self.assertTrue(ledger["production_reachable"]["keyed"])
 
     def test_route_ledger_does_not_hide_production_after_cfg_test_helper(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
@@ -602,10 +605,13 @@ class RouteLedgerTests(unittest.TestCase):
                     "}\n"
                 )
 
+            with (repository / "src/parsers/raw/metadata.rs").open("a", encoding="utf-8") as handle:
+                handle.write("fn production() { process_keyed_directory(table, block, ctx, sink); }\n")
             ledger = attribute._route_ledger(repository, run_root)
 
             self.assertTrue(ledger["production_reachable"]["serial"])
-            self.assertFalse(ledger["production_reachable"]["keyed"])
+            self.assertTrue(ledger["production_reachable"]["keyed"])
+            self.assertEqual(len(ledger["production_calls"]["keyed"]), 1)
 
 
 class PreSeamControlTests(unittest.TestCase):

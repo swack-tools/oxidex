@@ -32,7 +32,9 @@ use crate::core::tag_conversion::{apply_tile_offsets_value_conv, exif_entry_to_t
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
-    Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
+    Acknowledged, Ctx, Emitted, GateA, KeyedBlock, KeyedDirectoryTable, KeyedEmissionSink,
+    KeyedScope, PerlCitation, RawAccess, decode_binary_table, find_keyed_table, find_table,
+    process_keyed_directory,
 };
 use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
@@ -8680,10 +8682,10 @@ fn emit_ciff_main_tag(metadata: &mut MetadataMap, entry: &CiffEntry<'_>, model: 
 ///   conversions, via [`parse_canon_ciff_records`];
 /// * `%Canon::ColorBalance` is decoded from its generated table here, because
 ///   the MakerNote side has no decoder for it ([`emit_canon_color_balance`]);
-/// * `%CanonRaw::Main`'s scalar entries -- the part of the format that is a tag
-///   *dictionary* rather than a binary record, and so is not in the generated
-///   schema at all -- are the only hand-written decode
-///   ([`emit_ciff_main_tag`]), each arm carrying its CanonRaw.pm citation.
+/// * `%CanonRaw::Main`'s 0x080b firmware field is read from a checked projection
+///   of its generated keyed row; other scalar entries still use the cited
+///   hand reader ([`emit_ciff_main_tag`]). The full generated Main table stays
+///   blocked until its remaining formats and edges are representable.
 ///
 /// # Deliberately omitted
 ///
@@ -8741,6 +8743,112 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
     decode_ciff_container(data, &mut metadata);
     Ok(metadata)
+}
+
+/// The 13.59 CanonRaw Main table is blocked as a whole: other rows have
+/// unmodeled formats and edges. This projection admits only the generated
+/// 0x080b row after checking every property the keyed scalar path consumes.
+/// Absence or changed source facts leaves the existing hand reader in charge.
+fn canon_firmware_keyed_table() -> Option<&'static KeyedDirectoryTable> {
+    static PROJECTION: std::sync::OnceLock<Option<KeyedDirectoryTable>> =
+        std::sync::OnceLock::new();
+    PROJECTION
+        .get_or_init(|| {
+            let source = find_keyed_table("CanonRaw", "Main")?;
+            let tag = source.tags.iter().find(|tag| tag.raw_id == 0x080b)?;
+            if tag.name != "CanonFirmwareVersion"
+                || tag.format.is_some()
+                || tag.count.is_some()
+                || tag.condition.is_some()
+                || tag.raw_conv.is_some()
+                || tag.value_conv.is_some()
+                || !matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
+                || tag.edge.is_some()
+                || tag.omitted.value_conv
+                || tag.omitted.raw_conv
+                || tag.omitted.condition
+                || tag.omitted.hook
+                || tag.omitted.subdirectory
+                || tag.omitted.print_conv
+                || tag.flags.unknown
+                || tag.flags.binary
+                || tag.flags.list
+                || tag.flags.avoid
+                || tag.flags.priority.is_some()
+            {
+                return None;
+            }
+            Some(KeyedDirectoryTable {
+                gate_a: GateA { blocked_by: &[] },
+                tags: std::slice::from_ref(tag),
+                variants: &[],
+                ..*source
+            })
+        })
+        .as_ref()
+}
+
+#[derive(Default)]
+struct CanonFirmwareKeyedSink {
+    rows: Vec<Emitted>,
+}
+
+impl KeyedEmissionSink for CanonFirmwareKeyedSink {
+    fn emit(&mut self, row: Emitted) {
+        self.rows.push(row);
+    }
+
+    fn keyed_enabled(&self, table: &'static KeyedDirectoryTable) -> bool {
+        canon_firmware_keyed_table().is_some_and(|enabled| std::ptr::eq(enabled, table))
+    }
+}
+
+/// Return one generated occurrence from the actual CIFF heap. The singleton
+/// condition keeps its position aligned with the hand directory walk; a file
+/// with repeated firmware records stays entirely on the existing path.
+fn canon_firmware_from_keyed_heap(
+    heap: &[u8],
+    order: TableByteOrder,
+    occurrences: usize,
+) -> Option<Option<Emitted>> {
+    if occurrences != 1 {
+        return None;
+    }
+    let table = canon_firmware_keyed_table()?;
+    let mut members = std::collections::HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    let mut sink = CanonFirmwareKeyedSink::default();
+    let block = KeyedBlock::new(
+        heap,
+        order,
+        KeyedScope {
+            group1_override: Some("CanonRaw"),
+        },
+    );
+    let result = process_keyed_directory(table, block, &mut ctx, &mut sink);
+    if result.emitted != 1
+        || result.gate_a_blocked != 0
+        || result.gate_b_blocked != 0
+        || result.malformed_directory != 0
+        || result.high_bit_error != 0
+        || result.duplicate_directory != 0
+        || result.initial_context_refusal != 0
+        || result.omitted != 0
+        || result.bad_value != 0
+        || result.large_scalar != 0
+        || result.unwalked_edge != 0
+        || result.unavailable_target != 0
+        || result.validation_rejected != 0
+    {
+        return None;
+    }
+    // The attribution token suppresses the outward row after pipeline::execute.
+    // A silenced row still consumes this source occurrence: falling back to
+    // the hand reader would hide that the keyed route had no output.
+    if sink.rows.len() > 1 {
+        return None;
+    }
+    Some(sink.rows.pop())
 }
 
 /// Decode one little-endian CIFF container -- `II`, a 4-byte header length,
@@ -8803,9 +8911,19 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
         }
     }
 
+    let mut firmware_from_keyed = canon_firmware_from_keyed_heap(
+        &data[heap_start..],
+        order,
+        entries.iter().filter(|entry| entry.id == 0x080b).count(),
+    );
     let mut canon_records: Vec<(u16, &[u8])> = Vec::new();
     for entry in &entries {
         match entry.id {
+            0x080b if firmware_from_keyed.is_some() => {
+                if let Some(row) = firmware_from_keyed.take().flatten() {
+                    metadata.insert(format!("{}:{}", row.group1, row.name), row.value);
+                }
+            }
             0x080a => {}
             // The eight transcribed `%CanonRaw::*` binary records
             // (CanonRaw.pm:427-590), reached from Main at the cited lines.
@@ -12549,6 +12667,28 @@ mod rational_array_tests {
         file.extend_from_slice(&0u32.to_le_bytes()); // next-directory word
         file.extend_from_slice(&directory_relative.to_le_bytes());
         file
+    }
+
+    #[test]
+    fn keyed_firmware_projection_refuses_truncated_repeated_and_unknown_records() {
+        let file = build_ciff(&[(0x080b, b"Firmware Version 1.1.1\0".to_vec())]);
+        let heap = &file[14..];
+        let row = canon_firmware_from_keyed_heap(heap, TableByteOrder::Little, 1)
+            .expect("one generated source occurrence")
+            .expect("keyed output row");
+        assert_eq!(row.name, "CanonFirmwareVersion");
+        assert_eq!(row.group1, "CanonRaw");
+        assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(0x080b));
+        assert_eq!(row.value.as_string(), Some("Firmware Version 1.1.1"));
+        assert!(
+            canon_firmware_from_keyed_heap(&heap[..heap.len() - 1], TableByteOrder::Little, 1)
+                .is_none()
+        );
+        assert!(canon_firmware_from_keyed_heap(heap, TableByteOrder::Little, 2).is_none());
+        let unknown = build_ciff(&[(0x08fe, b"unknown\0".to_vec())]);
+        assert!(
+            canon_firmware_from_keyed_heap(&unknown[14..], TableByteOrder::Little, 1).is_none()
+        );
     }
 
     /// A `0x28`-typed subdirectory is entered.

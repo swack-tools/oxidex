@@ -77,6 +77,7 @@ TASK8_RUST_BOUNDARY = (
     "src/parsers/flir_fpf.rs",
     "src/parsers/jpeg/app_segments/infiray.rs",
     "src/parsers/macho/metadata_extractor.rs",
+    "src/parsers/raw/metadata.rs",
     "src/parsers/specialized/fits.rs",
     "src/parsers/tiff/geotiff_parser.rs",
     "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
@@ -1371,10 +1372,10 @@ def _route_ledger(repository: Path, root: Path) -> dict:
             "serial": bool(serial_calls),
             "keyed": bool(keyed_calls),
         },
-        "keyed_note": "no public production caller; zero remains unexercised",
+        "keyed_note": "CanonRaw CRW/CIFF 0x080b is production reachable; the Task 8 bounded corpus has no CRW and remains unexercised for this token",
     }
-    if keyed_calls:
-        raise ReceiptError("keyed route ledger changed: production caller requires controller review")
+    if len(keyed_calls) != 1 or keyed_calls[0]["path"] != "src/parsers/raw/metadata.rs":
+        raise ReceiptError("keyed route ledger changed: expected only the reviewed CanonRaw carrier")
     path = root / "contracts" / "route-ledger.json"
     write_json(path, ledger)
     return {"artifact": _artifact_record(path), "sha256": canonical_sha256(ledger), **ledger}
@@ -1390,7 +1391,7 @@ def _fixture_observations(
             "status": exercise_status(
                 projections["control-empty"]["aggregate"],
                 projections[token]["aggregate"],
-                production_reachable=token != "keyed",
+                production_reachable=True,
             ),
             "matched_lost": reconciliations[token]["matched_lost"],
         }
@@ -1437,7 +1438,7 @@ def _fixture_observations(
         delta["removed"] or delta["added"] or delta["changed_or_reordered"]
         for delta in keyed_deltas.values()
     ):
-        raise ReceiptError("keyed changed output despite having no production caller")
+        raise ReceiptError("keyed changed Task 8 bounded-corpus output without a CRW fixture")
     corpus = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
     exact_loss_payload = {
         "schema": "genshare-exact-loss/v1",
