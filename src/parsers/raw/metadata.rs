@@ -544,8 +544,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     let mut dng_priority_dir: Option<String> = None;
-    // Bound total DNG child-directory work across all pointers in this file.
-    let mut dng_subifd_budget = 128usize;
+    // Direct children get separate bounded walks: a corrupt branch must not
+    // consume the budget needed to read its valid sibling.
+    let mut dng_root_slots = 32usize;
     // Non-DNG chain/SubIFD arbitration is separate from the DNG entry-order state.
     let mut priority_dir_set = false;
 
@@ -782,6 +783,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate()
                             {
                                 let offset = u64::from(read_u32(offset_bytes, byte_order));
+                                if offset == 0 || !dng_ifd_table_fits(data, offset, byte_order) {
+                                    continue;
+                                }
+                                if dng_root_slots == 0 {
+                                    break;
+                                }
+                                dng_root_slots -= 1;
                                 let directory = if index == 0 {
                                     "SubIFD".to_string()
                                 } else {
@@ -797,7 +805,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     &mut metadata,
                                     &mut dng_priority_dir,
                                     &mut Vec::new(),
-                                    &mut dng_subifd_budget,
+                                    &mut DngSubifdBudget::default(),
                                 );
                             }
                             continue;
@@ -2243,6 +2251,43 @@ fn read_tiff_numeric_array(
     )
 }
 
+/// Per direct child, at most 48 full IFD parses (32 successes) and 2048
+/// pointer inspections. At most 32 direct children start a walk per file.
+struct DngSubifdBudget {
+    parse_attempts_left: usize,
+    valid_ifds_left: usize,
+    pointer_checks_left: usize,
+    failed_offsets: std::collections::HashSet<u64>,
+}
+
+impl Default for DngSubifdBudget {
+    fn default() -> Self {
+        Self {
+            parse_attempts_left: 48,
+            valid_ifds_left: 32,
+            pointer_checks_left: 2048,
+            failed_offsets: std::collections::HashSet::new(),
+        }
+    }
+}
+
+/// Match parse_ifd's fixed-size table bounds check before spending a parse
+/// attempt. Out-of-range pointers are common in damaged DNGs and cheap to skip.
+fn dng_ifd_table_fits(data: &[u8], offset: u64, byte_order: ByteOrder) -> bool {
+    let Ok(start) = usize::try_from(offset) else {
+        return false;
+    };
+    let Some(count_bytes) = data.get(start..start.saturating_add(2)) else {
+        return false;
+    };
+    let Some(count) = read_tiff_u16(count_bytes, byte_order) else {
+        return false;
+    };
+    start
+        .checked_add(2 + usize::from(count) * 12 + 4)
+        .is_some_and(|end| end <= data.len())
+}
+
 /// Emit a DNG child at its pointer's position in the parent IFD walk.
 /// ExifTool 13.59 revisits a self-referencing SubIFD once before stopping.
 /// Keep that duplicate occurrence, while bounding malformed pointer graphs.
@@ -2257,12 +2302,15 @@ fn emit_dng_subifd(
     metadata: &mut MetadataMap,
     priority_dir: &mut Option<String>,
     active_offsets: &mut Vec<u64>,
-    remaining: &mut usize,
+    budget: &mut DngSubifdBudget,
 ) {
     const MAX_DNG_SUBIFD_DEPTH: usize = 16;
     if offset == 0
         || active_offsets.len() >= MAX_DNG_SUBIFD_DEPTH
-        || *remaining == 0
+        || budget.parse_attempts_left == 0
+        || budget.valid_ifds_left == 0
+        || budget.failed_offsets.contains(&offset)
+        || !dng_ifd_table_fits(data, offset, byte_order)
         || active_offsets
             .iter()
             .filter(|&&seen| seen == offset)
@@ -2271,16 +2319,22 @@ fn emit_dng_subifd(
     {
         return;
     }
-    *remaining -= 1;
+    budget.parse_attempts_left -= 1;
     let Ok(sub_tags) = parse_ifd(reader, offset, byte_order) else {
+        budget.failed_offsets.insert(offset);
         return;
     };
+    budget.valid_ifds_left -= 1;
     active_offsets.push(offset);
     extract_dng_subifd_preview(data, &sub_tags, sub_index, byte_order, metadata);
     for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
         let bytes = raw_bytes.as_ref();
         if *tag_id == 0x014A {
             for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate() {
+                if budget.pointer_checks_left == 0 {
+                    break;
+                }
+                budget.pointer_checks_left -= 1;
                 let child_offset = u64::from(read_u32(offset_bytes, byte_order));
                 let child_directory = if index == 0 {
                     "SubIFD".to_string()
@@ -2297,7 +2351,7 @@ fn emit_dng_subifd(
                     metadata,
                     priority_dir,
                     active_offsets,
-                    remaining,
+                    budget,
                 );
             }
             continue;
@@ -4123,6 +4177,121 @@ mod dng_thumbnail_tiff_tests {
         data[256..258].copy_from_slice(&4u16.to_le_bytes());
         data[294..306].copy_from_slice(&[0x4A, 0x01, 4, 0, 1, 0, 0, 0, 128, 0, 0, 0]);
         assert_eq!(dng_width_occurrences(&data).len(), 5);
+    }
+
+    fn dng_fanout_probe(distinct_invalid: bool) -> Vec<u8> {
+        let mut data = vec![0u8; 3000];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_ifd = |data: &mut [u8], offset: usize, width: u32, pointers: &[u32]| {
+            let entries = 3 + usize::from(!pointers.is_empty());
+            data[offset..offset + 2].copy_from_slice(&(entries as u16).to_le_bytes());
+            for (index, (tag, count, value)) in [
+                (0x00FEu16, 1u32, 1u32),
+                (0x0100, 1, width),
+                (0x0101, 1, 100),
+            ]
+            .into_iter()
+            .chain((!pointers.is_empty()).then_some((
+                0x014A,
+                pointers.len() as u32,
+                (offset + 64) as u32,
+            )))
+            .enumerate()
+            {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+            data[offset + 2 + entries * 12..offset + 6 + entries * 12].fill(0);
+            for (index, pointer) in pointers.iter().enumerate() {
+                let at = offset + 64 + index * 4;
+                data[at..at + 4].copy_from_slice(&pointer.to_le_bytes());
+            }
+        };
+        let offsets: Vec<_> = (0..15).map(|index| 128 + 128 * index).collect();
+        write_ifd(&mut data, 8, 16, &[offsets[0], 2300]);
+        for (index, &offset) in offsets.iter().enumerate() {
+            let mut pointers: Vec<u32> = offsets.get(index + 1).copied().into_iter().collect();
+            pointers.extend((0..9).map(|n| {
+                if distinct_invalid {
+                    3000 + (index * 9 + n) as u32
+                } else {
+                    2999
+                }
+            }));
+            write_ifd(&mut data, offset as usize, 1000 + index as u32, &pointers);
+        }
+        write_ifd(&mut data, 2300, 7777, &[]);
+        data
+    }
+
+    #[test]
+    fn dng_malformed_nested_branch_does_not_hide_direct_sibling() {
+        for distinct_invalid in [false, true] {
+            let widths = dng_width_occurrences(&dng_fanout_probe(distinct_invalid));
+            assert_eq!(widths.len(), 17);
+            assert_eq!(widths[0], ("IFD0".into(), 16));
+            assert_eq!(widths[15], ("SubIFD".into(), 1014));
+            assert_eq!(widths[16], ("SubIFD1".into(), 7777));
+        }
+    }
+
+    #[test]
+    fn dng_many_distinct_in_bounds_bad_offsets_cannot_spend_sibling_budget() {
+        let mut data = vec![0u8; 20000];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_entry = |data: &mut [u8], at: usize, tag: u16, count: u32, value: u32| {
+            data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+            data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+            data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+            data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+        };
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        write_entry(&mut data, 10, 0x0100, 1, 16);
+        write_entry(&mut data, 22, 0x014A, 2, 128);
+        data[128..136].copy_from_slice(&[0, 1, 0, 0, 0, 16, 0, 0]);
+        data[256..258].copy_from_slice(&251u16.to_le_bytes());
+        write_entry(&mut data, 258, 0x0100, 1, 1000);
+        for row in 0..250 {
+            write_entry(
+                &mut data,
+                270 + row * 12,
+                0x014A,
+                10,
+                (6000 + row * 40) as u32,
+            );
+            for column in 0..10 {
+                let at = 6000 + row * 40 + column * 4;
+                data[at..at + 4]
+                    .copy_from_slice(&((17000 + row * 10 + column) as u32).to_le_bytes());
+            }
+        }
+        data[17000..19500].fill(0xff); // 2500 distinct in-range invalid IFD tables
+        data[4096..4098].copy_from_slice(&1u16.to_le_bytes());
+        write_entry(&mut data, 4098, 0x0100, 1, 7777);
+        let widths = dng_width_occurrences(&data);
+        assert_eq!(widths.first(), Some(&("IFD0".into(), 16)));
+        assert_eq!(widths.last(), Some(&("SubIFD1".into(), 7777)));
+
+        let mut budget = DngSubifdBudget::default();
+        let mut metadata = MetadataMap::new();
+        let mut priority = None;
+        emit_dng_subifd(
+            &SliceReader::new(&data),
+            &data,
+            256,
+            0,
+            "SubIFD",
+            ByteOrder::LittleEndian,
+            &mut metadata,
+            &mut priority,
+            &mut Vec::new(),
+            &mut budget,
+        );
+        assert_eq!(budget.pointer_checks_left, 0);
+        assert_eq!(budget.parse_attempts_left, 47);
     }
 
     #[test]
