@@ -90,7 +90,9 @@ fn candidate_conversion(
     let unknown_form = value.strip_suffix('\n').unwrap_or(value);
     let lower = unknown_form.to_ascii_lowercase();
     if lower.starts_with("unknown")
-        && lower[7..].trim_start().starts_with('(')
+        && lower[7..]
+            .trim_start_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
+            .starts_with('(')
         && lower.ends_with(')')
         && !lower
             .split_once('(')
@@ -98,17 +100,20 @@ fn candidate_conversion(
     {
         return CandidateConversion::Possible;
     }
-    if !value.is_ascii() || labels.iter().any(|label| !label.is_ascii()) {
+    if labels.iter().any(|label| !label.is_ascii()) {
         return CandidateConversion::Unknown;
     }
-    let query = value.trim_end().to_ascii_lowercase();
+    // Native CLI operands are byte strings. A non-ASCII query cannot match
+    // an all-ASCII hash, and Unicode whitespace must not be stripped.
+    let query = value
+        .trim_end_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
+        .to_ascii_lowercase();
     // Writer.pl ReverseLookup tries exact, case-insensitive exact, prefix,
     // then substring. A non-exact tier with multiple matches stops there;
     // it does not use a later tier to choose one of them.
-    if labels.iter().any(|label| *label == value.trim_end())
-        || labels
-            .iter()
-            .any(|label| label.eq_ignore_ascii_case(&query))
+    if labels
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case(&query))
     {
         return CandidateConversion::Possible;
     }

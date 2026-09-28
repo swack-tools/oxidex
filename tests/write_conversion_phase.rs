@@ -76,6 +76,30 @@ fn invalid_enum_candidates_follow_pinned_command_and_file_phases() {
             false,
         ),
         (
+            "orientation-nonbreaking-space",
+            &synthetic,
+            &["-Orientation=Rotate 90 CW\u{a0}"],
+            1,
+            true,
+            false,
+        ),
+        (
+            "orientation-em-space",
+            &synthetic,
+            &["-Orientation=Rotate 90 CW\u{2003}"],
+            1,
+            true,
+            false,
+        ),
+        (
+            "orientation-unknown-nonbreaking-space",
+            &synthetic,
+            &["-Orientation=Unknown\u{a0}(6)"],
+            1,
+            true,
+            false,
+        ),
+        (
             "orientation-ambiguous-substring",
             &synthetic,
             &["-Orientation=Rotate"],
@@ -293,6 +317,16 @@ fn unknown_and_raw_orientation_values_keep_their_write_paths() {
             "-Orientation=Rotate 90 CW",
         ),
         ("prefix", "-Orientation=Horiz", "-Orientation=Horiz"),
+        (
+            "label-ascii-whitespace",
+            "-Orientation=Rotate 90 CW \t\r\n\u{b}\u{c}",
+            "-Orientation=Rotate 90 CW \t\r\n\u{b}\u{c}",
+        ),
+        (
+            "unknown-vertical-tab",
+            "-Orientation=Unknown\u{b}(6)",
+            "-Orientation=Unknown\u{b}(6)",
+        ),
         ("numeric-substring", "-Orientation=1", "-Orientation=1"),
     ] {
         let temp = tempfile::tempdir().unwrap();

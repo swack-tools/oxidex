@@ -1508,14 +1508,8 @@ const LIGHT_SOURCE_LABELS: &[(i64, &str)] = &[
 enum EnumInverseError {
     /// No table entry's label matched, exactly or case-insensitively.
     NoMatch,
-    /// More than one table entry's label matched at the same tier (exact,
-    /// or case-insensitive when no exact match existed). ExifTool's own
-    /// `ReverseLookup` (`Writer.pl:3609-3665`) breaks such a tie by picking
-    /// the entry whose numeric key sorts first as a string; this port
-    /// refuses instead, per `AGENTS.md`'s "never approximate a conversion"
-    /// -- a duplicate label such as `Compression`'s `7`/`99` both printing
-    /// `"JPEG"` is a real ExifTool ambiguity, not a transcription gap, and
-    /// picking a winner would be a guess wearing a citation.
+    /// Multiple labels matched a prefix or substring tier. Exact duplicate
+    /// labels instead select the first key in Perl's string sort.
     Ambiguous,
 }
 
@@ -1527,7 +1521,9 @@ fn invert_int_enum(
     entries: &[(i64, &str)],
     raw: &str,
 ) -> std::result::Result<i64, EnumInverseError> {
-    let raw = raw.trim_end();
+    // CLI operands reach native Perl as bytes: its \s matches these ASCII
+    // characters, not the broader Unicode whitespace accepted by trim_end.
+    let raw = raw.trim_end_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}']);
     let first_key = |matches: Vec<i64>| {
         matches
             .into_iter()
@@ -2467,7 +2463,7 @@ fn unknown_print_conv_value(raw: &str) -> Option<String> {
         return None;
     }
     let inner = raw[7..]
-        .trim_start_matches(|c: char| c.is_ascii_whitespace())
+        .trim_start_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
         .strip_prefix('(')?
         .strip_suffix(')')?;
     if inner.contains('\n') {
