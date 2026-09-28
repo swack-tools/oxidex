@@ -1252,6 +1252,46 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         self.assertEqual(calls, ["workspace"])
         self.assertFalse((repo / "src/b.rs").exists())
 
+    def test_final_zero_delta_after_lint_bisection_advances_landed_stamp(self):
+        repo = self.make_repo()
+        canon_sha = self.commit_file(repo, "src/a.rs", "fn a() {}\n", "A already on main")
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "branch", "squad/nikon", "main")
+        git(repo, "checkout", "-q", "squad/nikon")
+        nikon_sha = self.commit_file(
+            repo, "src/b.rs", "fn b() {}\n", "fix B",
+            trailers=[("Format", "JPEG"), ("Verified", "recheck-pass gaps=3->2")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+        config = self._config_toml(self.tmp, ["canon", "nikon"])
+        for squad, sha in (("canon", canon_sha), ("nikon", nikon_sha)):
+            squad_merge_loop.record_head(
+                squad_merge_loop.squad_status_file(home, squad), "workerhead",
+                status="consumed", patch_id=f"p-{squad}", format_name="JPEG",
+                squad_sha=sha, now_fn=lambda: 100,
+            )
+        calls = []
+        result = overlord_sweep.run_sweep(
+            repo_root=repo, home=home, cache_dir="/unused",
+            comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+            config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+            dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+            quarantine_path=home / "quarantine.jsonl",
+            cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+            push_branch_fn=lambda *args: self.fail("zero-delta branch must not push"),
+            create_pr_fn=lambda *args: self.fail("zero-delta branch must not open PR"),
+            fmt_fn=lambda repo_root: (True, ""),
+            lint_fn=lambda repo_root: (not (Path(repo_root) / "src/b.rs").exists(), "bad B"),
+            open_sweep_prs_fn=lambda: [], log_fn=lambda *args: None,
+        )
+        self.assertEqual(result["status"], "zero_delta", result)
+        self.assertEqual(calls, ["workspace"])
+        self.assertEqual(git_out(repo, "rev-parse", "HEAD^{tree}").strip(),
+                         git_out(repo, "rev-parse", "main^{tree}").strip())
+        state = overlord_sweep.load_sweep_state(home / "sweep-state.json")
+        self.assertIn("canon", state["squads"])
+
     def test_failed_early_formatter_restores_branch_and_keeps_stamp(self):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:

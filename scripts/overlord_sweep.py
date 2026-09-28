@@ -1912,8 +1912,25 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
                 "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
                 "preflight": health, "fmt": fmt_result}
 
-    # Lint bisection may have removed a squad, and formatting may have
-    # changed the final tree. Recheck idempotency on the exact HEAD to push.
+    # Lint bisection may have removed the only unlanded squad, and formatting
+    # may have changed the final tree. Recheck base equality before asking for
+    # changed paths or comparing open PRs on the exact HEAD to push.
+    final_diff_rc, _out, final_diff_err = run_git(
+        ["diff", "--quiet", origin_ref, "HEAD"], repo_root)
+    if final_diff_rc == 0:
+        durable_squads.update(merge_infos.keys())
+        persist_cursor(durable_squads)
+        clear_parks(merge_infos.keys())
+        log_fn(f"{branch} is tree-identical to {origin_ref} after lint and formatting -- "
+               "skipping push and PR")
+        return {"status": "zero_delta", "branch": branch,
+                "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+                "bisection": bisection_result, "preflight": health, "fmt": fmt_result}
+    if final_diff_rc != 1:
+        persist_cursor(durable_squads)
+        return {"status": "format_failed", "branch": branch,
+                "fmt": {"ok": False, "message": f"could not compare final tree: {final_diff_err.strip()}"},
+                "failed_squads": failed_squads, "preflight": health}
     if open_sweep_prs_fn is not None:
         duplicate_result = open_pr_duplicate_result("HEAD")
         if duplicate_result is not None:
