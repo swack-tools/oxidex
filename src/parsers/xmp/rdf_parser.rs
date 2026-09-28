@@ -245,6 +245,15 @@ impl XmpEntry {
         }
     }
 
+    /// An entry decoded from Google's `HdrPlusMakernote`/`ShotLogData`
+    /// (`google_hdrp`): a `MakerNotes` tag under family-1 group `Google`.
+    fn hdrp(key: String, value: XmpValue) -> Self {
+        Self {
+            group1: super::google_hdrp::HDRP_GROUP1.to_string(),
+            ..Self::plain(key, value)
+        }
+    }
+
     /// The value as stored: a list as an array of strings when `typed`,
     /// else joined.
     pub fn tag_value(&self, typed: bool) -> crate::core::TagValue {
@@ -325,8 +334,18 @@ pub fn insert_xmp_entry(
         metadata.insert(entry.key.clone(), value);
         return;
     }
-    let priority = if entry.shadowed {
+    let priority = if entry.shadowed || entry.group1 == "XMP" {
+        // The bare `XMP` group is a property no XMP table defines: one with
+        // no namespace, or in one of ExifTool's own `-X` static-group
+        // namespaces (`namespace_resolver::group_for_prefix`). FoundXMP gives
+        // such a tag the default `{ Name => $name, IsDefault => 1,
+        // Priority => 0 }` (XMP.pm 13.59:3589-3596), so it never displaces a
+        // same-named tag already found: `t/images/XMP.xml`'s bare
+        // `-FileType` is the file's own `XMP`, not the `JPEG` its RDF/XML
+        // records for the image it was written from.
         0
+    } else if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
+        super::google_hdrp::hdrp_tag_priority(&entry.key)
     } else {
         crate::core::tag_occurrence::shim_group_priority(
             entry.key.split_once(':').map_or("", |(group, _)| group),
@@ -1048,10 +1067,7 @@ fn parse_xmp_packet(
         );
     for (tag, value) in decoded_hdrp {
         if !formatted.iter().any(|(t, _)| *t == tag) {
-            entries.push(XmpEntry::plain(
-                tag.clone(),
-                XmpValue::Scalar(value.clone()),
-            ));
+            entries.push(XmpEntry::hdrp(tag.clone(), XmpValue::Scalar(value.clone())));
             formatted.push((tag, XmpValue::Scalar(value)));
         }
     }

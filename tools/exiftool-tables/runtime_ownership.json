@@ -1,12 +1,12 @@
 {
   "category_totals": {
-    "generated": 563,
+    "generated": 565,
     "not-applicable": 29,
     "refused": 18,
-    "residual": 64,
+    "residual": 62,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "11b8b45273863c17ded84053091626205eebd8430b740d750d150e53a3a5d687",
+  "fragment_inputs_sha256": "a770bfaa9d76de59ae1f6421b092eb77333c1196f09d14cdb608ea73faa74d9b",
   "rows": [
     {
       "field": {
@@ -229,7 +229,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::EXIF_IFD_HAND_KEPT",
       "table": "Main"
     },
@@ -409,7 +409,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -424,7 +424,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -439,7 +439,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -454,7 +454,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -469,7 +469,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -484,7 +484,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -499,7 +499,7 @@
       "refusal": null,
       "residual_disposition": "complement",
       "source_release": "13.59",
-      "source_sha256": "fe172866761895ea67b0e28e9c454b08fc932bb49d68c5f0d3dc24e23de40bb8",
+      "source_sha256": "49f9404269d3769fe7b8465962b4144e1bfac2421f61ea8e32398843c4281720",
       "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
       "table": "Main"
     },
@@ -9288,7 +9288,7 @@
         "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
       },
       "module": "Kodak",
-      "owner": "residual",
+      "owner": "generated",
       "provenance_schema": "source-carrier/v1",
       "refusal": null,
       "source_binding": {
@@ -9300,7 +9300,7 @@
       },
       "source_release": "13.59",
       "source_sha256": "a5cd12e7f01cdbf751fa360f63fbe1e0317ff333efca3ee8366107cc45df94af",
-      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
       "table": "Main"
     },
     {
@@ -9314,7 +9314,7 @@
         "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
       },
       "module": "Kodak",
-      "owner": "residual",
+      "owner": "generated",
       "provenance_schema": "source-carrier/v1",
       "refusal": null,
       "source_binding": {
@@ -9326,7 +9326,7 @@
       },
       "source_release": "13.59",
       "source_sha256": "93f52fc1f3090c2d204ed14ecfca1a69f6256e3b3d1613f3c0c84c712c47d07c",
-      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
       "table": "Main"
     },
     {

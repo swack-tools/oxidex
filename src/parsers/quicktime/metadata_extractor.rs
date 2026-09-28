@@ -297,6 +297,19 @@ fn extract_track_aperture(
 /// [`render_quicktime_datetime`]). Every other caller -- plain MOV/MP4/AVIF/
 /// HEIF -- passes `false` and keeps today's zone-less UTC rendering.
 pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap, String> {
+    crate::core::metadata_map::file_rows(|| {
+        extract_metadata_with_moov_uuid(root_atoms, is_cr3, None)
+    })
+}
+
+/// CR3's Canon rows are inserted at their actual moov UUID position rather
+/// than before or after an entire QuickTime batch. General callers keep the
+/// existing extraction order by passing no inserted directory.
+pub(super) fn extract_metadata_with_moov_uuid(
+    root_atoms: &[Atom],
+    is_cr3: bool,
+    mut inserted: Option<([u8; 16], MetadataMap)>,
+) -> Result<MetadataMap, String> {
     // Every row here is read from the file (`metadata_map::file_rows`):
     // a caller's later `insert`/`get_mut` is what counts as assigned.
     crate::core::metadata_map::file_rows(|| -> Result<MetadataMap, String> {
@@ -312,61 +325,65 @@ pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap
 
         // If we have a moov atom, extract traditional QuickTime/MP4 metadata
         if let Some(moov) = moov {
-            // Extract movie header metadata (mvhd)
-            if let Some(mvhd) = moov.find_child("mvhd") {
-                extract_movie_header(&mvhd, &mut metadata, is_cr3)?;
-            }
-
-            // Extract track headers (tkhd) from all trak atoms
-            if let Ok(children) = moov.parse_children() {
-                let trak_atoms: Vec<_> = children
-                    .iter()
-                    .filter(|a| a.atom_type.matches("trak"))
-                    .collect();
-
-                for (index, trak) in trak_atoms.iter().enumerate() {
-                    // Ignore errors - missing atoms in a track should not prevent
-                    // processing other tracks (preserves original behavior)
-                    let _ = extract_track_metadata(trak, &mut metadata, index, is_cr3);
+            if inserted.is_some() {
+                let mut track_index = 0;
+                for atom in moov.parse_children().unwrap_or_default() {
+                    match atom.atom_type.as_str() {
+                        "uuid"
+                            if inserted
+                                .as_ref()
+                                .is_some_and(|(uuid, _)| atom.data.starts_with(uuid)) =>
+                        {
+                            if let Some((_, rows)) = inserted.take() {
+                                metadata.merge(rows);
+                            }
+                        }
+                        "mvhd" => extract_movie_header(&atom, &mut metadata, is_cr3)?,
+                        "trak" => {
+                            let _ =
+                                extract_track_metadata(&atom, &mut metadata, track_index, is_cr3);
+                            track_index += 1;
+                        }
+                        "udta" => extract_moov_user_data(&atom, &mut metadata)?,
+                        "meta" => extract_mp4_metadata(&atom, &mut metadata)?,
+                        _ => {}
+                    }
                 }
-            }
+            } else {
+                // Extract movie header metadata (mvhd)
+                if let Some(mvhd) = moov.find_child("mvhd") {
+                    extract_movie_header(&mvhd, &mut metadata, is_cr3)?;
+                }
 
-            // Extract from all possible locations
-            if let Some(udta) = moov.find_child("udta") {
-                // Extract handler metadata (hdlr) - may be in udta or udta→meta
-                if let Some(meta) = udta.find_child("meta") {
-                    // Parse meta children (skip version/flags)
-                    let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
-                        &meta.data[4..]
-                    } else {
-                        meta.data
-                    };
+                // Extract track headers (tkhd) from all trak atoms
+                if let Ok(children) = moov.parse_children() {
+                    let trak_atoms: Vec<_> = children
+                        .iter()
+                        .filter(|a| a.atom_type.matches("trak"))
+                        .collect();
 
-                    if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
-                        && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
-                    {
-                        extract_handler_metadata(hdlr, &mut metadata)?;
+                    for (index, trak) in trak_atoms.iter().enumerate() {
+                        // Ignore errors - missing atoms in a track should not prevent
+                        // processing other tracks (preserves original behavior)
+                        let _ = extract_track_metadata(trak, &mut metadata, index, is_cr3);
                     }
                 }
 
-                // Also check for hdlr directly in udta
-                if let Some(hdlr) = udta.find_child("hdlr") {
-                    extract_handler_metadata(&hdlr, &mut metadata)?;
+                if let Some(udta) = moov.find_child("udta") {
+                    extract_moov_user_data(&udta, &mut metadata)?;
                 }
-                // Extract classic QuickTime user data (©xxx atoms)
-                extract_user_data_atoms(&udta, &mut metadata)?;
 
-                // Extract iTunes-style metadata (udta→meta)
-                if let Some(meta) = udta.find_child("meta") {
-                    extract_itunes_metadata(&meta, &mut metadata)?;
+                // Extract MP4 metadata (moov→meta with keys/ilst)
+                if let Some(meta) = moov.find_child("meta") {
                     extract_mp4_metadata(&meta, &mut metadata)?;
                 }
             }
-
-            // Extract MP4 metadata (moov→meta with keys/ilst)
-            if let Some(meta) = moov.find_child("meta") {
-                extract_mp4_metadata(&meta, &mut metadata)?;
-            }
+        }
+        // Preserve readable Canon rows when a malformed tree did not expose
+        // the UUID to this walk; the existing CR3 scanner is intentionally
+        // able to recover CMT records from such files.
+        if let Some((_, rows)) = inserted.take() {
+            metadata.merge(rows);
         }
 
         // HEIF/HIF files have a root-level meta atom instead of moov
@@ -401,6 +418,38 @@ pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap
             Ok(metadata)
         }
     })
+}
+
+fn extract_moov_user_data(udta: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
+    // Extract handler metadata (hdlr) - may be in udta or udta→meta
+    if let Some(meta) = udta.find_child("meta") {
+        // Parse meta children (skip version/flags)
+        let meta_data = if meta.data.len() >= 4 && meta.data[0..4] == [0, 0, 0, 0] {
+            &meta.data[4..]
+        } else {
+            meta.data
+        };
+
+        if let Ok((_, atoms)) = super::atom_parser::parse_atoms(meta_data)
+            && let Some(hdlr) = atoms.iter().find(|a| a.atom_type.matches("hdlr"))
+        {
+            extract_handler_metadata(hdlr, metadata)?;
+        }
+    }
+
+    // Also check for hdlr directly in udta
+    if let Some(hdlr) = udta.find_child("hdlr") {
+        extract_handler_metadata(&hdlr, metadata)?;
+    }
+    // Extract classic QuickTime user data (©xxx atoms)
+    extract_user_data_atoms(udta, metadata)?;
+
+    // Extract iTunes-style metadata (udta→meta)
+    if let Some(meta) = udta.find_child("meta") {
+        extract_itunes_metadata(&meta, metadata)?;
+        extract_mp4_metadata(&meta, metadata)?;
+    }
+    Ok(())
 }
 
 /// Extract Canon CR3 metadata stored in ISO Base Media sample tables.
@@ -4219,10 +4268,17 @@ mod tests {
                 ),
             ),
             ("extract_metadata", extract_metadata(&atoms, false)),
+            (
+                "extract_metadata_with_moov_uuid",
+                extract_metadata_with_moov_uuid(&atoms, false, None),
+            ),
         ];
         let dir = tempfile::tempdir().unwrap();
         for (label, map) in produced {
             let mut map = map.unwrap_or_else(|err| panic!("{label}: {err}"));
+            for (key, _, assigned) in map.keyed_occurrences_with_provenance() {
+                assert!(!assigned, "{label}: {key} was not marked read");
+            }
             let path = dir.path().join(format!("{label}.jpg"));
             std::fs::write(&path, &jpeg).unwrap();
             let held = read_metadata(&path).unwrap();
