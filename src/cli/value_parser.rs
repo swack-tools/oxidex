@@ -3009,14 +3009,34 @@ mod tests {
     /// has nothing.
     #[test]
     fn registry_absent_transcribed_enum_rows_still_invert() {
-        assert_eq!(
-            parse("EXIF:ShadingCorrection", "Yes").unwrap(),
-            TagValue::Integer(1)
-        );
-        assert_eq!(
-            parse("EXIF:NoiseReduction", "No").unwrap(),
-            TagValue::Integer(0)
-        );
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        for (id, name, label, code) in [
+            (0xa411, "ShadingCorrection", "Yes", 1),
+            (0xa412, "NoiseReduction", "No", 0),
+        ] {
+            let key = format!("EXIF:{name}");
+            assert!(
+                get_tag_descriptor(&key).is_none(),
+                "{key} gained a registry row"
+            );
+            match table.tag(id) {
+                Some(row) => {
+                    assert_eq!(row.name, name);
+                    assert!(row.writable.is_some());
+                    assert!(matches!(
+                        row.print_conv,
+                        crate::exiftool_tables::PrintConv::IntEnum(_)
+                    ));
+                    assert_eq!(parse(&key, label).unwrap(), TagValue::Integer(code));
+                }
+                None => {
+                    // Exif 3.1's 0xa411/0xa412 do not exist in the selected
+                    // 11.78/12.64 source. No enum inverse may be invented.
+                    assert!(table.tags.iter().all(|row| row.name != name));
+                    assert_eq!(parse(&key, label).unwrap(), TagValue::String(label.into()));
+                }
+            }
+        }
     }
 
     /// PR #959 review `4112816741`: raw mode (`#`, `--no-print-conv`) skips
@@ -3212,6 +3232,47 @@ mod tests {
     /// (also `IFD0:`, `EXIF:` and bare) to 0xa410 and refuses `=Auto`.
     #[test]
     fn duplicate_enum_rows_resolve_by_destination_directory() {
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        for (id, name) in [
+            (0x7034, "ChromaticAberrationCorrection"),
+            (0x7036, "DistortionCorrection"),
+        ] {
+            assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+        }
+        let modern_rows = [
+            (0xa410, "ChromaticAberrationCorrection"),
+            (0xa40f, "DistortionCorrection"),
+        ];
+        let present = modern_rows
+            .iter()
+            .filter(|(id, _)| table.tag(*id).is_some())
+            .count();
+        assert!(
+            present == 0 || present == modern_rows.len(),
+            "partial Exif 3.1 enum rows"
+        );
+        if present == 0 {
+            for (name, label) in [
+                ("ChromaticAberrationCorrection", "Auto"),
+                ("DistortionCorrection", "Auto"),
+            ] {
+                let key = format!("ExifIFD:{name}");
+                assert_eq!(parse(&key, label).unwrap(), TagValue::Integer(1));
+                assert!(
+                    parse(&key, "Yes").is_err(),
+                    "{key}: historical Sony row has no Yes"
+                );
+                assert_eq!(
+                    crate::writers::write_request::exif_main_row_for_destination(&key)
+                        .map(|row| row.id),
+                    None
+                );
+            }
+            return;
+        }
+        for (id, name) in modern_rows {
+            assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+        }
         for tag in [
             "ChromaticAberrationCorrection",
             "EXIF:ChromaticAberrationCorrection",

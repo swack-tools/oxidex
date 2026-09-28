@@ -71,6 +71,7 @@
 mod fixtures;
 
 use oxidex::exiftool_oracle;
+use oxidex::exiftool_tables::find_ifd_table;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -574,6 +575,28 @@ fn calibration_illuminant_matches_oracle() {
         "IFD0:CalibrationIlluminant2",
         "IFD0:CalibrationIlluminant3",
     ] {
+        let name = tag.rsplit(':').next().unwrap();
+        let table = find_ifd_table("Exif", "Main").expect("selected Exif::Main table");
+        if !table.tags.iter().any(|row| row.name == name) {
+            // 11.78 has only CalibrationIlluminant1/2. The third slot was
+            // added later; prove absence instead of inventing a write.
+            assert_eq!(name, "CalibrationIlluminant3");
+            let dir = tempfile::tempdir().unwrap();
+            let path = copy_into(&dir, &base, "absent.jpg");
+            let before = std::fs::read(&path).unwrap();
+            let out = oracle
+                .command()
+                .args([
+                    "-overwrite_original",
+                    "-IFD0:CalibrationIlluminant3=Daylight",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert!(!String::from_utf8_lossy(&out.stdout).contains("1 image files updated"));
+            continue;
+        }
         for (label, code) in [
             ("Daylight", 1),
             ("D55", 20),
@@ -1479,6 +1502,81 @@ fn duplicate_enum_rows_never_write_the_wrong_row() {
         eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
         return;
     };
+    let table = find_ifd_table("Exif", "Main").expect("selected Exif::Main table");
+    for (id, name) in [
+        (0x7034, "ChromaticAberrationCorrection"),
+        (0x7036, "DistortionCorrection"),
+    ] {
+        assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+    }
+    let modern = [
+        (0xa410, "ChromaticAberrationCorrection"),
+        (0xa40f, "DistortionCorrection"),
+    ];
+    let present = modern
+        .iter()
+        .filter(|(id, _)| table.tag(*id).is_some())
+        .count();
+    assert!(
+        present == 0 || present == modern.len(),
+        "partial Exif 3.1 enum rows"
+    );
+    if present == 0 {
+        // Selected 11.78/12.64 have only Sony's SubIFD destinations. A
+        // parser can invert Auto to 1, but that code must never be created
+        // as ExifIFD/IFD0 tag 0x7034 or 0x7036 on this Canon carrier.
+        for arg in [
+            "-ExifIFD:ChromaticAberrationCorrection=Auto",
+            "-ExifIFD:ChromaticAberrationCorrection#=1",
+            "-IFD0:DistortionCorrection=Auto",
+            "-ExifIFD:ChromaticAberrationCorrection=Yes",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = copy_into(&dir, &base, "legacy.jpg");
+            let before = std::fs::read(&path).unwrap();
+            let out = oxidex(&[arg, path.to_str().unwrap()]);
+            assert!(
+                !out.status.success(),
+                "oxidex {arg} must refuse a missing destination row"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "oxidex {arg} wrote a Sony row into an Exif destination"
+            );
+        }
+        // In 12.64 the native oracle reports the valid Sony label and raw
+        // code unchanged on Canon.jpg. 11.78 instead writes them into this
+        // carrier despite their SubIFD declaration; retain the safe refusal
+        // above rather than teaching the writer that wrong address.
+        if exiftool_oracle::repo_pin() == "12.64" {
+            for arg in [
+                "-ExifIFD:ChromaticAberrationCorrection=Auto",
+                "-ExifIFD:ChromaticAberrationCorrection#=1",
+                "-IFD0:DistortionCorrection=Auto",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = copy_into(&dir, &base, "native.jpg");
+                let before = std::fs::read(&path).unwrap();
+                let out = oracle
+                    .command()
+                    .args(["-overwrite_original", arg])
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "native {arg}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), before, "native 12.64 {arg}");
+            }
+        }
+        return;
+    }
+    for (id, name) in modern {
+        assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+    }
     // Refused by both tools.
     for arg in [
         "-ExifIFD:ChromaticAberrationCorrection=Auto",
@@ -1866,12 +1964,19 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
     let Some(base) = canon_jpg() else {
         panic!("Canon.jpg not resolved from the pinned t/images corpus");
     };
-    for arg in [
+    let has_exif_chromatic_row = find_ifd_table("Exif", "Main")
+        .expect("selected Exif::Main table")
+        .tag(0xa410)
+        .is_some();
+    let mut unsupported = vec![
         "-GPS:GPSDateStamp#=20240102",
         "-GPS:GPSDateStamp=2024:01:02 00:30:00+02:00",
         "-ExifIFD:DateTimeOriginal#=2020-01-02 03:04:05",
-        "-ExifIFD:ChromaticAberrationCorrection=Yes",
-    ] {
+    ];
+    if has_exif_chromatic_row {
+        unsupported.push("-ExifIFD:ChromaticAberrationCorrection=Yes");
+    }
+    for arg in unsupported {
         for companion_first in [true, false] {
             let dir = tempfile::tempdir().unwrap();
             let path = copy_into(&dir, &base, "atomic.jpg");
@@ -1895,6 +2000,26 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
                 "a refused transaction must not create a backup: {arg}"
             );
         }
+    }
+    if !has_exif_chromatic_row {
+        let oracle = exiftool_oracle::graded().expect("historical native oracle required");
+        // Historical ExifTool warns about the missing Yes conversion but
+        // still commits the valid companion; this is not an atomic refusal.
+        let out = assert_write_matches_oracle(
+            oracle,
+            &base,
+            &[
+                "-IFD0:Artist=atomic companion",
+                "-ExifIFD:ChromaticAberrationCorrection=Yes",
+            ],
+            &[
+                "-IFD0:Artist=atomic companion",
+                "-ExifIFD:ChromaticAberrationCorrection=Yes",
+            ],
+            &["IFD0:Artist"],
+        );
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("not in PrintConv"));
     }
 }
 
