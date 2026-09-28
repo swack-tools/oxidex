@@ -967,13 +967,104 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
         .map(|(key, _)| key)
 }
 
-/// One EXIF element of a MIE trailer: its TIFF structure, and the rows the
-/// EXIF reader decodes from it (`core::operations::parse_tiff_metadata`;
-/// empty where the reader cannot read it).
+/// Maximum TIFF bytes copied or read while proving absence across every MIE
+/// EXIF element in one file. A repeated offset can otherwise turn a small
+/// trailer into many copies of the same value before a write is refused.
+const MIE_CENSUS_BYTE_BUDGET: usize = 16 * 1024 * 1024;
+
+/// One EXIF element of a MIE trailer. Decoding its rows and scanning its
+/// structure are both deferred until a deletion needs that proof.
 #[derive(Debug)]
 pub(crate) struct MieExifBlock<'a> {
     pub tiff: std::borrow::Cow<'a, [u8]>,
-    pub rows: MetadataMap,
+    rows: std::cell::OnceCell<Option<MetadataMap>>,
+    scan: std::cell::OnceCell<Option<super::exif_surgical::ExifScan>>,
+    notes: std::cell::OnceCell<MakerNoteCensus>,
+    budget: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl<'a> MieExifBlock<'a> {
+    fn new(tiff: std::borrow::Cow<'a, [u8]>, budget: std::rc::Rc<std::cell::Cell<usize>>) -> Self {
+        Self {
+            tiff,
+            rows: std::cell::OnceCell::new(),
+            scan: std::cell::OnceCell::new(),
+            notes: std::cell::OnceCell::new(),
+            budget,
+        }
+    }
+
+    fn rows(&self) -> Option<&MetadataMap> {
+        self.rows
+            .get_or_init(|| {
+                let reader = MieBudgetReader {
+                    bytes: &self.tiff,
+                    budget: &self.budget,
+                    exhausted: std::cell::Cell::new(false),
+                };
+                let rows = crate::core::metadata_map::file_rows(|| {
+                    crate::core::operations::parse_tiff_metadata(&reader)
+                });
+                // The TIFF parser may skip an entry on a failed read. A
+                // budget failure must never become an empty absence proof.
+                if reader.exhausted.get() {
+                    None
+                } else {
+                    rows.ok()
+                }
+            })
+            .as_ref()
+    }
+
+    fn scan(&self) -> Option<&super::exif_surgical::ExifScan> {
+        self.scan
+            .get_or_init(|| {
+                super::exif_surgical::scan_entries_with_magics_budgeted(
+                    &self.tiff,
+                    super::exif_surgical::EXIF_BLOCK_MAGICS,
+                    &self.budget,
+                )
+                .ok()
+            })
+            .as_ref()
+    }
+
+    fn note_census(&self) -> MakerNoteCensus {
+        *self.notes.get_or_init(|| {
+            super::exif_surgical::makernote_census_budgeted(
+                &[self.tiff.as_ref()],
+                super::exif_surgical::EXIF_BLOCK_MAGICS,
+                &self.budget,
+            )
+        })
+    }
+}
+
+struct MieBudgetReader<'a, 'b> {
+    bytes: &'a [u8],
+    budget: &'b std::cell::Cell<usize>,
+    exhausted: std::cell::Cell<bool>,
+}
+
+impl crate::core::FileReader for MieBudgetReader<'_, '_> {
+    fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+        let start = usize::try_from(offset)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))?;
+        let end = start
+            .checked_add(length)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(std::io::ErrorKind::UnexpectedEof)?;
+        if length > self.budget.get() {
+            self.exhausted.set(true);
+            return Err(std::io::ErrorKind::OutOfMemory.into());
+        }
+        self.budget.set(self.budget.get() - length);
+        Ok(&self.bytes[start..end])
+    }
+
+    fn size(&self) -> u64 {
+        self.bytes.len() as u64
+    }
 }
 
 /// What a file carries of MIE, as [`ensure_no_mie_copy`] asks it: taken once
@@ -1018,20 +1109,17 @@ impl<'a> MieCensus<'a> {
             None => Self::NoTrailer,
             Some(MieExif::Absent) => Self::Absent,
             Some(MieExif::Unknown) => Self::Unknown,
-            Some(MieExif::Held(blocks)) => Self::Held(
-                blocks
-                    .into_iter()
-                    .map(|tiff| MieExifBlock {
-                        tiff: std::borrow::Cow::Borrowed(tiff),
-                        rows: crate::core::metadata_map::file_rows(|| {
-                            crate::core::operations::parse_tiff_metadata(
-                                &super::exif_surgical::SliceReader(tiff),
-                            )
-                            .unwrap_or_default()
-                        }),
-                    })
-                    .collect(),
-            ),
+            Some(MieExif::Held(blocks)) => {
+                let budget = std::rc::Rc::new(std::cell::Cell::new(MIE_CENSUS_BYTE_BUDGET));
+                Self::Held(
+                    blocks
+                        .into_iter()
+                        .map(|tiff| {
+                            MieExifBlock::new(std::borrow::Cow::Borrowed(tiff), budget.clone())
+                        })
+                        .collect(),
+                )
+            }
         }
     }
 }
@@ -1082,9 +1170,9 @@ pub(crate) fn ensure_no_mie_copy(
     mie: &MieCensus<'_>,
 ) -> Result<()> {
     use super::exif_surgical::{
-        EXIF_BLOCK_MAGICS, GroupRemoval, exif_request_is_no_op, group_directory_walked,
-        group_has_content, group_removal, has_dng_makernote, has_unwalked_exif_directory,
-        is_makernote_group, makernote_census, scan_entries_with_magics,
+        GroupRemoval, census_walk_is_complete, exif_named_removal_is_no_op_in_scan,
+        group_directory_walked, group_has_content, group_removal, has_dng_makernote,
+        has_unwalked_exif_directory, is_makernote_group,
     };
     let group = key.split_once(':').map_or("", |(group, _)| group);
     let removed_group = if removal { group_removal(key) } else { None };
@@ -1108,12 +1196,6 @@ pub(crate) fn ensure_no_mie_copy(
         MieCensus::Held(blocks) => ("a MIE trailer".to_string(), Some(blocks.as_slice())),
         MieCensus::Unknown => ("a MIE trailer".to_string(), None),
     };
-    let scans = |blocks: &[MieExifBlock<'_>]| -> Option<Vec<_>> {
-        blocks
-            .iter()
-            .map(|block| scan_entries_with_magics(&block.tiff, EXIF_BLOCK_MAGICS).ok())
-            .collect()
-    };
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
             if group.eq_ignore_ascii_case("MakerNotes") {
@@ -1123,10 +1205,38 @@ pub(crate) fn ensure_no_mie_copy(
                 // the reader did not expose that row.
                 let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
                 blocks.iter().all(|block| {
-                    makernote_may_hold(name, &block.rows, &|| {
-                        makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
-                    })
-                    .is_none()
+                    let Some(rows) = block.rows() else {
+                        return false;
+                    };
+                    let physical = super::generated_makernote_groups::MAKERNOTE_ROOTS
+                        .iter()
+                        .find(|root| root.entry.eq_ignore_ascii_case(name));
+                    let note = || block.note_census();
+                    if let Some(root) = physical {
+                        let census = note();
+                        // A named MakerNotes::Main entry selects the physical
+                        // note root. Writable child-field candidates do not
+                        // inventory these root names (MakerNoteNikon, for
+                        // example, has only an AdobeDNG candidate).
+                        if census.notes == 1
+                            && !census.uncertain_outside_ifd1
+                            && !census.uncertain_ifd1
+                            && census.identified_single_root.is_some()
+                        {
+                            census.identified_single_root != Some(root.entry)
+                        } else if census.notes == 0
+                            && !census.uncertain_outside_ifd1
+                            && !census.uncertain_ifd1
+                        {
+                            true
+                        } else if root.group.is_empty() {
+                            false
+                        } else {
+                            !makernote_group_may_hold(name, root.group, rows, &note)
+                        }
+                    } else {
+                        makernote_may_hold(name, rows, &note).is_none()
+                    }
                 })
             } else {
                 // A named vendor only selects roots whose source-derived
@@ -1134,9 +1244,10 @@ pub(crate) fn ensure_no_mie_copy(
                 // contain Canon:OwnerName, while an unidentified note may.
                 let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
                 blocks.iter().all(|block| {
-                    !makernote_group_may_hold(name, group, &block.rows, &|| {
-                        makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
-                    })
+                    let Some(rows) = block.rows() else {
+                        return false;
+                    };
+                    !makernote_group_may_hold(name, group, rows, &|| block.note_census())
                 })
             }
         });
@@ -1161,17 +1272,29 @@ pub(crate) fn ensure_no_mie_copy(
         ));
     }
     let untouched = blocks.is_some_and(|blocks| {
-        let Some(scans) = scans(blocks) else {
-            return false;
-        };
-        blocks
-            .iter()
-            .zip(&scans)
-            .all(|(block, scan)| match removed_group {
+        blocks.iter().all(|block| {
+            let Some(scan) = block.scan() else {
+                return false;
+            };
+            if !census_walk_is_complete(&block.tiff, scan.byte_order) {
+                return false;
+            }
+            let Some(rows) = block.rows() else {
+                return false;
+            };
+            let unwalked_child = scan
+                .entries
+                .iter()
+                .any(|entry| has_unwalked_exif_directory(entry.ifd, entry.tag_id))
+                || scan
+                    .ifd1_next
+                    .as_ref()
+                    .is_some_and(|chain| chain.refusal.is_some());
+            match removed_group {
                 // The block's decoded rows tell a note ExifTool files under
                 // ExifIFD; a DNGPrivateData maker note is deleted as well.
                 Some(GroupRemoval::MakerNotes) => {
-                    !group_has_content(GroupRemoval::MakerNotes, scan, &block.rows)
+                    !group_has_content(GroupRemoval::MakerNotes, scan, rows)
                         && !has_dng_makernote(scan)
                 }
                 // An empty directory the group names goes too.
@@ -1181,34 +1304,27 @@ pub(crate) fn ensure_no_mie_copy(
                     // Native ExifTool can apply a nested GPS or
                     // ExifIFD clear there, so their absence cannot be proven
                     // from the directories this scan did walk.
-                    let unwalked_child = matches!(
+                    let may_target_child = matches!(
                         group,
                         GroupRemoval::ExifIfd | GroupRemoval::Gps | GroupRemoval::Interop
-                    ) && (scan
-                        .entries
-                        .iter()
-                        .any(|entry| has_unwalked_exif_directory(entry.ifd, entry.tag_id))
-                        || scan
-                            .ifd1_next
-                            .as_ref()
-                            .is_some_and(|chain| chain.refusal.is_some()));
-                    !unwalked_child
-                        && !group_has_content(group, scan, &block.rows)
+                    );
+                    !(may_target_child && unwalked_child)
+                        && !group_has_content(group, scan, rows)
                         && !group_directory_walked(group, scan)
                 }
                 None => {
-                    !block.rows.contains_key(key)
-                        && exif_request_is_no_op(
-                            &[block.tiff.as_ref()],
-                            &[block.tiff.as_ref()],
-                            EXIF_BLOCK_MAGICS,
-                            false,
-                            &MetadataMap::new(),
-                            &MetadataMap::new(),
-                            &[key.to_string()],
-                        )
+                    // A grouped named deletion can reach the same child as
+                    // its group clear. An unread MIE SubIFD or IFD2 cannot
+                    // make a missing decoded row a proof of absence.
+                    let may_target_child = ["ExifIFD", "GPS", "InteropIFD", "EXIF", "SubIFD"]
+                        .iter()
+                        .any(|candidate| group.eq_ignore_ascii_case(candidate));
+                    !(may_target_child && unwalked_child)
+                        && !rows.contains_key(key)
+                        && exif_named_removal_is_no_op_in_scan(&block.tiff, scan, key)
                 }
-            })
+            }
+        })
     });
     // A bare name is deleted from every group that holds it: MIE's maker
     // note too, where that may hold it -- decided as for the main EXIF's
@@ -1216,8 +1332,13 @@ pub(crate) fn ensure_no_mie_copy(
     if untouched
         && !tag.contains(':')
         && let Some(reason) = blocks.unwrap_or_default().iter().find_map(|block| {
-            makernote_may_hold(key.rsplit(':').next().unwrap_or(key), &block.rows, &|| {
-                makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
+            let Some(rows) = block.rows() else {
+                return Some(
+                    "the MIE EXIF block could not be decoded within the census budget".to_string(),
+                );
+            };
+            makernote_may_hold(key.rsplit(':').next().unwrap_or(key), rows, &|| {
+                block.note_census()
             })
         })
     {
@@ -2277,16 +2398,76 @@ mod tests {
     /// A MIE census holding `tiff` as its one MIE-Meta EXIF block, decoded
     /// as `MieCensus::of_trailers` decodes one.
     fn census_holding(tiff: Vec<u8>) -> MieCensus<'static> {
-        let rows = crate::core::metadata_map::file_rows(|| {
-            crate::core::operations::parse_tiff_metadata(&super::super::exif_surgical::SliceReader(
-                &tiff,
-            ))
-            .unwrap_or_default()
-        });
-        MieCensus::Held(vec![MieExifBlock {
-            tiff: std::borrow::Cow::Owned(tiff),
-            rows,
-        }])
+        MieCensus::Held(vec![MieExifBlock::new(
+            std::borrow::Cow::Owned(tiff),
+            std::rc::Rc::new(std::cell::Cell::new(MIE_CENSUS_BYTE_BUDGET)),
+        )])
+    }
+
+    #[test]
+    fn mie_set_refuses_before_decoding_any_held_tiff() {
+        let census = census_holding(tiff_with(&[], &[]));
+        let block = &census.blocks()[0];
+        assert!(block.rows.get().is_none());
+        let empty = MetadataMap::new();
+        assert!(ensure_no_mie_copy("IFD0:Artist", "IFD0:Artist", &empty, false, &census).is_err());
+        assert!(block.rows.get().is_none());
+    }
+
+    #[test]
+    fn mie_row_decode_budget_failure_is_not_an_empty_absence_proof() {
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        let aliases = 32_u16;
+        let payload_len = 128 * 1024_u32;
+        let data_at = 8 + 2 + usize::from(aliases) * 12 + 4;
+        tiff.extend(aliases.to_le_bytes());
+        for _ in 0..aliases {
+            tiff.extend(0x010e_u16.to_le_bytes());
+            tiff.extend(7_u16.to_le_bytes());
+            tiff.extend(payload_len.to_le_bytes());
+            tiff.extend((data_at as u32).to_le_bytes());
+        }
+        tiff.extend(0_u32.to_le_bytes());
+        tiff.resize(data_at + payload_len as usize, b'x');
+        let budget = std::rc::Rc::new(std::cell::Cell::new(1024 * 1024));
+        let block = MieExifBlock::new(std::borrow::Cow::Owned(tiff), budget);
+        assert!(block.rows().is_none());
+        assert!(
+            block.rows().is_none(),
+            "exhaustion remains cached as unknown"
+        );
+    }
+
+    #[test]
+    fn grouped_mie_absence_requires_a_complete_directory_walk() {
+        // The tolerant scanner sees this root table, but TIFF type 13 is an
+        // unmodelled child pointer. A missing GPS row says nothing about its
+        // contents, even when the ordinary reader returns other rows.
+        let mut tiff = b"II*\0\x08\0\0\0\x01\0".to_vec();
+        tiff.extend(0x010f_u16.to_le_bytes());
+        tiff.extend(13_u16.to_le_bytes());
+        tiff.extend(1_u32.to_le_bytes());
+        tiff.extend(0_u32.to_le_bytes());
+        tiff.extend(0_u32.to_le_bytes());
+        let census = census_holding(tiff);
+        let block = &census.blocks()[0];
+        let scan = block.scan().expect("tolerant scan");
+        assert!(!super::super::exif_surgical::census_walk_is_complete(
+            &block.tiff,
+            scan.byte_order
+        ));
+        assert!(block.rows().is_some(), "reader can still return other rows");
+        let empty = MetadataMap::new();
+        assert!(
+            ensure_no_mie_copy(
+                "GPS:GPSVersionID",
+                "GPS:GPSVersionID",
+                &empty,
+                true,
+                &census
+            )
+            .is_err()
+        );
     }
 
     /// MIE deletion safety shares PR960's Adobe framing and record count.
@@ -2395,10 +2576,9 @@ mod tests {
         assert!(gps_all(&dng, "IFD0:All").is_err(), "the block goes");
         let unknown_note = census_holding(unknown_note);
         assert!(
-            unknown_note
-                .blocks()
-                .iter()
-                .any(|block| block.rows.contains_key("ExifIFD:MakerNoteUnknownText")),
+            unknown_note.blocks().iter().any(|block| block
+                .rows()
+                .is_some_and(|rows| rows.contains_key("ExifIFD:MakerNoteUnknownText"))),
             "the reader files the note under ExifIFD"
         );
         assert!(gps_all(&unknown_note, "MakerNotes:All").is_ok());

@@ -457,6 +457,49 @@ fn mie_makernote_deletion_respects_requested_vendor() {
         Ok(1),
         "Canon note: native edits MIE, so this writer must refuse"
     );
+
+    // MakerNoteNikon names a physical MakerNotes::Main root, not a
+    // Nikon-writable child field. The D70 note has that root even though
+    // the generic name has no Nikon entry in the writable-name inventory.
+    let nikon_d70 =
+        std::fs::read(fixtures::required_t_images_fixture_path("NikonD70.jpg")).unwrap();
+    let d70_mie = [
+        writer.as_slice(),
+        &mie_holding_exif(&jpeg_exif_tiff(&nikon_d70)),
+    ]
+    .concat();
+    assert_eq!(
+        grade(
+            oracle,
+            "Writer+MIE NikonD70 physical root",
+            "jpg",
+            &d70_mie,
+            &[(&["-MakerNotes:MakerNoteNikon="], "MakerNoteNikon")],
+        ),
+        Ok(1),
+    );
+    // Nikon.jpg has the separate MakerNoteNikon3 root; the same request
+    // does not remove it.
+    assert_eq!(
+        grade(
+            oracle,
+            "Writer+MIE Nikon3 physical root",
+            "jpg",
+            &nikon_mie,
+            &[(&["-MakerNotes:MakerNoteNikon="], "MakerNoteNikon")],
+        ),
+        Ok(0),
+    );
+    assert_eq!(
+        grade(
+            oracle,
+            "Writer+MIE NikonD70 other root",
+            "jpg",
+            &d70_mie,
+            &[(&["-MakerNotes:MakerNoteNikon3="], "MakerNoteNikon3")],
+        ),
+        Ok(0),
+    );
 }
 
 /// PR #966 review threads, each graded against the oracle as above:
@@ -817,8 +860,18 @@ fn nested_subifd_groups_in_mie_refuse_partial_clears() {
         ]
         .concat()
     };
-    const GPS_CLEAR: &[Case] = &[(&["-GPS:All="], "GPS:GPSVersionID")];
-    const EXIF_CLEAR: &[Case] = &[(&["-ExifIFD:All="], "ExifIFD:ExifVersion")];
+    const GPS_CLEAR: &[Case] = &[
+        (&["-GPS:All="], "GPS:GPSVersionID"),
+        (&["-GPS:GPSVersionID="], "GPS:GPSVersionID"),
+        (
+            &["-IFD0:Software=mie sibling", "-GPS:GPSVersionID="],
+            "GPS:GPSVersionID",
+        ),
+    ];
+    const EXIF_CLEAR: &[Case] = &[
+        (&["-ExifIFD:All="], "ExifIFD:ExifVersion"),
+        (&["-ExifIFD:ExifVersion="], "ExifIFD:ExifVersion"),
+    ];
     let dir = tempfile::tempdir().unwrap();
     for (label, root_pointer, child_pointer, leaf, main_fixture, make_main_gps, cases) in [
         (
@@ -923,7 +976,7 @@ fn nested_subifd_groups_in_mie_refuse_partial_clears() {
                 &original,
                 cases,
             ),
-            Ok(1),
+            Ok(cases.len()),
             "{label}",
         );
     }

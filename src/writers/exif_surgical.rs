@@ -2762,7 +2762,7 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
 /// Check the five directories `scan_entries_with_magics` intends to walk.
 /// That scanner skips corrupt entries to preserve reader behavior; the
 /// safety census cannot turn such a skip into a proof of absence.
-fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
+pub(crate) fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
     #[derive(Default)]
     struct Links {
         exif: Option<usize>,
@@ -2880,7 +2880,6 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
 
 /// Census with an aggregate limit on bytes copied by TIFF scans. A failed
 /// scan cannot prove a note absent, so exhaustion returns UNKNOWN.
-#[allow(dead_code)] // Called by the MIE owner when the two commits are composed.
 pub(crate) fn makernote_census_budgeted(
     blocks: &[&[u8]],
     magics: &[u16],
@@ -2978,12 +2977,21 @@ fn makernote_census_inner(
                     &make,
                     &model,
                 ) {
-                    census.identified_single_root = if census.tag_bearing == 0
-                        && crate::core::tiff_helpers::selected_headerless_nikon_note(
-                            &entry.value,
-                            &make,
-                            &model,
-                        ) {
+                    // MakerNotes::Main selects the two signature-bearing
+                    // Nikon entries before the camera-make fallback. These
+                    // are different physical names even though all three
+                    // decode into the Nikon family-1 group.
+                    census.identified_single_root = if census.tag_bearing != 0 {
+                        None
+                    } else if entry.value.starts_with(b"Nikon\0\x02") {
+                        Some("MakerNoteNikon")
+                    } else if entry.value.starts_with(b"Nikon\0\x01") {
+                        Some("MakerNoteNikon2")
+                    } else if crate::core::tiff_helpers::selected_headerless_nikon_note(
+                        &entry.value,
+                        &make,
+                        &model,
+                    ) {
                         Some("MakerNoteNikon3")
                     } else {
                         None
@@ -3077,7 +3085,6 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
 }
 
 /// Scan with a shared limit on copied value, thumbnail and chain data bytes.
-#[allow(dead_code)] // Called by the MIE owner when the two commits are composed.
 pub(crate) fn scan_entries_with_magics_budgeted(
     tiff: &[u8],
     magics: &[u16],
@@ -4336,6 +4343,22 @@ fn exif_family_removals_proven_absent(tiff: &[u8], scan: &ExifScan, removed: &[S
         }
     }
     true
+}
+
+/// The single named-removal case of `exif_request_is_no_op` after its caller
+/// has already scanned the MIE EXIF block with an allocation budget. Its
+/// baseline and desired maps are empty, the key is grouped, and no group or
+/// carrier clear is involved. Reusing `scan` avoids two unbudgeted scans of
+/// the same payload during an absence proof.
+pub(crate) fn exif_named_removal_is_no_op_in_scan(tiff: &[u8], scan: &ExifScan, key: &str) -> bool {
+    if !key.contains(':') || group_removal(key).is_some() {
+        return false;
+    }
+    let removed = [key.to_string()];
+    let empty = MetadataMap::new();
+    !removes_carrier(&removed)
+        && removals_name_nothing(scan, &empty, &removed, false)
+        && exif_family_removals_proven_absent(tiff, scan, &removed)
 }
 
 /// Whether a write changes nothing in the block (see
