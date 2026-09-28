@@ -516,9 +516,8 @@ fn plain_file_arguments_have_no_directories_scanned_line() {
 //    reports itself as a symlink, not a directory. A symlinked root whose
 //    target holds no subdirectories used to print no
 //    `directories_scanned` line at all where pinned 13.59 prints `1`.
-//    Nested symlinks are still never followed (`follow_links(false)`
-//    remains in force below the root), matching this CLI's pre-existing
-//    symlink-loop guard.
+//    Nested links are followed separately below, with WalkDir bounding
+//    ancestor cycles.
 
 #[test]
 fn structured_output_stays_clean_when_mixed_expansion_finds_nothing() {
@@ -563,6 +562,77 @@ fn structured_output_stays_clean_when_mixed_expansion_finds_nothing() {
             stdout(&ours)
         );
     }
+}
+
+#[test]
+fn structured_nonempty_directory_summary_matches_oracle_on_stderr() {
+    let oracle = require_oracle!();
+    let their_dir = TempDir::new().unwrap();
+    let our_dir = TempDir::new().unwrap();
+    if copy_jpeg("Canon.jpg", their_dir.path(), "photo.jpg").is_none() {
+        return;
+    }
+    copy_jpeg("Canon.jpg", our_dir.path(), "photo.jpg").unwrap();
+
+    for flags in [vec!["-j"], vec!["-csv"], vec!["-j", "-NonexistentTag"]] {
+        let mut their_args = flags.clone();
+        their_args.push(their_dir.path().to_str().unwrap());
+        let mut our_args = flags.clone();
+        our_args.push(our_dir.path().to_str().unwrap());
+        let theirs = run_oracle(oracle, &their_args);
+        let ours = run_oxidex(&our_args);
+        assert!(theirs.status.success(), "oracle: {}", stderr(&theirs));
+        assert!(ours.status.success(), "oxidex: {}", stderr(&ours));
+        assert_eq!(
+            summary_lines(&stderr(&ours)),
+            summary_lines(&stderr(&theirs))
+        );
+        assert!(summary_lines(&stdout(&ours)).is_empty());
+        if flags.contains(&"-j") {
+            let data: serde_json::Value = serde_json::from_slice(&ours.stdout).unwrap();
+            assert_eq!(data.as_array().unwrap().len(), 1);
+        } else {
+            let mut reader = csv::Reader::from_reader(ours.stdout.as_slice());
+            assert_eq!(
+                reader.headers().unwrap(),
+                &["SourceFile", "Tag", "Value"][..]
+            );
+            assert!(reader.records().next().is_some());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_walk_follows_nested_directory_symlink_like_oracle() {
+    let oracle = require_oracle!();
+    let their_fixture = TempDir::new().unwrap();
+    let our_fixture = TempDir::new().unwrap();
+    for fixture in [their_fixture.path(), our_fixture.path()] {
+        let root = fixture.join("root");
+        let target = fixture.join("one");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        if copy_jpeg("Canon.jpg", &target, "photo.jpg").is_none() {
+            return;
+        }
+        std::os::unix::fs::symlink("../one", root.join("linked")).unwrap();
+    }
+    let their_root = their_fixture.path().join("root");
+    let our_root = our_fixture.path().join("root");
+    let theirs = run_oracle(oracle, &["-r", their_root.to_str().unwrap()]);
+    let ours = run_oxidex(&["-r", our_root.to_str().unwrap()]);
+    assert!(theirs.status.success(), "oracle: {}", stderr(&theirs));
+    assert!(ours.status.success(), "oxidex: {}", stderr(&ours));
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        summary_lines(&stdout(&theirs))
+    );
+    assert_eq!(
+        summary_lines(&stdout(&ours)),
+        ["    2 directories scanned", "    1 image files read"]
+    );
+    assert!(stdout(&ours).contains("photo.jpg"));
 }
 
 #[test]

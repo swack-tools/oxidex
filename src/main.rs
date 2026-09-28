@@ -186,10 +186,11 @@ fn handle_multi_file_processing(
             directories_scanned,
         };
         if modifications.is_empty() && (args.json || args.csv) {
-            if let Err(e) = batch_processor::print_structured_output_for_no_files(args, &stats) {
+            if let Err(e) = batch_processor::print_structured_output_for_no_files(args) {
                 eprintln!("Error: Batch processing failed: {e}");
                 process::exit(1);
             }
+            stats.print_structured_read_summary();
         } else {
             stats.print();
         }
@@ -207,9 +208,11 @@ fn handle_multi_file_processing(
             stats.unidentified += unidentified;
             stats.directories_scanned = directories_scanned;
             let is_read_mode = modifications.is_empty();
-            // ExifTool prints its read summary after text output at every
-            // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
-            if !(is_read_mode && (args.json || args.csv)) {
+            // Structured reads put ExifTool's summary on stderr so stdout
+            // remains valid JSON/CSV.
+            if is_read_mode && (args.json || args.csv) {
+                stats.print_structured_read_summary();
+            } else {
                 stats.print();
             }
 
@@ -584,9 +587,11 @@ fn handle_batch_processing(
     match batch_processor::batch_process_requests(path, args, modifications) {
         Ok(stats) => {
             let is_read_mode = modifications.is_empty();
-            // ExifTool prints its read summary after text output at every
-            // level, `-s`/`-s3` included; only JSON/CSV keep stdout clean.
-            if !(is_read_mode && (args.json || args.csv)) {
+            // Structured reads put ExifTool's summary on stderr so stdout
+            // remains valid JSON/CSV.
+            if is_read_mode && (args.json || args.csv) {
+                stats.print_structured_read_summary();
+            } else {
                 stats.print();
             }
 

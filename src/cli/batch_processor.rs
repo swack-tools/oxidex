@@ -140,6 +140,25 @@ impl BatchStats {
             );
         }
     }
+
+    /// ExifTool sends read summaries for JSON/CSV to stderr, including a
+    /// single-file directory scan and a multi-file scan without directories.
+    /// Keep structured stdout reserved for the requested format.
+    pub fn print_structured_read_summary(&self) {
+        let total = self.files_read + self.errors;
+        if self.directories_scanned == 0 && total <= 1 {
+            return;
+        }
+        if self.directories_scanned > 0 {
+            eprintln!("{:5} directories scanned", self.directories_scanned);
+        }
+        if total > 1 || self.directories_scanned > 0 {
+            eprintln!("{:5} image files read", self.files_read);
+        }
+        if self.errors > 0 {
+            eprintln!("{:5} files could not be read", self.errors);
+        }
+    }
 }
 
 /// Main entry point for batch processing operations.
@@ -207,7 +226,7 @@ pub fn batch_process_requests(
         stats.unidentified = unidentified;
         stats.directories_scanned = directories_scanned;
         if modifications.is_empty() && (args.json || args.csv) {
-            print_structured_output_for_no_files(args, &stats)?;
+            print_structured_output_for_no_files(args)?;
         }
         return Ok(stats);
     }
@@ -335,20 +354,11 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
     } else if path.is_dir() {
         // Directory - walk and collect files
         let walker = if recursive {
-            // `WalkDir`'s `follow_root_links` (on by default, independent of
-            // `follow_links(false)` below) already makes it descend into
-            // `path` even when `path` is itself a symlink to a directory --
-            // pinned 13.59 does too, since `IsDirectory`/`-d` follows a
-            // symlink, and `path.is_dir()` above already relied on the same
-            // following to route us into this branch. But the root
-            // `DirEntry` the walk yields still reports itself with
-            // `symlink_metadata`'s type (a symlink, never a directory), so
-            // it needs its own carve-out in the loop below to be counted at
-            // all (PRRT_kwDOQNbr5M6mTzLO). Nested symlinks are still never
-            // followed -- `follow_links` stays `false` for everything past
-            // the root, avoiding symlink loops -- so only the explicitly
-            // named root is affected.
-            WalkDir::new(path).follow_links(false) // Avoid symlink loops
+            // ExifTool's ScanDir follows nested directory symlinks by default
+            // (`IsDirectory`, exiftool:4356-4362). WalkDir detects ancestor
+            // cycles and returns an error for that entry, bounding the walk
+            // while still visiting distinct paths to the same directory.
+            WalkDir::new(path).follow_links(true)
         } else {
             WalkDir::new(path).max_depth(1).follow_links(false)
         };
@@ -383,12 +393,8 @@ fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize, u
         while let Some(entry) = walker.next() {
             match entry {
                 Ok(entry) => {
-                    // An ordinary directory (`is_dir()`), or the walk's own
-                    // root when it is itself a symlink (`path.is_dir()`
-                    // above already confirmed it resolves to one; its
-                    // `DirEntry` reports `symlink_metadata`'s type instead,
-                    // per `follow_links(false)`, and only ever at depth 0
-                    // since nested symlinks are not followed at all).
+                    // Root links can still appear as symlink entries even
+                    // though `path.is_dir()` confirmed their directory target.
                     let is_root_symlink = entry.depth() == 0 && entry.file_type().is_symlink();
                     if entry.file_type().is_dir() || is_root_symlink {
                         // Non-recursive: only the root (depth 0) is ever
@@ -492,6 +498,44 @@ mod collect_files_open_failure_tests {
                 "an empty but openable directory must still be counted (recursive={recursive})"
             );
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod nested_symlink_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn follows_nested_links_and_repeats_distinct_paths() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("root");
+        let target = fixture.path().join("one");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("photo.jpg"), b"jpeg fixture").unwrap();
+        symlink("../one", root.join("linked-a")).unwrap();
+        symlink("../one", root.join("linked-b")).unwrap();
+        let (files, unidentified, dirs) = collect_files(&root, true).unwrap();
+        assert_eq!(dirs, 3);
+        assert_eq!(unidentified, 0);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p == &root.join("linked-a/photo.jpg")));
+        assert!(files.iter().any(|p| p == &root.join("linked-b/photo.jpg")));
+    }
+
+    #[test]
+    fn ancestor_cycle_is_bounded_and_hidden_link_is_pruned() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("photo.jpg"), b"jpeg fixture").unwrap();
+        symlink(".", root.join("again")).unwrap();
+        symlink(".", root.join(".hidden")).unwrap();
+        let (files, unidentified, dirs) = collect_files(&root, true).unwrap();
+        assert_eq!(dirs, 1);
+        assert_eq!(unidentified, 0);
+        assert_eq!(files, [root.join("photo.jpg")]);
     }
 }
 
@@ -957,15 +1001,11 @@ fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArg
 }
 
 /// Emit the normal CSV header or silent JSON for a read matching no files.
-/// The pinned oracle sends directory and zero-read counts to stderr here.
+/// The caller prints the summary once, after the batch result is known.
 /// Reuse the CSV formatter so its fixed columns cannot drift.
-pub fn print_structured_output_for_no_files(args: &CliArgs, stats: &BatchStats) -> Result<()> {
+pub fn print_structured_output_for_no_files(args: &CliArgs) -> Result<()> {
     if args.csv {
         output_csv_results(&[], args)?;
-    }
-    if stats.directories_scanned > 0 {
-        eprintln!("{:5} directories scanned", stats.directories_scanned);
-        eprintln!("{:5} image files read", stats.files_read);
     }
     Ok(())
 }
