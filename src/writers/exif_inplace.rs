@@ -78,6 +78,86 @@ pub fn locate_exif_datetimes(tiff: &[u8]) -> Result<Vec<LocatedDateTag>> {
     Ok(found)
 }
 
+/// The byte span (offset, length) of every out-of-line value in the EXIF
+/// directory chain of `tiff` -- IFD0 and the IFDs it links (IFD1, ...),
+/// the ExifIFD, GPS and InteropIFD -- other than the `located` date values
+/// themselves. A date value one of these spans overlaps also backs another
+/// tag (a `Software` entry pointing at the same bytes, say, or a MakerNote
+/// blob that contains it), which pinned ExifTool 13.59 writes apart from
+/// the shifted date; patching the bytes would change that tag too (codex
+/// pre-review of #964).
+fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usize, usize)>> {
+    const POINTERS: [u16; 3] = [EXIF_IFD_POINTER, 0x8825, 0xa005];
+    let byte_order = if tiff.starts_with(b"II") {
+        ByteOrder::LittleEndian
+    } else {
+        ByteOrder::BigEndian
+    };
+    let ifd0 = read_u32(&tiff[4..8], byte_order) as usize;
+    let exif_ifd = scan_ifd(tiff, ifd0, byte_order, Ifd::Ifd0, &mut Vec::new())?;
+    // Inline values, entry descriptors and pointers are storage too.
+    let mut spans = vec![(0, 8)];
+    let mut pending = vec![ifd0];
+    let mut visited = Vec::new();
+    while let Some(offset) = pending.pop() {
+        if offset == 0 || visited.contains(&offset) {
+            continue;
+        }
+        if visited.len() >= 64 {
+            return Err(ExifToolError::unsupported_format(
+                "Cannot safely shift dates through more than 64 EXIF directories; nothing was written",
+            ));
+        }
+        visited.push(offset);
+        let Some(count) = tiff.get(offset..offset + 2) else {
+            continue;
+        };
+        let count = read_u16(count, byte_order) as usize;
+        spans.push((offset, 2 + count * 12 + 4));
+        for i in 0..count {
+            let at = offset + 2 + i * 12;
+            let Some(entry) = tiff.get(at..at + 12) else {
+                break;
+            };
+            let tag_id = read_u16(&entry[0..2], byte_order);
+            let value_type = read_u16(&entry[2..4], byte_order);
+            let value_count = read_u32(&entry[4..8], byte_order) as usize;
+            let value = read_u32(&entry[8..12], byte_order) as usize;
+            if POINTERS.contains(&tag_id) {
+                pending.push(crate::writers::exif_surgical::inline_unsigned(
+                    value_type,
+                    value_count as u32,
+                    &entry[8..12],
+                    byte_order,
+                ));
+                continue;
+            }
+            let len =
+                crate::writers::exif_surgical::type_size(value_type).saturating_mul(value_count);
+            let date_tag = match tag_id {
+                0x0132 => Some(ExifDateTag::ModifyDate),
+                0x9003 => Some(ExifDateTag::DateTimeOriginal),
+                0x9004 => Some(ExifDateTag::CreateDate),
+                _ => None,
+            };
+            let is_located = (offset == ifd0 || Some(offset) == exif_ifd)
+                && value_type == ASCII_TYPE
+                && value_count == DATETIME_LEN as usize
+                && located
+                    .iter()
+                    .any(|l| Some(l.tag) == date_tag && l.value_offset == value);
+            if len > 4 && !is_located {
+                spans.push((value, len));
+            }
+        }
+        let next = offset + 2 + count * 12;
+        if let Some(link) = tiff.get(next..next + 4) {
+            pending.push(read_u32(link, byte_order) as usize);
+        }
+    }
+    Ok(spans)
+}
+
 /// Scans one IFD, appending located date/time values to `found`.
 /// Returns the ExifIFD offset when this IFD contains an ExifIFD pointer.
 fn scan_ifd(
@@ -120,10 +200,12 @@ fn scan_ifd(
             ));
             continue;
         }
-        let date_tag = match (which, tag_id) {
-            (Ifd::Ifd0, 0x0132) => ExifDateTag::ModifyDate,
-            (Ifd::ExifIfd, 0x9003) => ExifDateTag::DateTimeOriginal,
-            (Ifd::ExifIfd, 0x9004) => ExifDateTag::CreateDate,
+        // A date may sit in either directory (a copy in the other one is a
+        // copy pinned ExifTool 13.59 shifts too, WriteExif.pl 13.59:1259).
+        let date_tag = match tag_id {
+            0x0132 => ExifDateTag::ModifyDate,
+            0x9003 => ExifDateTag::DateTimeOriginal,
+            0x9004 => ExifDateTag::CreateDate,
             _ => continue,
         };
         // A count-20 ASCII value is larger than 4 bytes, so it is always
@@ -196,30 +278,158 @@ pub fn shift_jpeg_exif_dates(
         )
     };
 
-    let located = locate_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
-
-    let mut modified = 0;
-    for target in targets {
-        let Some(location) = located.iter().find(|l| l.tag == *target) else {
-            continue;
-        };
-        let value_start = tiff_start + location.value_offset;
-        match patch_datetime_value(&mut file_bytes, value_start, *target, spec) {
-            Ok(()) => modified += 1,
-            // Multi-target shifts (AllDates) skip values that cannot be
-            // shifted — matching ExifTool, which warns and continues when
-            // e.g. an unset camera clock wrote "0000:00:00 00:00:00"
-            Err(e) if targets.len() > 1 => {
-                eprintln!("Warning: skipping {}: {}", target.key(), e);
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    let modified = shift_block_dates(&mut file_bytes, tiff_start, tiff_len, targets, spec)?;
 
     if modified > 0 {
         write_atomic(path, &file_bytes)?;
     }
     Ok(modified)
+}
+
+/// Shifts, in `file_bytes`, every IFD0/ExifIFD copy of each of `targets`
+/// in the TIFF block at `tiff_start..tiff_start + tiff_len`; returns how
+/// many values changed.
+fn shift_block_dates(
+    file_bytes: &mut [u8],
+    tiff_start: usize,
+    tiff_len: usize,
+    targets: &[ExifDateTag],
+    spec: &ShiftSpec,
+) -> Result<usize> {
+    let located = locate_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
+    // One value may back several entries (an IFD0 and an ExifIFD ModifyDate
+    // pointing at the same 20 bytes, or ModifyDate and DateTimeOriginal).
+    // Pinned ExifTool 13.59 shifts each entry once from its own old value
+    // and writes it back on its own, so a shared value is patched once, and
+    // only when every entry it backs is shifted: patching it for each entry
+    // shifted it twice, and patching it for one entry shifted the others
+    // too (review of #964). A value shared with an entry the request does
+    // not shift is refused, naming both, before anything is patched.
+    let other_spans = other_value_spans(&file_bytes[tiff_start..tiff_start + tiff_len], &located)?;
+    let mut offsets: Vec<usize> = located.iter().map(|l| l.value_offset).collect();
+    offsets.sort_unstable();
+    offsets.dedup();
+    let mut shared = Vec::new();
+    for offset in offsets {
+        let backed: Vec<ExifDateTag> = located
+            .iter()
+            .filter(|l| l.value_offset == offset)
+            .map(|l| l.tag)
+            .collect();
+        let shifted: Vec<ExifDateTag> = backed
+            .iter()
+            .copied()
+            .filter(|tag| targets.contains(tag))
+            .collect();
+        if shifted.is_empty() {
+            continue;
+        }
+        if let Some(other) = located.iter().find(|other| {
+            other.value_offset != offset
+                && other.value_offset < offset + DATETIME_LEN as usize
+                && offset < other.value_offset + DATETIME_LEN as usize
+        }) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot shift {}: its storage partially overlaps {}; nothing was written",
+                shifted[0].key(),
+                other.tag.key()
+            )));
+        }
+        if let Some((at, len)) = other_spans.iter().find(|(at, len)| {
+            *at < offset + DATETIME_LEN as usize && offset < at.saturating_add(*len)
+        }) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot shift {}: its value's bytes also back another EXIF value (at \
+                 0x{at:x}, {len} bytes), which pinned ExifTool 13.59 writes apart from the \
+                 date; nothing was written",
+                shifted[0].key()
+            )));
+        }
+        if let Some(kept) = backed.iter().find(|tag| !targets.contains(tag)) {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Cannot shift {}: its value is stored once for {} as well, which this \
+                 request leaves alone (pinned ExifTool 13.59 writes the two apart); \
+                 nothing was written",
+                shifted[0].key(),
+                kept.key()
+            )));
+        }
+        shared.push((offset, shifted));
+    }
+    let mut modified = 0;
+    for (offset, shifted) in &shared {
+        let target = shifted[0];
+        match patch_datetime_value(file_bytes, tiff_start + offset, target, spec) {
+            Ok(()) => modified += shifted.len(),
+            // Multi-target shifts (AllDates) skip values that cannot be
+            // shifted — matching ExifTool, which warns and continues when
+            // e.g. an unset camera clock wrote "0000:00:00 00:00:00"
+            Err(e)
+                if targets.len() > 1 || located.iter().filter(|l| l.tag == target).count() > 1 =>
+            {
+                eprintln!("Warning: skipping {}: {}", target.key(), e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(modified)
+}
+
+/// [`shift_jpeg_exif_dates`] for a walkable TIFF (its own TIFF structure)
+/// or a PNG (its `eXIf` chunk, whose CRC is recomputed): every IFD0/ExifIFD
+/// copy of each target shifts in place. `None` when the file is neither, or
+/// holds no EXIF to shift in.
+pub fn shift_tiff_png_exif_dates(
+    path: &Path,
+    targets: &[ExifDateTag],
+    spec: &ShiftSpec,
+) -> Result<Option<usize>> {
+    const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let mut file_bytes = std::fs::read(path)?;
+    // Classic TIFF only (magic 42, not RW2's 85 or BigTIFF).
+    let classic_tiff = matches!(file_bytes.get(0..4), Some(b"II\x2a\x00" | b"MM\x00\x2a"));
+    let modified = if classic_tiff {
+        let len = file_bytes.len();
+        shift_block_dates(&mut file_bytes, 0, len, targets, spec)?
+    } else if file_bytes.starts_with(PNG_SIGNATURE) {
+        // This public helper can be called without date_shift's surrounding
+        // validation. Check the original container before a missing-eXIf
+        // no-op or an in-place date edit, using the PNG writer's same policy.
+        crate::writers::png_writer::refuse_bad_chunk_crcs(&SliceReader(&file_bytes))?;
+        let mut at = PNG_SIGNATURE.len();
+        let mut chunk = None;
+        while let Some(header) = file_bytes.get(at..at + 8) {
+            let len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+            if at + 12 + len > file_bytes.len() {
+                break;
+            }
+            if &header[4..8] == b"eXIf" {
+                chunk = Some((at, len));
+                break;
+            }
+            at += 12 + len;
+        }
+        let Some((at, len)) = chunk else {
+            return Ok(None);
+        };
+        let data = at + 8;
+        let skip = if file_bytes[data..data + len].starts_with(EXIF_IDENTIFIER) {
+            EXIF_IDENTIFIER.len()
+        } else {
+            0
+        };
+        let modified = shift_block_dates(&mut file_bytes, data + skip, len - skip, targets, spec)?;
+        let crc =
+            crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&file_bytes[at + 4..data + len]);
+        file_bytes[data + len..data + len + 4].copy_from_slice(&crc.to_be_bytes());
+        modified
+    } else {
+        return Ok(None);
+    };
+    if modified > 0 {
+        write_atomic(path, &file_bytes)?;
+    }
+    Ok(Some(modified))
 }
 
 /// Shifts the single 20-byte ASCII datetime value at `value_start`, patching
@@ -304,6 +514,43 @@ mod tests {
         t.extend_from_slice(b"2025:06:10 12:00:00\0"); // 88..108
         t.extend_from_slice(b"2025:06:10 12:00:05\0"); // 108..128
         t
+    }
+
+    #[test]
+    fn a_count_twenty_non_date_value_sharing_date_storage_is_refused() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut tiff = build_test_tiff(bo);
+            // Software has the same type, count and offset as DateTimeOriginal.
+            tiff[10..12].copy_from_slice(&u16_bytes(0x0131, bo));
+            tiff[18..22].copy_from_slice(&u32_bytes(88, bo));
+            let before = tiff.clone();
+            let len = tiff.len();
+            let spec = ShiftSpec::Absolute(parse_absolute_datetime("2020:01:02 03:04:05").unwrap());
+            let result =
+                shift_block_dates(&mut tiff, 0, len, &[ExifDateTag::DateTimeOriginal], &spec);
+            assert!(result.is_err(), "shared Software storage was patched");
+            assert_eq!(tiff, before);
+        }
+    }
+
+    #[test]
+    fn partially_overlapping_dates_are_refused_before_patching() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut tiff = build_test_tiff(bo);
+            tiff[18..22].copy_from_slice(&u32_bytes(89, bo));
+            let before = tiff.clone();
+            let len = tiff.len();
+            let spec = ShiftSpec::Absolute(parse_absolute_datetime("2020:01:02 03:04:05").unwrap());
+            let result = shift_block_dates(
+                &mut tiff,
+                0,
+                len,
+                &[ExifDateTag::ModifyDate, ExifDateTag::DateTimeOriginal],
+                &spec,
+            );
+            assert!(result.is_err(), "partially overlapping dates were patched");
+            assert_eq!(tiff, before);
+        }
     }
 
     #[test]

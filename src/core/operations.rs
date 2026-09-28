@@ -1253,9 +1253,26 @@ pub(crate) fn write_metadata_transaction(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_metadata_transaction_among(path, metadata, removed, &[])
+}
+
+/// Apply cross-directory replacement with the surviving resolved sibling sets.
+pub(crate) fn write_metadata_transaction_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    siblings: &[String],
+) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
     crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
+    let expanded = crate::writers::exif_cross_delete::with_cross_deletions(
+        path, &baseline, metadata, removed, &assigned, siblings,
+    )?;
+    let (metadata, removed) = match &expanded {
+        Some((desired, removed)) => (desired, removed.as_slice()),
+        None => (metadata, removed),
+    };
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
     // Same-value sets a removal covers: the only ones the map cannot tell
@@ -2114,9 +2131,7 @@ pub(crate) fn removal_is_no_op_with_reader(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
     ) || crate::writers::exif_surgical::chain_key_dir(key).is_some();
-    if !exif_group && group != "PDF" && group != "PNG" {
-        return Ok(false);
-    }
+
     let removed = [key.to_string()];
     let format = detect_format(reader)?;
     // A maker-note tag is never judged absent from the map alone: the
@@ -2147,6 +2162,11 @@ pub(crate) fn removal_is_no_op_with_reader(
     // 13.59 checks every CRC before it learns nothing changed.
     if matches!(format, FileFormat::PNG) {
         crate::writers::png_writer::refuse_bad_chunk_crcs(reader)?;
+    }
+    if !exif_group && group != "PDF" && group != "PNG" {
+        // The shared group-deletion proof also proves a named deletion
+        // absent when the file holds none of that whole supported family.
+        return Ok(group_is_empty(group, metadata));
     }
     // A single-tag removal acts on every block alike (only a group-wide
     // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
@@ -2555,6 +2575,18 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<Wr
     )
 }
 
+/// Set all resolved EXIF dates through the shared request transaction.
+pub(crate) fn set_exif_dates(path: &Path, keys: &[&str], raw: &str) -> Result<()> {
+    let changes: Result<Vec<_>> = keys
+        .iter()
+        .map(|key| {
+            crate::cli::value_parser::parse_cli_tag_value(key, raw)
+                .map(|value| crate::core::write_transaction::TagChange::set(*key, value))
+        })
+        .collect();
+    crate::core::write_transaction::apply_tag_changes(path, &changes?).map(|_| ())
+}
+
 /// Removes a metadata tag from a file.
 ///
 /// This function reads the file's metadata, removes the specified tag,
@@ -2719,6 +2751,9 @@ pub struct CopyReport {
     /// from a PDF, are one copy), on the filtered and the copy-all path
     /// alike.
     pub copied: usize,
+    /// Destination addresses proven by this copy. The CLI uses these as
+    /// sibling sets while applying later requests in the same command.
+    pub(crate) copied_destinations: Vec<String>,
     /// Tags the copy set: the source tags (one per name) and named tags
     /// pinned ExifTool 13.59 has a writable destination for anywhere --
     /// its tags "set from" the source. When it is zero the copy found

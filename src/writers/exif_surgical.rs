@@ -1220,6 +1220,7 @@ pub(crate) fn tag_value_to_field_for_key(
         ));
     }
     let hint = match key.rsplit(':').next() {
+        Some(leaf) if leaf.eq_ignore_ascii_case("AmbientTemperature") => Some(10),
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),
         _ => hint,
@@ -2140,6 +2141,33 @@ fn plan_exif_write_inner(
     // reaches IFD1 -- so while an IFD1 a group-wide removal is about to
     // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
     let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
+
+    // An ExifIFD this write creates gets WriteExif's mandatory entries
+    // (WriteExif.pl 13.59:714-719; `exif_ifd_creation`), as the TIFF
+    // writer's does: without them pinned ExifTool's `-validate` reports
+    // "Missing required JPEG ExifIFD tag 0x9000 ExifVersion" (and 0x9101,
+    // 0xa001) on a JPEG it would have written complete.
+    if !plan.exif_ifd.is_empty() && !scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd) {
+        let set: Vec<u16> = plan.exif_ifd.iter().map(|entry| entry.tag_id).collect();
+        for edit in
+            crate::writers::exif_ifd_creation::created_exif_ifd_entries(scan.byte_order, &set)?
+        {
+            if let crate::writers::tiff_surgical::entry_edits::EntryMutation::Set {
+                field_type,
+                count,
+                bytes,
+            } = edit.mutation
+            {
+                plan.exif_ifd.push(OutEntry {
+                    tag_id: edit.tag_id,
+                    field_type,
+                    count,
+                    value: bytes,
+                    native_endian: false,
+                });
+            }
+        }
+    }
 
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the

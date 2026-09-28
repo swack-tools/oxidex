@@ -12,6 +12,240 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+fn oracle_png_with_create_date() -> Vec<u8> {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let source = fixtures::required_t_images_fixture_path("PNG.png");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dated.png");
+    std::fs::copy(source, &path).unwrap();
+    let output = oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-ExifIFD:CreateDate=2002:02:02 02:02:02",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read(path).unwrap()
+}
+
+fn png_with_bad_ihdr_crc() -> Vec<u8> {
+    let mut bytes = oracle_png_with_create_date();
+    assert_eq!(&bytes[12..16], b"IHDR");
+    let length = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let at = 16 + length;
+    let computed = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&bytes[12..at]);
+    assert_eq!(
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()),
+        computed
+    );
+    bytes[at] ^= 1;
+    assert_ne!(
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()),
+        computed
+    );
+    bytes
+}
+
+#[cfg(unix)]
+fn inode(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).unwrap().ino()
+}
+
+/// Pinned 13.59 refuses a checked IHDR CRC before it shifts a present date.
+/// The public shift route and direct in-place helper must both fail closed.
+#[test]
+fn png_date_shift_refuses_bad_checked_ihdr_crc_before_edit() {
+    let Some(_) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = png_with_bad_ihdr_crc();
+    let dir = tempfile::tempdir().unwrap();
+    for direct in [true, false] {
+        let path = dir
+            .path()
+            .join(if direct { "helper.png" } else { "public.png" });
+        std::fs::write(&path, &bytes).unwrap();
+        #[cfg(unix)]
+        let before_inode = inode(&path);
+        let error = if direct {
+            let spec = build_shift_spec("1:0:0 0:0:0", ShiftOperation::Add).unwrap();
+            oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
+                &path,
+                &[ExifDateTag::CreateDate],
+                &spec,
+            )
+            .unwrap_err()
+        } else {
+            oxidex::core::date_shift::shift_metadata_dates(
+                &path,
+                "EXIF:CreateDate",
+                "1:0:0 0:0:0",
+                ShiftOperation::Add,
+            )
+            .unwrap_err()
+        };
+        assert!(
+            error.to_string().contains("Bad CRC for IHDR chunk"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        #[cfg(unix)]
+        assert_eq!(inode(&path), before_inode);
+    }
+}
+
+/// ExifTool checks a bad IHDR even when the requested date is absent: the
+/// unchanged shortcut must not bypass the same refusal.
+#[test]
+fn png_absent_date_shift_refuses_bad_checked_ihdr_crc() {
+    let Some(_) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = png_with_bad_ihdr_crc();
+    // The requested date is absent, but the TIFF/PNG EXIF shift route still
+    // needs to validate the containing PNG before returning unchanged.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent.png");
+    std::fs::write(&path, &bytes).unwrap();
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let read = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-EXIF:DateTimeOriginal"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(read.status.success());
+    assert!(read.stdout.is_empty(), "the requested date must be absent");
+    let native = dir.path().join("native-absent.png");
+    std::fs::write(&native, &bytes).unwrap();
+    #[cfg(unix)]
+    let native_inode = inode(&native);
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:DateTimeOriginal+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(!native_write.status.success());
+    assert!(String::from_utf8_lossy(&native_write.stderr).contains("Bad CRC for IHDR chunk"));
+    assert_eq!(std::fs::read(&native).unwrap(), bytes);
+    #[cfg(unix)]
+    assert_eq!(inode(&native), native_inode);
+    #[cfg(unix)]
+    let before_inode = inode(&path);
+    let error = oxidex::core::date_shift::shift_metadata_dates(
+        &path,
+        "EXIF:DateTimeOriginal",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("Bad CRC for IHDR chunk"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    #[cfg(unix)]
+    assert_eq!(inode(&path), before_inode);
+}
+
+/// IEND's CRC is deliberately not checked by pinned 13.59; shifting a good
+/// eXIf date over that exception remains possible and keeps IEND's bytes.
+#[test]
+fn png_date_shift_keeps_the_existing_iend_crc_exception() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let mut bytes = oracle_png_with_create_date();
+    let iend = bytes.len() - 8;
+    assert_eq!(&bytes[iend..iend + 4], b"IEND");
+    bytes[iend + 4] ^= 1;
+    let bad_iend = bytes[iend + 4..].to_vec();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("iend.png");
+    let native = dir.path().join("native-iend.png");
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(&native, &bytes).unwrap();
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:CreateDate+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(
+        native_write.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native_write.stderr)
+    );
+    oxidex::core::date_shift::shift_metadata_dates(
+        &path,
+        "EXIF:CreateDate",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap();
+    let after = std::fs::read(&path).unwrap();
+    assert_ne!(after, bytes);
+    assert_eq!(&after[after.len() - 4..], bad_iend);
+    assert_eq!(
+        oracle_png_create_date_rows(&path),
+        oracle_png_create_date_rows(&native)
+    );
+}
+
+fn oracle_png_create_date_rows(path: &Path) -> String {
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned ExifTool oracle");
+    let output = oracle
+        .command()
+        .args(["-a", "-G1", "-s", "-EXIF:CreateDate"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn png_ordinary_date_shift_matches_pinned_oracle() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = oracle_png_with_create_date();
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.png");
+    let candidate = dir.path().join("candidate.png");
+    std::fs::write(&native, &bytes).unwrap();
+    std::fs::write(&candidate, &bytes).unwrap();
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-EXIF:CreateDate+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success());
+    oxidex::core::date_shift::shift_metadata_dates(
+        &candidate,
+        "EXIF:CreateDate",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap();
+    let rows = oracle_png_create_date_rows(&native);
+    assert!(rows.contains("2003:02:02 02:02:02"), "{rows}");
+    assert_eq!(oracle_png_create_date_rows(&candidate), rows);
+}
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jpeg")

@@ -795,6 +795,7 @@ pub(crate) fn copy_tags(
             Ok((outcome, proven)) => {
                 report.outcome = outcome;
                 report.copied = proven;
+                report.copied_destinations = writes.iter().map(|(key, _, _)| key.clone()).collect();
                 break;
             }
             Err(ExifToolError::TagsNotWritten { tags })
