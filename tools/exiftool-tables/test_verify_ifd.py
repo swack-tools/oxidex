@@ -290,6 +290,56 @@ class ParseSample(unittest.TestCase):
                 verify.parse_ifd_rust(path)
 
 
+class FixedArrayMarkerBySourceEra(unittest.TestCase):
+    KEY = ("Olympus", "CameraSettings", "2052")
+    MARKER = "\x1foxidex-fixed-array-pattern-v1"
+    EXACT = [("0 0", "No"), ("9 2", "Focus-stacked (2 images)")]
+    WILDCARD = [("0 0", "No"), ("9 *", "Focus-stacked (* images)")]
+
+    def test_historical_exact_map_requires_no_marker(self):
+        verify.validate_fixed_array_marker(self.KEY, self.EXACT)
+        with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
+            verify.validate_fixed_array_marker(self.KEY, [(self.MARKER, ""), *self.EXACT])
+
+    def test_wildcard_map_requires_one_first_empty_marker(self):
+        verify.validate_fixed_array_marker(
+            self.KEY, [(self.MARKER, ""), *self.WILDCARD]
+        )
+        malformed = (
+            self.WILDCARD,
+            [self.WILDCARD[0], (self.MARKER, ""), self.WILDCARD[1]],
+            [(self.MARKER, "not empty"), *self.WILDCARD],
+            [(self.MARKER, ""), (self.MARKER, ""), *self.WILDCARD],
+        )
+        for pairs in malformed:
+            with self.subTest(pairs=pairs):
+                with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
+                    verify.validate_fixed_array_marker(self.KEY, pairs)
+
+    def test_unknown_fixed_array_pattern_is_rejected(self):
+        for key in ("x *", "9 * 2", "9 ?", "9 ２"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(SystemExit, "fixed-array pattern"):
+                    verify.validate_fixed_array_marker(self.KEY, [("0 0", "No"), (key, "Unknown")])
+
+    def test_oracle_detects_removed_marker_and_wildcard_row(self):
+        generated = copy.deepcopy(_parsed())
+        generated.tags[self.KEY] = copy.deepcopy(generated.tags[("Olympus", "Main", "519")])
+        generated.tags[self.KEY]["name"] = "StackedImage"
+        generated.enums[self.KEY] = dict(self.WILDCARD)
+        oracle = copy.deepcopy(_oracle())
+        oracle.names[self.KEY] = "StackedImage"
+        oracle.enums[self.KEY] = dict(self.WILDCARD)
+        _baseline_lines, baseline_failed = verify.verify_ifd(generated, oracle)
+
+        # The marker is private and is stripped by parse_ifd_rust. If the
+        # wildcard row also disappears, source-oracle coverage must catch it.
+        generated.enums[self.KEY] = dict(self.EXACT[:1])
+        lines, failed = verify.verify_ifd(generated, oracle)
+        self.assertEqual(failed, baseline_failed + 1, "\n".join(lines))
+        self.assertIn("9 *", "\n".join(lines))
+
+
 class BinaryIsTheUnsizedUndef(unittest.TestCase):
     """Exif.pm:103-104 `'binary' => 7, # (same as undef)`; ReadValue treats
     undef/binary/string alike (ExifTool.pm:6307-6311). The verifier must expect
