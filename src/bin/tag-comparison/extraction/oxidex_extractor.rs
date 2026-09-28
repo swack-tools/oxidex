@@ -387,8 +387,8 @@ impl OxiDexExtractor {
             TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
-                let parts: Vec<String> = arr.iter().map(Self::format_value).collect();
-                parts.join(" ")
+                serde_json::to_string(&arr.iter().map(Self::format_value).collect::<Vec<String>>())
+                    .expect("a vector of strings is JSON-serializable")
             }
         }
     }
@@ -957,6 +957,25 @@ mod tests {
                 "2025-11-09T15:06:20+00:00".to_string()
             )),
             "2025-11-09T15:06:20+00:00"
+        );
+    }
+
+    #[test]
+    fn format_value_preserves_array_boundaries_for_comparison() {
+        let binary = "(Binary data 32 bytes, use -b option to extract)";
+        let array = TagValue::Array(vec![
+            TagValue::String(binary.to_string()),
+            TagValue::String("a, b".to_string()),
+            TagValue::String("quote \" and slash \\".to_string()),
+        ]);
+        let rendered = OxiDexExtractor::format_value(&array);
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered).unwrap(),
+            vec![binary, "a, b", "quote \" and slash \\"]
+        );
+        assert_eq!(
+            OxiDexExtractor::format_value(&TagValue::Array(vec![])),
+            "[]"
         );
     }
 

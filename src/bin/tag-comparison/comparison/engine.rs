@@ -72,6 +72,8 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
         // "GoPro:" tags.
         "GoPro" => "APP6",
+        // Vivo's JPEG trailer is group 1 Vivo but group 0 Trailer.
+        "Vivo" => "Trailer",
         // CanonDR4 -> CanonVRD. Same case as FLIR, AROT and SPIFF above:
         // `%CanonVRD::DR4` declares GROUPS => { 1 => 'CanonDR4' } with no
         // family-0 override, so ExifTool files a DPP 4 recipe tag under
@@ -207,13 +209,20 @@ fn normalize_value_for_comparison(value: &str) -> String {
     //    src/parsers/xmp/rdf_parser.rs and its engine-side counterpart, and
     //    is deliberately left exactly as it was here -- changing the join
     //    would move 15 more comparisons underneath that work in flight.
-    if normalized.starts_with('[') && normalized.ends_with(']') {
-        let inner = &normalized[1..normalized.len() - 1];
-        let items: Vec<&str> = inner
-            .split(',')
-            .map(|s| s.trim().trim_matches('"'))
-            .collect();
-        return items.join(" ");
+    if normalized.starts_with('[')
+        && normalized.ends_with(']')
+        && let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(normalized)
+    {
+        return items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(value) => value,
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
     }
 
     normalized.to_string()
@@ -794,6 +803,34 @@ mod tests {
             normalize_value_for_comparison(r#"["ExifTool","Test","XMP"]"#),
             "ExifTool Test XMP"
         );
+    }
+
+    #[test]
+    fn json_array_transport_keeps_commas_inside_values() {
+        let binary = "(Binary data 32 bytes, use -b option to extract)";
+        let encoded = serde_json::to_string(&[binary, binary]).unwrap();
+        assert_eq!(
+            normalize_value_for_comparison(&encoded),
+            format!("{binary} {binary}")
+        );
+        assert_eq!(normalize_value_for_comparison(r#"["",""]"#), "");
+        assert_eq!(normalize_value_for_comparison(r#"["a, b","c"]"#), "a, b c");
+        assert_eq!(
+            normalize_value_for_comparison(r#"["a\\\"b","c"]"#),
+            "a\\\"b c"
+        );
+        assert_eq!(
+            normalize_value_for_comparison("[literal, bracket]"),
+            "[literal, bracket]"
+        );
+    }
+
+    #[test]
+    fn vivo_family1_matches_exiftool_trailer_family0() {
+        assert_eq!(normalize_family_for_comparison("Vivo"), "Trailer");
+        let ox = instances(&[("vivo.jpg", "Vivo", "ImageWidth", "1920")]);
+        let et = instances(&[("vivo.jpg", "Trailer", "ImageWidth", "1920")]);
+        assert_eq!(count_instance_coverage(&ox, &et), (1, 1));
     }
 
     #[test]
