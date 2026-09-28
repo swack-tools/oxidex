@@ -3537,7 +3537,9 @@ class AutoPublishEndToEndTests(GitRepoTestCase):
         )
 
         self.assertEqual(result["status"], "published_awaiting_review")
-        self.assertTrue(result["sweep"]["fmt"]["committed"])
+        # The early idempotency pass committed formatting; the later
+        # pass recorded in the result is already clean.
+        self.assertFalse(result["sweep"]["fmt"]["committed"])
 
         # What origin ACTUALLY received on the head branch -- the fix
         # still has to reach the PR's branch, fmt commit included, even

@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import overlord_sweep
+import parallel_model_fix_loop
 import squad_merge_loop
 
 GIT_ENV_OVERRIDES = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
@@ -1068,6 +1069,103 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 path.write_text(text.replace("( )", "()"))
         return True, ""
 
+    def _open_pr_fixture(self, *, unrelated_main=False, unformatted_worker=False,
+                         earlier_content="fn a() {}\n",
+                         open_prs_fn=None):
+        repo = self.make_repo()
+        git(repo, "branch", "sweep/tags-earlier", "main")
+        git(repo, "checkout", "-q", "sweep/tags-earlier")
+        self.commit_file(repo, "src/a.rs", earlier_content, "earlier sweep fix")
+        git(repo, "checkout", "-q", "main")
+        if unrelated_main:
+            self.commit_file(repo, "scripts/unrelated.py", "# newer main\n", "unrelated main change")
+        git(repo, "branch", "squad/canon", "main")
+        git(repo, "checkout", "-q", "squad/canon")
+        canon_sha = self.commit_file(
+            repo, "src/a.rs", "fn a( ) {}\n" if unformatted_worker else "fn a() {}\n",
+            "fix JPEG:Foo", trailers=[("Format", "JPEG"), ("Tag", "MakerNotes:Foo")],
+        )
+        git(repo, "checkout", "-q", "main")
+        home = self.tmp / "home"
+        config = self._config_toml(self.tmp, ["canon"])
+        squad_merge_loop.record_head(
+            squad_merge_loop.squad_status_file(home, "canon"), "workerhead",
+            status="consumed", patch_id="p1", format_name="JPEG", squad_sha=canon_sha,
+            now_fn=lambda: 100,
+        )
+        calls = []
+        result = overlord_sweep.run_sweep(
+            repo_root=repo, home=home, cache_dir="/unused",
+            comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+            config_path=config, sweep_state_path=home / "sweep-state.json", origin_ref="main",
+            dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+            cargo_test_workspace_fn=lambda repo_root: calls.append("workspace") or (True, "ok"),
+            push_branch_fn=lambda repo_root, branch: calls.append("push") or (True, "pushed"),
+            create_pr_fn=lambda *args: calls.append("pr") or {"ok": True, "url": "u"},
+            fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
+            open_sweep_prs_fn=open_prs_fn or (lambda: [{"headRefName": "sweep/tags-earlier",
+                                                        "url": "https://example/pull/42"}]),
+            log_fn=lambda *args: None,
+        )
+        return repo, home, result, calls
+
+    def test_open_pr_duplicate_consumes_stamp_without_publishing(self):
+        repo, home, result, calls = self._open_pr_fixture()
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(result["duplicate_of"], "https://example/pull/42")
+        self.assertEqual(calls, [])
+        self.assertIn("canon", overlord_sweep.load_sweep_state(home / "sweep-state.json")["squads"])
+
+    def test_open_pr_duplicate_ignores_unrelated_main_change(self):
+        _, _, result, calls = self._open_pr_fixture(unrelated_main=True)
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(calls, [])
+
+    def test_open_pr_duplicate_compares_formatted_content(self):
+        repo, _, result, calls = self._open_pr_fixture(unformatted_worker=True)
+        self.assertEqual(result["status"], "duplicate_of_open_pr")
+        self.assertEqual(calls, [])
+        self.assertEqual(git_out(repo, "show", f"{result['branch']}:src/a.rs"), "fn a() {}\n")
+
+    def test_different_open_pr_on_same_path_does_not_block_publication(self):
+        _, _, result, calls = self._open_pr_fixture(earlier_content="fn different() {}\n")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(calls, ["workspace", "push", "pr"])
+
+    def test_open_pr_lookup_failure_does_not_publish_or_consume_stamp(self):
+        def unavailable():
+            raise OSError("gh unavailable")
+
+        _, home, result, calls = self._open_pr_fixture(open_prs_fn=unavailable)
+        self.assertEqual(result["status"], "open_pr_lookup_failed")
+        self.assertEqual(calls, [])
+        self.assertNotIn("canon", overlord_sweep.load_sweep_state(home / "sweep-state.json")["squads"])
+
+    def test_dispatcher_open_pr_query_is_strict(self):
+        with patch.object(overlord_sweep, "run_sweep") as run_sweep:
+            parallel_model_fix_loop.default_sweep_fn(repo_root=self.tmp)
+            query = run_sweep.call_args.kwargs["open_sweep_prs_fn"]
+        with patch.object(parallel_model_fix_loop, "list_open_sweep_prs",
+                          side_effect=RuntimeError("gh pr list failed")) as listing:
+            with self.assertRaisesRegex(RuntimeError, "gh pr list failed"):
+                query()
+            self.assertTrue(listing.call_args.kwargs["strict"])
+        self.assertIn("duplicate_of_open_pr", parallel_model_fix_loop.PUBLISH_OK_STATUSES)
+        self.assertIn("duplicate_of_open_pr", parallel_model_fix_loop.IDLE_STATUSES)
+        self.assertNotIn("open_pr_lookup_failed", parallel_model_fix_loop.PUBLISH_OK_STATUSES)
+
+    def test_strict_open_pr_lister_rejects_gh_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "gh pr list failed"):
+            parallel_model_fix_loop.list_open_sweep_prs(
+                self.tmp, run_gh=lambda args, repo: (1, "", "auth required"), strict=True)
+
+    def test_strict_open_pr_lister_rejects_incomplete_results(self):
+        with self.assertRaisesRegex(RuntimeError, "incomplete PR record"):
+            parallel_model_fix_loop.list_open_sweep_prs(
+                self.tmp, run_gh=lambda args, repo: (0, '[{"headRefName":"sweep/tags-1"}]', ""),
+                strict=True,
+            )
+
     def test_no_news_short_circuits_before_cutting_a_branch(self):
         repo = self.make_repo()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1157,7 +1255,9 @@ class RunSweepIntegrationTests(GitRepoTestCase):
         # branch ref -- the only thing `git push origin <branch>` and
         # `gh pr create --head <branch>` ever see -- stays behind.
         branch = result["branch"]
-        self.assertTrue(result["fmt"]["committed"])
+        # The early idempotency pass makes the format commit; the later
+        # pass reported in the result is normally already clean.
+        self.assertFalse(result["fmt"]["committed"])
         self.assertEqual(git_out(repo, "rev-parse", "HEAD").strip(),
                          git_out(repo, "rev-parse", branch).strip())
         self.assertIn("style: cargo fmt --all (sweep publish)",

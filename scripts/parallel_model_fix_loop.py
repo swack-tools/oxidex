@@ -2330,8 +2330,14 @@ def default_sweep_fn(**kwargs):
     def comparison_fn(repo, cache_dir, fmt, suffix):
         return squad_merge_loop.real_format_match(repo, cache_dir, fmt, suffix)
 
+    def open_sweep_prs_fn():
+        # Publication must stop if the list cannot be checked. Adoption's
+        # best-effort query remains unchanged for its separate use.
+        return list_open_sweep_prs(kwargs.get("repo_root"), strict=True)
+
     return overlord_sweep.run_sweep(
-        comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout, **kwargs,
+        comparison_fn=comparison_fn, checkout_fn=overlord_sweep.real_checkout,
+        open_sweep_prs_fn=open_sweep_prs_fn, **kwargs,
     )
 
 
@@ -2515,12 +2521,12 @@ def is_own_sweep_branch(head):
     return bool(SWEEP_BRANCH_RE.match(str(head or "")))
 
 
-def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
+def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main", *, strict=False):
     """Open PRs whose head branch is a sweep branch AND which this
     automation could actually have opened, oldest (lowest PR number)
-    first. [] on any failure -- an expired token or a missing `gh` must
-    cost one skipped adoption pass, never an exception inside an
-    --infinite dispatcher.
+    first. Adoption uses [] on failure so a transient `gh` error costs
+    one pass. Publication passes strict=True and raises on a failed query,
+    because an unknown PR list cannot establish that a sweep is new.
 
     Three gates beyond the branch shape, each needing a field `gh` only
     returns when asked (which is why the field list below is part of the
@@ -2554,7 +2560,7 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
         # to rescue -- fall outside the window and are never adopted,
         # silently. The limit is also raised well past any plausible count
         # of concurrently-open sweep PRs.
-        _rc, out, _err = run_gh(
+        rc, out, err = run_gh(
             ["pr", "list", "--state", "open", "--json",
              "number,url,headRefName,isDraft,baseRefName,isCrossRepository",
              "--search", "head:sweep/tags-", "--limit", "200"],
@@ -2565,13 +2571,30 @@ def list_open_sweep_prs(repo_root, run_gh=default_run_gh, base_ref="main"):
         # call of every round now -- including rounds that have no news
         # and previously made none at all -- so it must not be the thing
         # that turns a quiet round into a raised exception.
+        if strict:
+            raise
+        return []
+    if rc != 0:
+        if strict:
+            raise RuntimeError(f"gh pr list failed: {err.strip()}")
         return []
     try:
         prs = json.loads(out)
     except ValueError:
+        if strict:
+            raise RuntimeError("gh pr list returned invalid JSON")
         return []
     if not isinstance(prs, list):
+        if strict:
+            raise RuntimeError("gh pr list returned a non-list payload")
         return []
+    if strict:
+        if len(prs) >= 200:
+            raise RuntimeError("gh pr list reached its 200-PR limit")
+        required = {"number", "url", "headRefName", "isDraft", "baseRefName",
+                    "isCrossRepository"}
+        if any(not isinstance(pr, dict) or not required.issubset(pr) for pr in prs):
+            raise RuntimeError("gh pr list returned an incomplete PR record")
     # --search narrows server-side but is a substring match, so the exact
     # shape is still enforced here: never trust the server filter to be
     # the security boundary.
@@ -2784,7 +2807,8 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
     Returns a summary dict whose "status" is either one of run_sweep's
     own statuses passed straight through ("no_news",
     "branch_cut_failed", "nothing_merged", "sweep_aborted",
-    "reattach_failed", "zero_delta", "workspace_tests_failed",
+    "reattach_failed", "zero_delta", "duplicate_of_open_pr", "open_pr_lookup_failed",
+    "format_failed", "workspace_tests_failed",
     "push_failed", "pr_create_failed"), or one of this function's own:
     "no_worktree", "bisection_unverified", "zero_delta", "checks_red",
     "checks_timeout", "checks_unknown", "reviews_<state>",
@@ -2946,13 +2970,15 @@ def auto_publish_round(*, repo_root=REPO_ROOT, cache_dir, home=None, config_path
 # A publish that either landed something or had nothing to land. Every
 # other status is a round that did NOT publish, which is what the one-shot
 # exit code and the --infinite stall counter both key off.
-PUBLISH_OK_STATUSES = frozenset({"published_awaiting_review", "no_news", "zero_delta"})
+PUBLISH_OK_STATUSES = frozenset({
+    "published_awaiting_review", "no_news", "zero_delta", "duplicate_of_open_pr",
+})
 
 # Sweep statuses meaning "there was nothing to publish", as opposed to
 # "publishing was attempted and failed". Only these earn the idle backoff:
 # a failing round should keep its configured cadence so a transient fault
 # is retried promptly.
-IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta"})
+IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta", "duplicate_of_open_pr"})
 IDLE_ROUND_DELAY_SECONDS = 60.0
 
 # How many consecutive non-publishing rounds before the loop says so out

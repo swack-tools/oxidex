@@ -1342,11 +1342,9 @@ def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
     sweep worktree (a comparison report, an editor swapfile) to ride
     along inside a commit labelled "cargo fmt".
 
-    A cargo fmt that FAILS outright (no rustfmt component installed, a
-    parse error) is logged loudly and reported as ok=False, but is not
-    fatal to the caller: the worst case is the same red "Lint & Audit"
-    the sweep has always had, and a PR left open for a human beats
-    throwing away a branch full of validated fixes.
+    A cargo fmt failure is logged and reported as ok=False. The caller
+    stops publication when the open-PR duplicate gate is active, since
+    unformatted content cannot be compared reliably with older PRs.
     """
     fmt_fn = fmt_fn or real_cargo_fmt
     ok, output = fmt_fn(repo_root)
@@ -1406,7 +1404,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
              config_path=DEFAULT_CONFIG_PATH, cargo_test_workspace_fn=None, create_pr_fn=None,
              push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
              sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
-             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None):
+             origin_ref=ORIGIN_MAIN, dispatcher_lock_path=None, open_sweep_prs_fn=None):
     """One full overlord sweep pass (spec M4). See module docstring for
     the step-by-step breakdown. Returns a summary dict whose "status"
     is one of: "no_news", "branch_cut_failed", "nothing_merged",
@@ -1414,7 +1412,8 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     revert a candidate, or ended without a passing recheck -- see
     bisect_sweep_failure), "reattach_failed", "zero_delta" (the assembled
     branch is tree-identical to origin_ref: nothing to publish),
-    "workspace_tests_failed", "push_failed", "pr_create_failed", "ok".
+    "duplicate_of_open_pr", "open_pr_lookup_failed", "format_failed", "workspace_tests_failed",
+    "push_failed", "pr_create_failed", "ok".
     """
     run_git = run_git or default_run_git
     cargo_test_workspace_fn = cargo_test_workspace_fn or _real_cargo_test_workspace
@@ -1633,6 +1632,14 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
             "bisection": bisection_result, "failed_squads": failed_squads, "preflight": health,
         }
 
+    # Compare the content that would be published. A prior sweep PR has
+    # already been formatted, so comparing raw worker output can miss it.
+    early_fmt = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+    if not early_fmt["ok"] and open_sweep_prs_fn is not None:
+        persist_cursor(durable_squads)
+        return {"status": "format_failed", "branch": branch, "fmt": early_fmt,
+                "failed_squads": failed_squads, "preflight": health}
+
     # The repo's DURABLE idempotency rule: compare the TREE, not the SHA.
     # A cherry-pick or a squash gives identical content a fresh sha (fresh
     # committer timestamp), so a stamp whose whole contribution is already
@@ -1649,7 +1656,7 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     #
     # Placed here deliberately: after reattach (so HEAD is the branch tip
     # that would actually be pushed) and BEFORE the multi-minute workspace
-    # suite, the fmt commit, the push and the PR. `--quiet` implies
+    # suite, the push and the PR. `--quiet` implies
     # --exit-code, so rc 0 means "no differences"; two dots, not three, so
     # a merge that neutralised main's own content is caught too.
     rc, _out, _err = run_git(["diff", "--quiet", f"{origin_ref}..HEAD"], repo_root)
@@ -1668,6 +1675,53 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
             "status": "zero_delta", "branch": branch, "merged_squads": sorted(merge_infos),
             "failed_squads": failed_squads, "bisection": bisection_result, "preflight": health,
         }
+
+    if open_sweep_prs_fn is not None:
+        # Main may have advanced since an older PR was cut. Only the paths
+        # changed by this round distinguish its fix from that open PR.
+        changed_rc, changed_out, changed_err = run_git(
+            ["diff", "--name-only", "-z", f"{origin_ref}..HEAD"], repo_root)
+        try:
+            if changed_rc != 0:
+                raise RuntimeError(f"could not list changed paths: {changed_err.strip()}")
+            changed_paths = [path for path in changed_out.split("\0") if path]
+            if not changed_paths:
+                raise RuntimeError("nonzero origin diff has no changed paths")
+            open_prs = open_sweep_prs_fn()
+            if not isinstance(open_prs, list):
+                raise RuntimeError("open sweep PR query did not return a list")
+            remote = origin_ref.split("/", 1)[0] if "/" in origin_ref else None
+            for pr in open_prs:
+                head = pr.get("headRefName") if isinstance(pr, dict) else None
+                if not head or head == branch:
+                    continue
+                candidate_ref = head
+                if remote:
+                    fetch_rc, _out, fetch_err = run_git(
+                        ["fetch", remote, f"{head}:refs/remotes/{remote}/{head}"], repo_root)
+                    if fetch_rc != 0:
+                        raise RuntimeError(f"could not fetch open PR {head}: {fetch_err.strip()}")
+                    candidate_ref = f"refs/remotes/{remote}/{head}"
+                cmp_rc, _out, cmp_err = run_git(
+                    ["diff", "--quiet", f"{candidate_ref}..HEAD", "--", *changed_paths], repo_root)
+                if cmp_rc > 1:
+                    raise RuntimeError(f"could not compare open PR {head}: {cmp_err.strip()}")
+                if cmp_rc == 0:
+                    pr_ref = pr.get("url") or pr.get("number") or head
+                    log_fn(f"{branch} duplicates already-open {pr_ref} ({head}) on this round's "
+                           "changed paths -- skipping publication")
+                    durable_squads.update(merge_infos.keys())
+                    persist_cursor(durable_squads)
+                    clear_parks(merge_infos.keys())
+                    return {"status": "duplicate_of_open_pr", "branch": branch,
+                            "duplicate_of": pr_ref, "merged_squads": sorted(merge_infos),
+                            "failed_squads": failed_squads, "bisection": bisection_result,
+                            "preflight": health}
+        except (OSError, ValueError, RuntimeError) as exc:
+            log_fn(f"cannot verify open sweep PRs for {branch}: {exc} -- refusing to publish")
+            persist_cursor(durable_squads)
+            return {"status": "open_pr_lookup_failed", "branch": branch,
+                    "message": str(exc), "failed_squads": failed_squads, "preflight": health}
 
     all_shas = []
     for squad, info in merge_infos.items():
@@ -1700,14 +1754,14 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     body = build_pr_body(evidence_rows=evidence_rows, judgment_entries=judgment_entries, branch=branch)
     title = build_sweep_pr_title(branch, all_shas, merge_infos)
 
-    # Formatting is deliberately the LAST thing to touch the branch.
+    # Retain the late pass for a transient early failure and for callers
+    # that do not use the open-PR gate; it is normally already clean.
     # all_shas / the evidence table / the judgment queue above are the
     # TAG-FIX commits, and the fmt commit is not one of them: it carries
     # no trailers, closes no gap, and must not show up as a row in the
-    # PR's evidence table or as an entry in the judgment queue. Running
-    # it after cargo_test_workspace_fn is also deliberate -- rustfmt only
-    # moves whitespace, so re-running a multi-minute workspace suite
-    # afterwards would double the sweep's wall clock for no semantic gain.
+    # PR's evidence table or as an entry in the judgment queue. The
+    # contribution SHAs come from merge_infos boundaries captured before
+    # either format pass, so the early commit cannot enter those rows.
     fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
 
     # The lint gate CI will apply, applied BEFORE the push rather than after.
@@ -1902,10 +1956,9 @@ def main(argv=None):
         print(f"  retry with: gh pr create --head {result.get('branch')} --base main")
     elif result.get("pr") is not None:
         print(f"PR: {result['pr']}")
-    # "zero_delta" joins the success set: the branch was tree-identical to
-    # origin/main, so there was genuinely nothing to publish -- the same
-    # kind of legitimate no-op as "no_news", not a failure to report.
-    return 0 if result.get("status") in ("ok", "no_news", "zero_delta") else 1
+    # Both duplicate statuses mean the content is already represented by
+    # main or an open sweep PR, so publication is a legitimate no-op.
+    return 0 if result.get("status") in ("ok", "no_news", "zero_delta", "duplicate_of_open_pr") else 1
 
 
 if __name__ == "__main__":
