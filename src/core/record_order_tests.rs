@@ -181,10 +181,19 @@ fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
             let selected_binary = Path::new(oracle.argv.last().expect("oracle binary"));
             let config = FixtureConfig::from_environment(release);
             assert_selected_source_fixture_absent(&config, selected_binary, file);
-            continue;
+            // PCAPNG still exercises Rust ordering from the independently
+            // pinned combined corpus even when this native tree lacks it.
+            if *file != "PCAP.pcapng" {
+                continue;
+            }
         }
-        let Some(path) = crate::test_support::pinned_t_images_fixture_path(file) else {
-            eprintln!("skip: configured t/images fixture {file} is absent");
+        let path = if *file == "PCAP.pcapng" {
+            crate::test_support::pinned_combined_fixture_path(file)
+        } else {
+            crate::test_support::pinned_t_images_fixture_path(file)
+        };
+        let Some(path) = path else {
+            eprintln!("skip: configured fixture {file} is absent");
             return;
         };
         let first = recorded_sequence(&path);
