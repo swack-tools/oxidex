@@ -2083,6 +2083,22 @@ fn file_makernote_census(
     census
 }
 
+/// Physical census for the CLI's file-phase candidate conversion proof. A
+/// failed read is unknown, never evidence that a maker-note candidate is
+/// absent. This uses the same scanner as bare write resolution.
+pub(crate) fn conversion_makernote_census(
+    path: &Path,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::MakerNoteCensus;
+    let Ok(reader) = MMapReader::new(path) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let Ok(format) = detect_format(&reader) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    file_makernote_census(&reader, format, is_surgical_tiff_target(format, &reader))
+}
+
 /// Whether deleting `key` from the file at `path` changes nothing: the map
 /// does not hold it (under any spelling) and -- for an EXIF carrier -- no
 /// entry of any EXIF block is named by it (`exif_surgical::

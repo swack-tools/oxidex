@@ -1508,40 +1508,71 @@ const LIGHT_SOURCE_LABELS: &[(i64, &str)] = &[
 enum EnumInverseError {
     /// No table entry's label matched, exactly or case-insensitively.
     NoMatch,
-    /// More than one table entry's label matched at the same tier (exact,
-    /// or case-insensitive when no exact match existed). ExifTool's own
-    /// `ReverseLookup` (`Writer.pl:3609-3665`) breaks such a tie by picking
-    /// the entry whose numeric key sorts first as a string; this port
-    /// refuses instead, per `AGENTS.md`'s "never approximate a conversion"
-    /// -- a duplicate label such as `Compression`'s `7`/`99` both printing
-    /// `"JPEG"` is a real ExifTool ambiguity, not a transcription gap, and
-    /// picking a winner would be a guess wearing a citation.
+    /// Multiple labels matched a prefix or substring tier. Exact duplicate
+    /// labels instead select the first key in Perl's string sort.
     Ambiguous,
 }
 
 /// Ports ExifTool's `ReverseLookup` (`Writer.pl:3609-3665`) for a plain enum
-/// `PrintConv` hash: `raw` matched against the table's labels exactly, then
-/// case-insensitively, and only when exactly one entry matches either tier.
+/// `PrintConv` hash: exact, case-insensitive exact, prefix, then substring.
+/// An exact duplicate chooses the first key in Perl's string sort; multiple
+/// prefix or substring matches are ambiguous.
 fn invert_int_enum(
     entries: &[(i64, &str)],
     raw: &str,
 ) -> std::result::Result<i64, EnumInverseError> {
-    let mut exact = entries.iter().filter(|(_, label)| *label == raw);
-    if let Some(&(value, _)) = exact.next() {
-        return if exact.next().is_none() {
-            Ok(value)
-        } else {
-            Err(EnumInverseError::Ambiguous)
-        };
-    }
-    let mut insensitive = entries
+    // CLI operands reach native Perl as bytes: its \s matches these ASCII
+    // characters, not the broader Unicode whitespace accepted by trim_end.
+    let raw = raw.trim_end_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}']);
+    let first_key = |matches: Vec<i64>| {
+        matches
+            .into_iter()
+            .min_by_key(|code| code.to_string())
+            .ok_or(EnumInverseError::NoMatch)
+    };
+    let exact: Vec<_> = entries
         .iter()
-        .filter(|(_, label)| label.eq_ignore_ascii_case(raw));
-    match (insensitive.next(), insensitive.next()) {
-        (Some(&(value, _)), None) => Ok(value),
-        (Some(_), Some(_)) => Err(EnumInverseError::Ambiguous),
-        (None, _) => Err(EnumInverseError::NoMatch),
+        .filter(|(_, label)| *label == raw)
+        .map(|(code, _)| *code)
+        .collect();
+    if !exact.is_empty() {
+        return first_key(exact);
     }
+    let insensitive: Vec<_> = entries
+        .iter()
+        .filter(|(_, label)| label.eq_ignore_ascii_case(raw))
+        .map(|(code, _)| *code)
+        .collect();
+    if !insensitive.is_empty() {
+        return first_key(insensitive);
+    }
+    for matches in [
+        entries
+            .iter()
+            .filter(|(_, label)| {
+                label
+                    .to_ascii_lowercase()
+                    .starts_with(&raw.to_ascii_lowercase())
+            })
+            .map(|(code, _)| *code)
+            .collect::<Vec<_>>(),
+        entries
+            .iter()
+            .filter(|(_, label)| {
+                label
+                    .to_ascii_lowercase()
+                    .contains(&raw.to_ascii_lowercase())
+            })
+            .map(|(code, _)| *code)
+            .collect::<Vec<_>>(),
+    ] {
+        match matches.as_slice() {
+            [] => continue,
+            [code] => return Ok(*code),
+            _ => return Err(EnumInverseError::Ambiguous),
+        }
+    }
+    Err(EnumInverseError::NoMatch)
 }
 
 /// Whether `declared_tag_name` may be inverted against `Exif::Main`
@@ -2424,14 +2455,20 @@ fn is_canonical_exif_datetime(raw: &str) -> bool {
 /// `/^Unknown\s*\((.*)\)$/i`, with an `0x`-prefixed X read as hex (`hex()`,
 /// so `Unknown (0x10)` is 16). `None` for any other value.
 fn unknown_print_conv_value(raw: &str) -> Option<String> {
+    // Perl $ may match immediately before one final newline. The inner dot
+    // still does not match a newline. Preserve those distinct rules.
+    let raw = raw.strip_suffix('\n').unwrap_or(raw);
     let head = raw.get(..7)?;
     if !head.eq_ignore_ascii_case("unknown") {
         return None;
     }
     let inner = raw[7..]
-        .trim_start_matches(|c: char| c.is_ascii_whitespace())
+        .trim_start_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
         .strip_prefix('(')?
         .strip_suffix(')')?;
+    if inner.contains('\n') {
+        return None;
+    }
     let hex = inner
         .strip_prefix("0x")
         .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit()));
