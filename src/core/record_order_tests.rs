@@ -156,6 +156,10 @@ fn source_fixture_absence_tracks_the_selected_oracle_tree() {
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
     let mut failures = Vec::new();
     let release = crate::exiftool_oracle::repo_pin();
+    assert!(
+        matches!(release, "11.78" | "12.64" | "13.59"),
+        "unsupported native fixture release: {release}"
+    );
     for (file, exercises) in PATHS {
         // These two source-tree fixtures did not exist in the selected
         // native releases. Keep every other path under the same exact
