@@ -51,6 +51,13 @@ enum Ifd {
 /// falls outside `tiff`, are skipped (never patched) rather than risking
 /// corruption.
 pub fn locate_exif_datetimes(tiff: &[u8]) -> Result<Vec<LocatedDateTag>> {
+    Ok(scan_exif_datetimes(tiff)?.0)
+}
+
+/// Also retain date entries that the reader may expose but the fixed-width
+/// patcher cannot edit. A missing physical location is not proof that a
+/// requested date is absent.
+fn scan_exif_datetimes(tiff: &[u8]) -> Result<(Vec<LocatedDateTag>, Vec<ExifDateTag>)> {
     if tiff.len() < 8 {
         return Err(ExifToolError::parse_error("EXIF TIFF structure too small"));
     }
@@ -71,11 +78,26 @@ pub fn locate_exif_datetimes(tiff: &[u8]) -> Result<Vec<LocatedDateTag>> {
     let ifd0_offset = read_u32(&tiff[4..8], byte_order) as usize;
 
     let mut found = Vec::new();
-    let exif_ifd_offset = scan_ifd(tiff, ifd0_offset, byte_order, Ifd::Ifd0, &mut found)?;
+    let mut unshiftable = Vec::new();
+    let exif_ifd_offset = scan_ifd(
+        tiff,
+        ifd0_offset,
+        byte_order,
+        Ifd::Ifd0,
+        &mut found,
+        &mut unshiftable,
+    )?;
     if let Some(offset) = exif_ifd_offset {
-        scan_ifd(tiff, offset, byte_order, Ifd::ExifIfd, &mut found)?;
+        scan_ifd(
+            tiff,
+            offset,
+            byte_order,
+            Ifd::ExifIfd,
+            &mut found,
+            &mut unshiftable,
+        )?;
     }
-    Ok(found)
+    Ok((found, unshiftable))
 }
 
 /// The byte span (offset, length) of every other value in the reachable
@@ -116,7 +138,14 @@ fn other_value_spans(tiff: &[u8], located: &[LocatedDateTag]) -> Result<Vec<(usi
         ByteOrder::BigEndian
     };
     let ifd0 = read_u32(tiff.get(4..8).ok_or_else(incomplete)?, byte_order) as usize;
-    let exif_ifd = scan_ifd(tiff, ifd0, byte_order, Ifd::Ifd0, &mut Vec::new())?;
+    let exif_ifd = scan_ifd(
+        tiff,
+        ifd0,
+        byte_order,
+        Ifd::Ifd0,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )?;
     // Inline values, entry descriptors and pointers are storage too.
     let mut spans = vec![(0, 8)];
     let mut pending = Vec::new();
@@ -283,6 +312,7 @@ fn scan_ifd(
     byte_order: ByteOrder,
     which: Ifd,
     found: &mut Vec<LocatedDateTag>,
+    unshiftable: &mut Vec<ExifDateTag>,
 ) -> Result<Option<usize>> {
     let entries_start = match offset.checked_add(2) {
         Some(end) if end <= tiff.len() => end,
@@ -335,6 +365,8 @@ fn scan_ifd(
                 tag: date_tag,
                 value_offset: value_or_offset,
             });
+        } else {
+            unshiftable.push(date_tag);
         }
     }
     Ok(exif_ifd_offset)
@@ -413,7 +445,19 @@ fn shift_block_dates(
     targets: &[ExifDateTag],
     spec: &ShiftSpec,
 ) -> Result<usize> {
-    let located = locate_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
+    let (located, unshiftable) =
+        scan_exif_datetimes(&file_bytes[tiff_start..tiff_start + tiff_len])?;
+    if let Some(tag) = unshiftable.into_iter().find(|tag| targets.contains(tag)) {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Cannot shift {}: its EXIF date value is not a supported 20-byte ASCII field; nothing was written",
+            tag.key()
+        )));
+    }
+    // There is no requested physical date to patch. In particular, an
+    // unrelated directory type cannot make an absent-date shift fail.
+    if !located.iter().any(|entry| targets.contains(&entry.tag)) {
+        return Ok(0);
+    }
     // One value may back several entries (an IFD0 and an ExifIFD ModifyDate
     // pointing at the same 20 bytes, or ModifyDate and DateTimeOriginal).
     // Pinned ExifTool 13.59 shifts each entry once from its own old value

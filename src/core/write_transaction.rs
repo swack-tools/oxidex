@@ -977,6 +977,28 @@ fn execute_plan(
                 Step::Group(key) => removed.push(key.clone()),
                 Step::Field(request) => {
                     remove_field(&mut desired, &request.key);
+                    // A family-0 deletion names all native EXIF rows with
+                    // this leaf. The TIFF writer decides whether a surfaced
+                    // entry was deleted from the native key's absence in the
+                    // desired map, so remove those rows before it runs.
+                    if request.value.is_none()
+                        && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                            .is_some()
+                        && let (Some(group), leaf) = group_and_name(&request.key)
+                        && group.eq_ignore_ascii_case("EXIF")
+                    {
+                        let native: Vec<String> = desired
+                            .iter()
+                            .filter(|(key, _)| {
+                                matches!(group_and_name(key), (Some(directory), name)
+                                    if is_exif_directory(directory) && name.eq_ignore_ascii_case(leaf))
+                            })
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        for key in native {
+                            remove_field(&mut desired, &key);
+                        }
+                    }
                     match request.value {
                         Some(value) => {
                             // `insert` marks the occurrence assigned
