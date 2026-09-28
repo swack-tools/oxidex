@@ -3204,9 +3204,10 @@ mod focus_info_model_conditional_tests {
     }
 
     /// `/E-(3|5|30)\b/` must not swallow `E-300`, `E-500` or `E-M5`, all of
-    /// which are in the corpus and all of which ExifTool routes to the
-    /// *other* variants: `OlympusE-300.jpg` prints `Center (horizontal)`
-    /// (`-n` -> `1`), and `OlympusE-M5.jpg` prints its `AFPoint` raw.
+    /// which ExifTool routes to other variants. `E-300` prints `Center
+    /// (horizontal)` (`-n` -> `1`). Native 11.78 routes `E-M5` to its final
+    /// value map and prints zero as `Left (or n/a)`; 12.64/13.59 add a raw
+    /// E-M/OM variant that prints zero unchanged.
     #[test]
     fn af_point_word_boundary_is_not_a_prefix_match() {
         assert_eq!(
@@ -3217,9 +3218,14 @@ mod focus_info_model_conditional_tests {
             af_point_forms(1, "E-500"),
             Some(("1".to_string(), "Center (horizontal)".to_string()))
         );
+        let printed = match crate::exiftool_tables::IFD_EXIFTOOL_VERSION {
+            "11.78" => "Left (or n/a)",
+            "12.64" | "13.59" => "0",
+            other => panic!("unsupported ExifTool source {other}"),
+        };
         assert_eq!(
             af_point_forms(0, "E-M5"),
-            Some(("0".to_string(), "0".to_string()))
+            Some(("0".to_string(), printed.to_string()))
         );
     }
 

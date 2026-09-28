@@ -244,13 +244,18 @@ mod tests {
         }
         // The RawConv-carrying fields stay omitted rather than approximated:
         // Image2..8Description (`RawConv '$val=~/[^\xff]/ ? $val : undef'`),
-        // AspectRatio (`RawConv` + Rationalize PrintConv), ShutterAngle and
-        // FrameRate (`RawConv '($val =~ /\d/ and $val !~ /nan/i) ? $val :
-        // undef'`), all DPX.pm. On this header every one of them is undef in
-        // ExifTool too (all-zero/all-0xff regions).
+        // AspectRatio (`RawConv` + Rationalize PrintConv), ShutterAngle and,
+        // in 12.64/13.59, FrameRate (`RawConv '($val =~ /\d/ and $val !~
+        // /nan/i) ? $val : undef'`), all DPX.pm. In native 11.78 FrameRate
+        // is a plain float at offset 1724 and emits zero from this header.
+        // The other fields are undef in ExifTool (all-zero/all-0xff regions).
         assert_eq!(metadata.get("File:AspectRatio"), None);
         assert_eq!(metadata.get("File:ShutterAngle"), None);
-        assert_eq!(metadata.get("File:FrameRate"), None);
+        match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => assert_eq!(metadata.get("File:FrameRate"), Some(&TagValue::Float(0.0))),
+            "12.64" | "13.59" => assert_eq!(metadata.get("File:FrameRate"), None),
+            other => panic!("unsupported ExifTool source {other}"),
+        }
         assert_eq!(metadata.get("File:Image2Description"), None);
     }
 
