@@ -203,6 +203,18 @@ fn selected_fit_module_is_absent() -> bool {
 fn newly_covered_producers_hand_out_read_rows() {
     use oxidex::parsers::*;
     let fit_module_absent = selected_fit_module_is_absent();
+    let old_source = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => true,
+        "12.64" | "13.59" => false,
+        pin => panic!("unprobed producer source {pin}"),
+    };
+    for module in ["MRC", "ZISRAW"] {
+        assert_eq!(
+            oxidex::exiftool_tables::find_table(module, "Main").is_none(),
+            old_source,
+            "selected native {module} module availability",
+        );
+    }
     macro_rules! on_reader {
         ($f:path) => {
             (|path: &Path| {
@@ -644,7 +656,22 @@ fn newly_covered_producers_hand_out_read_rows() {
         let Some(path) = path else {
             continue;
         };
-        let map = match produce(&path) {
+        let result = produce(&path);
+        let absent_module = match (*name, old_source) {
+            ("parse_czi_metadata", true) => Some("ZISRAW"),
+            ("parse_mrc_metadata", true) => Some("MRC"),
+            _ => None,
+        };
+        if let Some(module) = absent_module {
+            checked += 1;
+            match result {
+                Err(reason) if reason == format!("missing {module}::Main table") => {}
+                Err(reason) => failures.push(format!("{name}: unexpected refusal {reason}")),
+                Ok(_) => failures.push(format!("{name}: absent native module did not refuse")),
+            }
+            continue;
+        }
+        let map = match result {
             Ok(map) => map,
             Err(err) => {
                 failures.push(format!("{name} on {sample}: {err}"));
