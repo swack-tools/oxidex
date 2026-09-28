@@ -2148,7 +2148,9 @@ pub(crate) fn removal_is_no_op_with_reader(
     // checked MIE's copy before asking this no-op question. Use the physical
     // note census, never just decoded rows: an unidentified note may carry
     // a tag the reader did not surface.
-    if crate::writers::exif_surgical::is_makernote_group(group) {
+    if !group.eq_ignore_ascii_case("MakerNotes")
+        && crate::writers::exif_surgical::is_makernote_group(group)
+    {
         let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
         let name = name.strip_suffix('#').unwrap_or(name);
         let format = detect_format(reader)?;
