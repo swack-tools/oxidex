@@ -2,8 +2,9 @@ import copy
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 import quicktime_userdata_specs as compiler
-from quicktime_test_sources import selected_document
+from quicktime_test_sources import fixed_source_context, selected_document
 
 
 def snapshot():
@@ -11,6 +12,10 @@ def snapshot():
 
 
 class UserDataCompilerTests(unittest.TestCase):
+    def setUp(self):
+        self.selected_root=compiler.ROOT
+        self.enterContext(fixed_source_context('13.59',compiler))
+
     def test_complete_safe_explicit_format_class(self):
         r=compiler.compile_document(snapshot())
         self.assertEqual(r['identity_counts'],{'source_records':213,'generated':17,'omitted':196})
@@ -80,7 +85,8 @@ class UserDataCompilerTests(unittest.TestCase):
         self.assertEqual(compiler.compile_document(d)['specs'],[])
 
     def test_generated_artifacts_replay(self):
-        r=compiler.compile_document(selected_document())
+        with patch.object(compiler,'ROOT',self.selected_root):
+            r=compiler.compile_document(selected_document())
         self.assertEqual(json.loads(compiler.LEDGER.read_text()),r)
         from verify_quicktime_reader import rust_matches
         self.assertTrue(rust_matches(compiler.render_rust(r),compiler.RUST.read_text()))

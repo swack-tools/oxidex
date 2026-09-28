@@ -476,7 +476,7 @@ mod tests {
         };
         let width = match pin {
             "11.78" => 1, // source Format=int8u
-            "12.64" => 1, // source Count=8 makes the row ineligible
+            "12.64" => 8, // full Count=8 payload; the source row is still ineligible
             "13.59" => 8, // source Format=int64u
             _ => unreachable!(),
         };
@@ -488,6 +488,11 @@ mod tests {
         let metadata = AacParser.parse(&reader).unwrap();
         let rows = metadata.occurrences_for(name);
         if pin == "12.64" {
+            let generated = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/parsers/quicktime/generated_itemlist_specs.rs"
+            ));
+            assert!(!generated.contains("raw_fourcc: [0x70, 0x6c, 0x49, 0x44]"));
             assert!(rows.is_empty(), "Count=8 plID must remain refused");
             assert!(metadata.get("QuickTime:AlbumID").is_none());
             return;

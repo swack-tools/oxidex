@@ -6,9 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import quicktime_generated_specs as specs
-from quicktime_test_sources import selected_document
+from quicktime_test_sources import fixed_source_context, selected_document
 
 
 HERE = Path(__file__).resolve().parent
@@ -26,6 +27,10 @@ def fresh_dump():
 
 
 class GeneratedItemListSpecsTests(unittest.TestCase):
+    def setUp(self):
+        self.selected_root = specs.ROOT
+        self.enterContext(fixed_source_context("13.59", specs))
+
     def test_new_supported_source_row_generates_rust_without_name_mapping(self):
         document = fresh_dump()
         table = document["modules"]["QuickTime"]["tables"]["ItemList"]
@@ -41,7 +46,11 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertEqual(result["identity_counts"], {"source_records": 400, "generated": 93, "omitted": 307})
 
     def test_cli_generates_from_fresh_dump_without_baseline_capture(self):
-        document = fresh_dump()
+        document = selected_document()
+        document.pop("capture_scope")
+        document["modules_failed"] = 0
+        with patch.object(specs, "ROOT", self.selected_root):
+            expected = specs.compile_document(document)["identity_counts"]["generated"] + 1
         table = document["modules"]["QuickTime"]["tables"]["ItemList"]
         table["tags"]["n3w!"] = {"Name": "FreshDumpTag", "Format": "int16u"}
         table["tag_count"] += 1
@@ -51,11 +60,11 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
             dump.write_text(json.dumps(document))
             run = subprocess.run([sys.executable, str(HERE / "quicktime_generated_specs.py"),
                                   "--dump", str(dump), "--ledger", str(ledger), "--rust", str(rust)],
-                                 cwd=specs.ROOT, env={**os.environ, "OXIDEX_ALLOW_DIRTY_TREE": "1"},
+                                 cwd=self.selected_root, env={**os.environ, "OXIDEX_ALLOW_DIRTY_TREE": "1"},
                                  text=True, capture_output=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn('name: "FreshDumpTag"', rust.read_text())
-            self.assertEqual(json.loads(ledger.read_text())["identity_counts"]["generated"], 93)
+            self.assertEqual(json.loads(ledger.read_text())["identity_counts"]["generated"], expected)
 
     def test_catalog_enum_columns_do_not_block_runtime_operands(self):
         document = fresh_dump()
@@ -208,11 +217,12 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertIn('rendered: "line\\nwith \\"quote\\" and \\\\ slash"', rendered)
 
     def test_committed_artifacts_are_current_and_preserve_every_source_identity(self):
-        result = specs.compile_document(selected_document())
+        with patch.object(specs, "ROOT", self.selected_root):
+            result = specs.compile_document(selected_document())
         self.assertEqual(specs.serialized(result),
                          (HERE / "quicktime_generated_itemlist_ledger.json").read_text())
         self.assertEqual(specs.render_rust(result),
-                         (specs.ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs").read_text())
+                         (self.selected_root / "src/parsers/quicktime/generated_itemlist_specs.rs").read_text())
         self.assertEqual(len({json.dumps(row["identity"], sort_keys=True) for row in result["ledger"]}),
                          result["identity_counts"]["source_records"])
         self.assertEqual(result["identity_counts"], {
