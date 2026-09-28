@@ -615,16 +615,62 @@ pub(crate) fn exif_main_row_for_destination(
     }
 }
 
-/// The refusal for an EXIF `key` whose destination row
-/// ([`exif_main_row_for_destination`]) is not the row the tag registry --
-/// and so the EXIF writers, which take the tag id from `get_tag_descriptor`
-/// -- would address. The registry names `ChromaticAberrationCorrection` by
-/// the Sony SubIFD row `0x7034`, so `-ExifIFD:ChromaticAberrationCorrection#=1`
-/// used to store `1` under tag `0x7034` in ExifIFD, where pinned 13.59 writes
-/// `0xa410`: a wrong tag id under a real name. Refused by name instead
-/// (`TagsNotWritten`), whatever the value or conversion mode.
-pub(crate) fn exif_duplicate_row_misaddressed(key: &str) -> Option<ExifToolError> {
-    let row = exif_main_row_for_destination(key)?;
+/// The sole transcribed row would be placed into an explicit EXIF directory
+/// although its source-captured `WriteGroup` is SubIFD. In 12.64,
+/// `ChromaticAberrationCorrection` has only the Sony 0x7034 row; the Exif 3.1
+/// ExifIFD row 0xa410 appears later. The JPEG/TIFF writers do not write a
+/// SubIFD and must not create 0x7034 in ExifIFD just because the registry
+/// knows that tag id.
+fn lone_subifd_row_id_for_destination(
+    key: &str,
+    rows: &[&crate::exiftool_tables::IfdTag],
+) -> Option<u16> {
+    let (group, _) = key.rsplit_once(':')?;
+    if !["EXIF", "IFD0", "ExifIFD", "IFD1", "InteropIFD"]
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(group))
+    {
+        return None;
+    }
+    let [only] = rows else { return None };
+    SET_NEW_VALUE_LOOKUP
+        .iter()
+        .find(|candidate| {
+            is_exif_main(candidate)
+                && candidate.name.eq_ignore_ascii_case(only.name)
+                && match candidate.raw_id.strip_prefix("0x") {
+                    Some(hex) => u16::from_str_radix(hex, 16).ok(),
+                    None => candidate.raw_id.parse().ok(),
+                } == Some(only.id)
+        })
+        .filter(|candidate| candidate.write_group == Some("SubIFD"))
+        .map(|_| only.id)
+}
+
+/// Refuse a wrong EXIF address, either a sole row physically owned by SubIFD
+/// or a destination-selected duplicate row with a different registry id.
+/// Both cases are value-independent and leave the file untouched.
+pub(crate) fn exif_row_misaddressed(key: &str) -> Option<ExifToolError> {
+    let row = exif_main_row_for_destination(key);
+    if row.is_none() {
+        let (group, name) = key.rsplit_once(':')?;
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main")?;
+        let rows: Vec<_> = table
+            .tags
+            .iter()
+            .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
+            .collect();
+        if let Some(id) = lone_subifd_row_id_for_destination(key, &rows) {
+            return Some(refuse(
+                key,
+                format!(
+                    "ExifTool's only transcribed row is tag 0x{id:04x} in SubIFD; \
+                     oxidex cannot write it into {group}"
+                ),
+            ));
+        }
+    }
+    let row = row?;
     let registry_id = match crate::tag_db::tag_registry::get_tag_descriptor(key)?.id() {
         crate::core::TagId::Numeric(id) => *id,
         crate::core::TagId::Named(_) => return None,
@@ -794,6 +840,72 @@ pub(crate) fn generated_route_resolves(key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::tag_value::TagValue;
+
+    #[test]
+    fn historical_sole_sony_row_cannot_be_written_into_exififd() {
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        let sony = table.tag(0x7034).unwrap();
+        assert_eq!(sony.name, "ChromaticAberrationCorrection");
+        // 12.64 has this row alone; its captured WriteGroup is SubIFD.
+        let historical_rows = [sony];
+        for key in [
+            "ExifIFD:ChromaticAberrationCorrection",
+            "IFD0:ChromaticAberrationCorrection",
+            "EXIF:ChromaticAberrationCorrection",
+        ] {
+            assert_eq!(
+                lone_subifd_row_id_for_destination(key, &historical_rows),
+                Some(0x7034),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            lone_subifd_row_id_for_destination(
+                "SubIFD:ChromaticAberrationCorrection",
+                &historical_rows
+            ),
+            None
+        );
+
+        let key = "ExifIFD:ChromaticAberrationCorrection";
+        if let Some(exif31) = table.tag(0xa410) {
+            // 13.59 adds a genuine ExifIFD row. Its duplicate-row selector,
+            // and the registry-address refusal, still decide this request.
+            assert_eq!(exif31.name, sony.name);
+            assert_eq!(
+                lone_subifd_row_id_for_destination(key, &[sony, exif31]),
+                None
+            );
+            assert_eq!(
+                exif_main_row_for_destination(key).map(|row| row.id),
+                Some(0xa410)
+            );
+            assert!(
+                exif_row_misaddressed(key)
+                    .unwrap()
+                    .to_string()
+                    .contains("registry addresses it as 0x7034")
+            );
+        } else {
+            // In the actual 12.64/11.78 generated table, the Sony row is
+            // alone. Exercise the production guard, not only the helper.
+            assert_eq!(
+                table
+                    .tags
+                    .iter()
+                    .filter(|row| row.name == sony.name)
+                    .count(),
+                1
+            );
+            assert_eq!(exif_main_row_for_destination(key).map(|row| row.id), None);
+            assert!(
+                exif_row_misaddressed(key)
+                    .unwrap()
+                    .to_string()
+                    .contains("tag 0x7034 in SubIFD")
+            );
+        }
+    }
 
     /// PR #957 review (Codex, 4112788433): every `Shortcuts::Main` key
     /// expands, with SetNewValue's group and `#` rules (Writer.pl:562-578).
