@@ -13,8 +13,11 @@
 mod fixtures;
 
 use oxidex::core::operations::{CopyReport, copy_metadata_report};
+use oxidex::error::{ExifToolError, TagNotWritten};
 use oxidex::exiftool_oracle;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -28,6 +31,15 @@ fn copy_into(dir: &TempDir, fixture: &Path, name: &str) -> PathBuf {
     let path = dir.path().join(name);
     fs::copy(fixture, &path).expect("copy fixture");
     path
+}
+
+fn unchanged(path: &Path, before: &[u8], metadata: &fs::Metadata) {
+    assert_eq!(fs::read(path).unwrap(), before);
+    #[cfg(unix)]
+    assert_eq!(fs::metadata(path).unwrap().ino(), metadata.ino());
+    #[cfg(not(unix))]
+    let _ = metadata;
+    assert!(!PathBuf::from(format!("{}_original", path.display())).exists());
 }
 
 fn oxidex(args: &[&str], path: &Path) -> Output {
@@ -171,25 +183,79 @@ fn a_pdf_copy_names_the_xmp_13_59_writes_from_its_info() {
 }
 
 /// Case 4: t/images/Canon.jpg: 13.59 copies the Canon maker note block
-/// whole (oxidex names every Canon tag), writes maker-note values into
-/// ExifIFD by name (Canon's MeteringMode is the one `-MeteringMode`
-/// reports), and converts each copied value from its printed form, as
-/// `-TAG=VALUE` does: FocalPlaneXResolution 3072000/892 prints 3443.946188
-/// and is written back as 13.59 rationalises that, 3443.946154.
+/// whole. Oxidex refuses that selected physical block atomically. Excluding
+/// it allows the scalars, including 13.59's copied printed-value conversion:
+/// FocalPlaneXResolution 3072000/892 prints 3443.946188 and is written back
+/// as 13.59 rationalises that, 3443.946154.
 #[test]
 fn a_camera_copy_writes_by_name_and_names_the_maker_notes() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping: no graded ExifTool oracle");
+        return;
+    };
     let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
         eprintln!("skipping: pinned t/images/Canon.jpg not available");
         return;
     };
     let dir = TempDir::new().unwrap();
-    let dst = copy_into(&dir, Path::new(JPEG), "dst.jpg");
-    let report = copy_metadata_report(&canon, &dst, None).unwrap();
+    let native = copy_into(&dir, Path::new(JPEG), "native.jpg");
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-TagsFromFile"])
+        .arg(&canon)
+        .args(["-all"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success(), "{native_write:?}");
+    let native_canon = value(&native, "Canon", "MeteringMode");
     assert!(
-        report.uncopied_groups.iter().any(|g| g == "Canon"),
+        native_canon.is_some(),
+        "native copy omitted Canon:MeteringMode"
+    );
+    assert_eq!(native_canon, value(&canon, "Canon", "MeteringMode"));
+    let dst = copy_into(&dir, Path::new(JPEG), "dst.jpg");
+    let before = fs::read(&dst).unwrap();
+    let metadata = fs::metadata(&dst).unwrap();
+    let error = copy_metadata_report(&canon, &dst, None).unwrap_err();
+    assert_eq!(
+        error.tags_not_written(),
+        &[TagNotWritten::new(
+            "ExifIFD:MakerNoteCanon",
+            "the selected physical maker note block cannot be copied by oxidex",
+        )],
+        "{error}"
+    );
+    assert!(matches!(error, ExifToolError::TagsNotWritten { .. }));
+    unchanged(&dst, &before, &metadata);
+
+    // Excluding Make leaves the destination's own Make, whose MakerNotes
+    // condition the Canon block does not meet: 13.59 writes no block. Both
+    // tools must still copy the independently readable ExifIFD scalars.
+    let native_no_make = copy_into(&dir, Path::new(JPEG), "native-nomake.jpg");
+    let native_write = oracle
+        .command()
+        .args(["-overwrite_original", "-TagsFromFile"])
+        .arg(&canon)
+        .args(["-all", "--Make"])
+        .arg(&native_no_make)
+        .output()
+        .unwrap();
+    assert!(native_write.status.success(), "{native_write:?}");
+    let dst = copy_into(&dir, Path::new(JPEG), "nomake.jpg");
+    let filters = ["all".to_string(), "-Make".to_string()];
+    let report = copy_metadata_report(&canon, &dst, Some(&filters)).unwrap();
+    assert!(
+        !report.uncopied_groups.iter().any(|g| g == "Canon"),
         "{report:?}"
     );
-    assert!(named(&report, "Canon:MeteringMode"), "{report:?}");
+    for name in ["MeteringMode", "FocalPlaneXResolution", "MaxApertureValue"] {
+        assert_eq!(
+            value(&dst, "ExifIFD", name),
+            value(&native_no_make, "ExifIFD", name),
+            "{name}"
+        );
+    }
     assert_eq!(
         value(&dst, "ExifIFD", "MeteringMode").as_deref(),
         Some("Center-weighted average")
@@ -201,16 +267,6 @@ fn a_camera_copy_writes_by_name_and_names_the_maker_notes() {
     assert_eq!(
         value(&dst, "ExifIFD", "MaxApertureValue").as_deref(),
         Some("4.5")
-    );
-    // Excluding Make leaves the destination's own Make, whose MakerNotes
-    // condition the Canon block does not meet: 13.59 writes no block, and
-    // oxidex names none.
-    let dst = copy_into(&dir, Path::new(JPEG), "nomake.jpg");
-    let filters = ["all".to_string(), "-Make".to_string()];
-    let report = copy_metadata_report(&canon, &dst, Some(&filters)).unwrap();
-    assert!(
-        !report.uncopied_groups.iter().any(|g| g == "Canon"),
-        "{report:?}"
     );
 }
 
