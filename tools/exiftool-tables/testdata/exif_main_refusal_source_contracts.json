@@ -1,0 +1,218 @@
+{
+  "11.78": {
+    "rows": {
+      "0x00fe": {
+        "name": "SubfileType",
+        "source_sha256": "04137e80ef7dd02dab5cf94c62ef08203e28e5af7649f2e718975efde16eabfb"
+      },
+      "0x00ff": {
+        "name": "OldSubfileType",
+        "source_sha256": "51a877bd78e1f48942c322154f109f7fa69b2e5479a43574e6353eaad93f1276"
+      },
+      "0x0103": {
+        "name": "Compression",
+        "source_sha256": "4aea97febbf7621778901cf26b31f6ea9884624a37f443f330e28df04b6d6be4"
+      },
+      "0x0111": {
+        "name": "StripOffsets/PreviewImageStart/JpgFromRawStart",
+        "source_sha256": "5beeea42661698b98945ba68966ce3b015d8a8c566adceb6a011385004ae54c2"
+      },
+      "0x0117": {
+        "name": "StripByteCounts/PreviewImageLength/JpgFromRawLength",
+        "source_sha256": "5bcf24db62976f8c4670d0ad126bc7ad4b240e1b5ed3ceb0b06d064a4350a07b"
+      },
+      "0x014a": {
+        "name": "SubIFD/A100DataOffset",
+        "source_sha256": "1a3067d1dc6212d6283d591eaa8a21a4d7db26b2468ef24b1e930138f0143cd2"
+      },
+      "0x0201": {
+        "name": "ThumbnailOffset/PreviewImageStart/JpgFromRawStart/OtherImageStart",
+        "source_sha256": "2f65117fb04f145eabf6fc905f9680eb4d771c5d9041ba1b6e56a045947e10bd"
+      },
+      "0x0202": {
+        "name": "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
+        "source_sha256": "89ddeba0e8ecbe87a6965f8598913f6744dde13ea0437d46a09eed0a9335b1b2"
+      },
+      "0x8298": {
+        "name": "Copyright",
+        "source_sha256": "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd"
+      },
+      "0x927c": {
+        "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyx/MakerNoteReconyx2/MakerNoteReconyx3/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
+        "source_sha256": "093de6800ba82df367c2457178065323f43ddc2291d1d17e91ec66a0d5f1a179"
+      },
+      "0xa462": {
+        "name": "CompositeImageExposureTimes",
+        "source_sha256": "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953"
+      },
+      "0xc51b": {
+        "name": "HasselbladExif",
+        "source_sha256": "98e141849d9585cafaa944beba569c3f667cabe049cdf706a5def53eaf008ac7"
+      },
+      "0xc634": {
+        "name": "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/DNGPrivateData",
+        "source_sha256": "e3a72642c4567b06c2b6be4d503f2b82bb1824f13d0e2dd64bd6c8a503f1b6c5"
+      },
+      "0xc740": {
+        "name": "OpcodeList1",
+        "source_sha256": "7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01"
+      },
+      "0xc741": {
+        "name": "OpcodeList2",
+        "source_sha256": "7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01"
+      },
+      "0xc74e": {
+        "name": "OpcodeList3",
+        "source_sha256": "7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01"
+      },
+      "0xc763": {
+        "name": "TimeCodes",
+        "source_sha256": "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5"
+      }
+    }
+  },
+  "12.64": {
+    "rows": {
+      "0x00fe": {
+        "name": "SubfileType",
+        "source_sha256": "bd8f15e902a9f767a64818505857895fc00ff63d28f9daee2d995275bf002113"
+      },
+      "0x00ff": {
+        "name": "OldSubfileType",
+        "source_sha256": "2d95033497228e59344d962cf766c37ba8a91654067a751ecc3afef3d107b803"
+      },
+      "0x0103": {
+        "name": "Compression",
+        "source_sha256": "4aea97febbf7621778901cf26b31f6ea9884624a37f443f330e28df04b6d6be4"
+      },
+      "0x0111": {
+        "name": "StripOffsets/OtherImageStart/PreviewImageStart/JpgFromRawStart",
+        "source_sha256": "8d69e9565663d61d267cbeff37b25ff41af4deac28fbb549db589b9d9e27acc0"
+      },
+      "0x0117": {
+        "name": "StripByteCounts/OtherImageLength/PreviewImageLength/JpgFromRawLength",
+        "source_sha256": "322eab5a043cf8a2dcf937984e2b95ab83d39c5e9f340e9914fe92db2a4ee172"
+      },
+      "0x014a": {
+        "name": "SubIFD/A100DataOffset",
+        "source_sha256": "1a3067d1dc6212d6283d591eaa8a21a4d7db26b2468ef24b1e930138f0143cd2"
+      },
+      "0x0201": {
+        "name": "ThumbnailOffset/PreviewImageStart/JpgFromRawStart/OtherImageStart",
+        "source_sha256": "3c76d36bccedcc951a5fcd61d50f38195d3334be67bfdd92f07f5c0666c28430"
+      },
+      "0x0202": {
+        "name": "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
+        "source_sha256": "36c182d7d235c63aa5ac300b6573b35986e9ad52970bbfb6fdded21cc5c47afd"
+      },
+      "0x8298": {
+        "name": "Copyright",
+        "source_sha256": "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd"
+      },
+      "0x927c": {
+        "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyx/MakerNoteReconyx2/MakerNoteReconyx3/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
+        "source_sha256": "e912e518bfce0da3039b17fe573ecd368ccc55f34bdebe8a652607d612be4d26"
+      },
+      "0xa462": {
+        "name": "CompositeImageExposureTimes",
+        "source_sha256": "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953"
+      },
+      "0xc51b": {
+        "name": "HasselbladExif",
+        "source_sha256": "98e141849d9585cafaa944beba569c3f667cabe049cdf706a5def53eaf008ac7"
+      },
+      "0xc634": {
+        "name": "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/MakerNoteDJIInfo/DNGPrivateData",
+        "source_sha256": "bd3bdce13a3c5567d12dbe34e2eb6becc50ef8749a900b532434472f7bccafa9"
+      },
+      "0xc740": {
+        "name": "OpcodeList1",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc741": {
+        "name": "OpcodeList2",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc74e": {
+        "name": "OpcodeList3",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc763": {
+        "name": "TimeCodes",
+        "source_sha256": "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5"
+      }
+    }
+  },
+  "13.59": {
+    "rows": {
+      "0x00fe": {
+        "name": "SubfileType",
+        "source_sha256": "bd8f15e902a9f767a64818505857895fc00ff63d28f9daee2d995275bf002113"
+      },
+      "0x00ff": {
+        "name": "OldSubfileType",
+        "source_sha256": "2d95033497228e59344d962cf766c37ba8a91654067a751ecc3afef3d107b803"
+      },
+      "0x0103": {
+        "name": "Compression",
+        "source_sha256": "db1c8e09851036f5a176efb45ee31bdb42b02942179a8d43062353d7da6b9132"
+      },
+      "0x0111": {
+        "name": "StripOffsets/OtherImageStart/PreviewJXLStart/PreviewImageStart/JpgFromRawStart",
+        "source_sha256": "3950e20366b09c41efecd165c984c646250f5b0060edd80d503933bf6c4cbfa7"
+      },
+      "0x0117": {
+        "name": "StripByteCounts/OtherImageLength/PreviewJXLLength/PreviewImageLength/JpgFromRawLength",
+        "source_sha256": "0004fabbc91d9dcb0f83991bc0cdde82285f0b28c7f790eab875c88ca1758135"
+      },
+      "0x014a": {
+        "name": "SubIFD/A100DataOffset",
+        "source_sha256": "1a3067d1dc6212d6283d591eaa8a21a4d7db26b2468ef24b1e930138f0143cd2"
+      },
+      "0x0201": {
+        "name": "ThumbnailOffset/PreviewImageStart/JpgFromRawStart/OtherImageStart",
+        "source_sha256": "3c76d36bccedcc951a5fcd61d50f38195d3334be67bfdd92f07f5c0666c28430"
+      },
+      "0x0202": {
+        "name": "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
+        "source_sha256": "36c182d7d235c63aa5ac300b6573b35986e9ad52970bbfb6fdded21cc5c47afd"
+      },
+      "0x8298": {
+        "name": "Copyright",
+        "source_sha256": "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd"
+      },
+      "0x927c": {
+        "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
+        "source_sha256": "3375ec3f22bcbcf01e108f21db5788cc4252d3d46bad0a14d750513aaa7c2296"
+      },
+      "0x9287": {
+        "name": "LearningOptOutIn",
+        "source_sha256": "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c"
+      },
+      "0xa462": {
+        "name": "CompositeImageExposureTimes",
+        "source_sha256": "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953"
+      },
+      "0xc634": {
+        "name": "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/MakerNoteDJIInfo/DNGPrivateData",
+        "source_sha256": "c819c88947eaf1e96bb45683d0c34a0299e845c044136ee53dd7661711a9cad7"
+      },
+      "0xc740": {
+        "name": "OpcodeList1",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc741": {
+        "name": "OpcodeList2",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc74e": {
+        "name": "OpcodeList3",
+        "source_sha256": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"
+      },
+      "0xc763": {
+        "name": "TimeCodes",
+        "source_sha256": "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5"
+      }
+    }
+  }
+}
