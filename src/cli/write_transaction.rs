@@ -504,7 +504,12 @@ pub fn write_plan_file(
                 })
                 .cloned()
                 .collect();
-            proven_sets += apply_sets(scratch, &before_copy, plan.raw_values, &[])?;
+            // The core receipt excludes cancelled sets and gives the physical
+            // destinations actually proven, so later passes protect only live
+            // assignments from this command's earlier phase.
+            let (before_proven, before_destinations) =
+                apply_sets(scratch, &before_copy, plan.raw_values, &[])?;
+            proven_sets += before_proven;
             if let Some((src, filters)) = &plan.copy_from {
                 let filters = (!filters.is_empty()).then_some(filters.as_slice());
                 // ExifTool evaluates the physical maker note block against
@@ -525,6 +530,7 @@ pub fn write_plan_file(
                                 && !after_copy.iter().any(|(tag, _)| supersedes_copy(tag, key))
                         },
                         final_make_override,
+                        &before_destinations,
                     )
                     .map_err(|e| {
                         format!(
@@ -543,8 +549,8 @@ pub fn write_plan_file(
                 shift_metadata_dates(scratch, tag_pattern, offset, *operation)
                     .map_err(|e| format!("Failed to shift dates for '{}': {}", tag_pattern, e))?;
             }
-            let mut siblings: Vec<String> =
-                plan.shifts.iter().map(|(tag, _, _)| tag.clone()).collect();
+            let mut siblings: Vec<String> = before_destinations;
+            siblings.extend(plan.shifts.iter().map(|(tag, _, _)| tag.clone()));
             // A retained TagsFromFile destination is a set in this command,
             // even though the CLI applied it in an earlier transaction.
             // Cross-directory deletion must see it beside later explicit
@@ -554,7 +560,7 @@ pub fn write_plan_file(
                     siblings.extend(report.copied_destinations.iter().cloned());
                 }
             }
-            proven_sets += apply_sets(scratch, after_copy, plan.raw_values, &siblings)?;
+            proven_sets += apply_sets(scratch, after_copy, plan.raw_values, &siblings)?.0;
             Ok(())
         },
     )?;
@@ -667,7 +673,7 @@ pub fn write_file_with_warnings(
 /// (typed as the tag's registry entry declares; wrapping every value as a
 /// String made Integer/Rational/DateTime tags unsettable), then all of them
 /// are resolved, written in one pass, and proven together -- or none is.
-/// Returns how many sets were proven in effect.
+/// Returns the proven set count and their resolved surviving destinations.
 ///
 /// `global_raw_values` is `plan.raw_values` (ExifTool's `-n`, always applying
 /// to every set here). A tag's own trailing `#` (`canonical_request_tag`
@@ -686,9 +692,9 @@ fn apply_sets(
     sets: &[(String, OsString)],
     global_raw_values: bool,
     siblings: &[String],
-) -> Result<usize, String> {
+) -> Result<(usize, Vec<String>), String> {
     if sets.is_empty() {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
     // The request's group deletions, so a bare name is typed by the address
     // the transaction writes it at in their presence
@@ -759,7 +765,7 @@ fn apply_sets(
         changes.push(TagChange::set(write_tag.to_string(), tag_value));
     }
     apply_tag_changes_counted_among(scratch, &changes, siblings)
-        .map(|(_, proven_sets)| proven_sets)
+        .map(|(_, proven_sets, destinations)| (proven_sets, destinations))
         .map_err(|e| describe_set_failure(&e, sets))
 }
 

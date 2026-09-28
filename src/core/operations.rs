@@ -1033,6 +1033,16 @@ pub(crate) fn write_metadata_counted(
     metadata: &MetadataMap,
     mutations: &[String],
 ) -> Result<(WriteOutcome, usize)> {
+    write_metadata_counted_among(path, metadata, mutations, &[])
+}
+
+/// Count copied assignments while protecting earlier proven CLI destinations.
+pub(crate) fn write_metadata_counted_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize)> {
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     // Infer the request and plan it against the same handle that is copied.
@@ -1119,8 +1129,9 @@ pub(crate) fn write_metadata_counted(
     ordered.sort_by_key(|(at, _)| *at);
     let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     drop(reader);
-    let receipt =
-        crate::core::write_transaction::apply_tag_changes_on_opened(path, &changes, original)?;
+    let receipt = crate::core::write_transaction::apply_tag_changes_on_opened_among(
+        path, &changes, original, siblings,
+    )?;
     Ok(finish_metadata_write(
         metadata,
         read,
@@ -2854,7 +2865,7 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_report_retaining(src, dest, tags, |_| true, None)
+    copy_metadata_report_retaining(src, dest, tags, |_| true, None, &[])
 }
 
 /// Resolves and validates the copy, retaining only destination sets that
@@ -2867,6 +2878,7 @@ pub(crate) fn copy_metadata_report_retaining(
     // The final Make supplied by CLI requests after this copy. `Some(None)`
     // means a later request deletes Make; `None` means use this copy's result.
     final_make_override: Option<Option<String>>,
+    siblings: &[String],
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
     // The public Option is semantic: CLI's bare -TagsFromFile maps its empty
@@ -2882,6 +2894,7 @@ pub(crate) fn copy_metadata_report_retaining(
         &selectors,
         retain,
         final_make_override,
+        siblings,
     )
 }
 

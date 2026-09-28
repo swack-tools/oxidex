@@ -163,16 +163,36 @@ pub(crate) fn apply_tag_changes_with_receipt(
     apply_with_planning_hook(path, changes, || {})
 }
 
-/// Count proven sets while protecting dates shifted by the enclosing CLI
-/// command. Planning, no-op decisions and copying retain the same opened file.
+/// Return proven sets and their resolved destinations while protecting
+/// assignments made by other phases of the enclosing CLI command.
+/// Planning, no-op decisions and copying retain the same opened file.
 pub(crate) fn apply_tag_changes_counted_among(
     path: &Path,
     changes: &[TagChange],
     siblings: &[String],
-) -> Result<(WriteOutcome, usize)> {
+) -> Result<(WriteOutcome, usize, Vec<String>)> {
     let original = super::filesystem_metadata::open_destination(path)?;
     let receipt = apply_on_opened_with_hook(path, changes, original, siblings, || {})?;
-    Ok((receipt.outcome, receipt.sets))
+    Ok((
+        receipt.outcome,
+        receipt.sets,
+        receipt
+            .caller_fields
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect(),
+    ))
+}
+
+/// Apply inferred copy assignments while protecting surviving CLI assignments
+/// made before the copy. Keep the same opened-file planning and proof path.
+pub(crate) fn apply_tag_changes_on_opened_among(
+    path: &Path,
+    changes: &[TagChange],
+    original: fs::File,
+    siblings: &[String],
+) -> Result<AppliedWrite> {
+    apply_on_opened_with_hook(path, changes, original, siblings, || {})
 }
 
 fn apply_with_planning_hook(
