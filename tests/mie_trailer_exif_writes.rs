@@ -72,6 +72,79 @@ fn mie_trailer(file: &[u8]) -> Option<&[u8]> {
     mie_trailers(file).pop()
 }
 
+/// The first SOS segment in the pinned Writer.jpg is complete and length 12.
+/// `ff 11` here is a component/table pair inside its header, not a marker.
+fn ff11_first_sos(mut jpeg: Vec<u8>) -> Vec<u8> {
+    let sos = jpeg
+        .windows(2)
+        .position(|w| w == [0xff, 0xda])
+        .expect("SOS");
+    assert_eq!(&jpeg[sos..sos + 7], b"\xff\xda\0\x0c\x03\x01\0");
+    jpeg[sos + 5..sos + 7].copy_from_slice(b"\xff\x11");
+    jpeg
+}
+
+#[test]
+fn first_sos_header_ff11_does_not_hide_mie_from_write_census() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let plain = ff11_first_sos(
+        std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap(),
+    );
+    let mie_source =
+        std::fs::read(fixtures::required_t_images_fixture_path("ExifTool.jpg")).unwrap();
+    let mut carrying = plain.clone();
+    carrying.extend_from_slice(mie_trailer(&mie_source).expect("pinned MIE trailer"));
+    assert_eq!(mie_trailer(&carrying).unwrap().len(), 90);
+
+    let dir = tempfile::tempdir().unwrap();
+    // grade independently proves that native ExifTool copies Artist into MIE
+    // while OxiDex refuses with the file's bytes and inode unchanged.
+    assert_eq!(
+        grade(
+            oracle,
+            "first SOS ff11 + MIE",
+            "jpg",
+            &carrying,
+            &[(&["-IFD0:Artist=x"], "Artist")]
+        ),
+        Ok(1)
+    );
+
+    // The same header without MIE is still an ordinary writable JPEG.
+    let et_path = dir.path().join("native-plain.jpg");
+    let ox_path = dir.path().join("oxidex-plain.jpg");
+    std::fs::write(&et_path, &plain).unwrap();
+    std::fs::write(&ox_path, &plain).unwrap();
+    let et = oracle
+        .command()
+        .args(["-m", "-overwrite_original", "-IFD0:Artist=x"])
+        .arg(&et_path)
+        .output()
+        .unwrap();
+    let ox = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Artist=x")
+        .arg(&ox_path)
+        .output()
+        .unwrap();
+    assert!(
+        et.status.success(),
+        "native: {}",
+        String::from_utf8_lossy(&et.stderr)
+    );
+    assert!(
+        ox.status.success(),
+        "oxidex: {}",
+        String::from_utf8_lossy(&ox.stderr)
+    );
+    assert_ne!(std::fs::read(&ox_path).unwrap(), plain);
+    assert_eq!(
+        oracle_rows(oracle, &et_path, "Artist"),
+        oracle_rows(oracle, &ox_path, "Artist")
+    );
+}
+
 /// Every group's `tag` rows of `path` as the oracle reads them.
 fn oracle_rows(oracle: &Oracle, path: &Path, tag: &str) -> Vec<String> {
     let out = oracle

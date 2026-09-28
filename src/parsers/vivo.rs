@@ -19,10 +19,10 @@ pub(crate) struct VivoTrailer<'a> {
 /// Walk JPEG header markers by their declared lengths to the first SOS.
 /// JPEG permits FF fill before a marker (ExifTool.pm:7362-7367). This is
 /// a framed walk from SOI, so an SOS signature inside a payload is ignored.
-/// Require a complete SOS header before handing its marker end to the
+/// Require a complete SOS header before handing its header end to the
 /// existing entropy-data/EOI walker; EOI before SOS and malformed framing
 /// provide no reachable scan.
-pub(crate) fn jpeg_sos_marker_end(file: &[u8]) -> Option<usize> {
+pub(crate) fn jpeg_sos_header_end(file: &[u8]) -> Option<usize> {
     if !file.starts_with(b"\xff\xd8") {
         return None;
     }
@@ -60,7 +60,7 @@ pub(crate) fn jpeg_sos_marker_end(file: &[u8]) -> Option<usize> {
                     return None;
                 }
                 if marker == 0xda {
-                    return Some(after_marker);
+                    return Some(end);
                 }
                 end
             }
@@ -69,8 +69,9 @@ pub(crate) fn jpeg_sos_marker_end(file: &[u8]) -> Option<usize> {
 }
 
 /// The JPEG `TrailerStart`: the byte after the EOI that ProcessJPEG reaches by
-/// continuing its marker walk from `scan_from` (just past the SOS marker's
-/// fixed bytes) through the entropy-coded data (ExifTool.pm:7337-7400,7464-7468).
+/// continuing its marker walk from `scan_from` through the entropy-coded
+/// data (ExifTool.pm:7337-7400,7464-7468). The write census passes the
+/// first SOS header end; other readers supply their own established boundary.
 ///
 /// Like ExifTool it reads up to each `0xff`, skips `0xff` padding, treats the
 /// `%markerLenBytes` markers as stand-alone, skips any other segment by its
@@ -165,4 +166,18 @@ pub(crate) fn process_vivo(
         start: trailer_start + marker,
         json,
     })
+}
+
+#[cfg(test)]
+mod sos_boundary_tests {
+    use super::{jpeg_sos_header_end, jpeg_trailer_start};
+
+    #[test]
+    fn first_sos_length_frames_ff11_before_the_eoi_walk() {
+        let jpeg = b"\xff\xd8\xff\xda\0\x08\x01\xff\x11\0\x3f\0\xff\xd9MIE";
+        let scan_from = jpeg_sos_header_end(jpeg).expect("complete first SOS header");
+        assert_eq!(scan_from, 12);
+        assert_eq!(jpeg_trailer_start(jpeg, scan_from), Some(14));
+        assert_eq!(jpeg_trailer_start(jpeg, 4), None);
+    }
 }

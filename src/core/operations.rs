@@ -1837,8 +1837,8 @@ pub(crate) fn mie_census_with_reader(
     let trailer_start = if jpeg {
         // The writer's scan boundary also accepts EOI before SOS. MIE is
         // read only after ProcessJPEG traverses an actual SOS to its EOI.
-        let trailer_start = crate::parsers::vivo::jpeg_sos_marker_end(file)
-            .and_then(|after_marker| crate::parsers::vivo::jpeg_trailer_start(file, after_marker));
+        let trailer_start = crate::parsers::vivo::jpeg_sos_header_end(file)
+            .and_then(|after_header| crate::parsers::vivo::jpeg_trailer_start(file, after_header));
         let Some(trailer_start) = trailer_start else {
             return Ok(MieCensus::NoTrailer);
         };
