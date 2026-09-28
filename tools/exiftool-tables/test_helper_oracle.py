@@ -19,6 +19,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import codegen_charsets
 import helper_oracle as H
@@ -28,6 +29,16 @@ PINNED = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cac
 
 
 class Capture(unittest.TestCase):
+    def test_probe_cases_use_explicit_selected_charset_render(self):
+        text = codegen_charsets.OUT.read_text(encoding="utf-8")
+        selected = codegen_charsets.generated_tables_from_text(text)
+        # A helper capture must not consult an older generated table left in
+        # the checkout before the charset writer runs.
+        with patch.object(codegen_charsets, "generated_tables",
+                          side_effect=AssertionError("ambient charset table read")):
+            actual = H.cases(selected)
+        self.assertEqual(len(actual), sum(len(h["cases"]) for h in CAPTURE["helpers"].values()))
+
     def test_reviewed_source_pins_fail_closed(self):
         version = CAPTURE["capture"]["exiftool_version"]
         pins = json.loads(H.SOURCE_PINS.read_text(encoding="utf-8"))
@@ -57,7 +68,7 @@ class Capture(unittest.TestCase):
 
     def test_capture_was_taken_from_this_probe_set(self):
         by_helper = {}
-        for case in H.cases():
+        for case in H.cases(codegen_charsets.generated_tables()):
             by_helper.setdefault(case["helper"], []).append(
                 (case["args"],) + tuple(case.get(k) for k in H.CASE_KEYS))
         for name, h in CAPTURE["helpers"].items():

@@ -76,9 +76,10 @@ echo ">> selecting PNG absent-date shift behavior from native source"
 python3 "$HERE/png_shift_contract.py" "$LIB" \
     --output "$(artifact_path png-shift-contract)"
 
-# Both generated contracts are part of tier 1's declared write set. Capture
-# native helper and residual channels first, then regenerate the charset data
-# Decode/Encode consume. The final oracle check proves both selected artifacts.
+# Both generated contracts are part of tier 1's declared write set. Helper
+# probes derive their charset cases from the selected native source in memory,
+# so this capture does not depend on a prior charset_tables.rs in the checkout.
+# The final oracle check proves both selected artifacts.
 echo ">> capturing selected-source helper and residual oracle"
 python3 "$HERE/helper_oracle.py" --write --perl "$PERL" \
     --exiftool-dir "$(dirname "$LIB")"

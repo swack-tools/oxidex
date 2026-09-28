@@ -350,9 +350,8 @@ RECOMPOSE_VALUES = [
 ]
 
 
-def decode_cases(add):
+def decode_cases(add, charset_tables):
     """Probes for Decode and Encode (added to `cases()`)."""
-    import codegen_charsets
     D, E = "Image::ExifTool::Decode", "Image::ExifTool::Encode"
     II = {"byte_order": "II"}
     MM = {"byte_order": "MM"}
@@ -405,7 +404,7 @@ def decode_cases(add):
                 add(D, [Bx(v), S(cs), S(order)], None, extra=bo)
 
     # Every generated table entry, decoded.
-    _, tables, scalars = codegen_charsets.generated_tables()
+    _, tables, scalars = charset_tables
     for cs, (ty, entries) in sorted(tables.items()):
         if ty & 0x600:
             for order in ("MM", "II"):
@@ -587,7 +586,7 @@ def exif_helper_cases(add):
                 add(PR, [v] + ml, opts)
 
 
-def cases():
+def cases(charset_tables):
     out = []
 
     def add(helper, args, options=None, with_session=False, extra=None):
@@ -689,7 +688,7 @@ def cases():
                    {"ByteUnit": S("binary")}, {"ByteUnit": U}]:
             add("Image::ExifTool::ConvertFileSize", [a], bu, with_session=True)
 
-    decode_cases(add)
+    decode_cases(add, charset_tables)
     exif_helper_cases(add)
     return out
 
@@ -839,7 +838,8 @@ def build(perl, et_dir):
     missing = [h["perl"] for h in HELPERS if sources[h["perl"]][0] is None]
     if missing:
         sys.exit(f"subs absent from the pinned tree: {missing}")
-    cs = cases()
+    charset_render = codegen_charsets.generate(perl, et_dir, oracle_env(), ver)
+    cs = cases(codegen_charsets.generated_tables_from_text(charset_render))
     results = run_perl(perl, et_lib, cs)
     tr_cases = truthiness_cases()
     tr_results = run_perl(perl, et_lib, tr_cases)
