@@ -552,6 +552,10 @@ perl_re!(
     UNIX_TIME_STR,
     r"(?-u)^([0-9]+)[-:]([0-9]+)[-:]([0-9]+)[\t\n\x0B\x0C\r ]+([0-9]+):([0-9]+):([0-9]+)(.*)"
 );
+perl_re!(
+    UNIX_TIME_STR_1178,
+    r"(?-u)^([0-9]+):([0-9]+):([0-9]+)[\t\n\x0B\x0C\r ]+([0-9]+):([0-9]+):([0-9]+)(.*)"
+);
 perl_re!(UNIX_TIME_ZONE, r"(?i-u)(?:Z|([-+])([0-9]+):([0-9]+))");
 perl_re!(UNIX_TIME_FRAC, r"(?-u)^(\.[0-9]+)");
 
@@ -1063,12 +1067,58 @@ fn trim_xmp_zeros(s: &str, suffix: &str) -> String {
     format!("{}{}", &body[..keep_to], suffix)
 }
 
+/// The selected source ledger records the folded native sub body.
+/// A release label or the running host's ExifTool is not a source identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DateHelperSource {
+    V1178,
+    V1264,
+    V1359,
+}
+
+fn date_helper_source(perl: &str) -> Result<DateHelperSource, HelperError> {
+    let digest = selected_port_source(perl);
+    let source = match (perl, digest) {
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("14b595dc50ff73b7e3ba40e474b6e80dc13c9fc2ac62f11ee33e360967878be1"),
+        ) => DateHelperSource::V1178,
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("de9f9f6e44242aa6e171881847b7e1804dc3e020f9dcd286629cff7f3bedb0c4"),
+        ) => DateHelperSource::V1264,
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("22a3fea0970c697c98d4002710c50ed9fe89b91ed1e314c65220c26c99e9028d"),
+        ) => DateHelperSource::V1359,
+        (
+            "Image::ExifTool::ConvertUnixTime",
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee"),
+        ) => DateHelperSource::V1264,
+        (
+            "Image::ExifTool::ConvertUnixTime",
+            Some("ee1e09f50ee91f3b67b9d6166af39cdaed3e3ce375080ff51b5465cedad4f7ac"),
+        ) => DateHelperSource::V1359,
+        (
+            "Image::ExifTool::GetUnixTime",
+            Some("4b6e1babf8d17d4f43b3e8591f9c33a36909039cdfef88944eea613ad599c8ee"),
+        ) => DateHelperSource::V1178,
+        (
+            "Image::ExifTool::GetUnixTime",
+            Some("7c4b9ade78e619553b6b82a15a31af83cad4ae24325ad21d41a3af0e822fdaff"),
+        ) => DateHelperSource::V1359,
+        _ => return Err(HelperError::Refused("unreviewed date helper source")),
+    };
+    Ok(source)
+}
+
 /// `$self->ConvertDateTime($date)` (ExifTool.pm, pinned 13.59): the date
 /// unchanged, unless `$$self{OPTIONS}{GlobalTimeShift}` or
 /// `$$self{OPTIONS}{DateFormat}` is Perl-TRUE -- a `"0"` of either leaves the
 /// identity branch, exactly as the Perl's `if ($shift)` / `if ($fmt)` do.
 /// Those branches (ShiftTime, strftime, StrictDate) refuse.
 pub fn convert_date_time(session: &Session, date: &MemberVal) -> HelperResult {
+    let _source = date_helper_source("Image::ExifTool::ConvertDateTime")?;
     if session.option("GlobalTimeShift").is_truthy() {
         return Err(HelperError::Refused("GlobalTimeShift option"));
     }
@@ -1090,9 +1140,33 @@ pub fn convert_unix_time(
     to_local: &MemberVal,
     dec: &MemberVal,
 ) -> HelperResult {
+    let source = date_helper_source("Image::ExifTool::ConvertUnixTime")?;
+    convert_unix_time_for_source(source, session, time, to_local, dec)
+}
+
+fn convert_unix_time_for_source(
+    source: DateHelperSource,
+    session: &Session,
+    time: &MemberVal,
+    to_local: &MemberVal,
+    dec: &MemberVal,
+) -> HelperResult {
     let t = time.perl_num().as_f64();
     if t == 0.0 {
         return Ok(MemberVal::Str("0000:00:00 00:00:00".to_string()));
+    }
+    if source != DateHelperSource::V1359 {
+        // The 11.78/12.64 sub ignores SystemTimeRes and takes this branch
+        // whenever its explicit `$dec` is false, including a defined zero.
+        if dec.is_truthy() {
+            return Err(HelperError::Refused("old sub-second $dec"));
+        }
+        if !t.is_finite() {
+            return Err(HelperError::Refused("non-finite time"));
+        }
+        return Ok(MemberVal::Str(
+            super::exprs::convert_unix_time_trunc_epsilon(t, to_local.is_truthy()),
+        ));
     }
     if dec.is_defined() || session.option("SystemTimeRes").is_truthy() {
         return Err(HelperError::Refused("sub-second $dec / SystemTimeRes"));
@@ -1142,11 +1216,25 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 /// second out of range) and any year outside 1000-9999 (its two-digit-year
 /// window depends on the current date).
 pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult {
+    let source = date_helper_source("Image::ExifTool::GetUnixTime")?;
+    get_unix_time_for_source(source, time_str, is_local)
+}
+
+fn get_unix_time_for_source(
+    source: DateHelperSource,
+    time_str: &MemberVal,
+    is_local: &MemberVal,
+) -> HelperResult {
     let s = time_str.perl_bytes();
     if s.as_ref() == b"0000:00:00 00:00:00" {
         return Ok(MemberVal::Int(0));
     }
-    let Some(c) = UNIX_TIME_STR.captures(&s) else {
+    let regex = if source == DateHelperSource::V1178 {
+        &*UNIX_TIME_STR_1178
+    } else {
+        &*UNIX_TIME_STR
+    };
+    let Some(c) = regex.captures(&s) else {
         return Ok(MemberVal::Undef);
     };
     let field = |i: usize| bytes_str(&c[i]).to_string();
@@ -1164,7 +1252,7 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
                 tz_sec = (h * 60 + m) * if sign.as_bytes() == b"-" { -60 } else { 60 };
             }
             local = false;
-        } else if is_local.perl_bytes().as_ref() == b"2" {
+        } else if source != DateHelperSource::V1178 && is_local.perl_bytes().as_ref() == b"2" {
             local = false;
         }
     }
@@ -1197,14 +1285,101 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
             "Time::Local range check / two-digit-year window",
         ));
     }
-    let t = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec - tz_sec;
-    if let Some(f) = UNIX_TIME_FRAC.captures(&tz_str) {
+    let calendar_year = if source == DateHelperSource::V1178 {
+        let time_local_year = year - 1900;
+        if (0..100).contains(&time_local_year) {
+            return Err(HelperError::Refused(
+                "old Time::Local moving two-digit-year window",
+            ));
+        }
+        if time_local_year >= 1000 {
+            time_local_year
+        } else {
+            year
+        }
+    } else {
+        year
+    };
+    let t = days_from_civil(calendar_year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec
+        - tz_sec;
+    if source != DateHelperSource::V1178
+        && let Some(f) = UNIX_TIME_FRAC.captures(&tz_str)
+    {
         let frac = MemberVal::Str(bytes_str(&f[1]).to_string())
             .perl_num()
             .as_f64();
         return Ok(MemberVal::Float(t as f64 + frac));
     }
     Ok(MemberVal::Int(t))
+}
+
+#[cfg(test)]
+mod date_helper_source_tests {
+    use super::*;
+
+    #[test]
+    fn old_unix_time_uses_the_native_truncation_and_ignores_new_options() {
+        let mut session = Session::new();
+        session.set_option("SystemTimeRes", MemberVal::Int(4));
+        session.set_option("KeepUTCTime", MemberVal::Int(1));
+        let run = |time: f64| {
+            convert_unix_time_for_source(
+                DateHelperSource::V1264,
+                &session,
+                &MemberVal::Float(time),
+                &MemberVal::Undef,
+                &MemberVal::Int(0),
+            )
+            .expect("old whole-second path")
+            .perl_string()
+        };
+        // Pinned 11.78 and 12.64 captures, UTC: old int($time + 1e-6).
+        assert_eq!(run(-0.5), "1970:01:01 00:00:00");
+        assert_eq!(run(0.666_666_7), "1970:01:01 00:00:00");
+        assert_eq!(run(12.7), "1970:01:01 00:00:12");
+        assert_eq!(
+            convert_unix_time_for_source(
+                DateHelperSource::V1359,
+                &Session::new(),
+                &MemberVal::Float(12.7),
+                &MemberVal::Undef,
+                &MemberVal::Undef,
+            )
+            .expect("new rounded path")
+            .perl_string(),
+            "1970:01:01 00:00:13"
+        );
+    }
+
+    #[test]
+    fn old_get_unix_time_keeps_its_colon_grammar_and_year_rules() {
+        let old = |s: &str| {
+            get_unix_time_for_source(
+                DateHelperSource::V1178,
+                &MemberVal::Str(s.to_string()),
+                &MemberVal::Undef,
+            )
+        };
+        assert_eq!(
+            old("2020:01:02 03:04:05.123")
+                .expect("old source discards fractional seconds")
+                .perl_string(),
+            "1577934245"
+        );
+        assert!(matches!(old("2020-01-02 03:04:05"), Ok(MemberVal::Undef)));
+        assert_eq!(
+            old("9999:12:31 23:59:59")
+                .expect("old Time::Local absolute-year interpretation")
+                .perl_string(),
+            "193444156799"
+        );
+        assert!(matches!(
+            old("1970:01:01 00:00:00"),
+            Err(HelperError::Refused(
+                "old Time::Local moving two-digit-year window"
+            ))
+        ));
+    }
 }
 
 /// `Image::ExifTool::XMP::ConvertXMPDate($val [, $unsure])` in scalar
