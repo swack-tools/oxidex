@@ -29,6 +29,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 /// An 8x8 baseline JPEG with no metadata segment at all (the same fixture
 /// `tests/xp_string_write.rs` and `tests/cli_non_utf8_args.rs` use):
 /// decodable, so the oracle agrees to write it, and with no existing EXIF
@@ -980,6 +983,42 @@ fn exif_family_deletions_keep_their_directory_scope() {
                 "{arg}"
             );
         }
+    }
+}
+
+#[test]
+fn tiff_family_deletions_remove_surfaced_exififd_focal_length() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let source = oracle.command().args(["-ver"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&source.stdout).trim(), "13.59");
+    let fixture = fixtures::required_t_images_fixture_path("ExifTool.tif");
+    for spelling in ["FocalLength", "EXIF:FocalLength"] {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = dir.path().join("ours.tif");
+        let theirs = dir.path().join("theirs.tif");
+        std::fs::copy(&fixture, &ours).unwrap();
+        std::fs::copy(&fixture, &theirs).unwrap();
+        for path in [&ours, &theirs] {
+            let setup = oracle_write(oracle, "-ExifIFD:FocalLength=50", path);
+            assert!(setup.status.success(), "{setup:?}");
+            assert!(
+                oracle_read_grouped(oracle, path, "FocalLength")
+                    .iter()
+                    .any(|(key, _)| key == "ExifIFD:FocalLength")
+            );
+        }
+        let deletion = format!("-{spelling}=");
+        let native = oracle_write(oracle, &deletion, &theirs);
+        assert!(native.status.success(), "{native:?}");
+        assert!(oracle_read_grouped(oracle, &theirs, "FocalLength").is_empty());
+        let actual = run_oxidex(&[os(&deletion), ours.as_os_str().to_owned()]);
+        assert!(actual.status.success(), "{deletion}: {actual:?}");
+        assert_eq!(
+            oracle_read_grouped(oracle, &ours, "FocalLength"),
+            oracle_read_grouped(oracle, &theirs, "FocalLength")
+        );
     }
 }
 

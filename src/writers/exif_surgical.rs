@@ -2665,6 +2665,20 @@ impl MakerNoteCensus {
 /// so they do not by themselves make the note census incomplete.
 const UNWALKED_EXIF_DIRECTORIES: &[u16] = &[0x014a, 0x0190, 0x8290, 0x888a, 0xc51b, 0xc6f5, 0xfe00];
 
+/// A source-declared EXIF child that this scanner did not walk. A group-wide
+/// MIE deletion cannot prove GPS, ExifIFD or Interop absence beyond one of
+/// these edges. The maker-note census uses its narrower note-bearing variant
+/// below (GPSInfo itself cannot hold a MakerNote).
+pub(crate) fn has_unwalked_exif_directory(ifd: IfdKind, tag_id: u16) -> bool {
+    if ifd == IfdKind::Gps {
+        return false;
+    }
+    UNWALKED_EXIF_DIRECTORIES.contains(&tag_id)
+        || (tag_id == EXIF_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == GPS_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
+}
+
 /// An Exif::Main edge outside the scanner's supported placement can hide a
 /// MakerNote in a child directory. ExifOffset and InteropOffset are modelled
 /// only at IFD0 and ExifIFD respectively; ExifTool follows them in the other

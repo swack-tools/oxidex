@@ -12,6 +12,122 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+fn minimal_tiff(entries: &[(u16, u16, u32, u32)], tail: &[u8]) -> Vec<u8> {
+    let mut bytes = b"II\x2a\0\x08\0\0\0".to_vec();
+    bytes.extend_from_slice(&u16::try_from(entries.len()).unwrap().to_le_bytes());
+    for &(tag, field_type, count, value) in entries {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&field_type.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(tail);
+    bytes
+}
+
+#[test]
+fn readable_count19_tiff_date_is_refused_atomically() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let bytes = minimal_tiff(&[(0x0132, 2, 19, 26)], b"2020:01:02 03:04:05");
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("native.tif");
+    let ours = dir.path().join("ours.tif");
+    std::fs::write(&native, &bytes).unwrap();
+    std::fs::write(&ours, &bytes).unwrap();
+    let shifted = oracle
+        .command()
+        .args(["-overwrite_original", "-ModifyDate+=1:0:0 0:0:0"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    assert!(shifted.status.success(), "{shifted:?}");
+    assert_ne!(std::fs::read(&native).unwrap(), bytes);
+
+    let error = oxidex::core::date_shift::shift_metadata_dates(
+        &ours,
+        "ModifyDate",
+        "1:0:0 0:0:0",
+        ShiftOperation::Add,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("ModifyDate"), "{error}");
+    assert!(error.to_string().contains("20-byte ASCII"), "{error}");
+    assert_eq!(std::fs::read(&ours).unwrap(), bytes);
+}
+
+// Pinned ExifTool validates the TIFF writer's graph even when the requested
+// date is absent. An unsupported field must not bypass that validation.
+#[test]
+fn unsupported_type13_graph_is_refused_with_absent_or_present_date() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let absent = minimal_tiff(&[(0x0100, 13, 1, 8)], b"");
+    let path = dir.path().join("absent.tif");
+    std::fs::write(&path, &absent).unwrap();
+    let spec = build_shift_spec("1:0:0 0:0:0", ShiftOperation::Add).unwrap();
+    let error = oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
+        &path,
+        &[ExifDateTag::ModifyDate],
+        &spec,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incomplete EXIF directory graph"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), absent);
+    let native = oracle
+        .command()
+        .args(["-overwrite_original", "-ModifyDate+=1:0:0 0:0:0"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!native.status.success(), "{native:?}");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("IFD format not handled"),
+        "{native:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), absent);
+
+    let present = minimal_tiff(
+        &[(0x0100, 13, 1, 8), (0x0132, 2, 20, 38)],
+        b"2020:01:02 03:04:05\0",
+    );
+    std::fs::write(&path, &present).unwrap();
+    let error = oxidex::writers::exif_inplace::shift_tiff_png_exif_dates(
+        &path,
+        &[ExifDateTag::ModifyDate],
+        &spec,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incomplete EXIF directory graph"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), present);
+    let native = oracle
+        .command()
+        .args(["-overwrite_original", "-ModifyDate+=1:0:0 0:0:0"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!native.status.success(), "{native:?}");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("IFD format not handled"),
+        "{native:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), present);
+}
+
 #[path = "common/fixtures.rs"]
 mod fixtures;
 
