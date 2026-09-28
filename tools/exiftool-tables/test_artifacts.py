@@ -20,15 +20,16 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 72)
-        self.assertEqual(len(all_items), 73 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 73)
+        self.assertEqual(len(all_items), 74 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
                          {"quicktime-keys-specs", "quicktime-keys-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_userdata_specs")},
                          {"quicktime-userdata-specs", "quicktime-userdata-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="conv_codegen")},
-                         {"conv-registry", "conv-exif-main", "conv-exif-main-ledger"})
-        self.assertEqual(len(artifacts.select(1)), 47 + members)
+                         {"conv-registry", "conv-exif-main", "conv-exif-main-ledger",
+                          "conv-exif-main-worklist"})
+        self.assertEqual(len(artifacts.select(1)), 48 + members)
         self.assertEqual(len(artifacts.select(2)), 26)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
@@ -196,6 +197,16 @@ class WriteSetTests(unittest.TestCase):
         path = artifacts.select(2)[0].path
         (self.root / path).write_text('regenerated\n')
         self.assertEqual(artifacts.check(self.root, saved), [path])
+
+    def test_refusal_worklist_is_a_tier_one_declared_output(self):
+        path = artifacts.select(producer='conv_codegen', root=self.root)
+        worklist = next(item.path for item in path if item.key == 'conv-exif-main-worklist')
+        tier_one = self.snap(tier='1')
+        (self.root / worklist).write_text('regenerated from selected source\n')
+        self.assertEqual(artifacts.check(self.root, tier_one), [worklist])
+        tier_two = self.snap(tier='2')
+        (self.root / worklist).write_text('another change\n')
+        self.reject(tier_two)
 
     def test_dirty_file_changed_again_with_same_size_and_mtime_fails(self):
         path = self.root / 'unrelated.rs'

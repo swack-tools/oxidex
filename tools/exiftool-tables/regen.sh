@@ -139,7 +139,8 @@ echo ">> generating Autogeneration v2 conversion arms (Exif::Main) and proving t
 # pinned tree's own FoundTag/GetValue and captures the bytes the Rust test
 # (`conv::tests`) must reproduce.
 python3 "$HERE/conv_codegen.py" "$JSON" --table Exif::Main \
-    -o "$(artifact_path conv-exif-main)" --ledger "$(artifact_path conv-exif-main-ledger)"
+    -o "$(artifact_path conv-exif-main)" --ledger "$(artifact_path conv-exif-main-ledger)" \
+    --worklist "$(artifact_path conv-exif-main-worklist)"
 python3 "$HERE/conv_oracle.py" --write --table Exif::Main \
     --perl "$PERL" --exiftool-dir "$LIB/.."
 
