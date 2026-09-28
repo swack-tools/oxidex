@@ -459,6 +459,51 @@ fn plan_changes<'a>(
     )?;
     baseline.mark_read_complete();
     baseline.set_read_handle(original);
+    if crate::writers::jpeg_multi_exif::multiple_exif_app1_records_from_reader(reader).is_some() {
+        // Refuse all surviving EXIF requests together before address validation
+        // can obscure a multi-record JPEG's physical write boundary.
+        let mut effective: Vec<&TagChange> = Vec::new();
+        for change in changes {
+            if let Some(group) = group_deletion(change.tag()) {
+                if change.value().is_none() {
+                    effective.retain(|earlier| {
+                        group_deletion(earlier.tag()).is_some()
+                            || !(group_covers(group, earlier.tag())
+                                || resolve_write_key_for_with_reader(
+                                    earlier.tag(),
+                                    &baseline,
+                                    reader,
+                                )
+                                .is_ok_and(|(key, _)| group_covers(group, &key)))
+                    });
+                }
+            } else {
+                let field = resolve_write_key_for_with_reader(change.tag(), &baseline, reader)
+                    .map(|(key, _)| key)
+                    .unwrap_or_else(|_| change.tag().to_string());
+                effective.retain(|earlier| {
+                    group_deletion(earlier.tag()).is_some()
+                        || !resolve_write_key_for_with_reader(earlier.tag(), &baseline, reader)
+                            .map(|(key, _)| same_field(&key, &field))
+                            .unwrap_or_else(|_| same_field(earlier.tag(), change.tag()))
+                });
+            }
+            effective.push(change);
+        }
+        let assigned: Vec<String> = effective
+            .iter()
+            .filter(|c| c.value().is_some())
+            .map(|c| c.tag().to_string())
+            .collect();
+        let removed: Vec<String> = effective
+            .iter()
+            .filter(|c| c.value().is_none())
+            .map(|c| c.tag().to_string())
+            .collect();
+        crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes_from_reader(
+            reader, &baseline, &baseline, &removed, &assigned,
+        )?;
+    }
     // The file's bytes, for the Panasonic RAW no-op decisions below (#956's
     // `rw2_ifd0`, which answer `false` for any other file) -- read only for a
     // Panasonic RAW, never the whole of every file (PR #957 review, Codex).
@@ -1283,6 +1328,38 @@ mod tests {
             read_metadata(&path).unwrap().get_string("IFD0:Artist"),
             Some("replacement")
         );
+    }
+
+    #[test]
+    fn multi_app1_planning_guard_reads_opened_inode_after_path_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.jpg");
+        let replacement = dir.path().join("replacement.jpg");
+        fs::copy(
+            "tests/fixtures/jpeg/multi_exif_app1/multi-app1-canon-nikon.jpg",
+            &path,
+        )
+        .unwrap();
+        fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &replacement).unwrap();
+        let bytes = fs::read(&replacement).unwrap();
+        let original = super::super::filesystem_metadata::open_destination(&path).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        let reader = MMapReader::from_file(original.try_clone().unwrap()).unwrap();
+        let changes = [TagChange::set("IFD0:Artist", s("refused"))];
+        let error = match plan_changes(&path, &changes, &reader, &original) {
+            Ok(_) => panic!("planning must inspect the opened multi-APP1 original"),
+            Err(error) => error,
+        };
+        match error {
+            ExifToolError::TagsNotWritten { tags } => {
+                assert_eq!(tags.len(), 1);
+                assert_eq!(tags[0].tag, "IFD0:Artist");
+                assert!(tags[0].reason.contains("EXIF APP1 blocks"));
+            }
+            other => panic!("expected multi-APP1 refusal, got {other:?}"),
+        }
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

@@ -81,3 +81,6 @@ pub(crate) mod exif_surgical_test_support {
         panic!("no EXIF segment in test JPEG");
     }
 }
+
+/// Refusal for EXIF edits of JPEGs with several EXIF records.
+pub(crate) mod jpeg_multi_exif;

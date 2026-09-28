@@ -175,6 +175,19 @@ pub fn shift_jpeg_exif_dates(
     targets: &[ExifDateTag],
     spec: &ShiftSpec,
 ) -> Result<usize> {
+    // This direct writer must refuse before selecting a single EXIF block.
+    let assigned = targets
+        .iter()
+        .map(|tag| tag.key().to_string())
+        .collect::<Vec<_>>();
+    let empty = crate::core::MetadataMap::new();
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes(
+        path,
+        &empty,
+        &empty,
+        &[],
+        &assigned,
+    )?;
     let mut file_bytes = std::fs::read(path)?;
 
     // Find the EXIF APP1 segment. The TIFF structure starts after
