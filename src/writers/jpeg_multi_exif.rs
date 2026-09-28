@@ -76,7 +76,11 @@ pub(crate) fn refuse_multi_exif_app1_writes_from_reader(
         .iter()
         .filter(|key| {
             if key.contains(':') {
-                !crate::core::operations::removal_is_no_op_with_reader(key, baseline, reader)
+                // The absence helper scans canonical EXIF directory names.
+                // Keep the caller's spelling in `active_removed` so a later
+                // refusal still names the original request.
+                let canonical = crate::writers::exif_surgical::canonical_write_key(key, baseline);
+                !crate::core::operations::removal_is_no_op_with_reader(&canonical, baseline, reader)
                     .unwrap_or(false)
             } else {
                 !crate::core::operations::bare_removal_is_no_op_with_reader(key, baseline, reader)

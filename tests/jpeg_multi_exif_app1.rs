@@ -472,6 +472,57 @@ fn absent_bare_exif_deletion_stays_unchanged_across_two_app1_blocks() {
 }
 
 #[test]
+fn absent_grouped_deletion_uses_canonical_address_and_keeps_request_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = copy(dir.path(), CANON);
+    let original = std::fs::read(&path).unwrap();
+    for key in ["IFD0:CalibrationIlluminant1", "ifd0:CalibrationIlluminant1"] {
+        remove_tag(&path, key).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{key}");
+
+        let handle = exiftool_create();
+        let c_path = CString::new(path.to_str().unwrap()).unwrap();
+        let c_key = CString::new(key).unwrap();
+        assert_eq!(exiftool_read_file(handle, c_path.as_ptr()), EXIFTOOL_OK);
+        assert_eq!(exiftool_remove_tag(handle, c_key.as_ptr()), EXIFTOOL_OK);
+        let code = exiftool_write_file(handle, c_path.as_ptr());
+        let message = unsafe { CStr::from_ptr(exiftool_get_last_error()) }
+            .to_string_lossy()
+            .into_owned();
+        exiftool_destroy(handle);
+        assert_eq!(code, EXIFTOOL_OK, "{key}: {message}");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{key}");
+    }
+
+    let key = "ifd0:Software";
+    let err = remove_tag(&path, key).unwrap_err();
+    assert_no_problems(
+        refusal_problem(key, &err.to_string(), Some(&format!("{err:?}")), key)
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    let handle = exiftool_create();
+    let c_path = CString::new(path.to_str().unwrap()).unwrap();
+    let c_key = CString::new(key).unwrap();
+    assert_eq!(exiftool_read_file(handle, c_path.as_ptr()), EXIFTOOL_OK);
+    assert_eq!(exiftool_remove_tag(handle, c_key.as_ptr()), EXIFTOOL_OK);
+    let code = exiftool_write_file(handle, c_path.as_ptr());
+    let message = unsafe { CStr::from_ptr(exiftool_get_last_error()) }
+        .to_string_lossy()
+        .into_owned();
+    exiftool_destroy(handle);
+    assert_eq!(code, EXIFTOOL_ERR_TAG_NOT_WRITTEN, "{message}");
+    assert_no_problems(
+        refusal_problem(key, &message, None, key)
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn a_read_map_write_names_each_changed_exif_key() {
     let dir = tempfile::tempdir().unwrap();
     let mut problems = Vec::new();

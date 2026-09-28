@@ -4305,6 +4305,17 @@ pub(crate) fn exif_request_is_no_op(
                         .iter()
                         .filter_map(|key| group_removal(key))
                         .all(|group| {
+                            // The read map combines every JPEG APP1. An
+                            // unknown-note row from one block cannot classify
+                            // a different block's physical MakerNote as
+                            // unknown. A multi-block group clear is absent
+                            // only when every block has no note entry at all.
+                            if group == GroupRemoval::MakerNotes
+                                && group_blocks.len() > 1
+                                && group_has_content(group, &scan, &MetadataMap::new())
+                            {
+                                return false;
+                            }
                             if group_has_content(group, &scan, baseline) {
                                 return false;
                             }
