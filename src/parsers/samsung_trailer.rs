@@ -31,6 +31,11 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
 /// ExifTool sets it only for JPEG when reading; without it ProcessVivo returns
 /// 0 and the walk stops at a Vivo trailer.
 pub fn parse_trailer_chain(file: &[u8], jpeg_trailer_start: Option<usize>) -> MetadataMap {
+    // Older selected sources have no Trailer::Vivo table or IdentifyTrailer
+    // branch for its footer. They stop at that outer suffix, so an inner
+    // Samsung SEFT block must remain unreachable. The generated table is an
+    // availability marker only; its unrepresentable rows are not decoded here.
+    let vivo_declared = crate::exiftool_tables::find_ifd_table("Trailer", "Vivo").is_some();
     // Every row here is read from the file (`metadata_map::file_rows`):
     // a caller's later `insert`/`get_mut` is what counts as assigned.
     crate::core::metadata_map::file_rows(|| -> MetadataMap {
@@ -53,7 +58,7 @@ pub fn parse_trailer_chain(file: &[u8], jpeg_trailer_start: Option<usize>) -> Me
                     metadata.merge_winners_keeping_group1(&samsung.metadata);
                 }
                 samsung.data_pos
-            } else if crate::parsers::vivo::has_footer_at(file, end) {
+            } else if vivo_declared && crate::parsers::vivo::has_footer_at(file, end) {
                 jpeg_trailer_start
                     .and_then(|trailer_start| {
                         crate::parsers::vivo::process_vivo(file, end, trailer_start)
