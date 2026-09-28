@@ -392,12 +392,18 @@ mod tests {
         assert_eq!(entry.refusal, "table_not_binary");
         assert!(find_table("Canon", "AFInfo").is_none());
         // Same table name, different modules, genuinely ProcessBinaryData.
-        for module in ["Nikon", "Olympus", "Pentax"] {
+        // Olympus::AFInfo is a zero-tag native shell in 11.78/12.64 and is
+        // deliberately not generated from those selected sources.
+        for module in ["Nikon", "Pentax"] {
             assert!(
                 find_table(module, "AFInfo").is_some(),
                 "{module}::AFInfo is emitted; only Canon's is serial"
             );
         }
+        assert_eq!(
+            find_table("Olympus", "AFInfo").is_none(),
+            enabled::source_unavailable_allowlist().contains(&("Olympus", "AFInfo"))
+        );
     }
 
     #[test]
@@ -974,7 +980,7 @@ mod tests {
         // allowlist grows.
         assert_eq!(
             enabled,
-            ENABLED.len(),
+            ENABLED.len() - enabled::source_unavailable_allowlist().len(),
             "enabled tables must equal the Gate B allowlist size"
         );
 
@@ -1074,8 +1080,24 @@ mod tests {
             );
             affected_fields += hit;
         }
-        assert_eq!(affected_tables, 7, "tables with a live var_* offset hazard");
-        assert_eq!(affected_fields, 88, "fields past the hazard boundary");
+        // DNG::ImageSeq first appears in the 13.59 native source. Its
+        // var_string at index 0 puts five later declared fields past the
+        // hazard boundary; the other six tables exist in all three pins.
+        let has_image_seq = match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => false,
+            "13.59" => true,
+            version => panic!("unprobed ExifTool source {version}"),
+        };
+        assert_eq!(
+            affected_tables,
+            if has_image_seq { 7 } else { 6 },
+            "tables with a live var_* offset hazard"
+        );
+        assert_eq!(
+            affected_fields,
+            if has_image_seq { 88 } else { 83 },
+            "fields past the hazard boundary"
+        );
 
         let expect = [
             ("BPG", "Main", 6),
@@ -1087,6 +1109,10 @@ mod tests {
             ("Photoshop", "VersionInfo", 5),
         ];
         for (module, table, bound) in expect {
+            if (module, table) == ("DNG", "ImageSeq") && !has_image_seq {
+                assert!(find_table(module, table).is_none());
+                continue;
+            }
             let t = find_table(module, table).unwrap_or_else(|| panic!("{module}::{table}"));
             assert_eq!(
                 t.offsets_sound_until,
@@ -1126,13 +1152,15 @@ mod tests {
 
     #[test]
     fn ifd_tables_are_present() {
-        // 496 in 13.59: the 495 tables with no PROCESS_PROC plus FujiFilm::IFD,
-        // which names Exif::ProcessExif explicitly.
-        assert!(
-            ALL_IFD_TABLES.len() > 400,
-            "expected the generated IFD table set, found {}",
-            ALL_IFD_TABLES.len()
-        );
+        // Independently counted from each selected native dump: tables with
+        // no PROCESS_PROC plus those naming Exif::ProcessExif explicitly.
+        let source_tables = match EXIFTOOL_VERSION {
+            "11.78" => 291,
+            "12.64" => 298,
+            "13.59" => 496,
+            version => panic!("unprobed ExifTool source {version}"),
+        };
+        assert_eq!(ALL_IFD_TABLES.len(), source_tables);
         assert!(
             find_ifd_table("FujiFilm", "IFD").is_some(),
             "FujiFilm::IFD is the one table selected by an explicit PROCESS_PROC"
