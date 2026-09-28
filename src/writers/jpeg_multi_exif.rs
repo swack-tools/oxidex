@@ -69,6 +69,29 @@ pub(crate) fn refuse_multi_exif_app1_writes_from_reader(
         return Ok(());
     };
     let keys = exif_family_request_keys(baseline, metadata, removed, assigned);
+    refuse_keys(blocks, keys)
+}
+
+/// The public byte-level JPEG writer can be called without the file-level
+/// transaction. It must also refuse a rewrite that would edit just the first
+/// EXIF record. An empty desired map is a named EXIF deletion at this level:
+/// only the carrier-level whole clear removes every record.
+pub(crate) fn refuse_multi_exif_app1_rewrite(
+    file_bytes: &[u8],
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<()> {
+    let blocks = exif_app1_records(file_bytes);
+    if blocks <= 1 {
+        return Ok(());
+    }
+    let assigned = desired.assigned_keys();
+    let keys = exif_family_request_keys(baseline, desired, removed, &assigned);
+    refuse_keys(blocks, keys)
+}
+
+fn refuse_keys(blocks: usize, keys: Vec<String>) -> Result<()> {
     if keys.is_empty() {
         return Ok(());
     }

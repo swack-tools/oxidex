@@ -419,6 +419,38 @@ fn library_refuses_every_exif_write_and_leaves_the_file_unchanged() {
 }
 
 #[test]
+fn public_byte_writers_refuse_partial_multi_app1_rewrites() {
+    use oxidex::core::metadata_map::MetadataMap;
+    use oxidex::core::operations::clear_all_metadata;
+    use oxidex::io::MMapReader;
+    use oxidex::writers::exif_surgical::rewrite_jpeg_exif;
+    use oxidex::writers::jpeg_writer::write_exif_to_jpeg;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = copy(dir.path(), FIXTURES[0]);
+    let original = std::fs::read(&path).unwrap();
+    let reader = MMapReader::new(&path).unwrap();
+    let mut desired = MetadataMap::new();
+    desired.insert("IFD0:Artist", TagValue::new_string("new"));
+    for result in [
+        rewrite_jpeg_exif(&original, &desired),
+        write_exif_to_jpeg(&reader, &desired),
+    ] {
+        let error = result.expect_err("a public byte writer must refuse partial EXIF output");
+        assert!(error.to_string().contains("IFD0:Artist"), "{error}");
+        assert!(error.to_string().contains(REASON), "{error}");
+    }
+    // At this level an empty desired map would delete only the first EXIF
+    // record. The whole-file clear below has the carrier-wide semantics.
+    assert!(rewrite_jpeg_exif(&original, &MetadataMap::new()).is_err());
+    assert!(write_exif_to_jpeg(&reader, &MetadataMap::new()).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    clear_all_metadata(&path).unwrap();
+    assert!(exif_app1_payloads(&std::fs::read(&path).unwrap()).is_empty());
+}
+
+#[test]
 fn a_read_map_write_names_each_changed_exif_key() {
     let dir = tempfile::tempdir().unwrap();
     let mut problems = Vec::new();

@@ -3895,6 +3895,12 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_rewrite(
+        file_bytes,
+        &original_map,
+        desired,
+        removed,
+    )?;
     // A created IFD0 takes its resolution from a JFIF APP0 segment read
     // before the EXIF one (WriteExif.pl 13.59:705-711): the segments ahead
     // of the existing EXIF APP1, or the leading APP0 run a new one follows.
