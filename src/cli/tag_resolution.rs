@@ -496,8 +496,9 @@ fn is_tag_char(c: char) -> bool {
 
 /// Parses one group-qualifier part; `Ok(None)` for an `all` part, which
 /// `GroupMatches` skips (`next if $grp eq '*' or $grp eq 'all'`), so
-/// `-EXIF:all:all` is `-EXIF:all` and `-1all:Make` is `-Make` over every
-/// copy.
+/// `-EXIF:all:all` is `-EXIF:all`. An all-only group on a named tag,
+/// such as `-1all:Make`, uses ordinary winner arbitration; only a direct
+/// `-all:Make` requests every copy.
 fn parse_group_part(selector: &str, part: &str) -> Result<Option<GroupPart>, String> {
     let digits = part.chars().take_while(char::is_ascii_digit).count();
     let (family, name) = part.split_at(digits);
@@ -1913,6 +1914,19 @@ mod tests {
         let resolved = resolve_requested_tags(&metadata, &["Make".to_string()], false);
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].occurrence.raw, TagValue::new_string("Canon"));
+    }
+
+    #[test]
+    fn all_only_group_parts_use_the_named_tag_winner() {
+        let metadata = sample_metadata();
+        for (selector, expected_count) in [("all:Make", 2), ("1all:Make", 1), ("all:all:Make", 1)] {
+            let selection = TagSelection::parse(&[selector.to_string()], &[]).unwrap();
+            let resolved = select_occurrences(&metadata, &selection, false, |_| true, None);
+            assert_eq!(resolved.len(), expected_count, "{selector}");
+            if expected_count == 1 {
+                assert_eq!(resolved[0].occurrence.raw, TagValue::new_string("Canon"));
+            }
+        }
     }
 
     #[test]

@@ -145,7 +145,7 @@ fn copy_exclusion_fails_closed_before_touching_a_destination() {
     let destination = dir.path().join("destination.jpg");
     std::fs::copy(REPO_FIXTURE, &destination).expect("copy fixture");
     let before = std::fs::read(&destination).expect("read destination");
-    for exclusion in [&["-x", "IFD0:Make"][..], &["--IFD0:Make"][..]] {
+    for exclusion in [&["-x", "IFD0:Make"][..], &["-exclude", "IFD0:Make"][..]] {
         let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
             .args(["-TagsFromFile", REPO_FIXTURE])
             .args(exclusion)
@@ -156,7 +156,7 @@ fn copy_exclusion_fails_closed_before_touching_a_destination() {
         assert!(output.stdout.is_empty(), "{exclusion:?}");
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .contains("tag exclusions in copy or write mode are not supported"),
+                .contains("-x/-exclude in copy or write mode is not supported"),
             "{exclusion:?}"
         );
         assert_eq!(
@@ -164,6 +164,36 @@ fn copy_exclusion_fails_closed_before_touching_a_destination() {
             before,
             "{exclusion:?}"
         );
+    }
+}
+
+#[test]
+fn rename_exclusion_fails_closed_before_moving_a_file() {
+    let dir = tempfile::tempdir().expect("isolated rename destination");
+    let source = dir.path().join("original.jpg");
+    let renamed = dir.path().join("renamed.jpg");
+    std::fs::copy(REPO_FIXTURE, &source).expect("copy fixture");
+    let before = std::fs::read(&source).expect("read original");
+    for exclusion in [
+        &["--Make"][..],
+        &["-x", "Make"][..],
+        &["-exclude", "Make"][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(exclusion)
+            .arg("-FileName<renamed.jpg")
+            .arg(&source)
+            .output()
+            .expect("run rename-exclusion control");
+        assert!(!output.status.success(), "{exclusion:?}");
+        assert!(output.stdout.is_empty(), "{exclusion:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("tag exclusions in rename mode are not supported"),
+            "{exclusion:?}"
+        );
+        assert_eq!(std::fs::read(&source).expect("read original"), before);
+        assert!(!renamed.exists(), "{exclusion:?} renamed the file");
     }
 }
 

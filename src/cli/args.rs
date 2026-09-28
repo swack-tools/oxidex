@@ -554,6 +554,7 @@ impl CliArgs {
         let mut literal_paths = Vec::new();
         let mut next_arg_is_exclusion = false;
         let mut exclusion_seen = false;
+        let mut x_exclusion_seen = false;
 
         for raw_arg in raw_args {
             if next_arg_is_exclusion {
@@ -649,6 +650,7 @@ impl CliArgs {
             if arg == "-x" || arg.eq_ignore_ascii_case("-exclude") {
                 next_arg_is_exclusion = true;
                 exclusion_seen = true;
+                x_exclusion_seen = true;
                 continue;
             }
             if exclusion_name(&arg)?.is_some() {
@@ -872,8 +874,14 @@ impl CliArgs {
             args,
             literal_paths,
         };
-        if exclusion_seen && (parsed.tags_from_file.is_some() || parsed.has_assignment_option()) {
-            return Err("tag exclusions in copy or write mode are not supported".into());
+        if exclusion_seen && parsed.filename_pattern().is_some() {
+            return Err("tag exclusions in rename mode are not supported".into());
+        }
+        // CopySelectors consumes raw --TAG tokens in argument order. Keep
+        // that established copy/write path intact; only the newly accepted
+        // -x/-exclude spelling lacks a proven copy/write translation.
+        if x_exclusion_seen && (parsed.tags_from_file.is_some() || parsed.has_assignment_option()) {
+            return Err("-x/-exclude in copy or write mode is not supported".into());
         }
         crate::cli::tag_resolution::TagSelection::from_args(&parsed)
             .map_err(lexopt::Error::from)?;
@@ -1820,5 +1828,50 @@ mod tests {
             CliArgs::parse_date_shift("-ExifIFD:DateTimeOriginal=2024:02:03 04:05:06"),
             None
         );
+    }
+
+    #[test]
+    fn copy_double_dash_exclusions_keep_ordered_raw_selectors() {
+        let args = CliArgs::parse_from(
+            [
+                "-TagsFromFile",
+                "source.jpg",
+                "-IFD0:Artist",
+                "--IFD0:Artist",
+                "-IFD0:Artist",
+                "destination.jpg",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            args.copy_tag_filters(),
+            Some(vec![
+                "IFD0:Artist".to_string(),
+                "-IFD0:Artist".to_string(),
+                "IFD0:Artist".to_string(),
+            ])
+        );
+        assert_eq!(args.specific_tags(), None);
+        assert!(args.excluded_tags().is_empty());
+
+        for spelling in ["-x", "-exclude"] {
+            let error = CliArgs::parse_from(
+                [
+                    "-TagsFromFile",
+                    "source.jpg",
+                    spelling,
+                    "IFD0:Artist",
+                    "destination.jpg",
+                ]
+                .map(OsString::from),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("-x/-exclude in copy or write mode"),
+                "{error}"
+            );
+        }
     }
 }
