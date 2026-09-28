@@ -1089,6 +1089,33 @@ mod tests {
         DirEngineRows::empty(&IFD_EXIF_MAIN)
     }
 
+    fn historical_snapshot(current: &[u16], kind: &str) -> Vec<u16> {
+        let release = crate::exiftool_oracle::repo_pin();
+        let mut expected = current.to_vec();
+        let removed: &[u16] = match (release, kind) {
+            ("11.78", "withheld") => &[
+                0x9201, 0x9216, 0x9287, 0xa216, 0xa40d, 0xa40e, 0xc6fc, 0xc726, 0xcd39,
+            ],
+            ("12.64", "withheld") => &[0x9216, 0x9287, 0xa216, 0xa40d, 0xa40e],
+            ("11.78", "taken") => &[
+                0x9201, 0x9216, 0xa216, 0xa40d, 0xa40e, 0xc6fc, 0xc726, 0xcd39,
+            ],
+            ("12.64", "taken") => &[0x9216, 0xa216, 0xa40d, 0xa40e],
+            ("11.78" | "12.64", "edges") => {
+                &[0x9999, 0xc519, 0xc51b, 0xcd41, 0xcd44, 0xcd47, 0xcea1]
+            }
+            _ => &[],
+        };
+        expected.retain(|id| !removed.contains(id));
+        if matches!(release, "11.78" | "12.64") && kind == "withheld" {
+            // Native HasselbladExif used RawConv and returned undef in both
+            // releases; 13.59 made it a same-table SubDirectory edge.
+            expected.push(0xc51b);
+            expected.sort_unstable();
+        }
+        expected
+    }
+
     #[test]
     fn exif_main_withholding_is_the_snapshot() {
         for (name, list) in [
@@ -1109,7 +1136,8 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(
-            withheld, EXIF_MAIN_WITHHELD,
+            withheld,
+            historical_snapshot(EXIF_MAIN_WITHHELD, "withheld"),
             "EXIF_MAIN_WITHHELD: {SNAPSHOT_MOVED}"
         );
         let taken: Vec<u16> = withheld
@@ -1118,7 +1146,8 @@ mod tests {
             .filter(|&id| crate::exiftool_tables::conv::claims(table, table.tag(id).unwrap()))
             .collect();
         assert_eq!(
-            taken, EXIF_MAIN_GENERATED_TAKES,
+            taken,
+            historical_snapshot(EXIF_MAIN_GENERATED_TAKES, "taken"),
             "EXIF_MAIN_GENERATED_TAKES: {SNAPSHOT_MOVED}"
         );
         let edges: Vec<u16> = table
@@ -1127,7 +1156,11 @@ mod tests {
             .filter(|t| t.subdir.is_some())
             .map(|t| t.id)
             .collect();
-        assert_eq!(edges, EXIF_MAIN_EDGES, "EXIF_MAIN_EDGES: {SNAPSHOT_MOVED}");
+        assert_eq!(
+            edges,
+            historical_snapshot(EXIF_MAIN_EDGES, "edges"),
+            "EXIF_MAIN_EDGES: {SNAPSHOT_MOVED}"
+        );
         for &id in EXIF_MAIN_ABSENT {
             assert!(
                 table.tag(id).is_none() && table.variant_group(id).is_none(),
@@ -1153,7 +1186,15 @@ mod tests {
             .iter()
             .filter(|(_, t)| t.subdir.is_some())
             .count();
-        assert_eq!(edge_alternatives, 6, "0xc634: {SNAPSHOT_MOVED}");
+        let expected_edge_alternatives = if crate::exiftool_oracle::repo_pin() == "11.78" {
+            5
+        } else {
+            6
+        };
+        assert_eq!(
+            edge_alternatives, expected_edge_alternatives,
+            "0xc634: {SNAPSHOT_MOVED}"
+        );
     }
 
     #[test]
@@ -1164,17 +1205,20 @@ mod tests {
         assert_eq!(rows.owner(0x927c, true), Owner::Hand, "MakerNote");
         assert_ne!(rows.owner(0xa005, false), Owner::Engine, "InteropOffset");
         assert_ne!(rows.owner(0xa005, true), Owner::Engine, "InteropOffset");
-        let hand_withheld: Vec<u16> = EXIF_MAIN_WITHHELD
+        let withheld = historical_snapshot(EXIF_MAIN_WITHHELD, "withheld");
+        let taken = historical_snapshot(EXIF_MAIN_GENERATED_TAKES, "taken");
+        let edges = historical_snapshot(EXIF_MAIN_EDGES, "edges");
+        let hand_withheld: Vec<u16> = withheld
             .iter()
             .copied()
-            .filter(|id| !EXIF_MAIN_GENERATED_TAKES.contains(id))
+            .filter(|id| !taken.contains(id))
             .collect();
         for &id in hand_withheld.iter().chain(EXIF_MAIN_ABSENT) {
             for silence in [false, true] {
                 assert_eq!(rows.owner(id, silence), Owner::Hand, "{id:#06x}");
             }
         }
-        for &id in EXIF_MAIN_GENERATED_TAKES {
+        for &id in &taken {
             assert_eq!(rows.owner(id, true), Owner::Engine, "{id:#06x}");
         }
         let unknown: Vec<u16> = table
@@ -1191,7 +1235,7 @@ mod tests {
         for &id in &unknown {
             assert_eq!(rows.owner(id, true), Owner::Hand, "{id:#06x}");
         }
-        for &id in EXIF_MAIN_EDGES {
+        for &id in &edges {
             assert_eq!(rows.owner(id, false), Owner::Hand, "{id:#06x}");
             assert_eq!(rows.owner(id, true), Owner::Silent, "{id:#06x}");
         }
@@ -1212,7 +1256,7 @@ mod tests {
         // The partition is total: every declared id is exactly one of
         // engine, withheld, edge, unknown.
         assert_eq!(
-            emit.len() + hand_withheld.len() + EXIF_MAIN_EDGES.len() + unknown.len(),
+            emit.len() + hand_withheld.len() + edges.len() + unknown.len(),
             all_ids(table).len(),
             "engine (incl. generated arms) + hand-withheld + edges + unknown must cover every \
              declared id once"
@@ -1376,18 +1420,38 @@ mod tests {
                 tag.id, tag.name, edge.module, edge.table
             );
         }
+        let expected_self_edges: &[(u16, bool)] =
+            if matches!(crate::exiftool_oracle::repo_pin(), "11.78" | "12.64") {
+                &[
+                    (0x0190, true),
+                    (0x8769, true),
+                    (0xa005, true),
+                    (0xc6f5, true),
+                ]
+            } else {
+                &[
+                    (0x0190, true),
+                    (0x8769, true),
+                    (0xa005, true),
+                    (0xc51b, true),
+                    (0xc6f5, true),
+                ]
+            };
         assert_eq!(
-            into_itself,
-            [
-                (0x0190, true),
-                (0x8769, true),
-                (0xa005, true),
-                (0xc51b, true),
-                (0xc6f5, true)
-            ],
+            into_itself, expected_self_edges,
             "the Exif::Main -> Exif::Main edges and whether each is emitted unwalked"
         );
-        assert_eq!(checked, 28 + 6, "28 plain edges plus 0xc634's six");
+        let plain_edges = historical_snapshot(EXIF_MAIN_EDGES, "edges");
+        assert_eq!(
+            checked,
+            plain_edges.len()
+                + if crate::exiftool_oracle::repo_pin() == "11.78" {
+                    5
+                } else {
+                    6
+                },
+            "plain edges plus 0xc634 alternatives"
+        );
     }
 
     // -----------------------------------------------------------------

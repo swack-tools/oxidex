@@ -1930,46 +1930,60 @@ mod tests {
             .filter(|tag| is_plain_undefined_exif_tag(tag))
             .map(|tag| tag.name)
             .collect();
-        assert_eq!(
-            names,
-            [
-                "ProcessingSoftware",
-                "DocumentName",
-                "Make",
-                "Model",
-                "PageName",
-                "Software",
-                "Artist",
-                "HostComputer",
-                "TargetPrinter",
-                "SEMInfo",
-                "SpectralSensitivity",
-                "OffsetTime",
-                "OffsetTimeOriginal",
-                "OffsetTimeDigitized",
-                "ImageHistory",
-                "RelatedSoundFile",
-                "ImageUniqueID",
-                "OwnerName",
-                "SerialNumber",
-                "LensMake",
-                "LensModel",
-                "LensSerialNumber",
-                "ImageTitle",
-                "Photographer",
-                "ImageEditor",
-                "CameraFirmware",
-                "RAWDevelopingSoftware",
-                "ImageEditingSoftware",
-                "MetadataEditingSoftware",
-                "GDALMetadata",
-                "GDALNoData",
-                "UniqueCameraModel",
-                "CameraSerialNumber",
-                "ReelName",
-                "CameraLabel",
-            ]
-        );
+        let mut expected = vec![
+            "ProcessingSoftware",
+            "DocumentName",
+            "Make",
+            "Model",
+            "PageName",
+            "Software",
+            "Artist",
+            "HostComputer",
+            "TargetPrinter",
+            "SEMInfo",
+            "SpectralSensitivity",
+            "OffsetTime",
+            "OffsetTimeOriginal",
+            "OffsetTimeDigitized",
+            "ImageHistory",
+            "RelatedSoundFile",
+            "ImageUniqueID",
+            "OwnerName",
+            "SerialNumber",
+            "LensMake",
+            "LensModel",
+            "LensSerialNumber",
+            "ImageTitle",
+            "Photographer",
+            "ImageEditor",
+            "CameraFirmware",
+            "RAWDevelopingSoftware",
+            "ImageEditingSoftware",
+            "MetadataEditingSoftware",
+            "GDALMetadata",
+            "GDALNoData",
+            "UniqueCameraModel",
+            "CameraSerialNumber",
+            "ReelName",
+            "CameraLabel",
+        ];
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => expected.retain(|name| {
+                !matches!(
+                    *name,
+                    "ImageTitle"
+                        | "Photographer"
+                        | "ImageEditor"
+                        | "CameraFirmware"
+                        | "RAWDevelopingSoftware"
+                        | "ImageEditingSoftware"
+                        | "MetadataEditingSoftware"
+                )
+            }),
+            "12.64" => expected.retain(|name| *name != "ImageTitle"),
+            _ => {}
+        }
+        assert_eq!(names, expected);
         let plain = *IFD_EXIF_MAIN.tag(0x010d).unwrap();
         for flags in [
             IfdFlags {

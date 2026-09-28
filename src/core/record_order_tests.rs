@@ -83,14 +83,31 @@ fn recorded_sequence(path: &Path) -> Vec<String> {
 #[test]
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
     let mut failures = Vec::new();
+    let release = crate::exiftool_oracle::repo_pin();
     for (file, exercises) in PATHS {
-        let path = if *file == "PCAP.pcapng" {
-            crate::test_support::pinned_combined_fixture_path(file)
-        } else {
-            crate::test_support::pinned_t_images_fixture_path(file)
-        };
-        let Some(path) = path else {
-            eprintln!("skip: configured fixture {file} is absent");
+        // These two source-tree fixtures did not exist in the selected
+        // native releases. Keep every other path under the same exact
+        // repeated-sequence contract, and prove the stated absence.
+        if matches!(
+            (release, *file),
+            ("11.78", "InfiRay.jpg" | "PCAP.pcapng") | ("12.64", "PCAP.pcapng")
+        ) {
+            let source = std::path::PathBuf::from(
+                std::env::var_os("EXIFTOOL").expect("pinned native ExifTool"),
+            );
+            let missing = source
+                .parent()
+                .expect("native source tree")
+                .join("t/images")
+                .join(file);
+            assert!(
+                !missing.exists(),
+                "{file} unexpectedly exists in native {release}"
+            );
+            continue;
+        }
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path(file) else {
+            eprintln!("skip: configured t/images fixture {file} is absent");
             return;
         };
         let first = recorded_sequence(&path);

@@ -2491,6 +2491,17 @@ mod tests {
 
     #[test]
     fn dji_relative_humidity_uses_perl_general_number_format() {
+        if crate::exiftool_oracle::repo_pin() == "11.78" {
+            // DJI.pm 11.78 has no ThermalParams2 table. The APP4 branch and
+            // its humidity conversion first appear in the later native tree.
+            assert!(find_table("DJI", "ThermalParams2").is_none());
+            let payload = dji_thermal_params2(0.5);
+            let segment = Segment::new(APP4_MARKER, 0, &payload);
+            let mut metadata = dji_metadata();
+            process_dji_thermal_segments(&[segment], &mut metadata, &mut Vec::new());
+            assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
+            return;
+        }
         for (raw, expected) in [
             (0.123_456_78_f32, "12.3457 %"),
             (1e-7_f32, "1e-05 %"),
@@ -2525,6 +2536,26 @@ mod tests {
 
     #[test]
     fn infiray_does_not_claim_an_earlier_dji_thermal_params2_app4_branch() {
+        if crate::exiftool_oracle::repo_pin() == "11.78" {
+            // Neither native module exists in 11.78. Its generated InfiRay
+            // sentinel explicitly forbids constructing an APP2 record.
+            assert_eq!(infiray::VERSION_MIN_LENGTH, usize::MAX);
+            assert_eq!(infiray::FACTORY_MIN_LENGTH, usize::MAX);
+            assert!(find_table("DJI", "ThermalParams2").is_none());
+            let mut version = [0; 10];
+            version[4..10].copy_from_slice(b"IJPEG\0");
+            let thermal = dji_thermal_params2(0.5);
+            let segments = [
+                Segment::new(APP2_MARKER, 0, &version),
+                Segment::new(APP4_MARKER, 0, &thermal),
+            ];
+            let mut metadata = dji_metadata();
+            process_infiray_segments(&segments, &mut metadata);
+            process_dji_thermal_segments(&segments, &mut metadata, &mut Vec::new());
+            assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
+            assert_eq!(metadata.get_string("APP4:IJPEGTempVersion"), None);
+            return;
+        }
         let mut version = vec![0; infiray::VERSION_MIN_LENGTH];
         version[4..10].copy_from_slice(b"IJPEG\0");
         let mut thermal = dji_thermal_params2(0.5);
