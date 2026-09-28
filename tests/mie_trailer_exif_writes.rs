@@ -72,6 +72,79 @@ fn mie_trailer(file: &[u8]) -> Option<&[u8]> {
     mie_trailers(file).pop()
 }
 
+/// The first SOS segment in the pinned Writer.jpg is complete and length 12.
+/// `ff 11` here is a component/table pair inside its header, not a marker.
+fn ff11_first_sos(mut jpeg: Vec<u8>) -> Vec<u8> {
+    let sos = jpeg
+        .windows(2)
+        .position(|w| w == [0xff, 0xda])
+        .expect("SOS");
+    assert_eq!(&jpeg[sos..sos + 7], b"\xff\xda\0\x0c\x03\x01\0");
+    jpeg[sos + 5..sos + 7].copy_from_slice(b"\xff\x11");
+    jpeg
+}
+
+#[test]
+fn first_sos_header_ff11_does_not_hide_mie_from_write_census() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let plain = ff11_first_sos(
+        std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap(),
+    );
+    let mie_source =
+        std::fs::read(fixtures::required_t_images_fixture_path("ExifTool.jpg")).unwrap();
+    let mut carrying = plain.clone();
+    carrying.extend_from_slice(mie_trailer(&mie_source).expect("pinned MIE trailer"));
+    assert_eq!(mie_trailer(&carrying).unwrap().len(), 90);
+
+    let dir = tempfile::tempdir().unwrap();
+    // grade independently proves that native ExifTool copies Artist into MIE
+    // while OxiDex refuses with the file's bytes and inode unchanged.
+    assert_eq!(
+        grade(
+            oracle,
+            "first SOS ff11 + MIE",
+            "jpg",
+            &carrying,
+            &[(&["-IFD0:Artist=x"], "Artist")]
+        ),
+        Ok(1)
+    );
+
+    // The same header without MIE is still an ordinary writable JPEG.
+    let et_path = dir.path().join("native-plain.jpg");
+    let ox_path = dir.path().join("oxidex-plain.jpg");
+    std::fs::write(&et_path, &plain).unwrap();
+    std::fs::write(&ox_path, &plain).unwrap();
+    let et = oracle
+        .command()
+        .args(["-m", "-overwrite_original", "-IFD0:Artist=x"])
+        .arg(&et_path)
+        .output()
+        .unwrap();
+    let ox = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Artist=x")
+        .arg(&ox_path)
+        .output()
+        .unwrap();
+    assert!(
+        et.status.success(),
+        "native: {}",
+        String::from_utf8_lossy(&et.stderr)
+    );
+    assert!(
+        ox.status.success(),
+        "oxidex: {}",
+        String::from_utf8_lossy(&ox.stderr)
+    );
+    assert_ne!(std::fs::read(&ox_path).unwrap(), plain);
+    assert_eq!(
+        oracle_rows(oracle, &et_path, "Artist"),
+        oracle_rows(oracle, &ox_path, "Artist")
+    );
+}
+
 /// Every group's `tag` rows of `path` as the oracle reads them.
 fn oracle_rows(oracle: &Oracle, path: &Path, tag: &str) -> Vec<String> {
     let out = oracle
@@ -287,6 +360,60 @@ fn mie_holding_exif(tiff: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(&[0x10, 4]);
     out
+}
+
+/// A truncated Adobe successor leaves maker-note presence uncertain even
+/// though the census has counted no complete MakN record. A named note
+/// request or group clear must stop the whole transaction, including an ordinary sibling.
+#[test]
+fn malformed_adobe_mie_note_refuses_write_atomically() {
+    let canon = std::fs::read(fixtures::required_t_images_fixture_path("Canon.jpg")).unwrap();
+    let mut private = b"Adobe\0XxxN".to_vec();
+    private.extend_from_slice(&17_u32.to_be_bytes());
+    private.extend_from_slice(b"payload MakN text");
+    private.push(0); // even-sized Adobe record
+    private.extend_from_slice(b"MakN\0\0\0\x06II"); // truncated successor
+    let mut tiff = b"MM\0*\0\0\0\x08\0\x01\xc6\x34\0\x07".to_vec();
+    tiff.extend_from_slice(&(private.len() as u32).to_be_bytes());
+    tiff.extend_from_slice(&26_u32.to_be_bytes());
+    tiff.extend_from_slice(&[0; 4]); // no next IFD
+    tiff.extend_from_slice(&private);
+    let original = [canon.as_slice(), &mie_holding_exif(&tiff)].concat();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("malformed-adobe-mie.jpg");
+    std::fs::write(&file, &original).unwrap();
+    let sibling = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .arg("-IFD0:Make=")
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(
+        sibling.status.success(),
+        "sibling alone: {}",
+        String::from_utf8_lossy(&sibling.stderr)
+    );
+    assert_ne!(std::fs::read(&file).unwrap(), original);
+    for requests in [
+        &["-MakerNotes:OwnerName=", "-IFD0:Make="][..],
+        &["-IFD0:Make=", "-MakerNotes:OwnerName="][..],
+        &["-MakerNotes:All=", "-IFD0:Make="][..],
+        &["-IFD0:Make=", "-MakerNotes:All="][..],
+    ] {
+        std::fs::write(&file, &original).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(requests)
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{requests:?}");
+        assert!(output.stdout.is_empty(), "{requests:?}");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("MIE") && error.contains("MakerNotes"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), original, "{requests:?}");
+    }
 }
 
 /// The TIFF payload of the first `Exif\0\0` APP1 of `jpeg`.

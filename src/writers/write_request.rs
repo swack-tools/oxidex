@@ -48,7 +48,7 @@
 
 use super::exif_surgical::MakerNoteCensus;
 use super::generated_setnewvalue_address_rules::{
-    SET_NEW_VALUE_LOOKUP, StaticNativeLookupCandidate,
+    SET_NEW_VALUE_LOOKUP, StaticCandidatePrintConv, StaticNativeLookupCandidate,
 };
 use super::generated_tag_exists::{SHORTCUTS, TAG_EXISTS};
 use crate::core::FileFormat;
@@ -58,6 +58,135 @@ use crate::error::{ExifToolError, Result};
 /// `Exif::Main`'s table-level `WRITE_GROUP` (Exif.pm:415), the write group of
 /// every candidate that declares none of its own.
 const EXIF_MAIN_WRITE_GROUP: &str = "ExifIFD";
+
+/// A closed, source-captured PrintConv hash proves a request cannot convert
+/// only when no eligible native candidate can interpret its text. Hashes with
+/// callbacks, inverse expressions or unsupported variants remain unknown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CandidateConversion {
+    NotInPrintConv,
+    Ambiguous,
+    Possible,
+    Unknown,
+}
+
+impl CandidateConversion {
+    fn rejected(self) -> bool {
+        matches!(self, Self::NotInPrintConv | Self::Ambiguous)
+    }
+}
+
+fn candidate_conversion(
+    candidate: &StaticNativeLookupCandidate,
+    value: &str,
+) -> CandidateConversion {
+    let StaticCandidatePrintConv::PlainHash(labels) = candidate.print_conv else {
+        return CandidateConversion::Unknown;
+    };
+    // ReverseLookup accepts Unknown (X) before looking at the hash. Its
+    // subsequent matching tiers include case-insensitive substring matches.
+    // The source rejects ambiguous partial matches. Non-ASCII folding stays
+    // unknown so it cannot prove that every candidate rejects the value.
+    let unknown_form = value.strip_suffix('\n').unwrap_or(value);
+    let lower = unknown_form.to_ascii_lowercase();
+    if lower.starts_with("unknown")
+        && lower[7..]
+            .trim_start_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
+            .starts_with('(')
+        && lower.ends_with(')')
+        && !lower
+            .split_once('(')
+            .is_some_and(|(_, inner)| inner.contains('\n'))
+    {
+        return CandidateConversion::Possible;
+    }
+    if labels.iter().any(|label| !label.is_ascii()) {
+        return CandidateConversion::Unknown;
+    }
+    // Native CLI operands are byte strings. A non-ASCII query cannot match
+    // an all-ASCII hash, and Unicode whitespace must not be stripped.
+    let query = value
+        .trim_end_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}'])
+        .to_ascii_lowercase();
+    // Writer.pl ReverseLookup tries exact, case-insensitive exact, prefix,
+    // then substring. A non-exact tier with multiple matches stops there;
+    // it does not use a later tier to choose one of them.
+    if labels
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case(&query))
+    {
+        return CandidateConversion::Possible;
+    }
+    for count in [
+        labels
+            .iter()
+            .filter(|label| label.to_ascii_lowercase().starts_with(&query))
+            .count(),
+        labels
+            .iter()
+            .filter(|label| label.to_ascii_lowercase().contains(&query))
+            .count(),
+    ] {
+        match count {
+            0 => continue,
+            1 => return CandidateConversion::Possible,
+            _ => return CandidateConversion::Ambiguous,
+        }
+    }
+    CandidateConversion::NotInPrintConv
+}
+
+/// The EXIF destination for a bare request rejected by every writable native
+/// candidate. `applicable` may narrow candidates using a file's physical
+/// evidence; without it this is the command-wide SetNewValue decision.
+pub(crate) fn rejected_bare_conversion(
+    name: &str,
+    value: &str,
+    applicable: impl Fn(&StaticNativeLookupCandidate) -> bool,
+) -> Option<(&'static str, &'static str)> {
+    let candidates: Vec<_> = SET_NEW_VALUE_LOOKUP
+        .iter()
+        .filter(|candidate| {
+            candidate.name.eq_ignore_ascii_case(name) && candidate.candidate_writable
+        })
+        .collect();
+    let exif = candidates.iter().find(|candidate| {
+        is_exif_main(candidate)
+            && matches!(candidate.print_conv, StaticCandidatePrintConv::PlainHash(_))
+    })?;
+    if candidates
+        .iter()
+        .filter(|candidate| applicable(candidate))
+        .all(|candidate| candidate_conversion(candidate, value).rejected())
+    {
+        let reason = match candidate_conversion(exif, value) {
+            CandidateConversion::Ambiguous => "matches more than one PrintConv",
+            CandidateConversion::NotInPrintConv => "not in PrintConv",
+            _ => return None,
+        };
+        Some((exif.write_group.unwrap_or(EXIF_MAIN_WRITE_GROUP), reason))
+    } else {
+        None
+    }
+}
+
+/// Whether one candidate can still be selected in this file. The only
+/// absence proofs used here are the physical maker-note census and absence of
+/// a MIE row. Other families stay possible when their creation rules are not
+/// captured; that deliberately prevents a false conversion warning.
+pub(crate) fn candidate_applies_to_file(
+    candidate: &StaticNativeLookupCandidate,
+    name: &str,
+    baseline: &MetadataMap,
+    census: MakerNoteCensus,
+) -> bool {
+    match family0(candidate) {
+        Some("MakerNotes") => family1(candidate)
+            .is_none_or(|group| makernote_group_may_hold(name, group, baseline, &|| census)),
+        Some("MIE") => mie_row(baseline).is_some(),
+        _ => true,
+    }
+}
 
 /// Whether ExifTool writes an ungrouped `name` to a PNG as a PNG text tag:
 /// pinned 13.59 answers `-Software=NEW` on a PNG with `[PNG] Software`, not
@@ -988,7 +1117,8 @@ pub(crate) fn ensure_no_mie_copy(
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
             let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
-            makernote_census(&tiffs, EXIF_BLOCK_MAGICS).tag_bearing == 0
+            let census = makernote_census(&tiffs, EXIF_BLOCK_MAGICS);
+            census.tag_bearing == 0 && !census.uncertain_outside_ifd1 && !census.uncertain_ifd1
         });
         if untouched {
             return Ok(());
@@ -1108,7 +1238,10 @@ pub(crate) fn ensure_makernote_entry_not_named(
         && MAKERNOTE_ROOTS
             .iter()
             .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
-    if named && makernote_block().notes > 0 {
+    let census = named.then(makernote_block);
+    if census.is_some_and(|census| {
+        census.notes > 0 || census.uncertain_outside_ifd1 || census.uncertain_ifd1
+    }) {
         return Err(refuse(
             tag,
             "it names a maker-note entry, which ExifTool deletes or replaces whole where \
@@ -1166,11 +1299,30 @@ pub(crate) fn makernote_may_hold(
     baseline: &MetadataMap,
     makernote_block: &dyn Fn() -> MakerNoteCensus,
 ) -> Option<String> {
-    use super::generated_makernote_groups::{MAKERNOTE_CANDIDATES, MAKERNOTE_ROOTS};
+    use super::generated_makernote_groups::MAKERNOTE_CANDIDATES;
     let lowered = name.to_ascii_lowercase();
     let groups: &[&str] = MAKERNOTE_CANDIDATES
         .binary_search_by(|(candidate, _)| (*candidate).cmp(lowered.as_str()))
         .map_or(&[], |at| MAKERNOTE_CANDIDATES[at].1);
+    makernote_may_hold_in_groups(name, groups, baseline, makernote_block)
+}
+
+pub(crate) fn makernote_group_may_hold(
+    name: &str,
+    group: &str,
+    baseline: &MetadataMap,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
+) -> bool {
+    makernote_may_hold_in_groups(name, &[group], baseline, makernote_block).is_some()
+}
+
+fn makernote_may_hold_in_groups(
+    name: &str,
+    groups: &[&str],
+    baseline: &MetadataMap,
+    makernote_block: &dyn Fn() -> MakerNoteCensus,
+) -> Option<String> {
+    use super::generated_makernote_groups::MAKERNOTE_ROOTS;
     if groups.is_empty() {
         return None;
     }
@@ -1181,6 +1333,29 @@ pub(crate) fn makernote_may_hold(
     // unless the deletion is `MakerNotes:All`, which takes CIFF too.
     let deletions = census.deletions;
     let ciff = census.ciff;
+    let surviving_direct = if deletions.exif_ifd_only() {
+        let surviving = if deletions.ifd1 && census.surviving_exif_ifd_clear != usize::MAX {
+            census
+                .surviving_exif_ifd_clear
+                .saturating_sub(census.ifd1_tag_bearing)
+        } else {
+            census.surviving_exif_ifd_clear
+        };
+        surviving > 0
+            || census.uncertain_survivor_outside_ifd1
+            || (!deletions.ifd1 && census.uncertain_survivor_ifd1)
+    } else {
+        false
+    };
+    // Rows do not identify which physical note supplied them. After an
+    // ExifIFD clear, a surviving direct note must stay an unknown candidate
+    // even if the removed ExifIFD note supplied a decoded vendor row.
+    if surviving_direct {
+        return Some(format!(
+            "the file carries a maker note outside ExifIFD where ExifTool also \
+             writes {name} if the note holds it, which oxidex cannot write"
+        ));
+    }
     if deletions.makernotes && (!ciff || deletions.ciff) {
         return None;
     }
@@ -1207,10 +1382,14 @@ pub(crate) fn makernote_may_hold(
     }
     let tag_bearing = if deletions.makernotes {
         0
+    } else if deletions.ifd1 && census.tag_bearing != usize::MAX {
+        census.tag_bearing.saturating_sub(census.ifd1_tag_bearing)
     } else {
         census.tag_bearing
     };
-    if decoded.is_empty() && tag_bearing == 0 {
+    let uncertain_note = !deletions.makernotes
+        && (census.uncertain_outside_ifd1 || (!deletions.ifd1 && census.uncertain_ifd1));
+    if decoded.is_empty() && tag_bearing == 0 && !uncertain_note {
         return None;
     }
     // Rows do not say which EXIF block they were decoded from, so more than
@@ -1224,13 +1403,28 @@ pub(crate) fn makernote_may_hold(
     // APP7's (a group no root claims). A note ExifTool reads as one value,
     // or a JPEG preview, bears no tags and is not counted
     // (`exif_surgical::makernote_census`).
+    // An otherwise rowless note can still have a physically proven root.
+    // Pinned MakerNotes::Main selects a headerless Nikon note by its ordered
+    // conditions; that root has no Pentax Artist address. Keep other notes
+    // unknown until their actual root is established.
+    if !ciff && !uncertain_note && tag_bearing == 1 && decoded.is_empty() {
+        if let Some(root) = census
+            .identified_single_root
+            .and_then(|entry| MAKERNOTE_ROOTS.iter().find(|root| root.entry == entry))
+        {
+            if !groups.iter().any(|group| root.closure.contains(group)) {
+                return None;
+            }
+        }
+    }
     let exif_decoded = super::exif_surgical::exif_makernote_row_groups(baseline);
     let ciff_reaches = |group: &str| {
         ciff && MAKERNOTE_ROOTS
             .iter()
             .any(|root| root.entry == "CIFF" && root.closure.contains(&group))
     };
-    if tag_bearing > 1
+    if uncertain_note
+        || tag_bearing > 1
         || (tag_bearing == 1
             && !MAKERNOTE_ROOTS.iter().any(|root| {
                 root.entry != "CIFF"
@@ -1444,6 +1638,72 @@ mod tests {
             blocks: 1,
             ..MakerNoteCensus::default()
         }
+    }
+
+    #[test]
+    fn physical_uncertainty_survives_only_the_directories_left_by_clears() {
+        use super::super::exif_surgical::RequestDeletions;
+        let empty = MetadataMap::new();
+        let ifd2 = MakerNoteCensus {
+            uncertain_ifd1: true,
+            uncertain_survivor_ifd1: true,
+            ..no_note()
+        };
+        assert!(makernote_may_hold("WhiteBalance", &empty, &|| ifd2).is_some());
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("ExifIFD:All"),
+                ..ifd2
+            })
+            .is_some()
+        );
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("IFD1:All"),
+                ..ifd2
+            })
+            .is_none()
+        );
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("MakerNotes:All"),
+                ..ifd2
+            })
+            .is_none()
+        );
+
+        let subifd = MakerNoteCensus {
+            uncertain_outside_ifd1: true,
+            uncertain_survivor_outside_ifd1: true,
+            ..no_note()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("IFD1:All"),
+                ..subifd
+            })
+            .is_some()
+        );
+        let exif_child = MakerNoteCensus {
+            uncertain_outside_ifd1: true,
+            ..no_note()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &empty, &|| MakerNoteCensus {
+                deletions: RequestDeletions::of("ExifIFD:All"),
+                ..exif_child
+            })
+            .is_none()
+        );
+        assert!(makernote_may_hold("WhiteBalance", &empty, &no_note).is_none());
+
+        // A whole-file sentinel retains uncertainty after subtracting any
+        // known IFD1 count; its MAX fields must never wrap into zero.
+        let unknown = MakerNoteCensus {
+            deletions: RequestDeletions::of("IFD1:All"),
+            ..MakerNoteCensus::UNKNOWN
+        };
+        assert!(makernote_may_hold("WhiteBalance", &empty, &|| unknown).is_some());
     }
 
     /// One EXIF block whose maker note bears tags.
@@ -1672,6 +1932,26 @@ mod tests {
             ..one_note()
         };
         assert!(makernote_may_hold("WhiteBalance", &canon, &exif_ifd_all).is_none());
+        // A direct IFD0 note survives ExifIFD:All. Even a decoded Nikon row
+        // could have belonged to an ExifIFD note that was just removed, so
+        // its physical survivor is kept as unknown rather than attributed
+        // to that row.
+        let direct_survivor = || MakerNoteCensus {
+            surviving_exif_ifd_clear: 1,
+            ..exif_ifd_all()
+        };
+        assert!(
+            makernote_may_hold("WhiteBalance", &canon, &direct_survivor)
+                .unwrap()
+                .contains("outside ExifIFD")
+        );
+        for clear in ["IFD0:All", "EXIF:All", "MakerNotes:All"] {
+            let removed = || MakerNoteCensus {
+                deletions: super::super::exif_surgical::RequestDeletions::of(clear),
+                ..direct_survivor()
+            };
+            assert!(makernote_may_hold("WhiteBalance", &canon, &removed).is_none());
+        }
         let mut ciff = canon.clone();
         ciff.insert("CIFF:FocalLength", TagValue::new_string("5 mm"));
         let exif_ifd_all_ciff = || MakerNoteCensus {
@@ -2029,11 +2309,13 @@ mod tests {
                 Some(count) => {
                     assert_eq!((notes.notes, notes.tag_bearing), (count, count), "{label}")
                 }
-                None => assert_eq!(
-                    notes.notes,
-                    super::super::exif_surgical::MakerNoteCensus::UNKNOWN.notes,
-                    "{label}"
-                ),
+                None => {
+                    assert_eq!(notes.notes, 0, "{label}: no confirmed record");
+                    assert!(
+                        notes.uncertain_outside_ifd1,
+                        "{label}: malformed successor must not prove absence"
+                    );
+                }
             }
             for (tag, removal) in [("MakerNotes:All", true), ("MakerNotes:OwnerName", false)] {
                 assert_eq!(

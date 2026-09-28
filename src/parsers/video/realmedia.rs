@@ -267,13 +267,22 @@ struct SerialValue {
 
 /// `Canon::ProcessSerialData` (Canon.pm:10518-10597) over one of the three
 /// `Real` sequence tables.
+///
+/// `priority` is the table's `FoundTag` priority: `Real::MediaProps` declares
+/// `PRIORITY => 0, # first stream takes priority` (Real.pm:120), so a later
+/// stream's `StreamNumber`/`StreamMimeType`/... never displaces the first
+/// one's under the bare name; the other two tables have the default 1.
 fn process_serial_data(
     data: &[u8],
     table: &[SerialEntry],
     group1: &str,
+    priority: u8,
     stream_mime: &mut Option<String>,
     metadata: &mut MetadataMap,
 ) {
+    let insert = |metadata: &mut MetadataMap, key: String, value: TagValue| {
+        metadata.insert_occurrence(key, value, priority, "", crate::core::Instance::default());
+    };
     let size = data.len();
     let mut values: HashMap<usize, SerialValue> = HashMap::new();
     let mut pos = 0usize;
@@ -393,14 +402,16 @@ fn process_serial_data(
                 process_real_properties(&value.bytes, group1, metadata);
             }
             Emit::Plain => {
-                metadata.insert(
+                insert(
+                    metadata,
                     format!("{group1}:{name}"),
                     TagValue::new_string(value.text.clone()),
                 );
             }
             Emit::Bitrate => {
                 if let Some(number) = value.number {
-                    metadata.insert(
+                    insert(
+                        metadata,
                         format!("{group1}:{name}"),
                         TagValue::new_string(convert_bitrate(number as f64)),
                     );
@@ -408,7 +419,8 @@ fn process_serial_data(
             }
             Emit::Milliseconds => {
                 if let Some(number) = value.number {
-                    metadata.insert(
+                    insert(
+                        metadata,
                         format!("{group1}:{name}"),
                         TagValue::new_string(convert_duration(number as f64 / 1000.0)),
                     );
@@ -430,7 +442,11 @@ fn process_serial_data(
                     } else {
                         labels.join(", ")
                     };
-                    metadata.insert(format!("{group1}:{name}"), TagValue::new_string(rendered));
+                    insert(
+                        metadata,
+                        format!("{group1}:{name}"),
+                        TagValue::new_string(rendered),
+                    );
                 }
             }
         }
@@ -817,6 +833,7 @@ pub fn parse_realmedia_metadata(
                     body,
                     PROPERTIES,
                     &format!("Real-PROP{suffix}"),
+                    1,
                     &mut stream_mime,
                     &mut metadata,
                 ),
@@ -828,6 +845,7 @@ pub fn parse_realmedia_metadata(
                         body,
                         MEDIA_PROPS,
                         &format!("Real-MDPR{suffix}"),
+                        0,
                         &mut stream_mime,
                         &mut metadata,
                     );
@@ -836,6 +854,7 @@ pub fn parse_realmedia_metadata(
                     body,
                     CONTENT_DESCR,
                     &format!("Real-CONT{suffix}"),
+                    1,
                     &mut stream_mime,
                     &mut metadata,
                 ),

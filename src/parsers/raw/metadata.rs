@@ -419,6 +419,49 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
     })
 }
 
+/// Records one generic IFD row of a TIFF-based raw file. `outside_priority_dir`
+/// is true for a directory read after IFD0 that is not ExifTool's
+/// `PRIORITY_DIR`: there an `Exif::Main` tag declared `Priority => 0`
+/// (ImageWidth, RowsPerStrip, XResolution, ...) keeps priority 0
+/// (ExifTool.pm:9549-9563) and never displaces a copy already found --
+/// `PhaseOne.iiq`'s bare `-ImageWidth` is PhaseOne's 7320, not the
+/// reduced-resolution IFD1's 1, and `DNG.dng`'s `-RowsPerStrip` is IFD0's 8,
+/// not a reduced SubIFD's.
+fn record_raw_ifd_row(
+    metadata: &mut MetadataMap,
+    tag_name: String,
+    tag_value: TagValue,
+    tag_id: u16,
+    outside_priority_dir: bool,
+) {
+    if outside_priority_dir
+        && crate::exiftool_tables::find_ifd_table("Exif", "Main")
+            .is_some_and(|table| crate::core::exif_dir_engine::tag_priority_is_zero(table, tag_id))
+    {
+        metadata.insert_occurrence(tag_name, tag_value, 0, "", crate::core::Instance::default());
+    } else {
+        metadata.insert(tag_name, tag_value);
+    }
+}
+
+/// Whether a directory is a full-resolution image: SubfileType (0xfe) 0 or
+/// OldSubfileType (0xff) 1, the values whose `RawConv` calls
+/// `SetPriorityDir` (Exif.pm 13.59:450-472).
+fn is_full_resolution_directory(
+    tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
+    byte_order: ByteOrder,
+) -> bool {
+    tags.iter()
+        .any(|(tag_id, field_type, value_count, raw_bytes)| {
+            let value = match (*field_type, *value_count) {
+                (3, 1) => read_tiff_u16(raw_bytes.as_ref(), byte_order).map(u32::from),
+                (4, 1) => read_tiff_u32(raw_bytes.as_ref(), byte_order),
+                _ => None,
+            };
+            matches!((*tag_id, value), (0x00fe, Some(0)) | (0x00ff, Some(1)))
+        })
+}
+
 /// Parse TIFF-based raw formats using existing TIFF parser infrastructure
 ///
 /// This function handles the majority of raw formats as they are based on TIFF/EXIF.
@@ -500,6 +543,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         );
     }
 
+    let mut dng_priority_dir: Option<String> = None;
+    // Direct SubIFDs remain on the original bounded IFD-chain/entry walk.
+    // Only newly followed descendants spend this separate file-level budget.
+    let mut dng_nested_budget = DngSubifdBudget::default();
+    // Non-DNG chain/SubIFD arbitration is separate from the DNG entry-order state.
+    let mut priority_dir_set = false;
+
     // Walk the IFD chain (IFD0, IFD1, etc.)
     while ifd_offset != 0 && ifd_index < 10 {
         // Safety limit to prevent infinite loops
@@ -516,6 +566,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         // Parse this IFD
         match parse_ifd(&reader, ifd_offset, byte_order) {
             Ok(tags) => {
+                // Whether this directory is the one `SetPriorityDir` names.
+                let chain_is_priority_dir =
+                    !priority_dir_set && is_full_resolution_directory(&tags, byte_order);
+                priority_dir_set |= chain_is_priority_dir;
                 // Track sub-IFD offsets, MakerNote data, and camera make
                 let mut exif_ifd_offset = None;
                 let mut gps_ifd_offset = None;
@@ -525,6 +579,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut makernote_preview_ifd_base: Option<u64> = None;
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
+                // ExifIFD rows after its (last) 0x927C MakerNote entry, held
+                // until the MakerNote below is recorded: ProcessExif walks
+                // the MakerNote at its own entry (Exif.pm 13.59:7072-7110),
+                // so these are found after the MakerNote's tags and take an
+                // equal-priority bare name from them (ExifTool.pm:9564).
+                let mut exif_rows_after_makernote: Vec<(String, TagValue)> = Vec::new();
 
                 // ImageWidth and ImageHeight occur in multiple CR2 IFDs.
                 // Compute this IFD's complete pair and its TIFF subfile
@@ -631,11 +691,20 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e)
                                 .map(|(offset, _length)| offset)
                                 .unwrap_or(0);
+                        // `PanasonicRaw::ProcessJpgFromRaw` reads the preview
+                        // with `DOC_NUM = 1` (PanasonicRaw.pm:872-911): its
+                        // tags are sub-document `Doc1` tags, which never
+                        // displace a main-document tag already found
+                        // (ExifTool.pm:9564) -- Panasonic.rw2's bare
+                        // `-WBRedLevel` is the outer IFD0's 570, not the
+                        // preview MakerNote's 2283.
+                        let mut preview = MetadataMap::new();
                         if let Err(error) =
-                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut metadata)
+                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut preview)
                         {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
+                        metadata.merge_as_subdocument(preview, crate::core::Instance(1));
                         // Emit the JpgFromRaw binary itself (ExifTool EXIF:JpgFromRaw)
                         metadata.insert(
                             "EXIF:JpgFromRaw".to_string(),
@@ -707,6 +776,34 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Check for SubIFD pointer (tag 0x014A) - common in RAW formats
                     // SubIFD contains RAW image data and RAW-specific metadata
                     if *tag_id == 0x014A {
+                        if format == RawFormat::AdobeDNG {
+                            // Exif.pm walks children at the pointer entry. A
+                            // later unsorted parent marker must not claim the
+                            // priority directory before an earlier child marker.
+                            for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate()
+                            {
+                                let offset = u64::from(read_u32(offset_bytes, byte_order));
+                                let directory = if index == 0 {
+                                    "SubIFD".to_string()
+                                } else {
+                                    format!("SubIFD{index}")
+                                };
+                                emit_dng_subifd(
+                                    &reader,
+                                    data,
+                                    offset,
+                                    index,
+                                    &directory,
+                                    byte_order,
+                                    &mut metadata,
+                                    &mut dng_priority_dir,
+                                    &mut Vec::new(),
+                                    &mut dng_nested_budget,
+                                    false,
+                                );
+                            }
+                            continue;
+                        }
                         // SubIFDs can contain multiple offsets
                         let offset_count = bytes.len() / 4;
                         for i in 0..offset_count {
@@ -963,7 +1060,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
                     };
-                    metadata.insert(tag_name, tag_value);
+                    if format == RawFormat::AdobeDNG {
+                        record_dng_ifd_tag(
+                            &mut metadata,
+                            &mut dng_priority_dir,
+                            ifd_name,
+                            *tag_id,
+                            *field_type,
+                            *value_count,
+                            bytes,
+                            byte_order,
+                            tag_name,
+                            tag_value,
+                        );
+                    } else {
+                        record_raw_ifd_row(
+                            &mut metadata,
+                            tag_name,
+                            tag_value,
+                            *tag_id,
+                            ifd_index > 0 && !chain_is_priority_dir,
+                        );
+                    }
                 }
 
                 // Parse EXIF Sub-IFD if present
@@ -974,8 +1092,12 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     let mut exif_makernote: Option<Vec<u8>> = None;
                     let mut exif_makernote_location: Option<(usize, usize)> = None;
                     let mut exif_make: Option<String> = None;
+                    let last_makernote_entry =
+                        exif_tags.iter().rposition(|(tag_id, ..)| *tag_id == 0x927C);
 
-                    for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+                    for (entry_index, (tag_id, field_type, value_count, raw_bytes)) in
+                        exif_tags.iter().enumerate()
+                    {
                         let bytes = raw_bytes.as_ref();
 
                         // MakerNote in EXIF IFD (more common location)
@@ -1010,7 +1132,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                             )
                         };
-                        metadata.insert(tag_name, tag_value);
+                        if last_makernote_entry.is_some_and(|makernote| entry_index > makernote) {
+                            exif_rows_after_makernote.push((tag_name, tag_value));
+                        } else {
+                            metadata.insert(tag_name, tag_value);
+                        }
                     }
 
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
@@ -1189,6 +1315,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     }
                 }
 
+                for (tag_name, tag_value) in exif_rows_after_makernote {
+                    metadata.insert(tag_name, tag_value);
+                }
+
                 // Recover the MakerNote the Adobe DNG Converter relocated into
                 // DNGPrivateData. The DNG carries no 0x927C of its own, so
                 // this is the only route to those tags.
@@ -1217,88 +1347,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 // Parse SubIFD(s) if present - crucial for RAW formats
                 // SubIFDs contain RAW image data, compression info, and RAW-specific tags
                 //
-                // KNOWN GAP (Step 22 follow-up, corpus finding on DNG.dng):
-                // every SubIFD offset this loop walks is filed under the
-                // literal group `SubIFD0` -- the branch below is not a typo,
-                // it deliberately collapses every entry (including index 0)
-                // onto one label. Real ExifTool assigns each one a distinct
-                // family-1 group by *position* in the tag's offset array,
-                // 0-indexed with the first entry bare (no suffix):
-                // `$subdirInfo{DirName} = $$tagInfo{Groups}{1}; $subdirInfo{
-                // DirName} =~ s/\d*$/$dirNum/ if $dirNum;` (ExifTool.pm:7073-
-                // 7076, `$dirNum` from the `for ($dirNum=0; ; ++$dirNum)` loop
-                // walking tag 0x14a's `SubDirectory => { MaxSubdirs => 10 }`,
-                // Exif.pm:1005-1026) -- so the first SubIFD is named bare
-                // `SubIFD`, the second `SubIFD1`, the third `SubIFD2`, not
-                // `SubIFD0`/`SubIFD0`/`SubIFD0`.
-                //
-                // Fixing only that naming would not by itself make
-                // `Composite:ImageSize`/`Megapixels` correct on a multi-
-                // SubIFD DNG, though: a DNG's IFD0 is conventionally a
-                // reduced-resolution thumbnail while exactly one SubIFD
-                // (the one whose `SubfileType`/`NewSubfileType` is 0, "Full-
-                // resolution image") is the real image, and ExifTool picks
-                // that one for the bare `ImageWidth`/`ImageHeight` composite
-                // dependency through a *third*, distinct priority mechanism
-                // this crate does not implement anywhere yet:
-                // `ImageWidth`/`ImageHeight`/`BitsPerSample` each declare
-                // `Priority => 0` in `%Exif::Main` (Exif.pm:483-502, "Note:
-                // priority 0 tags automatically have their priority increased
-                // for the priority directory"), and `SubfileType`'s own
-                // `RawConv` calls `$self->SetPriorityDir()` the first time it
-                // sees value 0 (Exif.pm:445-462; `OldSubfileType`'s RawConv
-                // does the equivalent for value 1, Exif.pm:463-475).
-                // `FoundTag` then promotes a `Priority => 0` tag back to 1
-                // only while walking the one directory recorded as
-                // `$$self{PRIORITY_DIR}` (ExifTool.pm:9551-9560,
-                // `SetPriorityDir` at :9633-9636 is "first SubfileType-0
-                // directory wins, sticky for the rest of the file"). Every
-                // other IFD's ImageWidth stays at priority 0, which is why
-                // `SubIFD`'s "3516x2328" -- not IFD0's placeholder "8x8" or
-                // SubIFD1/SubIFD2's own reduced sizes -- wins the tie on
-                // `DNG.dng` (verified against the pinned 13.59 oracle,
-                // `-G1 -a -j -ImageWidth -SubfileType`:
-                // `SubIFD:SubfileType = "Full-resolution image"`,
-                // `SubIFD1:SubfileType`/`SubIFD2:SubfileType` both
-                // "Reduced-resolution image").
-                //
-                // Implementing that correctly is not a DNG-only patch: these
-                // three tag names are declared once in the shared
-                // `%Exif::Main` table and are among the most common tags in
-                // the entire corpus, extracted through this same generic
-                // IFD-walking code for every TIFF-based format (DNG, TIFF,
-                // NEF, CR2, ORF, ARW, RW2, PEF, ...). A `Priority => 0`
-                // default for ImageWidth/ImageHeight/BitsPerSample that is
-                // never promoted (`PRIORITY_DIR` never gets set at all on a
-                // file with no `SubfileType`/`OldSubfileType` tag -- the
-                // ordinary case for a plain photo) would silently make
-                // `IFD0:ImageWidth` lose a bare-name tie to *any* other
-                // same-named occurrence at normal priority, corpus-wide,
-                // which is exactly the class of broad regression this whole
-                // step has been closing rather than a fix for one. It needs
-                // a real "priority directory" concept -- detecting which IFD
-                // (if any) has `SubfileType == 0`/`OldSubfileType == 1`
-                // before any tag from it is inserted, since ExifTool's own
-                // stateful single-pass `SetPriorityDir` cannot be replayed
-                // as-is against this crate's own (differently ordered)
-                // extraction pipeline -- that does not exist anywhere in
-                // `TagOccurrence`/`TagSink` today and needs its own design,
-                // not a two-line change here. Left as a follow-up rather than
-                // rushed: see the Step 22 commit history for the corpus
-                // evidence (DNG.dng: oracle ImageSize "3516x2328"/Megapixels
-                // "8.2", oxidex "3456x2304"/"8.0" -- both wrong sub-IFD, not
-                // a rounding difference).
                 for (sub_index, sub_offset) in sub_ifd_offsets.iter().enumerate() {
-                    // Use SubIFD0, SubIFD1, etc. for tag naming
-                    let sub_ifd_name = if sub_index == 0 {
-                        "SubIFD0"
-                    } else {
-                        // Multiple SubIFDs are rare but possible
+                    if sub_index != 0 {
                         eprintln!("Warning: Found SubIFD{} which is unusual", sub_index);
-                        "SubIFD0" // Use SubIFD0 as fallback for consistency
-                    };
+                    }
+                    let sub_ifd_name = "SubIFD0";
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
+                        let sub_is_priority_dir = !priority_dir_set
+                            && is_full_resolution_directory(&sub_tags, byte_order);
+                        priority_dir_set |= sub_is_priority_dir;
                         let is_nef = matches!(format, RawFormat::NikonNEF | RawFormat::NikonNRW);
                         let is_rw2 = format == RawFormat::PanasonicRW2;
 
@@ -1309,50 +1367,6 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 byte_order,
                                 &mut metadata,
                             );
-                        }
-
-                        // DNG: StripOffsets/StripByteCounts are renamed by
-                        // ExifTool in the embedded-image SubIFDs. Exif.pm 0x111
-                        // (Notes, verbatim): "called StripOffsets in most
-                        // locations, but it is PreviewImageStart in IFD0 of CR2
-                        // images and various IFD's of DNG images except for
-                        // SubIFD2 where it is JpgFromRawStart".
-                        //
-                        // The gate is the Condition on the StripOffsets branch:
-                        //   not ($$self{TIFF_TYPE} =~ /^(DNG|TIFF)$/ and
-                        //        $$self{Compression} eq '7' and
-                        //        $$self{SubfileType} ne '0')
-                        // i.e. only JPEG-compressed (7) reduced-resolution
-                        // (SubfileType != 0) SubIFDs are renamed.
-                        if format == RawFormat::AdobeDNG {
-                            extract_dng_subifd_preview(
-                                data,
-                                &sub_tags,
-                                sub_index,
-                                byte_order,
-                                &mut metadata,
-                            );
-
-                            // Exif.pm promotes the directory with a zero
-                            // SubfileType (the full-resolution image) to its
-                            // PRIORITY_DIR. Only the fields declared
-                            // `Priority => 0` in that table may replace the
-                            // reduced-resolution IFD0 thumbnail values.
-                            if dng_subifd_is_full_resolution(&sub_tags, byte_order) {
-                                for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
-                                    if let Some((tag_name, tag_value)) =
-                                        format_dng_priority_subifd_tag(
-                                            *tag_id,
-                                            raw_bytes.as_ref(),
-                                            *field_type,
-                                            *value_count,
-                                            byte_order,
-                                        )
-                                    {
-                                        metadata.insert(tag_name, tag_value);
-                                    }
-                                }
-                            }
                         }
 
                         for (tag_id, field_type, value_count, raw_bytes) in sub_tags {
@@ -1368,35 +1382,6 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     "EXIF:CFARepeatPatternDim".to_string(),
                                     TagValue::new_string(dim),
                                 );
-                                continue;
-                            }
-
-                            // DNG SubIFD tags that ExifTool reports under the
-                            // EXIF group with a PrintConv or multi-component
-                            // value the generic decoder cannot produce.
-                            //
-                            // `exiftool -G0:1 DNG.dng` labels every one of
-                            // these "[EXIF:SubIFD]" / "[EXIF:SubIFD1]" --
-                            // family 0 is EXIF, so oxidex's "SubIFD0:" prefix
-                            // was the wrong group.
-                            if format == RawFormat::AdobeDNG
-                                && let Some((tag_name, tag_value)) = format_dng_subifd_exif_tag(
-                                    tag_id,
-                                    raw_bytes.as_ref(),
-                                    field_type,
-                                    value_count,
-                                    byte_order,
-                                )
-                            {
-                                // ExifTool suppresses duplicates across the
-                                // SubIFD chain, so the first SubIFD carrying a
-                                // given tag is the one reported (measured:
-                                // `exiftool -s -YCbCrSubSampling DNG.dng`
-                                // prints SubIFD1's "YCbCr4:2:0 (2 2)", not
-                                // SubIFD2's "YCbCr4:4:4 (1 1)").
-                                if !metadata.contains_key(&tag_name) {
-                                    metadata.insert(tag_name, tag_value);
-                                }
                                 continue;
                             }
 
@@ -1493,16 +1478,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            // ExifTool's DNG priority rules select the first
-                            // (primary raw) SubIFD's BitsPerSample. Later
-                            // reduced-resolution SubIFDs carry 8 8 8 and must
-                            // not displace its 16-bit value.
-                            if format != RawFormat::AdobeDNG
-                                || tag_id != 0x0102
-                                || !metadata.contains_key(&tag_name)
-                            {
-                                metadata.insert(tag_name, tag_value);
-                            }
+                            record_raw_ifd_row(
+                                &mut metadata,
+                                tag_name,
+                                tag_value,
+                                tag_id,
+                                !sub_is_priority_dir,
+                            );
                         }
                     }
                 }
@@ -2263,58 +2245,260 @@ fn read_tiff_numeric_array(
     )
 }
 
-/// Whether this DNG SubIFD is ExifTool's full-resolution priority directory.
-///
-/// Exif.pm's `SubfileType` RawConv calls `SetPriorityDir()` only for value 0.
-/// A reduced-resolution image, even if it has larger dimensions than another
-/// preview, must never be selected by this rule.
-fn dng_subifd_is_full_resolution(
-    tags: &crate::parsers::tiff::ifd_parser::IfdEntries,
-    byte_order: ByteOrder,
-) -> bool {
-    let Some((_, field_type, value_count, bytes)) = tags.iter().find(|(tag, ..)| *tag == 0x00FE)
-    else {
-        return false;
-    };
-    if *value_count != 1 {
-        return false;
-    }
-    match *field_type {
-        3 => read_tiff_u16(bytes.as_ref(), byte_order) == Some(0),
-        4 => read_tiff_u32(bytes.as_ref(), byte_order) == Some(0),
-        _ => false,
+/// Added descendant work only. Direct roots retain the pre-feature parser's
+/// 10-main-IFD / 10-pointers-per-0x014A-entry limits independently of this.
+struct DngSubifdBudget {
+    parse_attempts_left: usize,
+    valid_ifds_left: usize,
+    pointer_checks_left: usize,
+    failed_offsets: std::collections::HashSet<u64>,
+}
+
+impl Default for DngSubifdBudget {
+    fn default() -> Self {
+        Self {
+            parse_attempts_left: 256,
+            valid_ifds_left: 128,
+            pointer_checks_left: 4096,
+            failed_offsets: std::collections::HashSet::new(),
+        }
     }
 }
 
-/// Render the DNG fields whose `Priority => 0` causes ExifTool to read from
-/// the full-resolution SubIFD instead of IFD0.
-fn format_dng_priority_subifd_tag(
-    tag_id: u16,
-    bytes: &[u8],
-    field_type: u16,
-    value_count: u32,
-    byte_order: ByteOrder,
-) -> Option<(String, TagValue)> {
-    if !matches!(tag_id, 0x0100 | 0x0101 | 0x0102 | 0x0103 | 0x0106 | 0x0115) {
-        return None;
-    }
-
-    let tag_value = match tag_id {
-        0x0103 | 0x0106 if field_type == 3 && value_count == 1 => {
-            let value = i64::from(read_tiff_u16(bytes, byte_order)?);
-            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(tag_id, value)
-                .map(TagValue::new_string)
-                .unwrap_or_else(|| {
-                    raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order)
-                })
-        }
-        _ => raw_bytes_to_simple_tag_value(bytes, field_type, value_count, byte_order),
+/// Match parse_ifd's fixed-size table bounds check before spending a parse
+/// attempt. Out-of-range pointers are common in damaged DNGs and cheap to skip.
+fn dng_ifd_table_fits(data: &[u8], offset: u64, byte_order: ByteOrder) -> bool {
+    let Ok(start) = usize::try_from(offset) else {
+        return false;
     };
+    let Some(count_bytes) = data.get(start..start.saturating_add(2)) else {
+        return false;
+    };
+    let Some(count) = read_tiff_u16(count_bytes, byte_order) else {
+        return false;
+    };
+    start
+        .checked_add(2 + usize::from(count) * 12 + 4)
+        .is_some_and(|end| end <= data.len())
+}
 
-    Some((
-        lookup_raw_tag_name(tag_id, "IFD0", RawFormat::AdobeDNG),
-        tag_value,
-    ))
+/// Emit a DNG child at its pointer's position in the parent IFD walk.
+/// ExifTool 13.59 revisits a self-referencing SubIFD once before stopping.
+/// Keep that duplicate occurrence, while bounding malformed pointer graphs.
+#[allow(clippy::too_many_arguments)]
+fn emit_dng_subifd(
+    reader: &dyn FileReader,
+    data: &[u8],
+    offset: u64,
+    sub_index: usize,
+    directory: &str,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+    priority_dir: &mut Option<String>,
+    active_offsets: &mut Vec<u64>,
+    budget: &mut DngSubifdBudget,
+    nested: bool,
+) {
+    const MAX_DNG_SUBIFD_DEPTH: usize = 16;
+    if nested {
+        if offset == 0
+            || active_offsets.len() >= MAX_DNG_SUBIFD_DEPTH
+            || budget.parse_attempts_left == 0
+            || budget.valid_ifds_left == 0
+            || budget.failed_offsets.contains(&offset)
+            || !dng_ifd_table_fits(data, offset, byte_order)
+            || active_offsets
+                .iter()
+                .filter(|&&seen| seen == offset)
+                .count()
+                >= 2
+        {
+            return;
+        }
+        budget.parse_attempts_left -= 1;
+    }
+    let Ok(sub_tags) = parse_ifd(reader, offset, byte_order) else {
+        if nested {
+            budget.failed_offsets.insert(offset);
+        }
+        return;
+    };
+    if nested {
+        budget.valid_ifds_left -= 1;
+    }
+    active_offsets.push(offset);
+    extract_dng_subifd_preview(data, &sub_tags, sub_index, byte_order, metadata);
+    for (tag_id, field_type, value_count, raw_bytes) in &sub_tags {
+        let bytes = raw_bytes.as_ref();
+        if *tag_id == 0x014A {
+            for (index, offset_bytes) in bytes.chunks_exact(4).take(10).enumerate() {
+                if budget.pointer_checks_left == 0 {
+                    break;
+                }
+                budget.pointer_checks_left -= 1;
+                let child_offset = u64::from(read_u32(offset_bytes, byte_order));
+                let child_directory = if index == 0 {
+                    "SubIFD".to_string()
+                } else {
+                    format!("SubIFD{index}")
+                };
+                emit_dng_subifd(
+                    reader,
+                    data,
+                    child_offset,
+                    index,
+                    &child_directory,
+                    byte_order,
+                    metadata,
+                    priority_dir,
+                    active_offsets,
+                    budget,
+                    true,
+                );
+            }
+            continue;
+        }
+        let (name, value) = if *tag_id == 0x828D
+            && let Some(dim) = format_cfa_repeat_pattern_dim(bytes, byte_order)
+        {
+            (
+                "EXIF:CFARepeatPatternDim".to_string(),
+                TagValue::new_string(dim),
+            )
+        } else if let Some(pair) =
+            format_dng_subifd_exif_tag(*tag_id, bytes, *field_type, *value_count, byte_order)
+        {
+            pair
+        } else {
+            let value =
+                format_exif_display_value(*tag_id, bytes, *field_type, *value_count, byte_order)
+                    .or_else(|| {
+                        if *tag_id == 0x0106 && *field_type == 3 && *value_count == 1 {
+                            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(
+                                *tag_id,
+                                i64::from(read_tiff_u16(bytes, byte_order)?),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        format_dng_integer_array(
+                            *tag_id,
+                            bytes,
+                            *field_type,
+                            *value_count,
+                            byte_order,
+                        )
+                    })
+                    .map(TagValue::new_string)
+                    .unwrap_or_else(|| {
+                        raw_bytes_to_simple_tag_value(bytes, *field_type, *value_count, byte_order)
+                    });
+            (
+                lookup_raw_tag_name(*tag_id, directory, RawFormat::AdobeDNG),
+                value,
+            )
+        };
+        record_dng_ifd_tag(
+            metadata,
+            priority_dir,
+            directory,
+            *tag_id,
+            *field_type,
+            *value_count,
+            bytes,
+            byte_order,
+            name,
+            value,
+        );
+    }
+    active_offsets.pop();
+}
+
+/// Exif.pm 0xfe/0xff select the first full-resolution directory in entry
+/// order. FoundTag (ExifTool.pm:9552-9564) promotes only declared priority-zero
+/// fields while that directory is current. Do not pre-scan: an unsorted IFD's
+/// dimensions preceding its marker have already been found at priority zero.
+#[allow(clippy::too_many_arguments)]
+fn record_dng_ifd_tag(
+    metadata: &mut MetadataMap,
+    priority_dir: &mut Option<String>,
+    directory: &str,
+    tag_id: u16,
+    field_type: u16,
+    count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    key: String,
+    display: TagValue,
+) {
+    if priority_dir.is_none() && count == 1 {
+        let scalar = match field_type {
+            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+            4 => read_tiff_u32(bytes, byte_order),
+            _ => None,
+        };
+        if matches!((tag_id, scalar), (0x00FE, Some(0)) | (0x00FF, Some(1))) {
+            *priority_dir = Some(directory.to_string());
+        }
+    }
+    // These are exactly the Priority => 0 declarations in pinned Exif::Main.
+    let low_priority = matches!(
+        tag_id,
+        0x0100
+            | 0x0101
+            | 0x0102
+            | 0x0103
+            | 0x0106
+            | 0x010E
+            | 0x0112
+            | 0x0115
+            | 0x0116
+            | 0x011A
+            | 0x011B
+            | 0x011C
+            | 0x0128
+            | 0x013F
+            | 0x0211
+            | 0x0212
+            | 0x0213
+            | 0x0214
+            | 0xA403
+    );
+    let priority = u8::from(!low_priority || priority_dir.as_deref() == Some(directory));
+    let name = key.rsplit(':').next().unwrap_or(&key);
+    let mut occurrence = crate::core::tag_occurrence::TagOccurrence::from_insert_shim(
+        &format!("EXIF:{name}"),
+        display,
+        0,
+    );
+    occurrence.group1 = crate::core::tag_occurrence::intern(directory);
+    occurrence.priority = priority;
+    // These Exif::Main enum tags have PrintConv only (Compression's RawConv
+    // returns its numeric value). Preserve that exact pre-PrintConv scalar;
+    // do not infer value forms for the DNG conversions handled elsewhere.
+    if count == 1
+        && matches!(
+            tag_id,
+            0x00FE | 0x00FF | 0x0103 | 0x0106 | 0x0112 | 0x011C | 0x0128
+        )
+    {
+        let scalar = match field_type {
+            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+            4 => read_tiff_u32(bytes, byte_order),
+            _ => None,
+        };
+        if let Some(scalar) = scalar {
+            occurrence.print = Some(crate::core::exiftool_compat::format_tag_value_rules(
+                &occurrence.lookup_key(),
+                &occurrence.raw,
+            ));
+            occurrence.value = Some(TagValue::new_integer(i64::from(scalar)));
+            occurrence.stored = occurrence.value.clone();
+        }
+    }
+    metadata.record_occurrence(key, occurrence);
 }
 
 /// Name and display value for the DNG SubIFD tags ExifTool reports under the
@@ -2350,9 +2534,8 @@ fn format_dng_priority_subifd_tag(
 ///
 /// Tags that also occur in DNG IFD0 (ImageWidth, BitsPerSample,
 /// SamplesPerPixel, PhotometricInterpretation, RowsPerStrip, ...) are
-/// deliberately NOT handled here: which IFD wins for those is decided by
-/// ExifTool's PRIORITY_DIR / `Priority => 0` machinery, which oxidex does not
-/// model yet, so moving them would trade one wrong value for another.
+/// handled by the generic DNG emission path, with occurrence priority and
+/// physical directory supplied by record_dng_ifd_tag.
 fn format_dng_subifd_exif_tag(
     tag_id: u16,
     bytes: &[u8],
@@ -3494,9 +3677,8 @@ fn rebuild_relocated_makernote(
 ///     $pos += $size;
 ///     ++$pos if $size & 0x01;   # (darn padding)
 /// ```
-/// Only the `MakN` record is handled here; `CRW `, `MRW `, `SR2 `, `RAF `,
-/// `Pano`, `Koda` and `Leaf` carry formats this function does not decode, and
-/// are skipped rather than guessed at.
+/// Only the `MakN` record is decoded here. Other records may still contain
+/// writable maker-note tags; the write census accounts for those separately.
 ///
 /// The MakN record's own header is `ProcessAdobeMakN` (DNG.pm:685): two bytes
 /// of byte order ("II"/"MM") -- which need NOT match the enclosing TIFF, and
@@ -3514,13 +3696,15 @@ fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut Metada
     });
 }
 
-/// Count maker-note records at Adobe DNG record boundaries, never bytes
-/// inside another record's payload. `None` means truncated framing and
-/// lets write guards retain their conservative refusal for unknown data.
+/// Count records that may hold writable maker-note tags at Adobe DNG record
+/// boundaries, never bytes inside another record's payload. Pinned DNG.pm's
+/// `ProcessAdobeCRW` and `ProcessAdobeMRW` write through the CanonRaw and
+/// MinoltaRaw tables. `None` means truncated framing, which prevents a proof
+/// that no such record follows.
 pub(crate) fn dng_adobe_makernote_count(data: &[u8]) -> Option<usize> {
     let mut count = 0;
     walk_dng_adobe_records(data, |record_tag, _| {
-        if record_tag == b"MakN" {
+        if matches!(record_tag, b"MakN" | b"CRW " | b"MRW ") {
             count += 1;
         }
     })?;
@@ -3903,8 +4087,326 @@ mod dng_integer_array_tests {
 mod dng_thumbnail_tiff_tests {
     use super::*;
 
+    // Mirrors the independent 512-byte TIFF probe. The child pointer is
+    // varied to exercise a grandchild, absent/malformed links, and a cycle.
+    fn nested_dng_probe(child_pointer: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 512];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_ifd = |data: &mut [u8], offset: usize, entries: &[(u16, u32)]| {
+            data[offset..offset + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (index, (tag, value)) in entries.iter().enumerate() {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&1u32.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        write_ifd(
+            &mut data,
+            8,
+            &[(0x00FE, 1), (0x0100, 16), (0x0101, 12), (0x014A, 128)],
+        );
+        write_ifd(
+            &mut data,
+            128,
+            &[
+                (0x00FE, 0),
+                (0x0100, 1000),
+                (0x0101, 800),
+                (0x014A, child_pointer),
+            ],
+        );
+        write_ifd(
+            &mut data,
+            256,
+            &[(0x00FE, 1), (0x0100, 2222), (0x0101, 1111)],
+        );
+        data
+    }
+
+    fn dng_width_occurrences(data: &[u8]) -> Vec<(String, i64)> {
+        parse_raw_metadata(data, RawFormat::AdobeDNG)
+            .expect("synthetic DNG")
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "ImageWidth")
+            .map(|o| (o.group1.to_string(), o.raw.as_integer().unwrap()))
+            .collect()
+    }
+
+    fn write_dng_test_ifd(data: &mut [u8], at: usize, rows: &[(u16, u32, u32)], next: u32) {
+        data[at..at + 2].copy_from_slice(&(rows.len() as u16).to_le_bytes());
+        for (index, &(tag, count, value)) in rows.iter().enumerate() {
+            let entry = at + 2 + 12 * index;
+            data[entry..entry + 2].copy_from_slice(&tag.to_le_bytes());
+            data[entry + 2..entry + 4].copy_from_slice(&4u16.to_le_bytes());
+            data[entry + 4..entry + 8].copy_from_slice(&count.to_le_bytes());
+            data[entry + 8..entry + 12].copy_from_slice(&value.to_le_bytes());
+        }
+        let end = at + 2 + 12 * rows.len();
+        data[end..end + 4].copy_from_slice(&next.to_le_bytes());
+    }
+
     #[test]
-    fn dng_full_resolution_subifd_overrides_reduced_ifd0_priority_fields() {
+    fn dng_direct_roots_remain_readable_after_nested_budget_limits() {
+        let mut data = vec![0u8; 16384];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let main = [8usize, 128, 248, 368];
+        let children: Vec<u32> = (0..33).map(|n| 1024 + 64 * n).collect();
+        for (ifd, &at) in main.iter().enumerate() {
+            let first = ifd * 10;
+            let end = (first + 10).min(children.len());
+            let pointers = &children[first..end];
+            write_dng_test_ifd(
+                &mut data,
+                at,
+                &[
+                    (0x0100, 1, 100 + ifd as u32),
+                    (0x014A, pointers.len() as u32, (at + 40) as u32),
+                ],
+                main.get(ifd + 1).copied().unwrap_or(0) as u32,
+            );
+            for (index, pointer) in pointers.iter().enumerate() {
+                let slot = at + 40 + 4 * index;
+                data[slot..slot + 4].copy_from_slice(&pointer.to_le_bytes());
+            }
+        }
+        for (index, &offset) in children.iter().enumerate() {
+            write_dng_test_ifd(
+                &mut data,
+                offset as usize,
+                &[
+                    (0x00FE, 1, 1),
+                    (0x0100, 1, 2000 + index as u32),
+                    (0x0101, 1, 100),
+                ],
+                0,
+            );
+        }
+        let widths = dng_width_occurrences(&data);
+        assert_eq!(widths.len(), 37);
+        assert_eq!(widths.last(), Some(&("SubIFD2".into(), 2032)));
+    }
+
+    #[test]
+    fn dng_nested_allowance_covers_forty_one_valid_nodes() {
+        let mut data = vec![0u8; 16384];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let children: Vec<u32> = (0..10).map(|n| 1024 + 128 * n).collect();
+        let grandchildren: Vec<u32> = (0..30).map(|n| 4096 + 64 * n).collect();
+        write_dng_test_ifd(&mut data, 8, &[(0x0100, 1, 100), (0x014A, 1, 512)], 0);
+        let mut write_pointer_ifd = |at: usize, width: u32, pointers: &[u32]| {
+            let mut rows = vec![(0x00FE, 1, 1), (0x0100, 1, width), (0x0101, 1, 100)];
+            if !pointers.is_empty() {
+                rows.push((0x014A, pointers.len() as u32, (at + 64) as u32));
+            }
+            write_dng_test_ifd(&mut data, at, &rows, 0);
+            for (index, pointer) in pointers.iter().enumerate() {
+                let slot = at + 64 + 4 * index;
+                data[slot..slot + 4].copy_from_slice(&pointer.to_le_bytes());
+            }
+        };
+        write_pointer_ifd(512, 500, &children);
+        for (index, &offset) in children.iter().enumerate() {
+            write_pointer_ifd(
+                offset as usize,
+                1000 + index as u32,
+                &grandchildren[index * 3..index * 3 + 3],
+            );
+        }
+        for (index, &offset) in grandchildren.iter().enumerate() {
+            write_pointer_ifd(offset as usize, 2000 + index as u32, &[]);
+        }
+        let widths = dng_width_occurrences(&data);
+        assert_eq!(widths.len(), 42);
+        assert_eq!(widths.last(), Some(&("SubIFD2".into(), 2029)));
+    }
+
+    #[test]
+    fn dng_nested_subifd_keeps_exiftool_occurrence_order_and_group() {
+        assert_eq!(
+            dng_width_occurrences(&nested_dng_probe(256)),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 2222)
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_ignores_zero_and_out_of_bounds_pointers() {
+        for pointer in [0, 65500] {
+            assert_eq!(
+                dng_width_occurrences(&nested_dng_probe(pointer)),
+                [("IFD0".into(), 16), ("SubIFD".into(), 1000)]
+            );
+        }
+    }
+
+    #[test]
+    fn dng_nested_subifd_cycle_keeps_one_native_duplicate_then_stops() {
+        assert_eq!(
+            dng_width_occurrences(&nested_dng_probe(128)),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 1000)
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_shared_sibling_retains_both_occurrences() {
+        let mut data = nested_dng_probe(256);
+        let pointer = 8 + 2 + 3 * 12;
+        data[pointer + 4..pointer + 8].copy_from_slice(&2u32.to_le_bytes());
+        data[pointer + 8..pointer + 12].copy_from_slice(&400u32.to_le_bytes());
+        data[400..408].copy_from_slice(&[128, 0, 0, 0, 0, 1, 0, 0]);
+        assert_eq!(
+            dng_width_occurrences(&data),
+            [
+                ("IFD0".into(), 16),
+                ("SubIFD".into(), 1000),
+                ("SubIFD".into(), 2222),
+                ("SubIFD1".into(), 2222),
+            ]
+        );
+    }
+
+    #[test]
+    fn dng_nested_subifd_two_node_cycle_is_bounded() {
+        let mut data = nested_dng_probe(256);
+        data[256..258].copy_from_slice(&4u16.to_le_bytes());
+        data[294..306].copy_from_slice(&[0x4A, 0x01, 4, 0, 1, 0, 0, 0, 128, 0, 0, 0]);
+        assert_eq!(dng_width_occurrences(&data).len(), 5);
+    }
+
+    fn dng_fanout_probe(distinct_invalid: bool) -> Vec<u8> {
+        let mut data = vec![0u8; 3000];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_ifd = |data: &mut [u8], offset: usize, width: u32, pointers: &[u32]| {
+            let entries = 3 + usize::from(!pointers.is_empty());
+            data[offset..offset + 2].copy_from_slice(&(entries as u16).to_le_bytes());
+            for (index, (tag, count, value)) in [
+                (0x00FEu16, 1u32, 1u32),
+                (0x0100, 1, width),
+                (0x0101, 1, 100),
+            ]
+            .into_iter()
+            .chain((!pointers.is_empty()).then_some((
+                0x014A,
+                pointers.len() as u32,
+                (offset + 64) as u32,
+            )))
+            .enumerate()
+            {
+                let at = offset + 2 + index * 12;
+                data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+                data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+                data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+            data[offset + 2 + entries * 12..offset + 6 + entries * 12].fill(0);
+            for (index, pointer) in pointers.iter().enumerate() {
+                let at = offset + 64 + index * 4;
+                data[at..at + 4].copy_from_slice(&pointer.to_le_bytes());
+            }
+        };
+        let offsets: Vec<_> = (0..15).map(|index| 128 + 128 * index).collect();
+        write_ifd(&mut data, 8, 16, &[offsets[0], 2300]);
+        for (index, &offset) in offsets.iter().enumerate() {
+            let mut pointers: Vec<u32> = offsets.get(index + 1).copied().into_iter().collect();
+            pointers.extend((0..9).map(|n| {
+                if distinct_invalid {
+                    3000 + (index * 9 + n) as u32
+                } else {
+                    2999
+                }
+            }));
+            write_ifd(&mut data, offset as usize, 1000 + index as u32, &pointers);
+        }
+        write_ifd(&mut data, 2300, 7777, &[]);
+        data
+    }
+
+    #[test]
+    fn dng_malformed_nested_branch_does_not_hide_direct_sibling() {
+        for distinct_invalid in [false, true] {
+            let widths = dng_width_occurrences(&dng_fanout_probe(distinct_invalid));
+            assert_eq!(widths.len(), 17);
+            assert_eq!(widths[0], ("IFD0".into(), 16));
+            assert_eq!(widths[15], ("SubIFD".into(), 1014));
+            assert_eq!(widths[16], ("SubIFD1".into(), 7777));
+        }
+    }
+
+    #[test]
+    fn dng_many_distinct_in_bounds_bad_offsets_cannot_spend_sibling_budget() {
+        let mut data = vec![0u8; 40000];
+        data[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+        let write_entry = |data: &mut [u8], at: usize, tag: u16, count: u32, value: u32| {
+            data[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+            data[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+            data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+            data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+        };
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        write_entry(&mut data, 10, 0x0100, 1, 16);
+        write_entry(&mut data, 22, 0x014A, 2, 128);
+        data[128..136].copy_from_slice(&[0, 1, 0, 0, 0x58, 0x1b, 0, 0]);
+        data[256..258].copy_from_slice(&501u16.to_le_bytes());
+        write_entry(&mut data, 258, 0x0100, 1, 1000);
+        for row in 0..500 {
+            write_entry(
+                &mut data,
+                270 + row * 12,
+                0x014A,
+                10,
+                (8000 + row * 40) as u32,
+            );
+            for column in 0..10 {
+                let at = 8000 + row * 40 + column * 4;
+                data[at..at + 4]
+                    .copy_from_slice(&((30000 + row * 10 + column) as u32).to_le_bytes());
+            }
+        }
+        data[30000..35000].fill(0xff); // 5000 distinct in-range invalid IFD tables
+        data[7000..7002].copy_from_slice(&1u16.to_le_bytes());
+        write_entry(&mut data, 7002, 0x0100, 1, 7777);
+        for rows in [250usize, 500] {
+            let mut sample = data.clone();
+            sample[256..258].copy_from_slice(&((rows + 1) as u16).to_le_bytes());
+            let widths = dng_width_occurrences(&sample);
+            assert_eq!(widths.first(), Some(&("IFD0".into(), 16)));
+            assert_eq!(widths.last(), Some(&("SubIFD1".into(), 7777)));
+
+            let mut budget = DngSubifdBudget::default();
+            let mut metadata = MetadataMap::new();
+            let mut priority = None;
+            emit_dng_subifd(
+                &SliceReader::new(&sample),
+                &sample,
+                256,
+                0,
+                "SubIFD",
+                ByteOrder::LittleEndian,
+                &mut metadata,
+                &mut priority,
+                &mut Vec::new(),
+                &mut budget,
+                false,
+            );
+            assert_eq!(
+                budget.pointer_checks_left,
+                4096usize.saturating_sub(rows * 10)
+            );
+            assert_eq!(budget.parse_attempts_left, 256);
+        }
+    }
+
+    #[test]
+    fn dng_full_resolution_subifd_preserves_physical_priority_fields() {
         // ExifTool's Exif.pm promotes the directory whose SubfileType is 0,
         // so these Priority => 0 fields must come from this full-resolution
         // SubIFD rather than IFD0's reduced-resolution thumbnail.
@@ -3954,16 +4456,29 @@ mod dng_thumbnail_tiff_tests {
         dng[ifd0_bits_offset as usize..].copy_from_slice(&[8, 0, 8, 0, 8, 0]);
 
         let metadata = parse_raw_metadata(&dng, RawFormat::AdobeDNG).expect("synthetic DNG");
+        let photometric = crate::cli::tag_resolution::resolve_requested_tag(
+            &metadata,
+            "PhotometricInterpretation",
+        )
+        .expect("photometric occurrence");
+        assert_eq!(
+            crate::cli::tag_resolution::resolved_display_value(photometric, false),
+            TagValue::new_string("Color Filter Array")
+        );
+        assert_eq!(
+            crate::cli::tag_resolution::resolved_display_value(photometric, true),
+            TagValue::new_integer(32803)
+        );
         for (tag, expected) in [
-            ("IFD0:ImageWidth", TagValue::new_integer(3516)),
-            ("IFD0:ImageHeight", TagValue::new_integer(2328)),
-            ("IFD0:BitsPerSample", TagValue::new_integer(16)),
-            ("IFD0:Compression", TagValue::new_string("JPEG")),
+            ("SubIFD:ImageWidth", TagValue::new_integer(3516)),
+            ("SubIFD:ImageHeight", TagValue::new_integer(2328)),
+            ("SubIFD:BitsPerSample", TagValue::new_integer(16)),
+            ("EXIF:Compression", TagValue::new_string("JPEG")),
             (
-                "IFD0:PhotometricInterpretation",
+                "SubIFD:PhotometricInterpretation",
                 TagValue::new_string("Color Filter Array"),
             ),
-            ("IFD0:SamplesPerPixel", TagValue::new_integer(1)),
+            ("SubIFD:SamplesPerPixel", TagValue::new_integer(1)),
         ] {
             assert_eq!(
                 metadata.get(tag),
@@ -3971,6 +4486,301 @@ mod dng_thumbnail_tiff_tests {
                 "{tag} must come from the full-resolution SubIFD"
             );
         }
+    }
+
+    // Required synthetic coverage: unlike the optional corpus fixture, these
+    // TIFFs always run and place the full image in different directory positions.
+    fn synthetic_dng(directories: &[Vec<(u16, u32)>], big_endian: bool) -> Vec<u8> {
+        let u16_bytes = |v: u16| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let u32_bytes = |v: u32| {
+            if big_endian {
+                v.to_be_bytes()
+            } else {
+                v.to_le_bytes()
+            }
+        };
+        let mut data = vec![0u8; 2048];
+        data[..2].copy_from_slice(if big_endian { b"MM" } else { b"II" });
+        data[2..4].copy_from_slice(&u16_bytes(42));
+        data[4..8].copy_from_slice(&u32_bytes(8));
+        for (index, entries) in directories.iter().enumerate() {
+            let offset = if index == 0 { 8 } else { index * 256 };
+            let count = entries.len() + usize::from(index == 0 && directories.len() > 1);
+            data[offset..offset + 2].copy_from_slice(&u16_bytes(count as u16));
+            let mut all = entries.clone();
+            if index == 0 && directories.len() > 1 {
+                all.push((0x014A, if directories.len() == 2 { 256 } else { 1800 }));
+            }
+            for (n, (tag, value)) in all.iter().enumerate() {
+                let at = offset + 2 + n * 12;
+                data[at..at + 2].copy_from_slice(&u16_bytes(*tag));
+                data[at + 2..at + 4].copy_from_slice(&u16_bytes(4));
+                let count = if *tag == 0x014A {
+                    (directories.len() - 1) as u32
+                } else {
+                    1
+                };
+                data[at + 4..at + 8].copy_from_slice(&u32_bytes(count));
+                data[at + 8..at + 12].copy_from_slice(&u32_bytes(*value));
+            }
+        }
+        if directories.len() > 2 {
+            for i in 1..directories.len() {
+                let at = 1800 + (i - 1) * 4;
+                data[at..at + 4].copy_from_slice(&u32_bytes((i * 256) as u32));
+            }
+        }
+        data
+    }
+
+    fn dimensions(marker: Option<(u16, u32)>, width: u32, height: u32) -> Vec<(u16, u32)> {
+        marker
+            .into_iter()
+            .chain([(0x0100, width), (0x0101, height)])
+            .collect()
+    }
+
+    fn assert_dng_size(data: &[u8], expected: &str) -> MetadataMap {
+        let mut metadata = parse_raw_metadata(data, RawFormat::AdobeDNG).expect("synthetic DNG");
+        crate::composite::apply(&mut metadata);
+        assert_eq!(metadata.get_string("Composite:ImageSize"), Some(expected));
+        metadata
+    }
+
+    #[test]
+    fn dng_second_subifd_wins_without_losing_physical_duplicates() {
+        for big_endian in [false, true] {
+            let mut directories = vec![
+                dimensions(Some((0xFE, 1)), 8, 8),
+                dimensions(Some((0xFE, 1)), 1024, 683),
+                dimensions(Some((0xFE, 0)), 3516, 2328),
+                dimensions(Some((0xFE, 1)), 8000, 6000),
+            ];
+            for (directory, bits) in directories.iter_mut().zip([8, 8, 16, 8]) {
+                directory.push((0x0102, bits));
+            }
+            let data = synthetic_dng(&directories, big_endian);
+            let metadata = assert_dng_size(&data, "3516x2328");
+            assert_eq!(metadata.get_string("Composite:Megapixels"), Some("8.2"));
+            let bits: Vec<_> = metadata
+                .occurrences()
+                .filter(|o| o.name.as_ref() == "BitsPerSample")
+                .map(|o| o.raw.as_integer())
+                .collect();
+            assert_eq!(bits, vec![Some(8), Some(8), Some(16), Some(8)]);
+            let winner =
+                crate::cli::tag_resolution::resolve_requested_tag(&metadata, "BitsPerSample")
+                    .expect("BitsPerSample winner");
+            assert_eq!(winner.group1.as_ref(), "SubIFD1");
+            assert_eq!(winner.raw.as_integer(), Some(16));
+            let widths: Vec<_> = metadata
+                .occurrences()
+                .filter(|o| o.name.as_ref() == "ImageWidth")
+                .map(|o| {
+                    (
+                        o.group0.to_string(),
+                        o.group1.to_string(),
+                        o.raw.as_integer(),
+                        o.priority,
+                    )
+                })
+                .collect();
+            assert_eq!(
+                widths,
+                vec![
+                    ("EXIF".into(), "IFD0".into(), Some(8), 0),
+                    ("EXIF".into(), "SubIFD".into(), Some(1024), 0),
+                    ("EXIF".into(), "SubIFD1".into(), Some(3516), 1),
+                    ("EXIF".into(), "SubIFD2".into(), Some(8000), 0),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn dng_failed_child_keeps_original_offset_array_index() {
+        let mut data = synthetic_dng(
+            &[
+                dimensions(Some((0xFE, 1)), 8, 8),
+                dimensions(Some((0xFE, 1)), 16, 16),
+                dimensions(Some((0xFE, 0)), 3516, 2328),
+            ],
+            false,
+        );
+        data[1800..1804].copy_from_slice(&u32::MAX.to_le_bytes());
+        let metadata = assert_dng_size(&data, "3516x2328");
+        assert!(
+            metadata
+                .occurrences()
+                .any(|o| o.name.as_ref() == "ImageWidth"
+                    && o.group1.as_ref() == "SubIFD1"
+                    && o.raw.as_integer() == Some(3516))
+        );
+        assert!(
+            !metadata
+                .occurrences()
+                .any(|o| o.group1.as_ref() == "SubIFD")
+        );
+    }
+
+    #[test]
+    fn dng_first_full_resolution_directory_is_sticky() {
+        for marker in [(0xFE, 0), (0xFF, 1)] {
+            assert_dng_size(
+                &synthetic_dng(
+                    &[
+                        dimensions(Some(marker), 100, 50),
+                        dimensions(Some((0xFE, 0)), 3516, 2328),
+                    ],
+                    false,
+                ),
+                "100x50",
+            );
+            assert_dng_size(
+                &synthetic_dng(
+                    &[
+                        dimensions(Some((0xFE, 1)), 8, 8),
+                        dimensions(Some(marker), 100, 50),
+                        dimensions(Some((0xFE, 0)), 3516, 2328),
+                    ],
+                    false,
+                ),
+                "100x50",
+            );
+        }
+    }
+
+    #[test]
+    fn dng_missing_and_multipage_markers_do_not_promote_dimensions() {
+        for marker in [None, Some((0xFE, 2)), Some((0xFF, 3))] {
+            assert_dng_size(
+                &synthetic_dng(
+                    &[dimensions(marker, 100, 50), dimensions(marker, 3516, 2328)],
+                    false,
+                ),
+                "100x50",
+            );
+        }
+    }
+
+    #[test]
+    fn dng_unsorted_dimensions_before_marker_keep_priority_zero() {
+        let data = synthetic_dng(
+            &[
+                dimensions(Some((0xFE, 1)), 100, 50),
+                vec![(0x0100, 3516), (0x0101, 2328), (0xFE, 0)],
+            ],
+            false,
+        );
+        let metadata = assert_dng_size(&data, "100x50");
+        assert!(
+            metadata
+                .occurrences()
+                .filter(|o| o.name.as_ref() == "ImageWidth")
+                .all(|o| o.priority == 0)
+        );
+    }
+
+    #[test]
+    fn dng_child_marker_precedes_later_unsorted_parent_marker() {
+        let mut data = synthetic_dng(
+            &[
+                dimensions(Some((0xFE, 0)), 100, 50),
+                dimensions(Some((0xFE, 0)), 3516, 2328),
+            ],
+            false,
+        );
+        // Move the pointer from the fourth parent entry to the first entry.
+        let entries = data[10..58].to_vec();
+        data[10..22].copy_from_slice(&entries[36..48]);
+        data[22..58].copy_from_slice(&entries[..36]);
+        assert_dng_size(&data, "3516x2328");
+    }
+
+    #[test]
+    fn dng_native_fixture_keeps_four_physical_groups_and_primary_size() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("DNG.dng") else {
+            return;
+        };
+        let data = std::fs::read(path).expect("pinned DNG fixture");
+        let metadata = assert_dng_size(&data, "3516x2328");
+        let widths: Vec<_> = metadata
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "ImageWidth")
+            .map(|o| (o.group1.to_string(), o.raw.as_integer()))
+            .collect();
+        assert_eq!(
+            widths,
+            vec![
+                ("IFD0".into(), Some(8)),
+                ("SubIFD".into(), Some(3516)),
+                ("SubIFD1".into(), Some(1024)),
+                ("SubIFD2".into(), Some(3456))
+            ]
+        );
+        let printed_photometric: Vec<_> = metadata
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "PhotometricInterpretation")
+            .map(|o| {
+                o.project(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                    .as_ref()
+                    .as_string()
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(
+            printed_photometric,
+            vec![
+                Some("RGB".into()),
+                Some("Color Filter Array".into()),
+                Some("YCbCr".into()),
+                Some("YCbCr".into())
+            ]
+        );
+        let photometric: Vec<_> = metadata
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "PhotometricInterpretation")
+            .map(|o| {
+                o.project(crate::core::tag_occurrence::ValueChannel::ValueConv)
+                    .as_ref()
+                    .as_integer()
+            })
+            .collect();
+        assert_eq!(photometric, vec![Some(2), Some(32803), Some(6), Some(6)]);
+        let sampling: Vec<_> = metadata
+            .occurrences()
+            .filter(|o| o.name.as_ref() == "YCbCrSubSampling")
+            .map(|o| {
+                (
+                    o.group1.to_string(),
+                    o.raw.as_string().map(str::to_string),
+                    o.priority,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sampling,
+            vec![
+                ("SubIFD1".into(), Some("YCbCr4:2:0 (2 2)".into()), 0),
+                ("SubIFD2".into(), Some("YCbCr4:4:4 (1 1)".into()), 0),
+            ]
+        );
+        assert_eq!(
+            metadata.get_string("EXIF:YCbCrSubSampling"),
+            Some("YCbCr4:2:0 (2 2)")
+        );
+        assert_eq!(metadata.get_string("Composite:Megapixels"), Some("8.2"));
+        assert!(
+            !metadata
+                .occurrences()
+                .any(|o| o.group1.as_ref() == "SubIFD0")
+        );
     }
 
     #[test]
@@ -4442,7 +5252,7 @@ mod nef_cfa_pattern2_tests {
 /// during IFD traversal. This function serves as documentation and can be
 /// extended to add computed/derived DNG-specific metadata or aliases.
 fn extract_dng_tags(metadata: &mut MetadataMap) {
-    // DNG-specific tags are stored in IFD0 or SubIFD0
+    // DNG-specific tags are stored in IFD0 or SubIFD directories
     // The TIFF parser already extracts these automatically
 
     // We can add computed values or format-specific processing here
@@ -5283,38 +6093,16 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
         .unwrap_or("CR3");
     let is_cr3 = file_type == "CR3";
 
-    // CR3 is an ISO Base Media container, so every `ftyp`/`moov`/`trak` box in
-    // it is the same box an MP4 carries. Walk it with the QuickTime box parser
-    // before touching the Canon boxes: this is the whole QuickTime tag group,
-    // and none of it needed new code.
-    let mut metadata =
-        match crate::parsers::quicktime::parse_quicktime_metadata_from_bytes_with_options(
-            data, is_cr3,
-        ) {
-            Ok(map) => map,
-            // A CR3 whose box tree does not parse still has readable CMT boxes
-            // below (find_cr3_box scans rather than walks), so this is not fatal.
-            Err(_) => MetadataMap::new(),
-        };
-
+    // Decode the Canon directory independently, then insert it at its UUID
+    // position in the shared QuickTime moov walk. A readable CR3 may place
+    // that child before, between or after the movie and track headers.
+    let mut metadata = MetadataMap::new();
     if let Some(version) = &compressor_version {
         metadata.insert(
             "Canon:CompressorVersion".to_string(),
             TagValue::new_string(version.clone()),
         );
     }
-    metadata.insert(
-        "File:FileType".to_string(),
-        TagValue::new_string(file_type.to_string()),
-    );
-    metadata.insert(
-        "File:FileTypeExtension".to_string(),
-        TagValue::new_string(file_type.to_ascii_lowercase()),
-    );
-    metadata.insert(
-        "File:MIMEType".to_string(),
-        TagValue::new_string(cr3_mime_type(file_type).to_string()),
-    );
 
     // Parse CMT1 box (standard TIFF IFD0 with optional EXIF IFD and MakerNote)
     if let Some(tiff) = find_cr3_cmt1_tiff(data) {
@@ -5467,6 +6255,31 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // Canon.pm's THMB conversion removes its 16-byte atom header and exposes
     // the remainder as the Canon/MakerNotes thumbnail.
     parse_cr3_thmb(data, &mut metadata);
+
+    const CANON_UUID: [u8; 16] = [
+        0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a,
+        0x48,
+    ];
+    if let Ok(ordered) = crate::parsers::quicktime::parse_quicktime_with_moov_uuid(
+        data,
+        is_cr3,
+        CANON_UUID,
+        metadata.clone(),
+    ) {
+        metadata = ordered;
+    }
+    metadata.insert(
+        "File:FileType".to_string(),
+        TagValue::new_string(file_type.to_string()),
+    );
+    metadata.insert(
+        "File:FileTypeExtension".to_string(),
+        TagValue::new_string(file_type.to_ascii_lowercase()),
+    );
+    metadata.insert(
+        "File:MIMEType".to_string(),
+        TagValue::new_string(cr3_mime_type(file_type).to_string()),
+    );
 
     // Timed metadata is a sample stream, not an ISO box payload. Locate the
     // CTMD track through its own `stsz`/`co64` sample tables, then apply
@@ -5777,7 +6590,22 @@ fn parse_x3f_embedded_jpeg_exif(
                 interop_ifd_offset = Some(u64::from(read_u32(raw_bytes.as_ref(), byte_order)));
             }
         }
-        emit_x3f_exif_tags(&exif_tags, "ExifIFD", byte_order, metadata);
+        // ProcessExif walks the MakerNote sub-directory at its own 0x927C
+        // entry (Exif.pm 13.59:7072-7110), so its tags are found between the
+        // ExifIFD entries before it and the ones after it -- and FoundTag's
+        // equal-priority tie goes to the later one (ExifTool.pm:9564):
+        // SigmaDP2.x3f's bare `-ExposureMode` is ExifIFD 0xa402's `Auto`,
+        // found after Sigma::Main's `Program AE`.
+        let after_makernote = exif_tags
+            .iter()
+            .position(|(tag_id, ..)| *tag_id == 0x927C)
+            .map_or(exif_tags.len(), |index| index + 1);
+        emit_x3f_exif_tags(
+            &exif_tags[..after_makernote],
+            "ExifIFD",
+            byte_order,
+            metadata,
+        );
 
         // The Sigma MakerNote lives in the preview's ExifIFD. `parse_ifd`
         // hands back a MakerNote entry's payload, but the offsets INSIDE it
@@ -5793,6 +6621,12 @@ fn parse_x3f_embedded_jpeg_exif(
                 metadata,
             );
         }
+        emit_x3f_exif_tags(
+            &exif_tags[after_makernote..],
+            "ExifIFD",
+            byte_order,
+            metadata,
+        );
     }
 
     if let Some(offset) = interop_ifd_offset
@@ -6165,7 +6999,19 @@ fn parse_x3f_properties(data: &[u8], metadata: &mut MetadataMap) {
             // Map property names to ExifTool-compatible tag names
             let tag_name = map_x3f_property_name(&name);
             let value = convert_x3f_property_value(&name, &value).unwrap_or(value);
-            metadata.insert(tag_name, TagValue::new_string(value));
+            // `SigmaRaw::Properties` is `PRIORITY => 0` "because these aren't
+            // writable like the EXIF ones" (SigmaRaw.pm:134-137): a property
+            // never displaces a same-named tag found before it
+            // (ExifTool.pm:9469-9473, 9564) -- SigmaDP2.x3f's bare
+            // `-DriveMode` is Sigma::Main's `SINGLE`, `-MeteringMode` the
+            // MakerNote's, `-ExposureProgram` the ExifIFD's.
+            metadata.insert_occurrence(
+                tag_name,
+                TagValue::new_string(value),
+                0,
+                "",
+                crate::core::Instance::default(),
+            );
         }
     }
 }
@@ -8007,6 +8853,36 @@ fn format_x3f_compression(
 /// - Reuses existing JPEG/EXIF parsing infrastructure
 /// - Extracts camera settings, timestamps, and other standard metadata
 /// - Avoids need to reverse-engineer proprietary RAF format details
+/// Records a RAF's Fujifilm MakerNote (the embedded JPEG's ExifIFD 0x927C).
+fn record_raf_makernote(mn_data: &[u8], byte_order: ByteOrder, metadata: &mut MetadataMap) {
+    // Use the MakerNote dispatcher for Fujifilm
+    let mut makernote_tags = std::collections::HashMap::new();
+    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+        "FUJIFILM",
+        mn_data,
+        byte_order,
+        &mut makernote_tags,
+    ) {
+        eprintln!("Warning: Failed to parse Fujifilm MakerNote: {}", e);
+    } else {
+        // Add parsed MakerNote tags to metadata
+        for (tag_name, tag_value) in
+            crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags)
+        {
+            metadata.insert(tag_name, TagValue::new_string(tag_value));
+        }
+    }
+    // Also use RAF-specific MakerNote parser to extract additional camera metadata
+    if let Ok(raf_tags) = raf_parser::parse_raf_makernote(mn_data, byte_order) {
+        for (tag_name, tag_value) in raf_tags {
+            // Only add if not already present from dispatcher
+            if !metadata.contains_key(&tag_name) {
+                metadata.insert(tag_name, TagValue::new_string(tag_value));
+            }
+        }
+    }
+}
+
 fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     // Validate RAF signature
     if data.len() < 16 || &data[0..16] != b"FUJIFILMCCD-RAW " {
@@ -8274,17 +9150,23 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     && let Ok(exif_tags) =
                                         parse_ifd(&exif_reader, offset, byte_order)
                                 {
-                                    // Track MakerNote data and Interoperability Sub-IFD pointer
-                                    let mut makernote_data: Option<Vec<u8>> = None;
+                                    // Track the Interoperability Sub-IFD pointer
                                     let mut interop_ifd_offset: Option<u64> = None;
 
                                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
                                         let bytes = raw_bytes.as_ref();
 
-                                        // Check for MakerNote tag (0x927C)
+                                        // The MakerNote (0x927C) is parsed at its own
+                                        // entry, as ProcessExif walks a sub-directory
+                                        // (Exif.pm 13.59:7072-7110): its tags are found
+                                        // before the ExifIFD entries after it, which win
+                                        // an equal-priority bare name (ExifTool.pm:9564)
+                                        // -- FujiFilm.raf's `-Saturation` is ExifIFD
+                                        // 0xa409's `Normal`, not FujiFilm::Main's
+                                        // `0 (normal)`. The raw MakerNote is not reported.
                                         if *tag_id == 0x927C {
-                                            makernote_data = Some(bytes.to_vec());
-                                            continue; // Don't add raw MakerNote to metadata
+                                            record_raf_makernote(bytes, byte_order, &mut metadata);
+                                            continue;
                                         }
 
                                         // Interoperability Sub-IFD pointer (tag 0xA005)
@@ -8349,48 +9231,6 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                                         byte_order,
                                                     );
                                                     metadata.insert(tag_name, tag_value);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Parse MakerNote if present (Fujifilm camera)
-                                    if let Some(mn_data) = makernote_data.as_ref() {
-                                        // Use the MakerNote dispatcher for Fujifilm
-                                        let mut makernote_tags = std::collections::HashMap::new();
-                                        if let Err(e) =
-                                            crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-                                                "FUJIFILM",
-                                                mn_data,
-                                                byte_order,
-                                                &mut makernote_tags,
-                                            )
-                                        {
-                                            eprintln!(
-                                                "Warning: Failed to parse Fujifilm MakerNote: {}",
-                                                e
-                                            );
-                                        } else {
-                                            // Add parsed MakerNote tags to metadata
-                                            for (tag_name, tag_value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
-                                                metadata.insert(
-                                                    tag_name,
-                                                    TagValue::new_string(tag_value),
-                                                );
-                                            }
-                                        }
-
-                                        // Also use RAF-specific MakerNote parser to extract additional camera metadata
-                                        if let Ok(raf_tags) =
-                                            raf_parser::parse_raf_makernote(mn_data, byte_order)
-                                        {
-                                            for (tag_name, tag_value) in raf_tags {
-                                                // Only add if not already present from dispatcher
-                                                if !metadata.contains_key(&tag_name) {
-                                                    metadata.insert(
-                                                        tag_name,
-                                                        TagValue::new_string(tag_value),
-                                                    );
                                                 }
                                             }
                                         }
@@ -8759,13 +9599,24 @@ fn extract_dng_subifd_preview(
         )
     };
 
-    metadata.insert(
-        start_key.to_string(),
+    let directory = if sub_index == 0 {
+        "SubIFD".to_string()
+    } else {
+        format!("SubIFD{sub_index}")
+    };
+    metadata.insert_occurrence(
+        start_key,
         TagValue::new_integer(i64::from(offset)),
+        1,
+        &directory,
+        crate::core::tag_occurrence::Instance::default(),
     );
-    metadata.insert(
-        length_key.to_string(),
+    metadata.insert_occurrence(
+        length_key,
         TagValue::new_integer(i64::from(length)),
+        1,
+        &directory,
+        crate::core::tag_occurrence::Instance::default(),
     );
 
     // ExifTool's ExtractBinary (ExifTool.pm:9832) returns the declared-length
@@ -8775,9 +9626,12 @@ fn extract_dng_subifd_preview(
     // `core::tiff_helpers::read_or_placeholder`, which this mirrors for a
     // byte slice instead of a `FileReader`.
     if length > 0 {
-        metadata.insert(
-            image_key.to_string(),
+        metadata.insert_occurrence(
+            image_key,
             dng_binary_or_placeholder(data, offset, length),
+            1,
+            &directory,
+            crate::core::tag_occurrence::Instance::default(),
         );
     }
 }
@@ -10779,6 +11633,16 @@ mod backlog_group_1_printconv_tests {
         complete.extend_from_slice(&4u32.to_be_bytes());
         complete.extend_from_slice(b"MakN");
         assert_eq!(dng_adobe_makernote_count(&complete), Some(0));
+        let writable = |tag: &[u8; 4]| {
+            let mut data = b"Adobe\0".to_vec();
+            data.extend_from_slice(tag);
+            data.extend_from_slice(&4u32.to_be_bytes());
+            data.extend_from_slice(b"data");
+            data
+        };
+        assert_eq!(dng_adobe_makernote_count(&writable(b"CRW ")), Some(1));
+        assert_eq!(dng_adobe_makernote_count(&writable(b"MRW ")), Some(1));
+        assert_eq!(dng_adobe_makernote_count(&writable(b"SR2 ")), Some(0));
         for tail in [&b"Mak"[..], &b"MakN\0\0\0\x06II"[..]] {
             let mut truncated = complete.clone();
             truncated.extend_from_slice(tail);
@@ -11291,7 +12155,7 @@ mod rational_array_tests {
         let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
 
         assert_eq!(
-            metadata.get("SubIFD0:BitsPerSample"),
+            metadata.get("SubIFD:BitsPerSample"),
             Some(&TagValue::new_integer(16))
         );
     }

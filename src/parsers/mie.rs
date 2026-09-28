@@ -35,6 +35,13 @@ pub fn parse_mie_trailer(file: &[u8]) -> MetadataMap {
     })
 }
 
+/// Where the MIE trailer [`parse_mie_trailer`] reads ends, if the file has
+/// one -- for ordering it against the other trailers ExifTool processes from
+/// the end of the file inwards (`ProcessTrailers`, ExifTool.pm:7019).
+pub fn mie_trailer_position(file: &[u8]) -> Option<usize> {
+    find_trailer(file).map(|trailer| trailer.end)
+}
+
 /// Start of the MIE trailer that ends exactly at `end`, for a trailer-chain
 /// walk. IdentifyTrailer (ExifTool.pm:7007-7010) anchors the `zmie` footer at
 /// the current end, and ProcessMIE (MIE.pm:1705-1730) sizes the trailer from

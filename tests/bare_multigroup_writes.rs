@@ -33,6 +33,8 @@
 mod fixtures;
 
 use oxidex::exiftool_oracle::{self, Oracle};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -91,9 +93,12 @@ fn expected(file: &str, name: &str, form: Form) -> Expect {
         // No maker note, no MIE: the bare name is EXIF alone, typed by its
         // EXIF address (`-ColorSpace#=2` was a string, refused, before).
         ("Writer.jpg", _) => Expect::Match,
+        // Nikon.jpg has a physically identified headerless Nikon note.
+        // MeteringMode's other maker-note address is outside Nikon's root;
+        // pinned 13.59 writes only ExifIFD for both forms.
+        ("Nikon.jpg", _) if name == "MeteringMode" => Expect::Match,
         // Canon.jpg: Canon's maker note may hold every other name;
-        // Nikon.jpg: a maker note oxidex's reader decodes no row of, which
-        // may hold any of them.
+        // other Nikon names may still have a Nikon address.
         _ => Expect::Refused,
     }
 }
@@ -154,6 +159,8 @@ fn run_args(
     let ox_path = dir.path().join(format!("ox.{ext}"));
     std::fs::write(&et_path, original).unwrap();
     std::fs::write(&ox_path, original).unwrap();
+    #[cfg(unix)]
+    let ox_inode_before = std::fs::metadata(&ox_path).unwrap().ino();
 
     let et = oracle
         .command()
@@ -169,6 +176,10 @@ fn run_args(
         .expect("run oxidex");
     let et_changed = std::fs::read(&et_path).unwrap() != original;
     let ox_changed = std::fs::read(&ox_path).unwrap() != original;
+    #[cfg(unix)]
+    let ox_inode_changed = std::fs::metadata(&ox_path).unwrap().ino() != ox_inode_before;
+    #[cfg(not(unix))]
+    let ox_inode_changed = false;
     let ox_stderr = String::from_utf8_lossy(&ox.stderr).into_owned();
     let et_rows = oracle_rows(oracle, &et_path, name);
     let ox_rows = oracle_rows(oracle, &ox_path, name);
@@ -189,7 +200,7 @@ fn run_args(
             }
         }
         Expect::Declined => {
-            if ox.status.success() || ox_changed || !et_changed {
+            if ox.status.success() || ox_changed || ox_inode_changed || !et_changed {
                 return Err(format!(
                     "{case}: expected oxidex to decline with the file untouched beside the \
                      oracle's write; oxidex exit {:?}, changed {ox_changed}, said \
@@ -200,7 +211,11 @@ fn run_args(
         }
 
         Expect::Refused => {
-            if ox.status.success() || ox_changed || !ox_stderr.contains("Cannot write tag") {
+            if ox.status.success()
+                || ox_changed
+                || ox_inode_changed
+                || !ox_stderr.contains("Cannot write tag")
+            {
                 return Err(format!(
                     "{case}: expected a named refusal with the file untouched; oxidex exit \
                      {:?}, changed {ox_changed}, said {ox_stderr:?}{}; the oracle wrote \
@@ -1070,6 +1085,156 @@ fn hidden_ciff_app0_is_not_inferred_absent_from_rows() {
         "FocalLength",
         &["-FocalLength#=50".to_string()],
         Expect::Refused,
+    )
+    .unwrap();
+}
+
+/// CanonRaw.pm's 0x1033 CustomFunctions10D reaches the writable
+/// CanonCustom::Functions10D table, but our CIFF reader deliberately does
+/// not decode that table. The physical APP0 segment must keep a grouped
+/// request live after EXIF:All clears the EXIF block: ExifTool edits
+/// the CIFF value, so oxidex must refuse the whole command by name.
+#[test]
+fn exif_clear_keeps_undecoded_ciff_grouped_write_live() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let writer = std::fs::read(fixtures::required_t_images_fixture_path("Writer.jpg")).unwrap();
+    let setup = tempfile::tempdir().unwrap();
+    let source = setup.path().join("writer.jpg");
+    std::fs::write(&source, writer).unwrap();
+    let model = oracle
+        .command()
+        .args([
+            "-overwrite_original",
+            "-IFD0:Model=Canon EOS 10D",
+            "-ExifIFD:DateTimeOriginal=2020:01:01 00:00:00",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        model.status.success(),
+        "{}",
+        String::from_utf8_lossy(&model.stderr)
+    );
+    let no_ciff = std::fs::read(&source).unwrap();
+
+    // One valid CIFF directory entry: CanonRaw::Main 0x1033, whose four
+    // bytes are a length word and custom function 1 = 0. Put the APP0 after
+    // the EXIF APP1 so pinned ExifTool knows the IFD0 Model while reading it.
+    let payload = [
+        &b"II\x0e\0\0\0HEAPJPGM"[..],
+        &b"\x04\0\0\x01"[..],
+        &b"\x01\0\x33\x10\x04\0\0\0\0\0\0\0\x04\0\0\0"[..],
+    ]
+    .concat();
+    let length = u16::try_from(payload.len() + 2).unwrap().to_be_bytes();
+    let app0 = [&b"\xff\xe0"[..], &length, &payload].concat();
+    let sos = jpeg_segments(&no_ciff)
+        .last()
+        .map(|(_, _, _, end)| *end)
+        .expect("Writer.jpg has header segments");
+    assert_eq!(&no_ciff[sos..sos + 2], b"\xff\xda");
+    let ciff = [&no_ciff[..sos], &app0, &no_ciff[sos..]].concat();
+    std::fs::write(&source, &ciff).unwrap();
+    assert_eq!(
+        oracle_rows(oracle, &source, "SetButtonWhenShooting"),
+        vec!["[CIFF] SetButtonWhenShooting : 0"]
+    );
+    let ox_read = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-a", "-G1", "-s", "-SetButtonWhenShooting"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(ox_read.status.success());
+    assert!(!String::from_utf8_lossy(&ox_read.stdout).contains("SetButtonWhenShooting"));
+
+    let set = "-CanonCustom:SetButtonWhenShooting#=1".to_string();
+    let model = "-IFD0:Model=Canon EOS 10D".to_string();
+    let changed = ["-EXIF:All=".to_string(), model.clone(), set.clone()];
+    run_args(
+        oracle,
+        &ciff,
+        "jpg",
+        "Writer.jpg + undecoded CustomFunctions10D CIFF APP0",
+        "SetButtonWhenShooting",
+        &changed,
+        Expect::Refused,
+    )
+    .unwrap();
+    // Independently prove the oracle changed the hidden tag, rather than
+    // merely rewriting EXIF while leaving the CIFF value untouched.
+    let native = oracle
+        .command()
+        .args(["-m", "-overwrite_original"])
+        .args(&changed)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        oracle_rows(oracle, &source, "SetButtonWhenShooting"),
+        vec!["[CIFF] SetButtonWhenShooting : 1"]
+    );
+    // The refusal is specifically for the live grouped CIFF request, and
+    // even the earlier EXIF clear must not replace the original inode.
+    std::fs::write(&source, &ciff).unwrap();
+    #[cfg(unix)]
+    let inode_before = std::fs::metadata(&source).unwrap().ino();
+    let ox = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(&changed)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(!ox.status.success());
+    assert!(
+        String::from_utf8_lossy(&ox.stderr).contains("CanonCustom:SetButtonWhenShooting"),
+        "{}",
+        String::from_utf8_lossy(&ox.stderr)
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), ciff);
+    #[cfg(unix)]
+    assert_eq!(std::fs::metadata(&source).unwrap().ino(), inode_before);
+    for clear in ["-ExifIFD:All=", "-IFD0:All="] {
+        let args = if clear == "-IFD0:All=" {
+            vec![clear.to_string(), model.clone(), set.clone()]
+        } else {
+            vec![clear.to_string(), set.clone()]
+        };
+        run_args(
+            oracle,
+            &ciff,
+            "jpg",
+            "Writer.jpg + undecoded CIFF after EXIF directory clear",
+            "SetButtonWhenShooting",
+            &args,
+            Expect::Refused,
+        )
+        .unwrap();
+    }
+    run_args(
+        oracle,
+        &no_ciff,
+        "jpg",
+        "Writer.jpg without CIFF APP0",
+        "SetButtonWhenShooting",
+        &changed,
+        Expect::Match,
+    )
+    .unwrap();
+    run_args(
+        oracle,
+        &ciff,
+        "jpg",
+        "Writer.jpg + CIFF removed by MakerNotes:All",
+        "SetButtonWhenShooting",
+        &["-MakerNotes:All=".to_string(), model, set],
+        Expect::Match,
     )
     .unwrap();
 }

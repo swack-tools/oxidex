@@ -1483,6 +1483,76 @@ fn raw_exif_profile(kind: &[u8; 4], tiff: &[u8]) -> ([u8; 4], Vec<u8>) {
     (*kind, data)
 }
 
+/// A raw EXIF profile can carry a maker-note candidate even though the eXIf
+/// chunk census is empty. Pinned 13.59 writes Nikon Type-3 ColorSpace as well
+/// as the sibling PNG text tag; this writer must refuse the combined request
+/// atomically until it can edit that maker note.
+#[test]
+fn raw_profile_makernote_keeps_bare_conversion_atomic() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let row = |tag: u16, field_type: u16, count: u32, value: u32| {
+        [
+            tag.to_le_bytes().as_slice(),
+            field_type.to_le_bytes().as_slice(),
+            count.to_le_bytes().as_slice(),
+            value.to_le_bytes().as_slice(),
+        ]
+        .concat()
+    };
+    let note = [
+        b"Nikon\0\x02\x10\0\0".as_slice(),
+        b"II*\0\x08\0\0\0",
+        &1_u16.to_le_bytes(),
+        &row(0x001e, 3, 1, 1),
+        &0_u32.to_le_bytes(),
+    ]
+    .concat();
+    let tiff = [
+        b"II*\0\x08\0\0\0".as_slice(),
+        &2_u16.to_le_bytes(),
+        &row(0x010f, 2, 6, 38),
+        &row(0x8769, 4, 1, 44),
+        &0_u32.to_le_bytes(),
+        b"NIKON\0",
+        &1_u16.to_le_bytes(),
+        &row(0x927c, 7, note.len() as u32, 62),
+        &0_u32.to_le_bytes(),
+        &note,
+    ]
+    .concat();
+    let (kind, profile) = raw_exif_profile(b"tEXt", &tiff);
+    let original = png(&[(&kind, profile)], &[]);
+    let dir = tempfile::tempdir().unwrap();
+    let native = write(dir.path(), "native.png", &original);
+    let ours = write(dir.path(), "ours.png", &original);
+    let args = [
+        "-overwrite_original",
+        "-ColorSpace=BT.2100",
+        "-PNG:Comment=sibling",
+    ];
+    let native_write = oracle.command().args(args).arg(&native).output().unwrap();
+    assert!(native_write.status.success(), "{:?}", native_write);
+    let native_rows = oracle
+        .command()
+        .args(["-G1", "-s", "-ColorSpace", "-Comment"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    let native_rows = String::from_utf8_lossy(&native_rows.stdout);
+    assert!(native_rows.contains("[Nikon]") && native_rows.contains("BT.2100"));
+    assert!(native_rows.contains("[PNG]") && native_rows.contains("sibling"));
+
+    let ours_write = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(args)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(!ours_write.status.success(), "{:?}", ours_write);
+    assert_eq!(std::fs::read(&ours).unwrap(), original);
+}
+
 /// Whether a request is a no-op is decided once, before any refusal: a
 /// removal that names nothing in any EXIF carrier -- an unmapped name, a
 /// registered tag the carrier does not hold, or anything in a carrier no
