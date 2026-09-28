@@ -10,7 +10,6 @@ with `-D unused_imports`.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import tempfile
@@ -20,18 +19,19 @@ from pathlib import Path
 import quicktime_generated_specs as shared
 import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
+from quicktime_test_sources import selected_document
 
 ITEMLIST_RS = keys.ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs"
 
 
 def refused_keys():
-    document = json.loads(keys.SNAPSHOT.read_text())
+    document = selected_document()
     document["modules"]["QuickTime"]["tables"]["Keys"]["meta"]["PROCESS_PROC"]["__deparse"] += " changed"
     return keys.compile_document(document)
 
 
 def refused_userdata():
-    document = json.loads(userdata.SNAPSHOT.read_text())
+    document = selected_document()
     document["modules"]["QuickTime"]["tables"]["UserData"]["meta"]["PROCESS_PROC"]["__deparse"] += " changed"
     return userdata.compile_document(document)
 
@@ -55,10 +55,10 @@ class ItemListUseTests(unittest.TestCase):
 
 class RenderedImportTests(unittest.TestCase):
     def test_pinned_release_keeps_every_import(self):
-        # 13.59 renders all three, byte-identical to the committed files.
+        # The selected source renders both installed artifacts byte-identically.
         for module, path in ((keys, keys.RUST), (userdata, userdata.RUST)):
             with self.subTest(module.__name__):
-                rust = module.render_rust(module.compile_document(json.loads(module.SNAPSHOT.read_text())))
+                rust = module.render_rust(module.compile_document(selected_document()))
                 self.assertEqual(rust, path.read_text())
                 self.assertEqual(use_lines(rust),
                                  ["use super::generated_itemlist_specs::{EnumOperand, ItemListSpec, SourceFormat};"])

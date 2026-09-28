@@ -1,16 +1,22 @@
 import copy,json,unittest,subprocess
 from pathlib import Path
 import quicktime_keys_specs as specs
+from quicktime_test_sources import selected_document
 HERE=Path(__file__).resolve().parent
 def snapshot(): return json.loads((HERE/'fixtures/quicktime_source_13_59.json').read_text())
 class KeysSpecsTests(unittest.TestCase):
  def test_committed_direct_keys_specs_and_omissions_are_complete(self):
-  r=specs.compile_document(snapshot())
-  self.assertEqual(r['identity_counts'],{'source_records':81,'generated':70,'omitted':11})
+  r=specs.compile_document(selected_document())
+  self.assertEqual(r['identity_counts'],{
+   '11.78':{'source_records':55,'generated':48,'omitted':7},
+   '12.64':{'source_records':60,'generated':53,'omitted':7},
+   '13.59':{'source_records':81,'generated':70,'omitted':11},
+  }[r['source']['exiftool_version']])
   self.assertEqual(specs.serialized(r),(HERE/'quicktime_generated_keys_ledger.json').read_text())
   self.assertEqual(specs.render_rust(r),(specs.ROOT/'src/parsers/quicktime/generated_keys_specs.rs').read_text())
   bad={x['identity']['raw_key'] for x in r['ledger'] if not x['generated']}
-  self.assertEqual(bad,{'creation_time','creationdate','detected-face','detected-face.bounds','live-photo-info','location.ISO6709','location.date','scene-illuminance','sdpd','setu','smartstyle-info'})
+  if r['source']['exiftool_version']=='13.59':
+   self.assertEqual(bad,{'creation_time','creationdate','detected-face','detected-face.bounds','live-photo-info','location.ISO6709','location.date','scene-illuminance','sdpd','setu','smartstyle-info'})
  def test_rendered_keys_survive_canonical_rustfmt(self):
   for source in (snapshot(),):
    rendered=specs.render_rust(specs.compile_document(source))

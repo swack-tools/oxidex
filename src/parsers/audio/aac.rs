@@ -466,6 +466,52 @@ mod tests {
     }
 
     #[test]
+    fn m4a_plid_uses_selected_source_declaration_and_retains_duplicates() {
+        let pin = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim();
+        let (name, values): (&str, &[u64]) = match pin {
+            "11.78" => ("QuickTime:PlayListID", &[17, 23]),
+            "12.64" => ("QuickTime:PlayListID", &[17, 23]),
+            "13.59" => ("QuickTime:AlbumID", &[4_294_967_297, u64::MAX]),
+            other => panic!("unreviewed QuickTime plID source pin: {other}"),
+        };
+        let width = match pin {
+            "11.78" => 1, // source Format=int8u
+            "12.64" => 1, // source Count=8 makes the row ineligible
+            "13.59" => 8, // source Format=int64u
+            _ => unreachable!(),
+        };
+        let payloads: Vec<Vec<u8>> = values
+            .iter()
+            .map(|value| payload(0, &value.to_be_bytes()[8 - width..]))
+            .collect();
+        let reader = TestReader::new(m4a_item(b"plID", &payloads));
+        let metadata = AacParser.parse(&reader).unwrap();
+        let rows = metadata.occurrences_for(name);
+        if pin == "12.64" {
+            assert!(rows.is_empty(), "Count=8 plID must remain refused");
+            assert!(metadata.get("QuickTime:AlbumID").is_none());
+            return;
+        }
+
+        assert_eq!(rows.len(), 2);
+        for (row, value) in rows.iter().zip(values) {
+            if *value <= i64::MAX as u64 {
+                assert_eq!(row.raw.as_integer(), Some(*value as i64));
+                assert_eq!(row.value_conv().as_integer(), Some(*value as i64));
+            } else {
+                let expected = value.to_string();
+                assert_eq!(row.raw.as_string(), Some(expected.as_str()));
+                assert_eq!(row.value_conv().as_string(), Some(expected.as_str()));
+            }
+            assert_eq!(row.group1.as_ref(), "ItemList");
+        }
+        assert_eq!(
+            metadata,
+            crate::parsers::quicktime::parse_quicktime_metadata(&reader).unwrap()
+        );
+    }
+
+    #[test]
     fn m4a_generated_text_and_enum_use_source_groups() {
         for (key, flags, value, name, expected) in [
             (b"\xa9nam", 2, &b"\0H\0i"[..], "QuickTime:Title", "Hi"),

@@ -11,6 +11,8 @@ import quicktime_generated_specs as itemlist
 import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
 import quicktime_protocol_caps as caps
+import quicktime_test_sources as sources
+from quicktime_test_sources import selected_document
 
 HERE = Path(__file__).resolve().parent
 
@@ -20,6 +22,17 @@ def source(version):
 
 
 class ProtocolCapabilities(unittest.TestCase):
+    def test_installed_artifact_selection_requires_a_reviewed_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(sources, "ROOT", root):
+                for version in ("11.78", "12.64", "13.59"):
+                    (root / ".exiftool-version").write_text(version + "\n")
+                    self.assertEqual(selected_document()["exiftool_version"], version)
+                (root / ".exiftool-version").write_text("14.00\n")
+                with self.assertRaisesRegex(ValueError, "unreviewed QuickTime source pin"):
+                    selected_document()
+
     def compile(self, version, document):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -45,7 +58,9 @@ class ProtocolCapabilities(unittest.TestCase):
                 "mdta_strip_generic_com": True, "mdta_retry_full_key": True,
                 "userdata_xmp_isutf8": False})
         self.assertIn("pub(crate) const IMPLICIT_INT64: bool = false;", caps.render_rust(old))
-        self.assertEqual(caps.render_rust(current), caps.RUST.read_text())
+        selected = caps.compile_document(selected_document())
+        self.assertEqual(caps.render_rust(selected), caps.RUST.read_text())
+        self.assertEqual(json.dumps(selected, sort_keys=True, indent=2) + "\n", caps.LEDGER.read_text())
 
     def test_capability_provenance_is_selected_body_not_release_string(self):
         for version in ("11.78", "12.64", "13.59"):

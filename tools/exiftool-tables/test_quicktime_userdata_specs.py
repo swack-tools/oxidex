@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import unittest
 import quicktime_userdata_specs as compiler
+from quicktime_test_sources import selected_document
 
 
 def snapshot():
@@ -79,7 +80,7 @@ class UserDataCompilerTests(unittest.TestCase):
         self.assertEqual(compiler.compile_document(d)['specs'],[])
 
     def test_generated_artifacts_replay(self):
-        r=compiler.compile_document(snapshot())
+        r=compiler.compile_document(selected_document())
         self.assertEqual(json.loads(compiler.LEDGER.read_text()),r)
         from verify_quicktime_reader import rust_matches
         self.assertTrue(rust_matches(compiler.render_rust(r),compiler.RUST.read_text()))

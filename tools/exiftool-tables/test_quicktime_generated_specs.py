@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 import quicktime_generated_specs as specs
+from quicktime_test_sources import selected_document
 
 
 HERE = Path(__file__).resolve().parent
@@ -207,16 +208,21 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertIn('rendered: "line\\nwith \\"quote\\" and \\\\ slash"', rendered)
 
     def test_committed_artifacts_are_current_and_preserve_every_source_identity(self):
-        result = specs.compile_document(snapshot())
+        result = specs.compile_document(selected_document())
         self.assertEqual(specs.serialized(result),
                          (HERE / "quicktime_generated_itemlist_ledger.json").read_text())
         self.assertEqual(specs.render_rust(result),
                          (specs.ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs").read_text())
         self.assertEqual(len({json.dumps(row["identity"], sort_keys=True) for row in result["ledger"]}),
                          result["identity_counts"]["source_records"])
-        self.assertEqual(result["identity_counts"], {"source_records": 399, "generated": 92, "omitted": 307})
-        self.assertEqual(sum(not row["generated"] for row in result["ledger"]
-                             if row["identity"]["table"] == "ItemList"), 13)
+        self.assertEqual(result["identity_counts"], {
+            "11.78": {"source_records": 320, "generated": 73, "omitted": 247},
+            "12.64": {"source_records": 352, "generated": 89, "omitted": 263},
+            "13.59": {"source_records": 399, "generated": 92, "omitted": 307},
+        }[result["source"]["exiftool_version"]])
+        if result["source"]["exiftool_version"] == "13.59":
+            self.assertEqual(sum(not row["generated"] for row in result["ledger"]
+                                 if row["identity"]["table"] == "ItemList"), 13)
 
     def test_committed_artifact_keeps_selected_table_identity_not_full_dump_provenance(self):
         raw = (HERE / "fixtures/quicktime_source_13_59.json").read_bytes()

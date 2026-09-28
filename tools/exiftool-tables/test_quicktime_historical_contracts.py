@@ -18,6 +18,7 @@ import quicktime_generated_specs as itemlist
 import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
 import quicktime_protocol_caps as caps
+from quicktime_test_sources import selected_document
 
 
 HERE = Path(__file__).resolve().parent
@@ -99,9 +100,10 @@ class HistoricalContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             itemlist.require_nonempty_supported(result, "UserData")
 
-    def test_current_1359_generation_is_byte_identical(self):
-        document = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())
-        results = self.compile_all("13.59", document)
+    def test_selected_generation_is_byte_identical(self):
+        document = selected_document()
+        version = document["exiftool_version"]
+        results = self.compile_all(version, document)
         for name, compiler in COMPILERS:
             self.assertGreater(results[name]["identity_counts"]["generated"], 0)
             self.assertEqual(compiler.render_rust(results[name]), compiler.RUST.read_text())
