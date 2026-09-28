@@ -2794,6 +2794,25 @@ pub(crate) fn selected_headerless_nikon_note(data: &[u8], make: &str, model: &st
         && !prefix.starts_with(b"MINOL\0")
         && !prefix.starts_with(b"CAMER\0")
         && !prefix.starts_with(b"MOT\0")
+        && !prefix.starts_with(b"Nikon\0\x01")
+}
+
+#[cfg(test)]
+#[test]
+fn headerless_nikon_root_respects_ordered_maker_conditions() {
+    assert!(selected_headerless_nikon_note(
+        b"\x12\0\x01\0",
+        "NIKON",
+        "E775"
+    ));
+    for earlier in [
+        b"Nikon\0\x01".as_slice(),
+        b"MOT\0",
+        b"MINOL\0",
+        b"Apple iOS\0",
+    ] {
+        assert!(!selected_headerless_nikon_note(earlier, "NIKON", "E775"));
+    }
 }
 
 /// Applies ExifTool's condition-specific names to the MakerNote (0x927C)
