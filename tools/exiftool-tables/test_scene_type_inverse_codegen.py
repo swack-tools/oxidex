@@ -11,7 +11,7 @@ from unittest.mock import patch
 import scene_type_inverse_codegen as generator
 
 HERE = Path(__file__).resolve().parent
-FIXTURE = json.loads((HERE / "fixtures/scene_type_inverse_sources.json").read_text())
+FIXTURE = json.loads((HERE / "testdata/scene_type_inverse_sources.json").read_text())
 
 
 def document(version):

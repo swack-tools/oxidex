@@ -7,7 +7,6 @@ UserData explicit Format rows; other ProcessMOV routes stay outside these
 generators. Reader differences are emitted as source-selected capabilities.
 """
 
-import json
 import hashlib
 from pathlib import Path
 import tempfile
@@ -19,14 +18,14 @@ import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
 import quicktime_protocol_caps as caps
 from quicktime_test_sources import selected_document
+from quicktime_test_sources import source_document
 
 
-HERE = Path(__file__).resolve().parent
 COMPILERS = (("ItemList", itemlist), ("Keys", keys), ("UserData", userdata))
 
 
 def source(version):
-    return json.loads((HERE / "fixtures" / f"quicktime_source_{version.replace('.', '_')}.json").read_text())
+    return source_document(version)
 
 
 class HistoricalContracts(unittest.TestCase):

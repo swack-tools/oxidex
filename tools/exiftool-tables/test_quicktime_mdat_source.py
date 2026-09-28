@@ -1,6 +1,5 @@
 """Selected Main mdat names captured from native 11.78, 12.64 and 13.59."""
 
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,9 +9,7 @@ import quicktime_protocol_caps as caps
 import quicktime_generated_specs as itemlist
 import quicktime_keys_specs as keys
 import quicktime_userdata_specs as userdata
-
-HERE = Path(__file__).resolve().parent
-
+from quicktime_test_sources import source_document
 
 class MainMdatSource(unittest.TestCase):
     def test_selected_native_declarations_drive_generated_operands(self):
@@ -21,8 +18,7 @@ class MainMdatSource(unittest.TestCase):
                                ("12.64", ("MediaDataSize", "MediaDataOffset")),
                                ("13.59", ("MediaDataSize", "MediaDataOffset"))):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
-                document = json.loads((HERE / "fixtures" /
-                    f"quicktime_source_{version.replace('.', '_')}.json").read_text())
+                document = source_document(version)
                 root = Path(directory)
                 (root / ".exiftool-version").write_text(version + "\n")
                 with patch.object(caps, "ROOT", root), patch.object(itemlist, "ROOT", root), \
@@ -36,19 +32,18 @@ class MainMdatSource(unittest.TestCase):
                     self.assertEqual(rendered, caps.RUST.read_text())
 
     def test_unknown_controls_and_mixed_source_names_fail_closed(self):
-        document = json.loads((HERE / "fixtures/quicktime_source_11_78.json").read_text())
+        document = source_document("11.78")
         document["quicktime_main_mdat_tags"]["mdat-size"]["RawConv"] = "$val + 1"
         with self.assertRaisesRegex(ValueError, "unreviewed.*conversion"):
             caps.main_mdat_names(document)
-        document = json.loads((HERE / "fixtures/quicktime_source_12_64.json").read_text())
+        document = source_document("12.64")
         document["quicktime_main_mdat_tags"]["mdat-offset"]["RawConv"] = "$val + 1"
         with self.assertRaisesRegex(ValueError, "unreviewed.*conversion"):
             caps.main_mdat_names(document)
 
     def test_normal_full_dump_rows_produce_bounded_native_fact(self):
         for version in ("11.78", "12.64", "13.59"):
-            document = json.loads((HERE / "fixtures" /
-                f"quicktime_source_{version.replace('.', '_')}.json").read_text())
+            document = source_document(version)
             native = document.pop("quicktime_main_mdat_tags")
             legacy = {}
             for key, value in native.items():

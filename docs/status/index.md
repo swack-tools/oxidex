@@ -37,7 +37,7 @@ Three different counts describe "how many tags". They measure different things a
 | --- | ---: | --- | --- |
 | ExifTool 13.59 catalog entries | **33,487** | Every ordinary tag entry ExifTool's own tag lookup lists, one per table coordinate. This is the read-parity denominator. | [`catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) `counts.catalog_ordinary_entries` |
 | Writable catalog entries | **14,169** | The entries ExifTool can write (7,068 distinct names, case-insensitive). This is the write-parity denominator. | [`catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) `counts.native_writable.writable` |
-| Tag definitions in `oxidex-tags-*` | **16,684** | Tag definitions in 931 tables across 6 `oxidex-tags-*` YAML databases. Knowing a tag exists is not the same as extracting it, so this is **not** a coverage figure. | [`parse_yaml_tags`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/scripts/generate_tag_coverage.py) (as `scripts/sync_tag_stats.py --check`) |
+| Tag definitions in `oxidex-tags-*` | **16,683** | Tag definitions in 931 tables across 6 `oxidex-tags-*` YAML databases. Knowing a tag exists is not the same as extracting it, so this is **not** a coverage figure. | [`parse_yaml_tags`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/scripts/generate_tag_coverage.py) (as `scripts/sync_tag_stats.py --check`) |
 
 Writability of the 33,487 catalog entries: 14,169 writable, 55 writable but protected, 19,262 read-only, 1 not listed. The 35,886 hydrated source rows are the ExifTool table rows the catalog was joined to.
 
@@ -153,7 +153,7 @@ Explicitly refused, with a recorded reason (4): `InverseDateTime`, `ValidateImag
 
 ### Generated artifacts
 
-**262** files are regenerated from ExifTool's source (tier 1: 237, tier 2: 25; 238 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
+**269** files are regenerated from ExifTool's source (tier 1: 244, tier 2: 25; 242 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
 
 ## Generated share of correct output
 

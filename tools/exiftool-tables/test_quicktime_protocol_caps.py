@@ -14,11 +14,8 @@ import quicktime_protocol_caps as caps
 import quicktime_test_sources as sources
 from quicktime_test_sources import selected_document
 
-HERE = Path(__file__).resolve().parent
-
-
 def source(version):
-    return json.loads((HERE / "fixtures" / f"quicktime_source_{version.replace('.', '_')}.json").read_text())
+    return sources.source_document(version)
 
 
 class ProtocolCapabilities(unittest.TestCase):
