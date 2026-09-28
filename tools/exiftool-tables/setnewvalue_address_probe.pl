@@ -203,8 +203,26 @@ for my $lower (@query_names) {
         # selected table's write controls differ.
         my %candidate = (name => "$info->{Name}", raw_id => "$info->{TagID}",
                          writable => (defined $info->{Writable} ? "$info->{Writable}" : undef),
+                         candidate_writable => (($info->{Writable} ||
+                             (!defined($info->{Writable}) && $table->{WRITABLE} &&
+                              !$info->{SubDirectory})) ? JSON::PP::true : JSON::PP::false),
                          permanent => ($info->{Permanent} ? JSON::PP::true : JSON::PP::false),
                          write_group => (defined $info->{WriteGroup} ? "$info->{WriteGroup}" : undef));
+        # ConvInv uses this candidate's own PrintConv, not the EXIF row with
+        # the same name.  A plain hash with no inverse/callback/OTHER has a
+        # closed set of display labels. Everything else stays unknown to the
+        # generated rejection proof, including absent PrintConv (which may
+        # accept arbitrary text).
+        my $conv = $info->{PrintConv};
+        my $plain = ref($conv) eq 'HASH' && !exists($info->{PrintConvInv})
+            && !exists($conv->{OTHER}) && !exists($conv->{BITMASK})
+            && !exists($conv->{Notes}) && !$info->{List}
+            && !$info->{Struct} && !$info->{WriteAlso}
+            && !exists($info->{AutoSplit});
+        $plain &&= !grep { !defined($_) || ref($_) } values %$conv if $plain;
+        $candidate{print_conv} = $plain
+            ? { kind => 'plain_hash', labels => [ map { "$conv->{$_}" } sort keys %$conv ] }
+            : { kind => 'unknown' };
         if (my $identity = $native_table_identity{refaddr($table)}) {
             @candidate{qw(module table full_name)} = @{$identity}{qw(module table full_name)};
         } else {
