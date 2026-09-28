@@ -287,8 +287,15 @@ pub fn parse_lens_data(
     order: ByteOrder,
     ctx: &mut Ctx,
     out: &mut HashMap<String, String>,
-) -> Vec<Emitted> {
+) -> GeneratedLensData {
     parse_encrypted(LENS_DATA_ROOTS, value, entry_count, keys, order, ctx, out)
+}
+
+/// The selected generated route owns its credited fields even when its
+/// outward rows are silenced for attribution measurement.
+pub struct GeneratedLensData {
+    pub owned: bool,
+    pub rows: Vec<Emitted>,
 }
 
 /// Select the sub-directory variant, decrypt, and walk the resulting table.
@@ -300,18 +307,22 @@ fn parse_encrypted(
     order: ByteOrder,
     ctx: &mut Ctx,
     out: &mut HashMap<String, String>,
-) -> Vec<Emitted> {
+) -> GeneratedLensData {
+    let unavailable = || GeneratedLensData {
+        owned: false,
+        rows: Vec::new(),
+    };
     let Some(root) = select_root(roots, value, entry_count) else {
-        return Vec::new();
+        return unavailable();
     };
     // A variant with no DecryptStart is one of the plaintext layouts, which
     // the hand-written parsers already cover.
     let Some(enc) = root.encrypted else {
-        return Vec::new();
+        return unavailable();
     };
     // No usable key means ExifTool warns and extracts nothing here.
     let Some(keys) = keys else {
-        return Vec::new();
+        return unavailable();
     };
 
     let mut data = value.to_vec();
@@ -324,7 +335,7 @@ fn parse_encrypted(
         0
     };
     if dir_start > data.len() {
-        return Vec::new();
+        return unavailable();
     }
     let big = enc.byte_order.unwrap_or(order == ByteOrder::BigEndian);
     let dir_len = data.len() - dir_start;
@@ -335,13 +346,18 @@ fn parse_encrypted(
     // field walk changes. The hand interpreter remains available for fields
     // that have not yet been independently credited to the generated walk.
     if root.name != "LensData0204" {
-        return Vec::new();
+        return unavailable();
     }
     let Some(table) = exiftool_tables::find_table("Nikon", "LensData0204") else {
-        return Vec::new();
+        return unavailable();
     };
     if !exiftool_tables::is_enabled(table) {
-        return Vec::new();
+        return unavailable();
+    }
+    // The last credited field is byte 13. A partial encrypted block is not
+    // enough to transfer ownership from the established hand reader.
+    if dir_len < 14 {
+        return unavailable();
     }
     let mut members = HashMap::new();
     if let Some(model) = ctx.model.as_deref() {
@@ -367,7 +383,10 @@ fn parse_encrypted(
         &mut generated_ctx,
         &mut emitted,
     );
-    emitted
+    GeneratedLensData {
+        owned: true,
+        rows: emitted,
+    }
 }
 
 #[cfg(test)]
@@ -430,7 +449,7 @@ mod dispatch_tests {
         data
     }
 
-    fn generated_lens_rows(data: &[u8], keys: Option<Keys>) -> Vec<Emitted> {
+    fn generated_lens_rows(data: &[u8], keys: Option<Keys>) -> GeneratedLensData {
         let mut ctx = Ctx::new(Some("NIKON D810"), None);
         let mut out = HashMap::new();
         parse_lens_data(
@@ -451,16 +470,19 @@ mod dispatch_tests {
             count: 485,
         });
         let rows = generated_lens_rows(&data, keys);
-        assert!(rows.iter().any(|row| row.name == "ExitPupilPosition"));
-        assert!(generated_lens_rows(&data, None).is_empty());
+        assert!(rows.owned);
+        assert!(rows.rows.iter().any(|row| row.name == "ExitPupilPosition"));
+        assert!(!generated_lens_rows(&data, None).owned);
         assert!(
             generated_lens_rows(&data[..4], keys)
+                .rows
                 .iter()
                 .all(|row| row.name != "ExitPupilPosition")
         );
+        assert!(!generated_lens_rows(&data[..4], keys).owned);
         let mut unknown = data.clone();
         unknown[..4].copy_from_slice(b"9999");
-        assert!(generated_lens_rows(&unknown, keys).is_empty());
+        assert!(!generated_lens_rows(&unknown, keys).owned);
 
         // Nikon's stream has no authentication bytes: a wrong key is
         // structurally parseable, but it must not satisfy the pinned expected
@@ -477,7 +499,7 @@ mod dispatch_tests {
                 .find(|row| row.name == "ExitPupilPosition")
                 .map(|row| row.stored.clone())
         };
-        assert_ne!(pupil(&rows), pupil(&wrong));
+        assert_ne!(pupil(&rows.rows), pupil(&wrong.rows));
     }
 
     #[test]

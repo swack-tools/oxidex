@@ -3,7 +3,14 @@
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
 use oxidex::core::tag_occurrence::ValueChannel;
+use oxidex::exiftool_tables::session::Session;
+use oxidex::exiftool_tables::{Ctx, MemberValue};
+use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+use oxidex::parsers::tiff::makernotes::nikon::NikonParser;
+use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use oxidex_tags::TagId;
+use std::collections::HashMap;
 
 #[path = "common/fixtures.rs"]
 mod fixtures;
@@ -94,4 +101,74 @@ fn encrypted_field_respects_cli_request_and_numeric_projection() {
     let numeric = run(true);
     assert!(numeric.contains("97.5238095238095"));
     assert!(!numeric.contains("AFAperture"));
+}
+
+#[test]
+fn engine_silence_does_not_resurrect_hand_copies_on_real_d810() {
+    let path = fixtures::required_combined_fixture_path("Nikon/NikonD810.jpg");
+    let file = std::fs::read(&path).expect("read required D810 carrier bytes");
+    let marker = b"Nikon\0\x02\x11\0\0";
+    let offset = file
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("D810 Nikon MakerNote signature");
+    // Isolate the real MakerNote carrier so the process-wide engine token
+    // does not suppress the enclosing EXIF IFD before it reaches Nikon.
+    let context = MakerNoteContext::detached(&file[offset..]);
+    let mut session = Session::new();
+    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+    let mut condition = Ctx::new(&mut members);
+    let mut tags = HashMap::new();
+    let mut value_forms = HashMap::new();
+    let mut rows = Vec::new();
+    NikonParser
+        .parse_with_context_and_values_and_session_and_occurrences(
+            &context,
+            ByteOrder::LittleEndian,
+            Some("NIKON D810"),
+            &mut session,
+            &mut condition,
+            &mut tags,
+            &mut value_forms,
+            &mut rows,
+        )
+        .expect("parse D810 Nikon MakerNote");
+
+    let credited = [
+        "ExitPupilPosition",
+        "AFAperture",
+        "FocusPosition",
+        "LensFStops",
+    ];
+    let silenced = std::env::var("OXIDEX_GENSHARE_SILENCE")
+        .ok()
+        .is_some_and(|tokens| tokens.split(',').any(|token| token == "engine"));
+    for name in credited {
+        let key = format!("Nikon:{name}");
+        assert!(!tags.contains_key(&key), "{key}: no hand copy");
+        assert!(!value_forms.contains_key(&key), "{key}: no hand ValueConv");
+        assert_eq!(
+            rows.iter()
+                .filter(|(candidate, _)| candidate == &key)
+                .count(),
+            usize::from(!silenced),
+            "{key}: only the generated route may report"
+        );
+    }
+    assert_eq!(
+        tags.get("Nikon:MinFocalLength").map(String::as_str),
+        Some("24.5 mm")
+    );
+
+    if !silenced {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "engine_silence_does_not_resurrect_hand_copies_on_real_d810",
+            ])
+            .env("OXIDEX_GENSHARE_SILENCE", "engine")
+            .status()
+            .expect("run real-carrier engine knockout in isolated process");
+        assert!(status.success(), "engine knockout failed: {status}");
+    }
 }

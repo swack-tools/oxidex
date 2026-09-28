@@ -861,6 +861,7 @@ impl NikonParser {
         });
         let mut ctx = binary_data::Ctx::new(model, None);
         let mut parsed_value_forms = HashMap::new();
+        let mut generated_lens_owned = false;
 
         // Parse IFD entries starting at the IFD location
         // Pass the full 'data' buffer so that offset calculations work correctly
@@ -1019,7 +1020,8 @@ impl NikonParser {
                             &mut ctx,
                             tags,
                         );
-                        for tag in generated {
+                        generated_lens_owned |= generated.owned && structured_rows.is_some();
+                        for tag in generated.rows {
                             // The source-derived table has more fields than
                             // this route has independently credited. Keep
                             // the hand reader for every other name.
@@ -1057,7 +1059,6 @@ impl NikonParser {
                                         },
                                     },
                                 ));
-                                tags.remove(&key);
                             }
                         }
                     }
@@ -1861,11 +1862,20 @@ impl NikonParser {
         // (see `binary_data::Pc::is_deferred`).
         ctx.finish_deferred(tags);
         parsed_value_forms.extend(ctx.take_value_forms());
-        if let Some(rows) = structured_rows {
-            for (key, row) in rows.iter() {
-                if row.origin.table == Some("LensData0204") {
-                    parsed_value_forms.remove(key);
-                }
+        if generated_lens_owned {
+            // Ownership is established by the selected source table, valid
+            // key and complete carrier, independent of outward Emitted rows.
+            // In particular, the `engine` attribution knockout must not
+            // expose the hand reader's copies of these four fields.
+            for name in [
+                "ExitPupilPosition",
+                "AFAperture",
+                "FocusPosition",
+                "LensFStops",
+            ] {
+                let key = format!("Nikon:{name}");
+                tags.remove(&key);
+                parsed_value_forms.remove(&key);
             }
         }
         value_forms.extend(parsed_value_forms);
