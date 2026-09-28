@@ -365,8 +365,8 @@ fn leica_layout(data: &[u8]) -> Option<LeicaLayout> {
 /// spells each one out. `MakerNoteLeica2` declares `Base => '$start'`, the IFD
 /// at `$valuePtr + 8` (MakerNotes.pm:621); `MakerNoteLeica4` declares
 /// `Base => '$start - 8'`, the payload itself (MakerNotes.pm:645); and
-/// `MakerNoteLeica9` declares no `Base` at all, so it inherits the enclosing
-/// TIFF header (MakerNotes.pm:717-721).
+/// `MakerNoteLeica9` uses the payload start in 11.78 (`Base => '$start - 8'`)
+/// and inherits the enclosing TIFF header in 12.64/13.59 (no `Base`).
 ///
 /// The distinction is not cosmetic: resolving `LeicaM10-R.jpg`'s `MeasuredLV`
 /// against the payload reads 899785574/2936739356 = 0.31 where ExifTool reads
@@ -479,7 +479,7 @@ fn read_leica_string(values: LeicaValues<'_>, value_offset: u32, count: u32) -> 
 /// `MM` is 0x1800 = 6144 -- rejected outright by the entry-count sanity check
 /// as "Invalid Leica IFD entry count: 6144", which dropped all eight of its
 /// `Leica:` tags. Read as `II` it is 24.
-fn resolve_unknown_byte_order(ifd_data: &[u8], inherited: ByteOrder) -> ByteOrder {
+pub(crate) fn resolve_unknown_byte_order(ifd_data: &[u8], inherited: ByteOrder) -> ByteOrder {
     let Some(num) = EndianReader::new(ifd_data, inherited.to_io_byte_order()).u16_at(0) else {
         return inherited;
     };
@@ -1002,10 +1002,9 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         self.parse_payload(data, byte_order, None, tags, &mut HashMap::new())
     }
 
-    /// Leica9's value offsets are measured from the enclosing TIFF header
-    /// rather than from the MakerNote, so `MeasuredLV` and
-    /// `ExternalSensorBrightnessValue` on an M10/M11/S are reachable only from
-    /// a located context.
+    /// Leica9's value offsets need the selected source's base: the MakerNote
+    /// start in 11.78, the TIFF header in 12.64/13.59. Both require a located
+    /// context for `MeasuredLV` and `ExternalSensorBrightnessValue`.
     fn parse_with_context(
         &self,
         ctx: &MakerNoteContext<'_>,
@@ -1093,10 +1092,7 @@ impl LeicaMakerNoteParser {
 
         // Where this layout's out-of-line values are measured from.
         let values = match layout {
-            // No `Base`, so the enclosing TIFF header. Without a located
-            // context there is nothing to measure against.
-            //
-            // `MakerNoteLeica3` (R8/R9) declares no `Base` either
+            // `MakerNoteLeica3` (R8/R9) declares no `Base`
             // (MakerNotes.pm:625-637, only `Start => '$valuePtr'`), so its
             // out-of-line reads are the same TIFF-relative story: R9's
             // `SerialInfo` (0x0b) entry holds `value_offset=772`, which
@@ -1108,7 +1104,25 @@ impl LeicaMakerNoteParser {
             // `MakerNoteLeica5`, which declares `Base => '$start - 8'` -- so
             // the Q/SL/CL belong here rather than with the payload-relative
             // arm below.
-            LeicaLayout::Leica9 | LeicaLayout::Leica3 | LeicaLayout::Leica8 => {
+            LeicaLayout::Leica9 => {
+                let base = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                    // MakerNotes.pm 11.78 `Base => '$start - 8'`.
+                    "11.78" => ctx
+                        .filter(|ctx| ctx.is_located())
+                        .map(|ctx| ctx.payload_offset()),
+                    // The Base was removed in 12.64 and remains absent in
+                    // 13.59, so these offsets inherit the TIFF header.
+                    "12.64" | "13.59" => Some(0),
+                    _ => return Err("Unreviewed Leica9 MakerNote source".to_string()),
+                };
+                ctx.filter(|ctx| ctx.is_located()).and_then(|ctx| {
+                    base.map(|base| LeicaValues {
+                        block: ctx.tiff(),
+                        base,
+                    })
+                })
+            }
+            LeicaLayout::Leica3 | LeicaLayout::Leica8 => {
                 ctx.filter(|ctx| ctx.is_located()).map(|ctx| LeicaValues {
                     block: ctx.tiff(),
                     base: 0,
@@ -1181,6 +1195,16 @@ impl LeicaMakerNoteParser {
 
             // Parse IFD entry fields using EndianReader
             let tag_id = entry_reader.u16_at(0).unwrap_or(0);
+            // The hand decoder knows newer Leica9 ids. Its 11.78 source
+            // table declares only 0x304, 0x311 and 0x312; borrowing a
+            // newer name (such as UserProfile) from the hand decoder turns
+            // unrelated bytes into a false tag and can veto safe writes.
+            if layout == LeicaLayout::Leica9
+                && !crate::exiftool_tables::find_ifd_table("Panasonic", "Leica9")
+                    .is_some_and(|table| table.tag(tag_id).is_some())
+            {
+                continue;
+            }
             let format = entry_reader.u16_at(2).unwrap_or(0);
             let component_count = entry_reader.u32_at(4).unwrap_or(0);
             let value_offset = entry_reader.u32_at(8).unwrap_or(0);

@@ -832,6 +832,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // 0x0118 (RawDataOffset) and "IFD0:XResolution" = 1 for
                     // 0x011A (which PanasonicRaw::Main does not define at all,
                     // so ExifTool does not report it).
+                    // Artist 0x013b first appears in the later reviewed
+                    // PanasonicRaw::Main tables. 11.78 ignores the physical
+                    // row even when a synthetic RW2 carries it.
+                    if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && *tag_id == 0x013b
+                        && !crate::exiftool_tables::find_ifd_table("PanasonicRaw", "Main")
+                            .is_some_and(|table| table.tag(*tag_id).is_some())
+                    {
+                        continue;
+                    }
                     let tag_name = if format == RawFormat::PanasonicRW2 && ifd_index == 0 {
                         match panasonic_raw_ifd0_tag_name(*tag_id) {
                             Some(name) => format!("{}:{}", ifd_name, name),

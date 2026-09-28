@@ -545,6 +545,15 @@ pub(crate) fn rw2_set_is_no_op(
     let Some(rw2) = Rw2::read(file_bytes, baseline) else {
         return false;
     };
+    // PanasonicRaw::Main 11.78 has no Artist row. Native SetNewValue leaves
+    // even an RW2 with a physical 0x013b and JpgFromRaw unchanged; routing
+    // into the embedded JPEG begins with later source tables.
+    if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78"
+        && name.eq_ignore_ascii_case("Artist")
+        && panasonic_tags(name).is_empty()
+    {
+        return true;
+    }
     let Some(exif) = exif_tag(name) else {
         return false;
     };

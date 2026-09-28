@@ -1400,13 +1400,29 @@ fn an_rw2_edit_passes_the_post_write_check() {
         t.extend(order.u32(0));
         t.extend(b"Panasonic\0");
         let path = write(dir.path(), "synthetic.rw2", &t);
-        modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+        let original = std::fs::read(&path).unwrap();
+        let outcome = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
             .unwrap_or_else(|e| panic!("{order:?} synthetic RW2: {e}"));
-        assert_eq!(
-            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-            Some("x"),
-            "{order:?}"
-        );
+        if exiftool_oracle::repo_pin() == "11.78" {
+            // PanasonicRaw::Main 11.78 has no Artist row. Its native write
+            // reports unchanged even though this synthetic file carries
+            // physical 0x013b; the reader must not borrow Exif::Main's name.
+            assert_eq!(
+                outcome,
+                oxidex::core::write_transaction::WriteOutcome::Unchanged
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(
+                read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                None
+            );
+        } else {
+            assert_eq!(
+                read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                Some("x"),
+                "{order:?}"
+            );
+        }
     }
     let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
         return;
@@ -1414,9 +1430,16 @@ fn an_rw2_edit_passes_the_post_write_check() {
     let path = dir.path().join("Panasonic.rw2");
     std::fs::copy(&sample, &path).unwrap();
     let original = std::fs::read(&path).unwrap();
-    let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
-        .expect_err("t/images/Panasonic.rw2: IFD0:Artist written outside the JpgFromRaw");
-    assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    if exiftool_oracle::repo_pin() == "11.78" {
+        assert_eq!(
+            modify_tag(&path, "IFD0:Artist", TagValue::new_string("x")).unwrap(),
+            oxidex::core::write_transaction::WriteOutcome::Unchanged
+        );
+    } else {
+        let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+            .expect_err("t/images/Panasonic.rw2: IFD0:Artist written outside the JpgFromRaw");
+        assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    }
     assert!(std::fs::read(&path).unwrap() == original, "file touched");
 }
 

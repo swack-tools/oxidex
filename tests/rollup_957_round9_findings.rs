@@ -116,6 +116,14 @@ fn without(kinds: &[String], gone: &str) -> Vec<String> {
 /// the chunk back (tIME, gAMA: `after writing, PNG:<Name> is still present`,
 /// exit 1) or called the deletion a no-op because its reader surfaces no
 /// SRGBRendering (`1 image files unchanged`, sRGB kept).
+fn png_gamma_and_srgb_writable() -> bool {
+    match exiftool_oracle::repo_pin() {
+        "11.78" => false,
+        "12.64" | "13.59" => true,
+        other => panic!("unreviewed PNG write source: {other}"),
+    }
+}
+
 #[test]
 fn deleting_a_chunk_backed_png_tag_drops_its_chunk() {
     let dir = TempDir::new().unwrap();
@@ -133,15 +141,35 @@ fn deleting_a_chunk_backed_png_tag_drops_its_chunk() {
         ("-PNG:Gamma=", "gAMA"),
         ("-PNG:SRGBRendering=", "sRGB"),
     ] {
+        let writable = kind == "tIME" || png_gamma_and_srgb_writable();
         let ours = write_png(&dir, "ours.png", ALL);
+        let original = fs::read(&ours).unwrap();
         let o = oxidex(&[arg], &[&ours]);
-        assert_eq!(
-            (o.status.code(), out(&o).as_str()),
-            (Some(0), "    1 image files updated\n"),
-            "{arg}: {}",
-            err(&o)
-        );
-        assert_eq!(chunk_types(&ours), without(&before, kind), "{arg}");
+        let expected_chunks = if writable {
+            without(&before, kind)
+        } else {
+            before.clone()
+        };
+        if writable {
+            assert_eq!(
+                (o.status.code(), out(&o).as_str()),
+                (Some(0), "    1 image files updated\n"),
+                "{arg}: {}",
+                err(&o)
+            );
+        } else {
+            assert_eq!(o.status.code(), Some(1), "{arg}");
+            assert_eq!(out(&o), "", "{arg}");
+            assert_eq!(
+                err(&o),
+                format!(
+                    "Warning: Sorry, {} doesn't exist or isn't writable\nNothing to do.\n",
+                    &arg[1..arg.len() - 1]
+                )
+            );
+            assert_eq!(fs::read(&ours).unwrap(), original, "{arg}");
+        }
+        assert_eq!(chunk_types(&ours), expected_chunks, "{arg}");
 
         if let Some(oracle) = oracle {
             let theirs = write_png(&dir, "theirs.png", ALL);
@@ -151,8 +179,12 @@ fn deleting_a_chunk_backed_png_tag_drops_its_chunk() {
                 .arg(&theirs)
                 .output()
                 .unwrap();
-            assert_eq!(out(&t), "    1 image files updated\n", "13.59 {arg}");
-            assert_eq!(chunk_types(&theirs), without(&before, kind), "13.59 {arg}");
+            assert_eq!(
+                t.status.code(),
+                if writable { Some(0) } else { Some(1) },
+                "{arg}"
+            );
+            assert_eq!(chunk_types(&theirs), expected_chunks, "{arg}");
             // Nothing else moved: the two files are the same bytes.
             assert_eq!(
                 fs::read(&ours).unwrap(),
@@ -211,15 +243,21 @@ fn unchanged_or_absent_chunk_tags_are_carried_or_no_ops() {
 
     let oracle = exiftool_oracle::graded();
     for arg in ["-PNG:ModifyDate=", "-PNG:Gamma=", "-PNG:SRGBRendering="] {
+        let writable = arg == "-PNG:ModifyDate=" || png_gamma_and_srgb_writable();
         let path = write_png(&dir, "bare.png", &[b"pHYs", b"tEXt"]);
         let before = fs::read(&path).unwrap();
         let o = oxidex(&[arg], &[&path]);
-        assert_eq!(
-            out(&o),
-            "    0 image files updated\n    1 image files unchanged\n",
-            "{arg}: {}",
-            err(&o)
-        );
+        if writable {
+            assert_eq!(
+                out(&o),
+                "    0 image files updated\n    1 image files unchanged\n",
+                "{arg}: {}",
+                err(&o)
+            );
+        } else {
+            assert_eq!(o.status.code(), Some(1), "{arg}");
+            assert_eq!(out(&o), "", "{arg}");
+        }
         assert_eq!(fs::read(&path).unwrap(), before, "{arg}");
         if let Some(oracle) = oracle {
             let theirs = write_png(&dir, "bare-theirs.png", &[b"pHYs", b"tEXt"]);
@@ -230,9 +268,18 @@ fn unchanged_or_absent_chunk_tags_are_carried_or_no_ops() {
                 .output()
                 .unwrap();
             assert_eq!(
+                t.status.code(),
+                if writable { Some(0) } else { Some(1) },
+                "{arg}"
+            );
+            assert_eq!(
                 out(&t),
-                "    0 image files updated\n    1 image files unchanged\n",
-                "13.59 {arg}"
+                if writable {
+                    "    0 image files updated\n    1 image files unchanged\n"
+                } else {
+                    ""
+                },
+                "{arg}"
             );
         }
     }

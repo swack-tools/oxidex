@@ -563,6 +563,13 @@ fn process_ifd0_tags(
             continue;
         };
 
+        // Exif::Main 11.78/12.64 has no 0x9287 row. The newer registry
+        // spelling must not turn its unknown bytes into LearningOptOutIn.
+        if *tag_id == 0x9287
+            && crate::core::tag_conversion::exif_main_residual_port(*tag_id).is_none()
+        {
+            continue;
+        }
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
         let hand_priority = arbiter.hand_priority(

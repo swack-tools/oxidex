@@ -238,7 +238,14 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         {
             let permissions = file_metadata.permissions();
             let mode = permissions.mode();
+            // ExifTool.pm 11.78's FilePermissions PrintConv emits the nine
+            // rwx bits; the file-type prefix was added by later sources.
             let perm_str = format_unix_permissions(mode);
+            let perm_str = if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" {
+                perm_str[1..].to_string()
+            } else {
+                perm_str
+            };
             insert_system_tag(
                 &mut metadata,
                 "File:FilePermissions",

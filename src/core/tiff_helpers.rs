@@ -1670,6 +1670,12 @@ fn parse_exif_directory_with_session(
                 continue;
             }
 
+            // 0x9287 is first declared in Exif::Main by the 13.59 source.
+            // Older pins leave these bytes unnamed; the fallback registry
+            // must not publish its newer LearningOptOutIn spelling.
+            if *tag_id == 0x9287 && exif_main_residual_port(*tag_id).is_none() {
+                continue;
+            }
             let resolved_name = lookup_tag_name(*tag_id, "ExifIFD");
             let (tag_name, special_value) = if *tag_id == MAKERNOTE {
                 special_makernote_value(&resolved_name, bytes, &make, &model)

@@ -162,6 +162,9 @@ pub(crate) fn sorry_not_writable(tag: &str) -> String {
 /// `exiftool -NoSuchTag=v a.jpg` (13.59): `Warning: Tag 'NoSuchTag' is not
 /// defined`, then `Nothing to do.` and exit 1 when no other tag was set.
 pub fn undefined_tag_warning(tag: &str) -> Option<String> {
+    if crate::writers::png_writer::old_png_read_only_tag(tag) {
+        return Some(sorry_not_writable(tag));
+    }
     // `-GROUP:All=` is a group-wide deletion (Writer.pl:400-484 rewrites
     // `all` to `*`), not a tag named `All`: `-GPS:All=` is defined wherever
     // GPS is a deletable group, and an unknown group is ExifTool's `Not a
@@ -253,6 +256,12 @@ pub fn exif_group_answer(group: &str, name: &str) -> Option<ExifGroupAnswer> {
                 ExifGroupAnswer::Rejected
             },
         );
+    }
+    // PixelUnits is PNG::PhysicalDimensions 8 in every reviewed source,
+    // with no Exif::Main or GPS::Main row. The broad registry name fallback
+    // cannot establish an IFD write address for it.
+    if family == "EXIF" && name.eq_ignore_ascii_case("PixelUnits") {
+        return Some(ExifGroupAnswer::Rejected);
     }
     let registered = family == "EXIF"
         && ["EXIF", "GPS"].iter().any(|prefix| {

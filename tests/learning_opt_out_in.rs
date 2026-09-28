@@ -1,8 +1,8 @@
 use oxidex::core::operations::read_metadata;
 use tempfile::NamedTempFile;
 
-/// ExifTool 13.59's Exif.pm 0x9287 PrintConv reads the first `int16u` as the
-/// number of usage/choice pairs, then renders each pair in order.
+/// ExifTool 13.59 first declares Exif.pm 0x9287; older selected sources do
+/// not name these bytes. The 13.59 PrintConv reads usage/choice pairs.
 #[test]
 fn learning_opt_out_in_shift_semantics_match_exiftool() {
     let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x3e];
@@ -25,10 +25,12 @@ fn learning_opt_out_in_shift_semantics_match_exiftool() {
     std::fs::write(file.path(), jpeg).expect("writes JPEG fixture");
 
     let metadata = read_metadata(file.path()).expect("reads JPEG fixture");
-    assert_eq!(
-        metadata.get_string("ExifIFD:LearningOptOutIn"),
-        Some(
-            "Non-Generative AI/ML Training; Opt-out; Input to Foundation Model (Trained AI/ML Model); Opt-in"
-        )
-    );
+    let expected = match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" | "12.64" => None,
+        "13.59" => Some(
+            "Non-Generative AI/ML Training; Opt-out; Input to Foundation Model (Trained AI/ML Model); Opt-in",
+        ),
+        other => panic!("unreviewed LearningOptOutIn source: {other}"),
+    };
+    assert_eq!(metadata.get_string("ExifIFD:LearningOptOutIn"), expected);
 }

@@ -558,6 +558,9 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         let brand_bytes = &ftyp.data[0..4];
         if let Ok(brand) = std::str::from_utf8(brand_bytes) {
             let brand_desc = match brand {
+                "isom" if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" => {
+                    "MP4  Base Media v1 [IS0 14496-12:2003]"
+                }
                 "isom" => "MP4 Base Media v1 [IS0 14496-12:2003]",
                 "iso2" => "MP4 Base Media v2",
                 "mp41" => "MP4 v1 [ISO 14496-1:ch13]",

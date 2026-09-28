@@ -1060,8 +1060,20 @@ const CHUNK_TAGS: &[(&str, [u8; 4])] = &[
 pub(crate) fn chunk_tag_chunk(key: &str) -> Option<[u8; 4]> {
     CHUNK_TAGS
         .iter()
+        .filter(|(_, kind)| {
+            crate::exiftool_tables::EXIFTOOL_VERSION != "11.78" || *kind == *b"tIME"
+        })
         .find(|(tag, _)| tag.eq_ignore_ascii_case(key))
         .map(|(_, kind)| *kind)
+}
+
+/// PNG.pm 11.78 declares gAMA and sRGB as read-only. Its 12.64 and 13.59
+/// tables add writable entries for these main-table chunks.
+pub(crate) fn old_png_read_only_tag(key: &str) -> bool {
+    crate::exiftool_tables::EXIFTOOL_VERSION == "11.78"
+        && ["PNG:Gamma", "PNG:SRGBRendering"]
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(key))
 }
 
 /// Whether the PNG in `reader` carries a `kind` chunk before IEND.
@@ -1095,6 +1107,9 @@ fn dropped_chunk_tags(
 ) -> Vec<[u8; 4]> {
     CHUNK_TAGS
         .iter()
+        .filter(|(_, kind)| {
+            crate::exiftool_tables::EXIFTOOL_VERSION != "11.78" || *kind == *b"tIME"
+        })
         .filter(|(key, _)| {
             !metadata.contains_key(key)
                 && (baseline.contains_key(key)
@@ -1158,7 +1173,9 @@ pub(crate) fn strip_all_metadata(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
                 String::from_utf8_lossy(&kind)
             )));
         }
-        let cleared = CLEARED_CHUNKS.contains(&&kind);
+        let cleared = CLEARED_CHUNKS.contains(&&kind)
+            && !(crate::exiftool_tables::EXIFTOOL_VERSION == "11.78"
+                && matches!(&kind, b"gAMA" | b"sRGB"));
         if !cleared {
             output.extend_from_slice(&bytes[at..end]);
         }
