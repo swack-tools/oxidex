@@ -417,47 +417,54 @@ pub fn convert_pfn(val: f64) -> String {
     }
 }
 
-/// `Image::ExifTool::ConvertFileSize($val)`, the default `ByteUnit` branch.
+/// `Image::ExifTool::ConvertFileSize($val)`, selected by the reviewed native
+/// helper body. ExifTool 11.78 uses 1024-based kB/MB/GB; 12.64 and the
+/// default branch of 13.59 use SI units.
 ///
-/// ExifTool (`ExifTool.pm:6851-6871`, pinned 13.59) selects between a binary
-/// and an SI branch on `$$et{OPTIONS}{ByteUnit}`; `ByteUnit` defaults to
-/// `'SI'` (`ExifTool.pm:1115`) and nothing in this pipeline ever sets it, so
-/// the SI branch is the whole function here:
-/// ```perl
-/// $val < 2000 and return "$val bytes";
-/// $val < 10000 and return sprintf('%.1f kB', $val / 1000);
-/// $val < 2000000 and return sprintf('%.0f kB', $val / 1000);
-/// $val < 10000000 and return sprintf('%.1f MB', $val / 1000000);
-/// $val < 2000000000 and return sprintf('%.0f MB', $val / 1000000);
-/// $val < 10000000000 and return sprintf('%.1f GB', $val / 1000000000);
-/// return sprintf('%.0f GB', $val / 1000000000);
-/// ```
-/// The `Binary` branch is deliberately absent rather than approximated: it is
-/// reachable only through an API option this crate never passes, and a
-/// half-implemented option is worse than an unimplemented one.
+/// The caller supplies no `$et`, so the optional Binary branch in 13.59 is
+/// unreachable here. Source digests select the 11.78 binary-scale body or
+/// the 12.64/13.59 SI body; an unreviewed source refuses.
 ///
 /// [`crate::core::value_formatter::format_file_size`] is the same conversion
 /// over a `u64` (the `File:FileSize` call site) and delegates here, so the
 /// two cannot drift.
 #[must_use]
 pub fn convert_file_size(val: f64) -> String {
-    if val < 2000.0 {
+    let source = super::helpers::selected_port_source("Image::ExifTool::ConvertFileSize")
+        .expect("unverified ConvertFileSize source");
+    convert_file_size_for_source(source, val).expect("unverified ConvertFileSize body")
+}
+
+fn convert_file_size_for_source(source: &str, val: f64) -> Option<String> {
+    let binary = match source {
+        "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e" => true,
+        "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117"
+        | "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e" => false,
+        _ => return None,
+    };
+    let (k, m, g) = if binary {
+        (1024.0, 1_048_576.0, 1_073_741_824.0)
+    } else {
+        (1000.0, 1_000_000.0, 1_000_000_000.0)
+    };
+    let result = if val < 2.0 * k {
         // `"$val bytes"` is Perl string interpolation, not a `sprintf` --
         // it goes through `%.15g`, which is what `perl_num` reproduces.
         format!("{} bytes", perl_num(val))
-    } else if val < 10_000.0 {
-        format!("{:.1} kB", val / 1_000.0)
-    } else if val < 2_000_000.0 {
-        format!("{:.0} kB", val / 1_000.0)
-    } else if val < 10_000_000.0 {
-        format!("{:.1} MB", val / 1_000_000.0)
-    } else if val < 2_000_000_000.0 {
-        format!("{:.0} MB", val / 1_000_000.0)
-    } else if val < 10_000_000_000.0 {
-        format!("{:.1} GB", val / 1_000_000_000.0)
+    } else if val < 10.0 * k {
+        format!("{:.1} kB", val / k)
+    } else if val < 2.0 * m {
+        format!("{:.0} kB", val / k)
+    } else if val < 10.0 * m {
+        format!("{:.1} MB", val / m)
+    } else if val < 2.0 * g {
+        format!("{:.0} MB", val / m)
+    } else if val < 10.0 * g {
+        format!("{:.1} GB", val / g)
     } else {
-        format!("{:.0} GB", val / 1_000_000_000.0)
-    }
+        format!("{:.0} GB", val / g)
+    };
+    Some(result)
 }
 
 /// `Image::ExifTool::Nikon::PrintAFPointsLeftRight($col, $ncol)`.
@@ -1147,22 +1154,55 @@ mod tests {
         assert_eq!(convert_pfn(1e18), "On (1e+18)");
     }
 
-    /// `ConvertFileSize` (ExifTool.pm:6851-6871, SI branch). The boundaries
-    /// are the ones the Perl states, and the point of the 1500/1_000_000 rows
-    /// is that the unit does NOT change at each power of 1000.
+    /// `ConvertFileSize` uses the selected native branch; the carrier value
+    /// is 168 kB at 11.78 and 172 kB at 12.64/13.59.
     #[test]
     fn convert_file_size_matches_exiftool() {
         assert_eq!(convert_file_size(500.0), "500 bytes");
-        assert_eq!(convert_file_size(1999.0), "1999 bytes");
-        assert_eq!(convert_file_size(2000.0), "2.0 kB");
-        assert_eq!(convert_file_size(9999.0), "10.0 kB");
-        assert_eq!(convert_file_size(10_000.0), "10 kB");
-        assert_eq!(convert_file_size(1_000_000.0), "1000 kB");
-        // Palm.mobi's real UncompressedTextLength -- see
-        // `exiftool_tables::tests::recovered_conversions_match_the_pinned_
-        // oracle_on_real_carriers` for the oracle run this came from.
-        assert_eq!(convert_file_size(171_966.0), "172 kB");
-        assert_eq!(convert_file_size(2_500_000_000.0), "2.5 GB");
+        let binary = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => true,
+            "12.64" | "13.59" => false,
+            other => panic!("unreviewed ConvertFileSize source: {other}"),
+        };
+        if binary {
+            assert_eq!(convert_file_size(1999.0), "1999 bytes");
+            assert_eq!(convert_file_size(2048.0), "2.0 kB");
+            assert_eq!(convert_file_size(171_966.0), "168 kB");
+            assert_eq!(convert_file_size(2_500_000_000.0), "2.3 GB");
+        } else {
+            assert_eq!(convert_file_size(1999.0), "1999 bytes");
+            assert_eq!(convert_file_size(2000.0), "2.0 kB");
+            assert_eq!(convert_file_size(9999.0), "10.0 kB");
+            assert_eq!(convert_file_size(10_000.0), "10 kB");
+            assert_eq!(convert_file_size(1_000_000.0), "1000 kB");
+            assert_eq!(convert_file_size(171_966.0), "172 kB");
+            assert_eq!(convert_file_size(2_500_000_000.0), "2.5 GB");
+        }
+    }
+
+    #[test]
+    fn palm_file_size_uses_each_reviewed_native_body() {
+        // Pinned Perl 5.38.2 on each retained Palm.mobi: raw 171966.
+        for (source, printed) in [
+            (
+                "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e",
+                "168 kB",
+            ),
+            (
+                "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117",
+                "172 kB",
+            ),
+            (
+                "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
+                "172 kB",
+            ),
+        ] {
+            assert_eq!(
+                convert_file_size_for_source(source, 171_966.0).as_deref(),
+                Some(printed)
+            );
+        }
+        assert_eq!(convert_file_size_for_source("unreviewed", 171_966.0), None);
     }
 
     /// The `u64` file-size formatter and the `f64` `PrintConv` one must be

@@ -210,11 +210,30 @@ CODE_REFS = {
     "(return ($val ? (($val == 1) ? 'On' : (\"On ($val)\")) : 'Off')); }":
         "Image::ExifTool::CanonCustom::ConvertPfn($val)",
 
-    # Image::ExifTool::ConvertFileSize -- ExifTool.pm:6851-6871, reached from
-    # Palm.pm:121-124 (MOBI UncompressedTextLength). The deparse carries BOTH
-    # of the sub's branches; the translation reproduces the SI one, which is
-    # the only one reachable without an API option this crate never sets
-    # (`ByteUnit` defaults to 'SI', ExifTool.pm:1115).
+    # Image::ExifTool::ConvertFileSize -- Palm::MOBI's
+    # UncompressedTextLength reaches this named sub at every reviewed pin.
+    # The complete 11.78 body uses 1024 divisors with kB/MB/GB labels; 12.64
+    # uses SI; 13.59 adds an optional Binary branch. The Rust translation
+    # selects those exact reviewed source bodies, and this call supplies no
+    # `$et`, so 13.59 takes its SI branch.
+    "($) { package Image::ExifTool; use strict; (my($val) = (shift())); "
+    "(($val < 2048) and (return (\"$val bytes\"))); "
+    "(($val < 10240) and (return sprintf('%.1f kB', ($val / 1024)))); "
+    "(($val < 2097152) and (return sprintf('%.0f kB', ($val / 1024)))); "
+    "(($val < 10485760) and (return sprintf('%.1f MB', ($val / 1048576)))); "
+    "(($val < 2147483648) and (return sprintf('%.0f MB', ($val / 1048576)))); "
+    "(($val < 10737418240) and (return sprintf('%.1f GB', ($val / 1073741824)))); "
+    "(return sprintf('%.0f GB', ($val / 1073741824))); }":
+        "Image::ExifTool::ConvertFileSize($val)",
+    "($) { package Image::ExifTool; use strict; (my($val) = (shift())); "
+    "(($val < 2000) and (return (\"$val bytes\"))); "
+    "(($val < 10000) and (return sprintf('%.1f kB', ($val / 1000)))); "
+    "(($val < 2000000) and (return sprintf('%.0f kB', ($val / 1000)))); "
+    "(($val < 10000000) and (return sprintf('%.1f MB', ($val / 1000000)))); "
+    "(($val < 2000000000) and (return sprintf('%.0f MB', ($val / 1000000)))); "
+    "(($val < 10000000000) and (return sprintf('%.1f GB', ($val / 1000000000)))); "
+    "(return sprintf('%.0f GB', ($val / 1000000000))); }":
+        "Image::ExifTool::ConvertFileSize($val)",
     "($;$) { package Image::ExifTool; use strict; (my($val, $et) = @_); "
     "if (($et and ($et->{'OPTIONS'}{'ByteUnit'} eq 'Binary'))) { "
     "(($val < 2048) and (return (\"$val bytes\"))); "

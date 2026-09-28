@@ -706,19 +706,27 @@ mod tests {
     /// over -- a branch no file reaches is not a branch this test covers.
     #[test]
     fn recovered_conversions_match_the_pinned_oracle_on_real_carriers() {
+        let palm_want = match helpers::selected_port_source("Image::ExifTool::ConvertFileSize") {
+            Some("20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e") => "168 kB",
+            Some(
+                "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117"
+                | "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
+            ) => "172 kB",
+            _ => panic!("unverified native ConvertFileSize source"),
+        };
         // (module, table, field, ExifTool `-n` value, ExifTool printed value,
         //  carrier)
-        const CASES: &[(&str, &str, &str, i64, &str, &str)] = &[
+        let cases: &[(&str, &str, &str, i64, &str, &str)] = &[
             // exiftool-pinned.sh -s -G1 [-n] -UncompressedTextLength Palm.mobi
             //   [MOBI] UncompressedTextLength : 171966   (-n)
-            //   [MOBI] UncompressedTextLength : 172 kB
+            //   [MOBI] UncompressedTextLength : 168 kB (11.78), 172 kB (12.64/13.59)
             // Palm.pm:121-124 -> ExifTool.pm:6851-6871.
             (
                 "Palm",
                 "MOBI",
                 "UncompressedTextLength",
                 171_966,
-                "172 kB",
+                palm_want,
                 "Palm.mobi",
             ),
             // exiftool-pinned.sh -s -G1 [-n] -PF* Canon/CanonEOS-1DmkII.jpg
@@ -750,7 +758,7 @@ mod tests {
                 "Canon/CanonEOS-1DSmkII.jpg",
             ),
         ];
-        for (module, table, name, raw, want, carrier) in CASES {
+        for (module, table, name, raw, want, carrier) in cases {
             let t = find_table(module, table)
                 .unwrap_or_else(|| panic!("{module}::{table} is not in the generated set"));
             let f = t
@@ -761,7 +769,7 @@ mod tests {
             assert_eq!(
                 runtime::render(f.print_conv, &DecodedValue::Integer(*raw)).as_deref(),
                 Some(*want),
-                "{module}::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} \
+                "{module}::{table} {name} on {carrier}: selected ExifTool prints {want:?} \
                  for the raw value {raw}",
             );
         }

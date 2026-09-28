@@ -1,0 +1,29 @@
+{
+  "instrument": "pinned Perl 5.38.2 B::Deparse -p -sC on Palm::MOBI[1].PrintConv; native exiftool -s3 -UncompressedTextLength Palm.mobi with/without -n, TZ=UTC",
+  "releases": {
+    "11.78": {
+      "deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 2048) and (return (\"$val bytes\")));\n    (($val < 10240) and (return sprintf('%.1f kB', ($val / 1024))));\n    (($val < 2097152) and (return sprintf('%.0f kB', ($val / 1024))));\n    (($val < 10485760) and (return sprintf('%.1f MB', ($val / 1048576))));\n    (($val < 2147483648) and (return sprintf('%.0f MB', ($val / 1048576))));\n    (($val < 10737418240) and (return sprintf('%.1f GB', ($val / 1073741824))));\n    (return sprintf('%.0f GB', ($val / 1073741824)));\n}",
+      "helper_source_sha256": "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e",
+      "palm": {
+        "numeric": "171966",
+        "printed": "168 kB"
+      }
+    },
+    "12.64": {
+      "deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 2000) and (return (\"$val bytes\")));\n    (($val < 10000) and (return sprintf('%.1f kB', ($val / 1000))));\n    (($val < 2000000) and (return sprintf('%.0f kB', ($val / 1000))));\n    (($val < 10000000) and (return sprintf('%.1f MB', ($val / 1000000))));\n    (($val < 2000000000) and (return sprintf('%.0f MB', ($val / 1000000))));\n    (($val < 10000000000) and (return sprintf('%.1f GB', ($val / 1000000000))));\n    (return sprintf('%.0f GB', ($val / 1000000000)));\n}",
+      "helper_source_sha256": "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117",
+      "palm": {
+        "numeric": "171966",
+        "printed": "172 kB"
+      }
+    },
+    "13.59": {
+      "deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val, $et) = @_);\n    if (($et and ($et->{'OPTIONS'}{'ByteUnit'} eq 'Binary'))) {\n        (($val < 2048) and (return (\"$val bytes\")));\n        (($val < 10240) and (return sprintf('%.1f KiB', ($val / 1024))));\n        (($val < 2097152) and (return sprintf('%.0f KiB', ($val / 1024))));\n        (($val < 10485760) and (return sprintf('%.1f MiB', ($val / 1048576))));\n        (($val < 2147483648) and (return sprintf('%.0f MiB', ($val / 1048576))));\n        (($val < 10737418240) and (return sprintf('%.1f GiB', ($val / 1073741824))));\n        (return sprintf('%.0f GiB', ($val / 1073741824)));\n    } else {\n        (($val < 2000) and (return (\"$val bytes\")));\n        (($val < 10000) and (return sprintf('%.1f kB', ($val / 1000))));\n        (($val < 2000000) and (return sprintf('%.0f kB', ($val / 1000))));\n        (($val < 10000000) and (return sprintf('%.1f MB', ($val / 1000000))));\n        (($val < 2000000000) and (return sprintf('%.0f MB', ($val / 1000000))));\n        (($val < 10000000000) and (return sprintf('%.1f GB', ($val / 1000000000))));\n        (return sprintf('%.0f GB', ($val / 1000000000)));\n    }\n}",
+      "helper_source_sha256": "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
+      "palm": {
+        "numeric": "171966",
+        "printed": "172 kB"
+      }
+    }
+  }
+}

@@ -2180,6 +2180,7 @@ mod tests {
         // Pinned Perl 5.38.2 calls into the retained Exif.pm subs. 11.78
         // sub hash 90f77cb8..., 12.64/13.59 sub hash 2326b19e....
         let cases = [
+            ("-", "0", "-"),
             ("inf", "Inf", "inf"),
             ("undef", "0", "undef"),
             ("1 2", "1", "1 2"),
