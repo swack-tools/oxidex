@@ -676,7 +676,11 @@ fn review_966_round_two_mie_cases_match_the_oracle_or_are_refused() {
         (&["-MakerNotes:All="], "MakerNotes:All"),
         (&["-makernotes:all="], "MakerNotes:All"),
     ];
-    const BARE: &[Case] = &[(&["-WhiteBalance="], "WhiteBalance")];
+    const BARE: &[Case] = &[
+        (&["-WhiteBalance="], "WhiteBalance"),
+        (&["-MakerNotes:OwnerName="], "OwnerName"),
+        (&["-MakerNotes:WhiteBalance="], "WhiteBalance"),
+    ];
     const MAKERNOTE_GROUP: &[Case] = &[(&["-Canon:OwnerName="], "OwnerName")];
     const EMPTY_GPS: &[Case] = &[(&["-GPS:All="], "GPS:All"), (&["-IFD1:All="], "IFD1:All")];
     let mut failures = Vec::new();
@@ -710,7 +714,7 @@ fn review_966_round_two_mie_cases_match_the_oracle_or_are_refused() {
             ("Writer.jpg+MIE-Document-EXIF", 0),
             ("Writer.jpg+MIE-DNG", 2),
             ("Writer.jpg+MIE-unknown-note", 0),
-            ("Writer.jpg+MIE-Nikon-EXIF", 1),
+            ("Writer.jpg+MIE-Nikon-EXIF", 2),
             ("Writer.jpg+MIE-Canon-EXIF", 1),
             ("Writer.jpg+MIE-empty-GPS", 1),
         ]
@@ -794,5 +798,99 @@ fn review_repair_966_jpeg_marker_fill_refuses_partial_mie_deletions() {
     {
         use std::os::unix::fs::MetadataExt;
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode_before);
+    }
+}
+
+/// A SubIFD can lead to GPS or ExifIFD absent from the root-only surgical
+/// scan. Native 13.59 clears the MIE copy as well as the main carrier's.
+#[test]
+fn nested_subifd_groups_in_mie_refuse_partial_clears() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let entry = |tag: u16, field_type: u16, count: u32, value: u32| {
+        [
+            tag.to_le_bytes().as_slice(),
+            field_type.to_le_bytes().as_slice(),
+            count.to_le_bytes().as_slice(),
+            value.to_le_bytes().as_slice(),
+        ]
+        .concat()
+    };
+    const GPS_CLEAR: &[Case] = &[(&["-GPS:All="], "GPS:GPSVersionID")];
+    const EXIF_CLEAR: &[Case] = &[(&["-ExifIFD:All="], "ExifIFD:ExifVersion")];
+    let dir = tempfile::tempdir().unwrap();
+    for (label, root_pointer, child_pointer, leaf, main_fixture, make_main_gps, cases) in [
+        (
+            "SubIFD GPS",
+            0x014a,
+            0x8825,
+            entry(0, 1, 4, u32::from_le_bytes([2, 3, 0, 0])),
+            "Writer.jpg",
+            true,
+            GPS_CLEAR,
+        ),
+        (
+            "ExifIFD GPS",
+            0x8769,
+            0x8825,
+            entry(0, 1, 4, u32::from_le_bytes([2, 3, 0, 0])),
+            "Writer.jpg",
+            true,
+            GPS_CLEAR,
+        ),
+        (
+            "SubIFD ExifIFD",
+            0x014a,
+            0x8769,
+            entry(0x9000, 7, 4, u32::from_le_bytes(*b"0231")),
+            "Canon.jpg",
+            false,
+            EXIF_CLEAR,
+        ),
+    ] {
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend(2_u16.to_le_bytes());
+        tiff.extend(entry(0x010f, 2, 4, u32::from_le_bytes(*b"Foo\0")));
+        tiff.extend(entry(root_pointer, 4, 1, 38));
+        tiff.extend(0_u32.to_le_bytes());
+        tiff.extend(1_u16.to_le_bytes());
+        tiff.extend(entry(child_pointer, 4, 1, 56));
+        tiff.extend(0_u32.to_le_bytes());
+        tiff.extend(1_u16.to_le_bytes());
+        tiff.extend(leaf);
+        tiff.extend(0_u32.to_le_bytes());
+        assert_eq!(tiff.len(), 74);
+        let main = dir.path().join(format!("main-{label}.jpg"));
+        std::fs::copy(
+            fixtures::required_t_images_fixture_path(main_fixture),
+            &main,
+        )
+        .unwrap();
+        if make_main_gps {
+            let set = oracle
+                .command()
+                .args(["-overwrite_original", "-GPS:GPSLatitude=1"])
+                .arg(&main)
+                .output()
+                .unwrap();
+            assert!(
+                set.status.success(),
+                "{}",
+                String::from_utf8_lossy(&set.stderr)
+            );
+        }
+        let original = [std::fs::read(&main).unwrap(), mie_holding_exif(&tiff)].concat();
+        assert_eq!(
+            grade(
+                oracle,
+                &format!("main and nested MIE SubIFD {label}"),
+                "jpg",
+                &original,
+                cases,
+            ),
+            Ok(1),
+            "{label}",
+        );
     }
 }

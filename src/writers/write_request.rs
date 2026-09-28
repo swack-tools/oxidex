@@ -971,8 +971,8 @@ pub(crate) fn mie_row(baseline: &MetadataMap) -> Option<&str> {
 /// EXIF reader decodes from it (`core::operations::parse_tiff_metadata`;
 /// empty where the reader cannot read it).
 #[derive(Debug)]
-pub(crate) struct MieExifBlock {
-    pub tiff: Vec<u8>,
+pub(crate) struct MieExifBlock<'a> {
+    pub tiff: std::borrow::Cow<'a, [u8]>,
     pub rows: MetadataMap,
 }
 
@@ -982,7 +982,7 @@ pub(crate) struct MieExifBlock {
 /// of the trailer chain, and for a JPEG a scan for its EOI, are
 /// file-sized).
 #[derive(Debug)]
-pub(crate) enum MieCensus {
+pub(crate) enum MieCensus<'a> {
     /// A file ExifTool reads no MIE trailer after (a PNG's IEND ends it;
     /// a `.mie` document is its own writer's to refuse): the reader's MIE
     /// rows alone say whether it carries MIE, whose EXIF is then unseen.
@@ -993,16 +993,16 @@ pub(crate) enum MieCensus {
     /// MIE trailers, none of which holds MIE-Meta's `EXIF`.
     Absent,
     /// Every MIE-Meta `EXIF` element of the file's MIE trailers.
-    Held(Vec<MieExifBlock>),
+    Held(Vec<MieExifBlock<'a>>),
     /// MIE trailers that may hold an `EXIF` element the walk cannot see.
     Unknown,
 }
 
-impl MieCensus {
+impl<'a> MieCensus<'a> {
     /// The MIE-Meta EXIF blocks the census holds (none unless
     /// [`MieCensus::Held`]).
     #[cfg(test)]
-    fn blocks(&self) -> &[MieExifBlock] {
+    fn blocks(&self) -> &[MieExifBlock<'a>] {
         match self {
             Self::Held(blocks) => blocks,
             _ => &[],
@@ -1012,7 +1012,7 @@ impl MieCensus {
     /// The census of a file ExifTool reads MIE trailers after (a JPEG,
     /// with `jpeg_trailer_start` the byte after its EOI, or a
     /// TIFF-structured file): each EXIF block decoded once.
-    pub(crate) fn of_trailers(file: &[u8], jpeg_trailer_start: Option<usize>) -> Self {
+    pub(crate) fn of_trailers(file: &'a [u8], jpeg_trailer_start: Option<usize>) -> Self {
         use crate::parsers::mie::{MieExif, trailer_exif};
         match trailer_exif(file, jpeg_trailer_start) {
             None => Self::NoTrailer,
@@ -1022,7 +1022,7 @@ impl MieCensus {
                 blocks
                     .into_iter()
                     .map(|tiff| MieExifBlock {
-                        tiff: tiff.to_vec(),
+                        tiff: std::borrow::Cow::Borrowed(tiff),
                         rows: crate::core::metadata_map::file_rows(|| {
                             crate::core::operations::parse_tiff_metadata(
                                 &super::exif_surgical::SliceReader(tiff),
@@ -1079,12 +1079,12 @@ pub(crate) fn ensure_no_mie_copy(
     key: &str,
     baseline: &MetadataMap,
     removal: bool,
-    mie: &MieCensus,
+    mie: &MieCensus<'_>,
 ) -> Result<()> {
     use super::exif_surgical::{
         EXIF_BLOCK_MAGICS, GroupRemoval, exif_request_is_no_op, group_directory_walked,
-        group_has_content, group_removal, has_dng_makernote, is_makernote_group, makernote_census,
-        scan_entries_with_magics,
+        group_has_content, group_removal, has_dng_makernote, has_unwalked_exif_directory,
+        is_makernote_group, makernote_census, scan_entries_with_magics,
     };
     let group = key.split_once(':').map_or("", |(group, _)| group);
     let removed_group = if removal { group_removal(key) } else { None };
@@ -1098,7 +1098,7 @@ pub(crate) fn ensure_no_mie_copy(
     if !exif && !makernote {
         return Ok(());
     }
-    let (mie_name, blocks): (String, Option<&[MieExifBlock]>) = match mie {
+    let (mie_name, blocks): (String, Option<&[MieExifBlock<'_>]>) = match mie {
         MieCensus::NoTrailer => return Ok(()),
         MieCensus::NotATrailerCarrier => match mie_row(baseline) {
             Some(row) => (row.to_string(), None),
@@ -1108,7 +1108,7 @@ pub(crate) fn ensure_no_mie_copy(
         MieCensus::Held(blocks) => ("a MIE trailer".to_string(), Some(blocks.as_slice())),
         MieCensus::Unknown => ("a MIE trailer".to_string(), None),
     };
-    let scans = |blocks: &[MieExifBlock]| -> Option<Vec<_>> {
+    let scans = |blocks: &[MieExifBlock<'_>]| -> Option<Vec<_>> {
         blocks
             .iter()
             .map(|block| scan_entries_with_magics(&block.tiff, EXIF_BLOCK_MAGICS).ok())
@@ -1117,9 +1117,17 @@ pub(crate) fn ensure_no_mie_copy(
     if makernote {
         let untouched = blocks.is_some_and(|blocks| {
             if group.eq_ignore_ascii_case("MakerNotes") {
-                let tiffs: Vec<&[u8]> = blocks.iter().map(|block| block.tiff.as_slice()).collect();
-                let census = makernote_census(&tiffs, EXIF_BLOCK_MAGICS);
-                census.tag_bearing == 0 && !census.uncertain_outside_ifd1 && !census.uncertain_ifd1
+                // A named generic request selects only the pinned maker-note
+                // candidate groups for this name. A Nikon block cannot hold
+                // Canon-only OwnerName, but may hold WhiteBalance even when
+                // the reader did not expose that row.
+                let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
+                blocks.iter().all(|block| {
+                    makernote_may_hold(name, &block.rows, &|| {
+                        makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
+                    })
+                    .is_none()
+                })
             } else {
                 // A named vendor only selects roots whose source-derived
                 // closure reaches that group. A proven Nikon note cannot
@@ -1127,7 +1135,7 @@ pub(crate) fn ensure_no_mie_copy(
                 let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
                 blocks.iter().all(|block| {
                     !makernote_group_may_hold(name, group, &block.rows, &|| {
-                        makernote_census(&[block.tiff.as_slice()], EXIF_BLOCK_MAGICS)
+                        makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
                     })
                 })
             }
@@ -1168,14 +1176,26 @@ pub(crate) fn ensure_no_mie_copy(
                 }
                 // An empty directory the group names goes too.
                 Some(group) => {
-                    !group_has_content(group, scan, &block.rows)
+                    // The surgical scan intentionally does not descend into
+                    // TIFF SubIFDs. Native ExifTool can apply a nested GPS or
+                    // ExifIFD clear there, so their absence cannot be proven
+                    // from the directories this scan did walk.
+                    let unwalked_child = matches!(
+                        group,
+                        GroupRemoval::ExifIfd | GroupRemoval::Gps | GroupRemoval::Interop
+                    ) && scan
+                        .entries
+                        .iter()
+                        .any(|entry| has_unwalked_exif_directory(entry.ifd, entry.tag_id));
+                    !unwalked_child
+                        && !group_has_content(group, scan, &block.rows)
                         && !group_directory_walked(group, scan)
                 }
                 None => {
                     !block.rows.contains_key(key)
                         && exif_request_is_no_op(
-                            &[block.tiff.as_slice()],
-                            &[block.tiff.as_slice()],
+                            &[block.tiff.as_ref()],
+                            &[block.tiff.as_ref()],
                             EXIF_BLOCK_MAGICS,
                             false,
                             &MetadataMap::new(),
@@ -1192,7 +1212,7 @@ pub(crate) fn ensure_no_mie_copy(
         && !tag.contains(':')
         && let Some(reason) = blocks.unwrap_or_default().iter().find_map(|block| {
             makernote_may_hold(key.rsplit(':').next().unwrap_or(key), &block.rows, &|| {
-                makernote_census(&[block.tiff.as_slice()], EXIF_BLOCK_MAGICS)
+                makernote_census(&[block.tiff.as_ref()], EXIF_BLOCK_MAGICS)
             })
         })
     {
@@ -2251,14 +2271,17 @@ mod tests {
 
     /// A MIE census holding `tiff` as its one MIE-Meta EXIF block, decoded
     /// as `MieCensus::of_trailers` decodes one.
-    fn census_holding(tiff: Vec<u8>) -> MieCensus {
+    fn census_holding(tiff: Vec<u8>) -> MieCensus<'static> {
         let rows = crate::core::metadata_map::file_rows(|| {
             crate::core::operations::parse_tiff_metadata(&super::super::exif_surgical::SliceReader(
                 &tiff,
             ))
             .unwrap_or_default()
         });
-        MieCensus::Held(vec![MieExifBlock { tiff, rows }])
+        MieCensus::Held(vec![MieExifBlock {
+            tiff: std::borrow::Cow::Owned(tiff),
+            rows,
+        }])
     }
 
     /// MIE deletion safety shares PR960's Adobe framing and record count.
@@ -2296,6 +2319,7 @@ mod tests {
             let census = MieCensus::of_trailers(&mie, None);
             let blocks = census.blocks();
             assert_eq!(blocks.len(), 1, "{label}: MIE EXIF block");
+            assert!(matches!(&blocks[0].tiff, std::borrow::Cow::Borrowed(_)));
             let notes = makernote_census(&[&blocks[0].tiff], EXIF_BLOCK_MAGICS);
             match count {
                 Some(count) => {
@@ -2338,7 +2362,7 @@ mod tests {
             &[(0x010f, 2, make)],
             &[(0x927c, 7, b"Plain text maker note\0")],
         );
-        let gps_all = |census: &MieCensus, spelling: &str| {
+        let gps_all = |census: &MieCensus<'_>, spelling: &str| {
             ensure_no_mie_copy(spelling, spelling, &empty, true, census)
         };
         let dng = census_holding(dng);

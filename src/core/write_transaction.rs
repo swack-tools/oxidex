@@ -450,7 +450,7 @@ impl GroupDeletions {
     pub(crate) fn plan<'a>(
         path: &Path,
         deletions: impl IntoIterator<Item = (usize, &'a str)>,
-        mie: Option<&MieCensus>,
+        mie: Option<&MieCensus<'_>>,
     ) -> Self {
         let Ok(reader) = MMapReader::new(path) else {
             return Self::default();
@@ -476,7 +476,7 @@ impl GroupDeletions {
         baseline: &MetadataMap,
         reader: &MMapReader,
         deletions: impl IntoIterator<Item = (usize, &'a str)>,
-        mie: &MieCensus,
+        mie: &MieCensus<'_>,
     ) -> Self {
         Self(
             deletions

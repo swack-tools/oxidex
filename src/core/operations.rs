@@ -1800,12 +1800,14 @@ pub(crate) fn ensure_no_mie_copy_for(
     baseline: &MetadataMap,
     removal: bool,
 ) -> Result<()> {
+    let reader = MMapReader::new(path)?;
+    let mie = mie_census_with_reader(&reader)?;
     crate::writers::write_request::ensure_no_mie_copy(
         tag_name.strip_suffix('#').unwrap_or(tag_name),
         key,
         baseline,
         removal,
-        &mie_census(path)?,
+        &mie,
     )
 }
 
@@ -1816,14 +1818,9 @@ pub(crate) fn ensure_no_mie_copy_for(
 /// file is no trailer carrier to ExifTool. A `.mie` document is not either:
 /// oxidex writes no MIE file at all, and its writer's refusal answers for
 /// it.
-pub(crate) fn mie_census(path: &Path) -> Result<crate::writers::write_request::MieCensus> {
-    let reader = MMapReader::new(path)?;
-    mie_census_with_reader(&reader)
-}
-
-pub(crate) fn mie_census_with_reader(
-    reader: &MMapReader,
-) -> Result<crate::writers::write_request::MieCensus> {
+pub(crate) fn mie_census_with_reader<'a>(
+    reader: &'a MMapReader,
+) -> Result<crate::writers::write_request::MieCensus<'a>> {
     use crate::writers::write_request::MieCensus;
     let format = detect_format(reader)?;
     if matches!(format, FileFormat::MIE) {
@@ -2340,7 +2337,7 @@ pub(crate) fn plan_group_deletion_with_reader(
     group: &str,
     baseline: &MetadataMap,
     reader: &MMapReader,
-    mie: &crate::writers::write_request::MieCensus,
+    mie: &crate::writers::write_request::MieCensus<'_>,
 ) -> Result<Option<String>> {
     let key = format!("{group}:All");
     let format = detect_format(reader)?;
@@ -3602,7 +3599,7 @@ mod tests {
             std::fs::write(&path, [carrier, mie.clone()].concat()).unwrap();
             assert!(
                 matches!(
-                    mie_census(&path).unwrap(),
+                    mie_census_with_reader(&MMapReader::new(&path).unwrap()).unwrap(),
                     crate::writers::write_request::MieCensus::NoTrailer
                 ),
                 "{name} has no readable JPEG trailer"
