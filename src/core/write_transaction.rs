@@ -46,8 +46,8 @@ use crate::core::metadata_map::{MetadataMap, SourceIdentity, handle_identity};
 use crate::core::operations::{
     bare_removal_is_no_op_with_reader, exif_group_in_pdf_with_reader, field_spellings,
     group_removal_takes_effect_with_reader, plan_group_deletion_with_reader, read_metadata,
-    removal_is_no_op_with_reader, remove_field, resolve_write_key_in_request_with_reader,
-    write_metadata_transaction,
+    removal_is_no_op_with_reader, remove_field, resolve_write_key_for_with_reader,
+    resolve_write_key_in_request_with_reader, write_metadata_transaction,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
