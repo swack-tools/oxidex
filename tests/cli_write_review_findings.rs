@@ -77,6 +77,141 @@ fn xp_source(dir: &TempDir) -> PathBuf {
     src
 }
 
+/// Pinned 13.59 warns once during SetNewValue for the bad bare enum and
+/// continues with the other requests. The bare name resolves to ExifIFD.
+#[test]
+fn resolved_bare_printconv_warning_keeps_other_requests() {
+    let dir = TempDir::new().unwrap();
+    for (name, args, artist, color) in [
+        (
+            "artist",
+            vec!["-ColorSpace=bogus", "-IFD0:Artist=x"],
+            "x",
+            "Uncalibrated",
+        ),
+        (
+            "replace",
+            vec!["-ColorSpace=bogus", "-ColorSpace=Adobe RGB"],
+            "Synthetic Artist 1",
+            "Adobe RGB",
+        ),
+        (
+            "delete",
+            vec!["-ColorSpace=bogus", "-ColorSpace="],
+            "Synthetic Artist 1",
+            "",
+        ),
+        ("clear", vec!["-ColorSpace=bogus", "-all="], "", ""),
+        (
+            "group_cancel",
+            vec!["-ColorSpace=bogus", "-EXIF:All="],
+            "",
+            "",
+        ),
+        (
+            "clear_first",
+            vec!["-all=", "-ColorSpace=bogus", "-IFD0:Artist=x"],
+            "x",
+            "",
+        ),
+    ] {
+        let file = copy_into(&dir, JPEG, &format!("{name}.jpg"));
+        let output = run(&file, &args);
+        assert_eq!(output.status.code(), Some(0), "{name}: {}", err(&output));
+        assert_eq!(out(&output), "    1 image files updated\n", "{name}");
+        assert_eq!(
+            err(&output),
+            "Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)\n",
+            "{name}"
+        );
+        assert_eq!(read_back(&file, "IFD0:Artist"), artist, "{name}");
+        assert_eq!(read_back(&file, "ExifIFD:ColorSpace"), color, "{name}");
+    }
+}
+
+#[test]
+fn raw_color_space_and_grouped_control_keep_their_existing_policy() {
+    let dir = TempDir::new().unwrap();
+    let raw = copy_into(&dir, JPEG, "raw.jpg");
+    let output = run(&raw, &["-ColorSpace#=2", "-IFD0:Artist=x"]);
+    assert_eq!(output.status.code(), Some(0), "{}", err(&output));
+    assert_eq!(err(&output), "");
+    assert_eq!(read_back(&raw, "ExifIFD:ColorSpace"), "Adobe RGB");
+
+    let no_print_conv = copy_into(&dir, JPEG, "no-print-conv.jpg");
+    let output = run(&no_print_conv, &["--no-print-conv", "-ColorSpace=2"]);
+    assert_eq!(output.status.code(), Some(0), "{}", err(&output));
+    assert_eq!(err(&output), "");
+    assert_eq!(read_back(&no_print_conv, "ExifIFD:ColorSpace"), "Adobe RGB");
+
+    let grouped = copy_into(&dir, JPEG, "grouped.jpg");
+    let output = run(&grouped, &["-ExifIFD:ColorSpace=bogus", "-IFD0:Artist=x"]);
+    assert_eq!(output.status.code(), Some(0), "{}", err(&output));
+    assert_eq!(
+        err(&output),
+        "Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)\n"
+    );
+    assert_eq!(read_back(&grouped, "IFD0:Artist"), "x");
+
+    let unsupported = copy_into(&dir, JPEG, "unsupported.jpg");
+    let before = sha(&unsupported);
+    let output = run(&unsupported, &["-ColorSpace=bogus", "-XMP:Title=x"]);
+    assert_refused_untouched(&output, &unsupported, &before, "unsupported XMP writer");
+    assert!(
+        err(&output).contains("Cannot write tag"),
+        "{}",
+        err(&output)
+    );
+}
+
+#[test]
+fn resolved_conversion_warning_preserves_copy_and_clear() {
+    let dir = TempDir::new().unwrap();
+    let source = copy_into(&dir, JPEG, "source.jpg");
+    assert_eq!(
+        run(&source, &["-IFD0:Artist=copy-sentinel"]).status.code(),
+        Some(0)
+    );
+    for (name, prefix, color) in [
+        ("copy", vec![], "Uncalibrated"),
+        ("clear-copy", vec!["-all="], ""),
+    ] {
+        let dst = copy_into(&dir, JPEG, &format!("{name}.jpg"));
+        let mut args = prefix;
+        args.extend([
+            "-TagsFromFile",
+            s(&source),
+            "-IFD0:Artist",
+            "-ColorSpace=bogus",
+        ]);
+        let output = run(&dst, &args);
+        assert_eq!(output.status.code(), Some(0), "{name}: {}", err(&output));
+        assert_eq!(
+            err(&output),
+            "Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)\n",
+            "{name}"
+        );
+        assert_eq!(read_back(&dst, "IFD0:Artist"), "copy-sentinel", "{name}");
+        assert_eq!(read_back(&dst, "ExifIFD:ColorSpace"), color, "{name}");
+    }
+}
+
+#[test]
+fn resolved_conversion_warns_once_for_two_files() {
+    let dir = TempDir::new().unwrap();
+    let first = copy_into(&dir, JPEG, "first.jpg");
+    let second = copy_into(&dir, JPEG, "second.jpg");
+    let output = oxidex(&["-ColorSpace=bogus", "-IFD0:Artist=x", s(&first), s(&second)]);
+    assert_eq!(output.status.code(), Some(0), "{}", err(&output));
+    assert_eq!(
+        err(&output),
+        "Warning: Can't convert ExifIFD:ColorSpace (not in PrintConv)\n"
+    );
+    assert_eq!(out(&output), "    2 image files updated\n");
+    assert_eq!(read_back(&first, "IFD0:Artist"), "x");
+    assert_eq!(read_back(&second, "IFD0:Artist"), "x");
+}
+
 // --- P1-1: -TagsFromFile goes through the write resolution gate ---------
 
 /// ExifTool 13.59, `-TagsFromFile sample_with_exif_xmp.jpg -XMP:Title

@@ -10,18 +10,19 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
+use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file_with_warnings};
 use crate::core::MetadataMap;
 use crate::core::operations::read_metadata_report_with_detector_and_options;
 use crate::core::read_report::{ParseStatus, ReadReport};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -486,15 +487,18 @@ pub fn batch_write(
     let updated_count = AtomicUsize::new(0);
     let unchanged_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
+    let warnings = Mutex::new(BTreeSet::<String>::new());
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
         match apply_modifications(path, &modifications, args) {
-            Ok(WriteOutcome::Updated) => {
+            Ok((WriteOutcome::Updated, file_warnings)) => {
                 updated_count.fetch_add(1, Ordering::Relaxed);
+                warnings.lock().unwrap().extend(file_warnings);
             }
-            Ok(WriteOutcome::Unchanged) => {
+            Ok((WriteOutcome::Unchanged, file_warnings)) => {
                 unchanged_count.fetch_add(1, Ordering::Relaxed);
+                warnings.lock().unwrap().extend(file_warnings);
             }
             Err(e) => {
                 error_count.fetch_add(1, Ordering::Relaxed);
@@ -509,6 +513,9 @@ pub fn batch_write(
     });
 
     progress.finish_and_clear();
+    for warning in warnings.into_inner().unwrap() {
+        eprintln!("Warning: {warning}");
+    }
 
     Ok(BatchStats {
         files_read: 0,
@@ -531,7 +538,7 @@ fn apply_modifications(
     path: &Path,
     modifications: &[(String, OsString)],
     args: &CliArgs,
-) -> std::result::Result<WriteOutcome, String> {
+) -> std::result::Result<(WriteOutcome, Vec<String>), String> {
     // Every write target is checked as the single-file write checks it
     // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
     // over a file list does: a read-only file is refused, never replaced.
@@ -560,7 +567,8 @@ fn apply_modifications(
             .map_err(|e| e.to_string())
     };
 
-    let outcome = write_file(path, modifications, !args.exiftool_compat(), backup)?;
+    let (outcome, warnings) =
+        write_file_with_warnings(path, modifications, !args.exiftool_compat(), backup)?;
 
     // Restore file times if requested
     if outcome == WriteOutcome::Updated
@@ -574,7 +582,7 @@ fn apply_modifications(
         }
     }
 
-    Ok(outcome)
+    Ok((outcome, warnings))
 }
 
 /// Creates a progress bar for batch processing.

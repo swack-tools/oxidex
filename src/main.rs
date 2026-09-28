@@ -190,13 +190,17 @@ fn handle_multi_file_processing(
 /// happened to the file: a file that did not change is `0 image files
 /// updated` / `1 image files unchanged`, exactly as ExifTool 13.59 prints it.
 fn handle_single_write(file: &std::path::Path, plan: &WritePlan, args: &CliArgs) {
+    let (plan, warnings) = plan.for_file(file);
+    for warning in warnings {
+        eprintln!("Warning: {warning}");
+    }
     let (label, noun) = if plan.copy_from.is_some() {
         ("Destination file", "destination file")
     } else {
         ("File", "file")
     };
     let original_mtime = prepare_write_target(file, args, label, noun);
-    let result = write_plan_file(file, plan, backup_before_commit(file, args));
+    let result = write_plan_file(file, &plan, backup_before_commit(file, args));
     if let (Ok(done), Some((src, filters))) = (&result, &plan.copy_from)
         && let Some(copy) = &done.copy
     {
@@ -240,7 +244,14 @@ fn report_copy(
 /// on the last path only.
 fn handle_multi_write(files: &[std::path::PathBuf], plan: &WritePlan, args: &CliArgs) {
     let mut stats = batch_processor::BatchStats::for_write();
+    let mut warned = std::collections::BTreeSet::new();
     for file in files {
+        let (file_plan, warnings) = plan.for_file(file);
+        for warning in warnings {
+            if warned.insert(warning.clone()) {
+                eprintln!("Warning: {warning}");
+            }
+        }
         let prepared = std::fs::metadata(file)
             .map_err(|e| format!("Cannot access file '{}': {}", file.display(), e))
             .and_then(|metadata| {
@@ -251,7 +262,8 @@ fn handle_multi_write(files: &[std::path::PathBuf], plan: &WritePlan, args: &Cli
                 }
             });
         let result = prepared.and_then(|mtime| {
-            write_plan_file(file, plan, backup_before_commit(file, args)).map(|done| (done, mtime))
+            write_plan_file(file, &file_plan, backup_before_commit(file, args))
+                .map(|done| (done, mtime))
         });
         match result {
             Ok((done, mtime)) => {

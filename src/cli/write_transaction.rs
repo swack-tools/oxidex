@@ -116,6 +116,9 @@ pub struct WritePlan {
     /// applies a command's requests in order (13.59: `-TagsFromFile SRC
     /// -Make -IFD0:Make=` deletes the copied Make).
     sets_before_copy: usize,
+    /// Defined sets removed by a later `-all=` still need their conversion
+    /// warning, which ExifTool emits while reading the command line.
+    sets_before_clear: Vec<(String, OsString)>,
 }
 
 /// Date tags `AllDates` shifts (ExifTool's `AllDates` shortcut).
@@ -188,6 +191,7 @@ impl WritePlan {
         // a later `-all=` remove the values assigned before it.
         let mut warnings = Vec::new();
         let mut sets = Vec::new();
+        let mut sets_before_clear = Vec::new();
         let mut sets_before_copy = 0;
         for (at, tag, value) in &raw_sets {
             // A `Shortcuts::Main` name (`AllDates`, `CommonIFD0`, ...) stands
@@ -214,15 +218,19 @@ impl WritePlan {
             // round 5).
             let defined: Vec<(String, OsString)> = defined
                 .into_iter()
-                .filter(
-                    |(tag, value)| match unconvertible_value_warning(tag, value, raw_values) {
+                .filter(|(tag, value)| {
+                    match tag
+                        .contains(':')
+                        .then(|| unconvertible_value_warning(tag, value, raw_values))
+                        .flatten()
+                    {
                         Some(warning) => {
                             warnings.push(warning);
                             false
                         }
                         None => true,
-                    },
-                )
+                    }
+                })
                 .collect();
             if clear_at.is_none_or(|clear| *at > clear) {
                 if args
@@ -232,6 +240,8 @@ impl WritePlan {
                     sets_before_copy += defined.len();
                 }
                 sets.extend(defined);
+            } else {
+                sets_before_clear.extend(defined);
             }
         }
         let mut shifts = Vec::new();
@@ -268,6 +278,7 @@ impl WritePlan {
                     (Some(copy), Some(clear)) if copy <= clear
                 ),
             sets_before_copy,
+            sets_before_clear,
         };
         if plan.clear_all && !plan.shifts.is_empty() {
             return Err(
@@ -315,6 +326,74 @@ impl WritePlan {
             }
         }
         Ok(plan)
+    }
+
+    /// Classify bare values at the destination this file would write. This
+    /// must run before the transaction: a failed PrintConv lookup is a
+    /// per-request warning, while an unresolved/unsupported destination is
+    /// still the transaction's whole-file refusal.
+    pub fn for_file(&self, path: &Path) -> (Self, Vec<String>) {
+        let mut plan = self.clone();
+        let mut warnings = Vec::new();
+        let deletions = GroupDeletions::plan(
+            path,
+            self.sets
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, value))| value.is_empty())
+                .map(|(at, (tag, _))| (at, tag.strip_suffix('#').unwrap_or(tag))),
+        );
+        let baseline = read_metadata(path).ok();
+        let classify = |at: usize, tag: &str, value: &OsString, with_deletions: bool| {
+            if value.is_empty() {
+                return None;
+            }
+            let bare = tag.strip_suffix('#').unwrap_or(tag);
+            if bare.contains(':') {
+                return None; // already classified in from_args
+            }
+            let typed = baseline.as_ref().and_then(|metadata| {
+                resolve_write_tag_in_request(
+                    path,
+                    bare,
+                    metadata,
+                    if with_deletions {
+                        deletions.for_set_at(at)
+                    } else {
+                        Default::default()
+                    },
+                )
+                .ok()
+            });
+            // An unresolved name is left to the write planner. Parsing it
+            // against an arbitrary EXIF alias could hide a real refusal.
+            typed.and_then(|mut key| {
+                // Resolution returns the physical key without request
+                // syntax. Keep `#` so this request still bypasses PrintConv.
+                if tag.ends_with('#') {
+                    key.push('#');
+                }
+                unconvertible_value_warning(&key, value, self.raw_values)
+            })
+        };
+        plan.sets = self
+            .sets
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (tag, value))| match classify(at, tag, value, true) {
+                Some(warning) => {
+                    warnings.push(warning);
+                    None
+                }
+                None => Some((tag.clone(), value.clone())),
+            })
+            .collect();
+        for (at, (tag, value)) in self.sets_before_clear.iter().enumerate() {
+            if let Some(warning) = classify(at, tag, value, false) {
+                warnings.push(warning);
+            }
+        }
+        (plan, warnings)
     }
 
     /// Whether the command line asks for any write at all.
@@ -493,6 +572,17 @@ pub fn write_file(
     raw_values: bool,
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
+    write_file_with_warnings(path, modifications, raw_values, on_commit).map(|done| done.0)
+}
+
+/// Batch form of [`write_file`], returning destination-aware command warnings
+/// so its caller can print each warning once across all files.
+pub fn write_file_with_warnings(
+    path: &Path,
+    modifications: &[(String, OsString)],
+    raw_values: bool,
+    on_commit: impl FnOnce() -> Result<(), String>,
+) -> Result<(WriteOutcome, Vec<String>), String> {
     // `raw_values` is `--no-print-conv` (ExifTool's `-n`), as
     // [`WritePlan::from_args`] reads it for one file: the multi-file path
     // used to build its plan without it, so `--no-print-conv
@@ -507,7 +597,8 @@ pub fn write_file(
         raw_values,
         ..Default::default()
     };
-    write_plan_file(path, &plan, on_commit).map(|done| done.outcome)
+    let (plan, warnings) = plan.for_file(path);
+    write_plan_file(path, &plan, on_commit).map(|done| (done.outcome, warnings))
 }
 
 /// Applies every `-TAG=VALUE` of one file through the library's write
