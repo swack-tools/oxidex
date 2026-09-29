@@ -527,7 +527,14 @@ mod tests {
             .iter()
             .filter(|e| e.arms.len() > 1)
             .count();
-        assert_eq!(multi, 26);
+        assert_eq!(
+            multi,
+            if super::super::selected_source_pin() == "11.78" {
+                21
+            } else {
+                26
+            }
+        );
         // Ids are unique and ascending, so `find` cannot shadow an entry.
         for pair in CUSTOM_FUNCTIONS2.windows(2) {
             assert!(pair[0].tag < pair[1].tag);
@@ -597,7 +604,15 @@ mod tests {
         // The 90D arm wins over both.
         assert_eq!(
             render(0x0106, "Canon EOS 90D", &[3]),
-            Some(("AEBShotCount", "3 shots".to_string()))
+            Some((
+                "AEBShotCount",
+                if super::super::selected_source_pin() == "11.78" {
+                    "7 shots"
+                } else {
+                    "3 shots"
+                }
+                .to_string()
+            ))
         );
     }
 

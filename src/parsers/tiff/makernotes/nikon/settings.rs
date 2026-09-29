@@ -308,7 +308,16 @@ pub fn parse_nikon_settings(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{TestedSource, tested_source};
     use super::*;
+
+    fn settings_supported() -> bool {
+        // 11.78 has no NikonSettings.pm; later selected sources carry this
+        // directory. A missing individual row in a populated table is a bug.
+        let supported = !SETTINGS_TAGS.is_empty();
+        assert_eq!(supported, tested_source() != TestedSource::V1178);
+        supported
+    }
 
     fn header(entries: &[(u16, u32)]) -> Vec<u8> {
         let mut v = Vec::new();
@@ -338,9 +347,10 @@ mod tests {
             Some("NIKON Z 7_2"),
             &mut tags,
         );
+        // NikonSettings.pm is absent from the selected 11.78 source.
         assert_eq!(
             tags.get("Nikon:SilentPhotography").map(String::as_str),
-            Some("Off")
+            settings_supported().then_some("Off")
         );
     }
 
@@ -353,9 +363,14 @@ mod tests {
         parse_nikon_settings(&data, ByteOrder::LittleEndian, Some("NIKON Z 7_2"), &mut z7);
         let mut d6 = HashMap::new();
         parse_nikon_settings(&data, ByteOrder::LittleEndian, Some("NIKON D6"), &mut d6);
-        assert!(z7.contains_key("Nikon:ISOAutoHiLimit"));
-        assert!(d6.contains_key("Nikon:ISOAutoHiLimit"));
-        assert_ne!(z7["Nikon:ISOAutoHiLimit"], d6["Nikon:ISOAutoHiLimit"]);
+        if settings_supported() {
+            assert!(z7.contains_key("Nikon:ISOAutoHiLimit"));
+            assert!(d6.contains_key("Nikon:ISOAutoHiLimit"));
+            assert_ne!(z7["Nikon:ISOAutoHiLimit"], d6["Nikon:ISOAutoHiLimit"]);
+        } else {
+            assert!(z7.is_empty());
+            assert!(d6.is_empty());
+        }
     }
 
     #[test]
@@ -396,7 +411,7 @@ mod tests {
             Some("NIKON Z 7_2"),
             &mut tags,
         );
-        assert_eq!(tags.len(), 1);
+        assert_eq!(tags.len(), usize::from(settings_supported()));
     }
 
     #[test]
@@ -413,7 +428,7 @@ mod tests {
         );
         assert_eq!(
             tags.get("Nikon:BracketProgram").map(String::as_str),
-            Some("A3F")
+            settings_supported().then_some("A3F")
         );
     }
 

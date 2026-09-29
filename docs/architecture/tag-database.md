@@ -6,7 +6,7 @@ The tag database provides O(1) lookup for the metadata tag definitions synced fr
 
 | Metric | Value |
 |--------|-------|
-| Total Tags | 16,684 (tag definitions; see [Tag Coverage](/reference/tag-coverage-analysis) for the measured extraction score) |
+| Total Tags | 16,683 (tag definitions; see [Tag Coverage](/reference/tag-coverage-analysis) for the measured extraction score) |
 | Modules Parsed | 140+ |
 | Lookup Time | O(1) |
 | Memory | ~5-10MB (lazy loaded) |

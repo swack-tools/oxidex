@@ -244,6 +244,7 @@ impl WritePlan {
             }
         }
         let mut shifts = Vec::new();
+        let mut invalid_signed_shift = false;
         for (tag, op, value) in args.date_shift_operations() {
             let operation = match op.as_str() {
                 "+=" => ShiftOperation::Add,
@@ -256,6 +257,18 @@ impl WritePlan {
                     ));
                 }
             };
+            if crate::core::date_shift::signed_alldates_shift(&tag, &value, operation)
+                == Some(crate::core::date_shift::SignedAllDatesShift::Invalid)
+            {
+                // SetNewValue warns and drops only this shift. Other sets
+                // still write, regardless of argument order; if this was
+                // the sole request, main prints Nothing to do and exits 1.
+                warnings.push(format!(
+                    "Invalid shift string ({value}) for IFD0:ModifyDate"
+                ));
+                invalid_signed_shift = true;
+                continue;
+            }
             shifts.push((tag, operation, value));
         }
         let plan = WritePlan {
@@ -269,7 +282,7 @@ impl WritePlan {
             shifts,
             sets,
             warnings,
-            requested_sets: !raw_sets.is_empty(),
+            requested_sets: !raw_sets.is_empty() || invalid_signed_shift,
             raw_values,
             copy_before_clear: args.tags_from_file.is_some()
                 && matches!(

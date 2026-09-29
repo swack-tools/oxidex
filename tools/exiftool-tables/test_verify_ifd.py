@@ -264,8 +264,23 @@ class ParseSample(unittest.TestCase):
         path = repo / "src/exiftool_tables/ifd/mod.rs"
         source = table_modules.read_logical(path)
         marker = '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n'
-        self.assertEqual(source.count(marker), 1)
-        without_marker = source.replace(marker, "", 1)
+        pin = (repo / ".exiftool-version").read_text(encoding="utf-8").strip()
+        if pin == "11.78":
+            # Native Olympus.pm 11.78 declares only exact StackedImage pairs.
+            # Add a wildcard to that generated identity to test the validator.
+            self.assertEqual(source.count(marker), 0)
+            exact = '                ("0 0", "No"),\n'
+            self.assertEqual(source.count(exact), 1)
+            without_marker = source.replace(
+                exact,
+                exact + '                ("9 *", "Focus-stacked (* images)"),\n',
+                1,
+            )
+        elif pin in ("12.64", "13.59"):
+            self.assertEqual(source.count(marker), 1)
+            without_marker = source.replace(marker, "", 1)
+        else:
+            self.fail(f"unreviewed ExifTool pin {pin}")
         with mock.patch.object(table_modules, "read_logical", return_value=without_marker):
             with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
                 verify.parse_ifd_rust(path)
@@ -278,13 +293,28 @@ class ParseSample(unittest.TestCase):
             '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n'
             '                ("0 0", "No"),\n'
         )
-        self.assertEqual(source.count(first_two), 1)
-        misplaced = source.replace(
-            first_two,
-            '                ("0 0", "No"),\n'
-            '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n',
-            1,
-        )
+        pin = (repo / ".exiftool-version").read_text(encoding="utf-8").strip()
+        if pin == "11.78":
+            self.assertEqual(source.count(first_two), 0)
+            exact = '                ("0 0", "No"),\n'
+            self.assertEqual(source.count(exact), 1)
+            misplaced = source.replace(
+                exact,
+                exact
+                + '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n'
+                + '                ("9 *", "Focus-stacked (* images)"),\n',
+                1,
+            )
+        elif pin in ("12.64", "13.59"):
+            self.assertEqual(source.count(first_two), 1)
+            misplaced = source.replace(
+                first_two,
+                '                ("0 0", "No"),\n'
+                '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n',
+                1,
+            )
+        else:
+            self.fail(f"unreviewed ExifTool pin {pin}")
         with mock.patch.object(table_modules, "read_logical", return_value=misplaced):
             with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
                 verify.parse_ifd_rust(path)

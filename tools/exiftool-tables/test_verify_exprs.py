@@ -12,8 +12,37 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import helper_oracle
 import verify_exprs
+
+
+class ConvertFileSizeBootstrap(unittest.TestCase):
+    def test_harness_binds_every_call_in_a_composed_expression(self):
+        digest = "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e"
+        call = "crate::exiftool_tables::exprs::convert_file_size({v})"
+        code = f'format!("{{}}/{{}}", {call}, {call})'
+        jobs = [(0, "num", "composed", 171966.0)]
+        by_expr = {"composed": ("String", code)}
+        src = verify_exprs.build_rust_harness(jobs, by_expr, digest)
+        self.assertEqual(src.count("convert_file_size_for_pinned_source("), 2)
+        self.assertEqual(src.count(f'"{digest}"'), 2)
+        self.assertNotIn("exprs::convert_file_size(", src)
+        with self.assertRaisesRegex(SystemExit, "checked source digest"):
+            verify_exprs.build_rust_harness(jobs, by_expr)
+
+    def test_native_body_must_match_pinned_release(self):
+        by_expr = {"ConvertFileSize": (
+            "String", "crate::exiftool_tables::exprs::convert_file_size({v})")}
+        digest = "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e"
+        with mock.patch.object(helper_oracle, "folded", return_value=("body", digest)):
+            self.assertEqual(verify_exprs.checked_file_size_source("11.78", Path("/native/lib"), by_expr), digest)
+            with self.assertRaisesRegex(SystemExit, "reviewed unknown source pin"):
+                verify_exprs.checked_file_size_source("unknown", Path("/native/lib"), by_expr)
+        with mock.patch.object(helper_oracle, "folded", return_value=("body", "0" * 64)):
+            with self.assertRaisesRegex(SystemExit, "reviewed 11.78 source pin"):
+                verify_exprs.checked_file_size_source("11.78", Path("/native/lib"), by_expr)
 
 
 class ElementCount(unittest.TestCase):

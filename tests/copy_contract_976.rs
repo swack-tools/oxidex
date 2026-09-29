@@ -7,6 +7,7 @@ mod fixtures;
 
 use oxidex::core::operations::{copy_metadata, copy_metadata_report};
 use oxidex::core::write_transaction::WriteOutcome;
+use oxidex::error::ExifToolError;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -33,6 +34,17 @@ fn unchanged(path: &Path, before: &[u8], metadata: &fs::Metadata) {
     #[cfg(not(unix))]
     let _ = metadata; // Windows still checks bytes and backup behavior below.
     assert!(!PathBuf::from(format!("{}_original", path.display())).exists());
+}
+
+fn physical_canon_refusal(error: &ExifToolError) {
+    assert_eq!(
+        error.tags_not_written(),
+        &[oxidex::error::TagNotWritten::new(
+            "ExifIFD:MakerNoteCanon",
+            "the selected physical maker note block cannot be copied by oxidex",
+        )],
+        "{error}"
+    );
 }
 
 #[test]
@@ -70,6 +82,24 @@ fn explicit_empty_filter_copies_nothing_while_none_keeps_copy_all() {
 }
 
 #[test]
+fn embedded_raf_exif_does_not_count_as_proven_absent() {
+    let source = fixtures::required_t_images_fixture_path("FujiFilm.raf");
+    let dir = TempDir::new().unwrap();
+    let destination = duplicate(&dir, Path::new(JPEG), "raf-copy.jpg");
+    let before = fs::read(&destination).unwrap();
+    let metadata = fs::metadata(&destination).unwrap();
+    let error = copy_metadata_report(
+        &source,
+        &destination,
+        Some(&filters(&["MakerNoteFujiFilm"])),
+    )
+    .unwrap_err();
+    assert_eq!(error.tags_not_written()[0].tag, "MakerNoteFujiFilm");
+    assert!(error.to_string().contains("physical maker note block"));
+    unchanged(&destination, &before, &metadata);
+}
+
+#[test]
 fn physical_canon_block_follows_exif_selection_and_valid_exclusions() {
     let canon = fixtures::required_t_images_fixture_path("Canon.jpg");
     let dir = TempDir::new().unwrap();
@@ -96,12 +126,22 @@ fn physical_canon_block_follows_exif_selection_and_valid_exclusions() {
             .output()
             .unwrap();
         assert!(set_make.status.success(), "{label}: {set_make:?}");
-        let report = copy_metadata_report(&canon, &destination, Some(&filters(&selector))).unwrap();
-        let has_block = report
-            .uncopied_tags
-            .iter()
-            .any(|tag| tag.tag.starts_with("Canon:"));
-        assert_eq!(has_block, block_selected, "{label}: {report:?}");
+        let before = fs::read(&destination).unwrap();
+        let metadata = fs::metadata(&destination).unwrap();
+        let result = copy_metadata_report(&canon, &destination, Some(&filters(&selector)));
+        if block_selected {
+            physical_canon_refusal(&result.unwrap_err());
+            unchanged(&destination, &before, &metadata);
+        } else {
+            let report = result.unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert!(
+                !report
+                    .uncopied_tags
+                    .iter()
+                    .any(|tag| tag.tag.starts_with("Canon:")),
+                "{label}: {report:?}"
+            );
+        }
     }
 
     // This named physical source block exists in Canon.jpg; silently treating
@@ -116,7 +156,15 @@ fn physical_canon_block_follows_exif_selection_and_valid_exclusions() {
         let metadata = fs::metadata(&destination).unwrap();
         let error =
             copy_metadata_report(&canon, &destination, Some(&filters(&[selector]))).unwrap_err();
-        assert!(error.to_string().contains(selector), "{error}");
+        let refused = error.tags_not_written();
+        assert_eq!(refused.len(), 1, "{label}: {error}");
+        assert_eq!(refused[0].tag, selector, "{label}: {error}");
+        assert!(
+            refused[0].reason.contains(
+                "ExifTool copies it to ExifIFD:MakerNoteCanon, and Cannot write tag 'ExifIFD:MakerNoteCanon': the source carries a physical maker note block, which oxidex cannot copy"
+            ),
+            "{label}: {error}"
+        );
         unchanged(&destination, &before, &metadata);
     }
     let no_block = duplicate(&dir, Path::new(JPEG), "no-source-block.jpg");
@@ -204,20 +252,38 @@ fn cli_reports_only_a_maker_block_surviving_later_requests() {
             .output()
             .unwrap();
         assert!(setup.status.success(), "{label}: {setup:?}");
+        let before = fs::read(&destination).unwrap();
+        let metadata = fs::metadata(&destination).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
             .args(["-overwrite_original", "-TagsFromFile"])
             .arg(&canon)
-            .args(["-all", later])
+            .args(["-all", later, "-Artist=final"])
             .arg(&destination)
             .output()
             .unwrap();
-        assert!(output.status.success(), "{label}: {output:?}");
-        let warning = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            warning.contains("cannot write the Canon"),
-            block_survives,
-            "{label}: {warning}"
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if block_survives {
+            assert_eq!(output.status.code(), Some(1), "{label}: {output:?}");
+            assert!(
+                stderr.contains("Cannot write tag 'ExifIFD:MakerNoteCanon': the selected physical maker note block cannot be copied by oxidex"),
+                "{label}: {stderr}"
+            );
+            unchanged(&destination, &before, &metadata);
+        } else {
+            assert!(output.status.success(), "{label}: {output:?}");
+            assert!(!stderr.contains("MakerNoteCanon"), "{label}: {stderr}");
+            let readback = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .args(["-s3", "-Artist"])
+                .arg(&destination)
+                .output()
+                .unwrap();
+            assert!(readback.status.success(), "{label}: {readback:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&readback.stdout).trim(),
+                "final",
+                "{label}"
+            );
+        }
     }
 }
 
@@ -278,5 +344,11 @@ fn canceled_physical_block_copy_uses_its_resolved_destination() {
         .output()
         .unwrap();
     assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(
+            "Cannot write tag 'MakerNoteCanon>IFD0:Artist': ExifTool copies it to IFD0:Artist, and Cannot write tag 'IFD0:Artist': the source carries a physical maker note block, which oxidex cannot copy"
+        ),
+        "{output:?}"
+    );
     unchanged(&destination, &before, &metadata);
 }

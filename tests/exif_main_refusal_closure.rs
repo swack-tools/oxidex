@@ -169,7 +169,11 @@ fn opcode_lists_match_print_opcode() {
     );
     assert_eq!(
         metadata.get_string("ExifIFD:OpcodeList2"),
-        Some("WarpRectilinear2, <err>")
+        Some(match oxidex::exiftool_oracle::repo_pin() {
+            "11.78" => "[opcode 14], <err>",
+            "12.64" | "13.59" => "WarpRectilinear2, <err>",
+            pin => panic!("unreviewed ExifTool pin {pin}"),
+        })
     );
     assert_eq!(
         metadata.get_string("ExifIFD:OpcodeList3"),
@@ -334,8 +338,8 @@ fn time_codes_match_value_and_print_conversions() {
         Some("1900-01-00T00:00:00.00+00:00")
     );
 
-    // 9e9999 becomes infinity in native Perl; its failed gmtime rendering
-    // retains the NaN fractional marker produced by ConvertUnixTime.
+    // 9e9999 becomes infinity in native Perl. ExifTool 13.59 retains the
+    // NaN fractional marker; 11.78 and 12.64 omit it.
     let jpeg =
         jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0, 0, 0, 0x80, 0x99, 0x99, 0x9e, 0x80])]);
     let file = NamedTempFile::new().expect("creates infinite MJD fixture");
@@ -343,7 +347,11 @@ fn time_codes_match_value_and_print_conversions() {
     let metadata = read_metadata(file.path()).expect("reads infinite MJD fixture");
     assert_eq!(
         metadata.get_string("ExifIFD:TimeCodes"),
-        Some("1900-01-00T00:00:00NaN.00+00:00")
+        Some(match oxidex::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => "1900-01-00T00:00:00.00+00:00",
+            "13.59" => "1900-01-00T00:00:00NaN.00+00:00",
+            pin => panic!("unreviewed ExifTool pin {pin}"),
+        })
     );
 }
 

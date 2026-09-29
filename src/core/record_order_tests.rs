@@ -9,10 +9,13 @@
 //! Each read below builds new maps, so repeated reads in one process
 //! exercise different iteration orders; the recorded sequence must not move.
 //!
-//! One file per path, from ExifTool's own `t/images` (skipped when that tree
-//! is absent, like the other pinned-sample tests).
+//! One file per path, usually from the selected ExifTool `t/images`. PCAPNG
+//! uses the separately verified combined corpus because historical source
+//! trees do not all carry that sample. This tests Rust read order, not parity
+//! with the selected native ExifTool release.
 
 use crate::core::operations::read_metadata_report;
+use crate::test_support::FixtureConfig;
 use std::path::Path;
 
 /// Reads per file. A path with only two hash-ordered entries repeats its
@@ -78,12 +81,119 @@ fn recorded_sequence(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Prove absence in the fixture tree belonging to the oracle actually selected.
+/// A cache fixture must not establish absence for an explicitly selected tree.
+fn assert_selected_source_fixture_absent(
+    config: &FixtureConfig,
+    selected_binary: &Path,
+    file: &str,
+) {
+    let directory = config
+        .t_images_dir_for_mode()
+        .expect("inspect pinned t/images directory")
+        .expect("selected pinned t/images directory");
+    let selected_directory = selected_binary
+        .parent()
+        .expect("selected ExifTool source tree")
+        .join("t/images");
+    assert_eq!(
+        directory.canonicalize().expect("pinned t/images directory"),
+        selected_directory
+            .canonicalize()
+            .expect("selected source t/images directory"),
+        "fixture resolver selected a different ExifTool source tree"
+    );
+    assert!(
+        !selected_directory.join(file).exists(),
+        "{file} unexpectedly exists in selected native source"
+    );
+}
+
+#[test]
+fn source_fixture_absence_tracks_the_selected_oracle_tree() {
+    let temp = tempfile::tempdir().expect("fixture roots");
+    let source = temp.path().join("source");
+    let cache = temp.path().join("cache");
+    let cached_tree = cache.join("exiftool");
+    for tree in [&source, &cached_tree] {
+        std::fs::create_dir_all(tree.join("t/images")).expect("fixture tree");
+    }
+    let config = FixtureConfig::new(Some(source.clone()), cache.clone(), true);
+    assert_selected_source_fixture_absent(&config, &source.join("exiftool"), "missing.jpg");
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_selected_source_fixture_absent(
+                &config,
+                &cached_tree.join("exiftool"),
+                "missing.jpg",
+            );
+        })
+        .is_err(),
+        "a different selected source cannot prove fixture absence"
+    );
+
+    let cache_only = FixtureConfig::new(None, cache, true);
+    assert_selected_source_fixture_absent(
+        &cache_only,
+        &cached_tree.join("exiftool"),
+        "missing.jpg",
+    );
+    std::fs::write(cached_tree.join("t/images/missing.jpg"), b"present").expect("selected fixture");
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_selected_source_fixture_absent(
+                &cache_only,
+                &cached_tree.join("exiftool"),
+                "missing.jpg",
+            );
+        })
+        .is_err(),
+        "a present fixture cannot satisfy absence"
+    );
+}
+
 #[test]
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
     let mut failures = Vec::new();
+    let release = crate::exiftool_oracle::repo_pin();
+    assert!(
+        matches!(release, "11.78" | "12.64" | "13.59"),
+        "unsupported native fixture release: {release}"
+    );
     for (file, exercises) in PATHS {
-        let Some(path) = crate::test_support::pinned_t_images_fixture_path(file) else {
-            eprintln!("skip: configured t/images fixture {file} is absent");
+        // These two source-tree fixtures did not exist in the selected
+        // native releases. Keep every other path under the same exact
+        // repeated-sequence contract, and prove the stated absence.
+        if matches!(
+            (release, *file),
+            ("11.78", "InfiRay.jpg" | "PCAP.pcapng") | ("12.64", "PCAP.pcapng")
+        ) {
+            let oracle = crate::exiftool_oracle::resolve().expect("pinned native ExifTool oracle");
+            assert!(
+                oracle.is_verified(),
+                "unverified native oracle: {}",
+                oracle.display()
+            );
+            assert!(
+                oracle.source != crate::exiftool_oracle::Source::Path,
+                "native fixture absence needs a selected source tree"
+            );
+            let selected_binary = Path::new(oracle.argv.last().expect("oracle binary"));
+            let config = FixtureConfig::from_environment(release);
+            assert_selected_source_fixture_absent(&config, selected_binary, file);
+            // PCAPNG still exercises Rust ordering from the independently
+            // pinned combined corpus even when this native tree lacks it.
+            if *file != "PCAP.pcapng" {
+                continue;
+            }
+        }
+        let path = if *file == "PCAP.pcapng" {
+            crate::test_support::pinned_combined_fixture_path(file)
+        } else {
+            crate::test_support::pinned_t_images_fixture_path(file)
+        };
+        let Some(path) = path else {
+            eprintln!("skip: configured fixture {file} is absent");
             return;
         };
         let first = recorded_sequence(&path);

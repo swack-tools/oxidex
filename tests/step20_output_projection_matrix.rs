@@ -3,16 +3,18 @@
 //! `--no-print-conv`, run through the real `oxidex` CLI binary against the
 //! pinned ExifTool corpus.
 //!
-//! Every expectation below is the pinned 13.59 oracle's own answer, run and
-//! recorded by the maintainer before this step began (not re-derived here):
+//! Except for FileSize, expectations below are the pinned 13.59 oracle's own
+//! answers, recorded by the maintainer before this step began. FileSize is
+//! checked against the selected carrier bytes and selected native oracle:
 //!
 //! ```text
 //! t/images/ExifTool.jpg:
 //!   -Make              -> Canon      (priority winner -- CIFF's, not IFD0's FUJIFILM)
 //!   -EXIF:Make         -> FUJIFILM
 //!   -a -G1 -s -Make    -> [IFD0] FUJIFILM  AND  [CIFF] Canon, in that order
-//!   -n -s -FileSize    -> 26106
-//!   -G0:1 -s -FileSize -> [File:System]  FileSize : 26 kB
+//!   -n -s -FileSize    -> the selected carrier's raw byte length (26106
+//!                          for the original 13.59 carrier)
+//!   -G0:1 -s -FileSize -> [File:System]  FileSize : selected native display
 //! t/images/Canon.jpg:
 //!   -n -s -FocalLength -> 34   (default -s -FocalLength -> 34.0 mm)
 //! ```
@@ -33,6 +35,26 @@ mod fixtures;
 
 use fixtures::pinned_fixture_path;
 use std::process::Command;
+
+fn native_file_size(file: &std::path::Path) -> Option<String> {
+    let mut oracle = oxidex::exiftool_oracle::shared_command()?;
+    let output = oracle
+        .args(["-s3", "-FileSize"])
+        .arg(file)
+        .output()
+        .expect("run selected ExifTool for FileSize");
+    assert!(
+        output.status.success(),
+        "selected ExifTool failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(
+        String::from_utf8(output.stdout)
+            .expect("ExifTool FileSize is UTF-8")
+            .trim()
+            .to_owned(),
+    )
+}
 
 fn oxidex_bin() -> &'static str {
     env!("CARGO_BIN_EXE_oxidex")
@@ -118,7 +140,7 @@ fn all_occurrences_with_group_display_lists_both_in_file_order() {
 }
 
 /// `--no-print-conv -s -FileSize` selects the raw byte count instead of
-/// the fused `"26 kB"` string `extract_file_metadata` stores for default
+/// the formatted string `extract_file_metadata` stores for default
 /// display -- `MetadataMap::insert_occurrence_with_raw`'s whole reason to
 /// exist (AGENTS.md's tagmodel/1.5 finding).
 #[test]
@@ -126,10 +148,17 @@ fn no_print_conv_selects_the_raw_file_size() {
     let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
         return;
     };
+    let raw_size = std::fs::metadata(&file)
+        .expect("read selected ExifTool.jpg size")
+        .len();
     let output = run(&["--no-print-conv", "-s", "-FileSize", file.to_str().unwrap()]);
     assert!(
-        output.contains("26106"),
-        "--no-print-conv -FileSize should show the raw byte count, got: {output:?}"
+        output
+            .lines()
+            .any(|line| line.split_once(':').is_some_and(|(name, value)| {
+                name.trim() == "FileSize" && value.trim() == raw_size.to_string()
+            })),
+        "--no-print-conv -FileSize should show raw byte count {raw_size}, got: {output:?}"
     );
     assert!(
         !output.contains("kB"),
@@ -139,13 +168,16 @@ fn no_print_conv_selects_the_raw_file_size() {
 
 /// `-G0:1 -s -FileSize` (no `-a`, no `--no-print-conv`) is unaffected by
 /// this step's `File:FileSize` raw-form migration: the display value is
-/// exactly what it was before (`"26 kB"`), and the two-family label reads
+/// exactly what the selected native oracle prints, and the two-family label reads
 /// `[File:System]` -- `File`'s real family 0, `System`'s real family 1
 /// (`ExifTool.pm:1388-1389`'s `%Extra` override, confirmed against the
 /// pinned oracle).
 #[test]
 fn multi_family_group_display_labels_file_size_correctly() {
     let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
+    let Some(size) = native_file_size(&file) else {
         return;
     };
     let output = run(&["-G0:1", "-s", "-FileSize", file.to_str().unwrap()]);
@@ -158,7 +190,7 @@ fn multi_family_group_display_labels_file_size_correctly() {
         "expected the FileSize tag name, got: {output:?}"
     );
     assert!(
-        output.contains("26 kB"),
+        output.contains(&size),
         "default display must still be the PrintConv-formatted size: {output:?}"
     );
 }

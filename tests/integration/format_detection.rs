@@ -260,13 +260,19 @@ fn test_parse_dpx_direct_table_fields() {
         metadata.get_string("File:ComponentsConfiguration"),
         Some("R, G, B")
     );
+    let color_specification = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => None,
+        "12.64" => Some("ITU-R 704-4"),
+        "13.59" => Some("ITU-R 709-4"),
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     assert_eq!(
         metadata.get_string("File:TransferCharacteristic"),
-        Some("ITU-R 709-4")
+        color_specification
     );
     assert_eq!(
         metadata.get_string("File:ColorimetricSpecification"),
-        Some("ITU-R 709-4")
+        color_specification
     );
     assert_eq!(metadata.get_integer("File:BitDepth"), Some(10));
     assert_eq!(

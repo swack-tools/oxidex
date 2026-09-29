@@ -13,7 +13,7 @@
 //!
 //! Reading every element with an `id` attribute as a tag turns those `<key>`
 //! rows into sibling *tag* entries, which is how the registry came to hold
-//! 16,005 of them — ids restarting at `0x0001` mid-table because they are
+//! 16,005 of them—ids restarting at `0x0001` mid-table because they are
 //! PrintConv keys, not tag ids.
 //!
 //! They did not reach output, but only because `src/tag_db/mod.rs` grew a
@@ -100,6 +100,54 @@ fn is_shaped_like_a_tag_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// The legacy registry stores LNK StringData IDs without their 0x30000
+/// section prefix. In 11.78 and 12.64, Flags also exposes numeric PrintConv
+/// keys 4 and 8 named Description and RelativePath; 13.59 spells those keys
+/// Bit2 and Bit3. Neither representation makes the existing real tags bogus.
+/// Keep this exception confined to that source-proven section encoding.
+fn registry_id_matches(table: &str, here: i64, wanted: &HashSet<i64>) -> bool {
+    wanted.contains(&here)
+        || (table == "LNK::Main"
+            && (0..=0xffff).contains(&here)
+            && wanted
+                .iter()
+                .any(|id| id & !0xffff == 0x30000 && id & 0xffff == here))
+}
+
+#[test]
+fn packed_lnk_ids_do_not_hide_real_printconv_collisions() {
+    assert!(registry_id_matches(
+        "LNK::Main",
+        4,
+        &HashSet::from([0x30004])
+    ));
+    assert!(registry_id_matches(
+        "LNK::Main",
+        8,
+        &HashSet::from([0x30008])
+    ));
+    assert!(!registry_id_matches(
+        "LNK::Main",
+        4,
+        &HashSet::from([0x30008])
+    ));
+    assert!(!registry_id_matches(
+        "LNK::Main",
+        4,
+        &HashSet::from([0x20004])
+    ));
+    assert!(!registry_id_matches(
+        "Exif::Main",
+        2,
+        &HashSet::from([0xa409])
+    ));
+    assert!(!registry_id_matches(
+        "Exif::Main",
+        4,
+        &HashSet::from([0x30004])
+    ));
+}
+
 #[test]
 fn registry_tag_names_are_shaped_like_exiftool_tag_names() {
     let mut violations = Vec::new();
@@ -140,7 +188,7 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
     // A name is only damning when it is a display value of *its own* table and
     // is not also a tag there. Restricting to the same table avoids convicting
     // a legitimate tag that happens to share a word with some other table's
-    // PrintConv (e.g. `Compression` is both a real EXIF tag and a value
+    // PrintConv (for example, `Compression` is both a real EXIF tag and a value
     // elsewhere).
     let mut violations = Vec::new();
     for domain in DOMAINS {
@@ -173,7 +221,7 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
 /// A display value can collide with a real tag of its own table, so the name
 /// check above waves it through. `Exif::Main` has a genuine `Saturation` tag at
 /// 0xA409 *and* carries `RenderingIntent`'s PrintConv value 2, also spelled
-/// "Saturation" — which landed in the registry as `id: "0x0002"`. Since
+/// "Saturation"—which landed in the registry as `id: "0x0002"`. Since
 /// `src/tag_db/mod.rs` builds its id→name index straight from these ids, such
 /// an entry can claim a tag id that belongs to something else entirely.
 ///
@@ -207,7 +255,7 @@ fn registry_tag_ids_are_not_print_conv_keys_in_disguise() {
             ) else {
                 continue;
             };
-            if wanted.contains(&here) {
+            if registry_id_matches(&e.table, here, wanted) {
                 continue;
             }
             let shadows = keys

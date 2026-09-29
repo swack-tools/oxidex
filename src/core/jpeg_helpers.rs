@@ -564,6 +564,13 @@ fn process_ifd0_tags(
             continue;
         };
 
+        // Exif::Main 11.78/12.64 has no 0x9287 row. The newer registry
+        // spelling must not turn its unknown bytes into LearningOptOutIn.
+        if *tag_id == 0x9287
+            && crate::core::tag_conversion::exif_main_residual_port(*tag_id).is_none()
+        {
+            continue;
+        }
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
         let hand_priority = arbiter.hand_priority(
@@ -2492,6 +2499,22 @@ mod tests {
 
     #[test]
     fn dji_relative_humidity_uses_perl_general_number_format() {
+        let release = crate::exiftool_oracle::repo_pin();
+        if release == "11.78" {
+            // DJI.pm 11.78 has no ThermalParams2 table. The APP4 branch and
+            // its humidity conversion first appear in the later native tree.
+            assert!(find_table("DJI", "ThermalParams2").is_none());
+            let payload = dji_thermal_params2(0.5);
+            let segment = Segment::new(APP4_MARKER, 0, &payload);
+            let mut metadata = dji_metadata();
+            process_dji_thermal_segments(&[segment], &mut metadata, &mut Vec::new());
+            assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
+            return;
+        }
+        assert!(
+            matches!(release, "12.64" | "13.59"),
+            "unsupported native DJI release: {release}"
+        );
         for (raw, expected) in [
             (0.123_456_78_f32, "12.3457 %"),
             (1e-7_f32, "1e-05 %"),
@@ -2526,6 +2549,31 @@ mod tests {
 
     #[test]
     fn infiray_does_not_claim_an_earlier_dji_thermal_params2_app4_branch() {
+        let release = crate::exiftool_oracle::repo_pin();
+        if release == "11.78" {
+            // Neither native module exists in 11.78. Its generated InfiRay
+            // sentinel explicitly forbids constructing an APP2 record.
+            assert_eq!(infiray::VERSION_MIN_LENGTH, usize::MAX);
+            assert_eq!(infiray::FACTORY_MIN_LENGTH, usize::MAX);
+            assert!(find_table("DJI", "ThermalParams2").is_none());
+            let mut version = [0; 10];
+            version[4..10].copy_from_slice(b"IJPEG\0");
+            let thermal = dji_thermal_params2(0.5);
+            let segments = [
+                Segment::new(APP2_MARKER, 0, &version),
+                Segment::new(APP4_MARKER, 0, &thermal),
+            ];
+            let mut metadata = dji_metadata();
+            process_infiray_segments(&segments, &mut metadata);
+            process_dji_thermal_segments(&segments, &mut metadata, &mut Vec::new());
+            assert_eq!(metadata.get_string("APP4:RelativeHumidity"), None);
+            assert_eq!(metadata.get_string("APP4:IJPEGTempVersion"), None);
+            return;
+        }
+        assert!(
+            matches!(release, "12.64" | "13.59"),
+            "unsupported native DJI/InfiRay release: {release}"
+        );
         let mut version = vec![0; infiray::VERSION_MIN_LENGTH];
         version[4..10].copy_from_slice(b"IJPEG\0");
         let mut thermal = dji_thermal_params2(0.5);
@@ -2714,10 +2762,14 @@ mod tests {
 
         process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
 
-        assert_eq!(
-            metadata.get_string("ExifIFD:LearningOptOutIn"),
-            Some("Unknown(65535)")
-        );
+        // Native Exif::Main first declares 0x9287 in the reviewed 13.59
+        // source. Earlier pins must not invent that name for these bytes.
+        let expected = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => None,
+            "13.59" => Some("Unknown(65535)"),
+            other => panic!("unsupported native LearningOptOutIn source: {other}"),
+        };
+        assert_eq!(metadata.get_string("ExifIFD:LearningOptOutIn"), expected);
     }
 
     #[test]

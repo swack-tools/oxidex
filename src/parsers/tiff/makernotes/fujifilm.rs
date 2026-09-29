@@ -12,6 +12,16 @@
 
 /// `FujiFilm::Main` through the generated table and the IFD engine (slice I-6).
 mod main_engine;
+
+#[cfg(test)]
+pub(super) fn selected_source_pin() -> &'static str {
+    match include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim() {
+        "11.78" => "11.78",
+        "12.64" => "12.64",
+        "13.59" => "13.59",
+        pin => panic!("unprobed FujiFilm source pin {pin}"),
+    }
+}
 /// The `OTHER` fallbacks of `%FujiFilm`'s settings tables, hand-written.
 mod print_conv;
 /// `%FujiFilm` binary sub-tables, generated from ExifTool's own hashes.
@@ -543,7 +553,15 @@ fn decode_fuji_tone(value: i32) -> String {
         0 => "0 (normal)".to_string(),
         16 => "-1 (medium soft)".to_string(),
         32 => "-2 (soft)".to_string(),
-        other => perl_number(f64::from(-other) / 16.0),
+        other => {
+            if include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim()
+                == "13.59"
+            {
+                perl_number(f64::from(-other) / 16.0)
+            } else {
+                format!("Unknown ({other})")
+            }
+        }
     }
 }
 
@@ -960,10 +978,16 @@ mod tests {
 
         let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x01, 0x01, 0x63, 0x00]);
         assert_eq!(tags["FujiFilm:FocusMode2"], "AF-S");
-        assert_eq!(tags["FujiFilm:PreAF"], "Off");
+        assert_eq!(
+            tags.get("FujiFilm:PreAF").map(String::as_str),
+            (selected_source_pin() != "11.78").then_some("Off")
+        );
         assert_eq!(tags["FujiFilm:AFAreaMode"], "Zone");
         assert_eq!(tags["FujiFilm:AFAreaPointSize"], "n/a");
-        assert_eq!(tags["FujiFilm:AFAreaZoneSize"], "3 x 3");
+        assert_eq!(
+            tags.get("FujiFilm:AFAreaZoneSize").map(String::as_str),
+            (selected_source_pin() == "13.59").then_some("3 x 3")
+        );
 
         let tags = decode_settings(&FUJIFILM_AFCSETTINGS, &[0x02, 0x01, 0x00, 0x00]);
         assert_eq!(tags["FujiFilm:AF-CSetting"], "Set 1 (multi-purpose)");
@@ -984,7 +1008,10 @@ mod tests {
         let tags = decode_settings(&FUJIFILM_FOCUSSETTINGS, &[0x01, 0x40, 0x00, 0x00]);
         assert_eq!(tags["FujiFilm:AFAreaPointSize"], "4");
         assert_eq!(tags["FujiFilm:AFAreaMode"], "Single Point");
-        assert_eq!(tags["FujiFilm:AFAreaZoneSize"], "n/a");
+        assert_eq!(
+            tags.get("FujiFilm:AFAreaZoneSize").map(String::as_str),
+            (selected_source_pin() == "13.59").then_some("n/a")
+        );
     }
 
     /// `combined-samples/FujiFilm/FujiFilmX-H2S.jpg` tag 0x102d: the low nibble

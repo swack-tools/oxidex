@@ -750,7 +750,7 @@ fn lookup(map: &[(&'static str, &'static str)], key: &[u8]) -> Option<&'static s
         .map(|i| map[i].1)
 }
 
-/// ExifTool.pm:3610-3632, for one scalar `$val`:
+/// ExifTool.pm:3610-3634 in 13.59, for one scalar `$val`:
 ///
 /// ```perl
 /// if (not defined($value = $$conv{$val})) {
@@ -770,8 +770,20 @@ fn lookup(map: &[(&'static str, &'static str)], key: &[u8]) -> Option<&'static s
 /// }
 /// ```
 ///
+/// In 11.78 (ExifTool.pm:3089) and 12.64 (ExifTool.pm:3343), the
+/// `PrintHex` condition uses `$val` instead of `defined $val`. Select the
+/// condition from the generated arm's source release, not the running Perl.
 /// An `undef` `$val` is the hash key `""` (with a warning), as in Perl.
 pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<MemberVal> {
+    hash_conv_for_source(super::exif_main::EXIFTOOL_VERSION, val, conv, print_conv)
+}
+
+fn hash_conv_for_source(
+    source_version: &str,
+    val: &MemberVal,
+    conv: &HashConv,
+    print_conv: bool,
+) -> R<MemberVal> {
     let key = val.perl_bytes();
     if let Some(v) = lookup(conv.map, &key) {
         return Ok(string(v));
@@ -785,7 +797,16 @@ pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<Member
             return Ok(v);
         }
     }
-    if conv.print_hex && print_conv && val.is_defined() {
+    let print_hex_operand = if conv.print_hex && print_conv {
+        match source_version {
+            "11.78" | "12.64" => val.is_truthy(),
+            "13.59" => val.is_defined(),
+            _ => return Err(Decline("unverified PrintHex source release")),
+        }
+    } else {
+        false
+    };
+    if print_hex_operand {
         let int_like = {
             let b: &[u8] = &key;
             let b = b.strip_suffix(b"\n").unwrap_or(b);
@@ -806,6 +827,63 @@ pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<Member
     out.extend_from_slice(&key);
     out.push(b')');
     Ok(bytes_val(out))
+}
+
+#[cfg(test)]
+mod hash_conv_source_tests {
+    use super::{HashConv, MemberVal, hash_conv_for_source};
+
+    const PRINT_HEX: HashConv = HashConv {
+        map: &[],
+        bitmask: None,
+        bits_per_word: None,
+        other: None,
+        print_hex: true,
+    };
+
+    #[test]
+    fn print_hex_zero_follows_selected_exiftool_source() {
+        let false_in_perl = [
+            MemberVal::Int(0),
+            MemberVal::Float(0.0),
+            MemberVal::Float(-0.0),
+            MemberVal::Str("0".into()),
+            MemberVal::Bytes(b"0".to_vec()),
+        ];
+        for source in ["11.78", "12.64"] {
+            for value in &false_in_perl {
+                let result = hash_conv_for_source(source, value, &PRINT_HEX, true).unwrap();
+                assert_eq!(
+                    result.perl_bytes().as_ref(),
+                    b"Unknown (0)",
+                    "{source} {value:?}"
+                );
+            }
+            // Perl string truthiness differs from numeric truthiness: these
+            // strings are true, even though their numeric value is zero.
+            for value in ["00", "+0", "-0"] {
+                let result =
+                    hash_conv_for_source(source, &MemberVal::Str(value.into()), &PRINT_HEX, true)
+                        .unwrap();
+                assert_eq!(
+                    result.perl_bytes().as_ref(),
+                    b"Unknown (0x0)",
+                    "{source} {value}"
+                );
+            }
+        }
+        for value in &false_in_perl {
+            let result = hash_conv_for_source("13.59", value, &PRINT_HEX, true).unwrap();
+            assert_eq!(result.perl_bytes().as_ref(), b"Unknown (0x0)", "{value:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_source_declines_print_hex_fallback() {
+        let err = hash_conv_for_source("14.00", &MemberVal::Int(0), &PRINT_HEX, true)
+            .expect_err("unprobed source must decline");
+        assert_eq!(err.0, "unverified PrintHex source release");
+    }
 }
 
 /// `DecodeBits($vals, $lookup, $bits)` (ExifTool.pm:6385-6407).

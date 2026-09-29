@@ -11,6 +11,8 @@ mod fixtures;
 
 use oxidex::exiftool_oracle::{self, Oracle};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -58,6 +60,15 @@ fn copy_into(dir: &TempDir, source: &Path, name: &str) -> PathBuf {
     path
 }
 
+fn unchanged(path: &Path, before: &[u8], metadata: &fs::Metadata) {
+    assert_eq!(fs::read(path).unwrap(), before);
+    #[cfg(unix)]
+    assert_eq!(fs::metadata(path).unwrap().ino(), metadata.ino());
+    #[cfg(not(unix))]
+    let _ = metadata;
+    assert!(!PathBuf::from(format!("{}_original", path.display())).exists());
+}
+
 // --- 4112788430: an EXIF:all copy selects SubIFD rows ----------------------
 
 /// t/images/DNG.dng with a text tag the oracle writes into its SubIFD:
@@ -92,6 +103,8 @@ fn an_exif_all_copy_selects_subifd_rows() {
     );
     let theirs = copy_into(&dir, Path::new(JPEG), "theirs.jpg");
     let ours = copy_into(&dir, Path::new(JPEG), "ours.jpg");
+    let before = fs::read(&ours).unwrap();
+    let metadata = fs::metadata(&ours).unwrap();
     let source_arg = source.to_str().unwrap();
     oracle_write(oracle, &["-TagsFromFile", source_arg, "-EXIF:all"], &theirs);
     let o = oxidex(
@@ -103,13 +116,42 @@ fn an_exif_all_copy_selects_subifd_rows() {
         ],
         &ours,
     );
-    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert_eq!(o.status.code(), Some(1), "{o:?}");
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains(
+            "Cannot write tag 'ExifIFD:MakerNoteCanon': the selected physical maker note block cannot be copied by oxidex"
+        ),
+        "{o:?}"
+    );
+    unchanged(&ours, &before, &metadata);
     let tags = ["ImageDescription", "Artist"];
     let expected = rows(oracle, &theirs, &tags);
     assert!(
         expected.contains(&"[IFD0] ImageDescription : SubIFD text".to_string()),
         "13.59 copies the SubIFD's ImageDescription: {expected:?}"
     );
+
+    // Excluding only the unsupported physical block still copies the SubIFD
+    // scalars. Compare both successful destinations through the native reader.
+    let theirs = copy_into(&dir, Path::new(JPEG), "theirs-no-block.jpg");
+    let ours = copy_into(&dir, Path::new(JPEG), "ours-no-block.jpg");
+    oracle_write(
+        oracle,
+        &["-TagsFromFile", source_arg, "-EXIF:all", "--MakerNoteCanon"],
+        &theirs,
+    );
+    let o = oxidex(
+        &[
+            "-overwrite_original",
+            "-TagsFromFile",
+            source_arg,
+            "-EXIF:all",
+            "--MakerNoteCanon",
+        ],
+        &ours,
+    );
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert_eq!(rows(oracle, &ours, &tags), rows(oracle, &theirs, &tags));
     assert_eq!(rows(oracle, &ours, &tags), expected);
 }
 

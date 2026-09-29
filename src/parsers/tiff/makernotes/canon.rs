@@ -16,6 +16,16 @@ mod custom_functions2_tables;
 pub mod filter_info;
 mod generated_subtables;
 mod main_engine;
+
+#[cfg(test)]
+pub(super) fn selected_source_pin() -> &'static str {
+    match include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim() {
+        "11.78" => "11.78",
+        "12.64" => "12.64",
+        "13.59" => "13.59",
+        pin => panic!("unprobed Canon source pin {pin}"),
+    }
+}
 pub mod original_decision_data;
 
 use crate::core::formatters::perl_number as format_perl_number;
@@ -1018,10 +1028,9 @@ const CAMERA_SETTINGS_MIN_FOCAL_LENGTH: usize = 24;
 const CAMERA_SETTINGS_FOCAL_UNITS: usize = 25;
 const CAMERA_SETTINGS_MAX_APERTURE: usize = 26;
 const CAMERA_SETTINGS_MIN_APERTURE: usize = 27;
-/// ExifTool `%Canon::CameraSettings` key 28 (Canon.pm:2553) — `Name => 'FlashModel'`,
-/// `Mask => 0x7f`, `RawConv => '$val == 127 ? undef : $val'`. There is no `FlashActivity`
-/// key in this table.
-const CAMERA_SETTINGS_FLASH_MODEL: usize = 28;
+/// CameraSettings key 28: its name changed from FlashActivity to FlashModel.
+/// Resolve the selected release's identity from the generated table.
+const CAMERA_SETTINGS_FLASH_SLOT: usize = 28;
 const CAMERA_SETTINGS_FLASH_BITS: usize = 29;
 const CAMERA_SETTINGS_FOCUS_CONTINUOUS: usize = 32;
 const CAMERA_SETTINGS_AE_SETTING: usize = 33;
@@ -5079,6 +5088,35 @@ pub fn is_canon_makernote(data: &[u8]) -> bool {
     false
 }
 
+/// Render CameraSettings slot 28 using the selected generated Canon row.
+/// The generator records but cannot execute either release's RawConv, so the
+/// two source-verified sentinel rules remain explicit here.
+fn camera_settings_flash_slot(raw: i16) -> Option<(String, String)> {
+    let field = crate::exiftool_tables::find_table("Canon", "CameraSettings")?
+        .fields
+        .iter()
+        .find(|field| field.index == CAMERA_SETTINGS_FLASH_SLOT as i64 && field.sub.is_none())?;
+    camera_settings_flash_field(raw, field)
+}
+
+fn camera_settings_flash_field(
+    raw: i16,
+    field: &crate::exiftool_tables::Field,
+) -> Option<(String, String)> {
+    let value = field
+        .mask
+        .map_or(i64::from(raw), |mask| mask.apply(i64::from(raw)));
+    let rendered = match field.name {
+        "FlashActivity" if value != -1 => value.to_string(),
+        "FlashModel" if value != 127 => field
+            .print_conv
+            .apply(value)
+            .unwrap_or_else(|| FLASH_MODEL.decode(value as i16)),
+        _ => return None,
+    };
+    Some((format!("Canon:{}", field.name), rendered))
+}
+
 /// Internal implementation of Canon MakerNote parsing.
 ///
 /// This parser extracts tags from Canon MakerNotes including simple tags
@@ -5932,13 +5970,10 @@ fn parse_canon_makernote_directory(
                         tags.insert("Canon:MinAperture".to_string(), rendered);
                     }
 
-                    // FlashModel (index 28). ExifTool masks with 0x7f and discards the
-                    // "no information" code 127; there is no FlashActivity key here.
-                    if let Some(&raw_flash_model) = array.get(CAMERA_SETTINGS_FLASH_MODEL) {
-                        let masked = raw_flash_model & 0x7f;
-                        if masked != 127 {
-                            tags.insert("Canon:FlashModel".to_string(), FLASH_MODEL.decode(masked));
-                        }
+                    if let Some(&raw) = array.get(CAMERA_SETTINGS_FLASH_SLOT)
+                        && let Some((name, value)) = camera_settings_flash_slot(raw)
+                    {
+                        tags.insert(name, value);
                     }
 
                     // FlashBits (index 29) - Flash features bitfield
@@ -6709,6 +6744,13 @@ fn parse_canon_makernote_directory(
                         (FILE_INFO_FLASH_EXPOSURE_LOCK, "FlashExposureLock"),
                         (FILE_INFO_ANTI_FLICKER, "AntiFlicker"),
                     ] {
+                        // A slot in the record is not a tag declaration. Older
+                        // FileInfo tables lack ShutterMode and AntiFlicker.
+                        if !crate::exiftool_tables::find_table("Canon", "FileInfo").is_some_and(
+                            |table| table.fields.iter().any(|field| field.name == name),
+                        ) {
+                            continue;
+                        }
                         if let Some(&value) = array.get(index) {
                             tags.insert(
                                 format!("Canon:{name}"),
@@ -6735,7 +6777,11 @@ fn parse_canon_makernote_directory(
                         }
                     }
 
-                    if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE) {
+                    if let Some(&rf_lens_type) = array.get(FILE_INFO_RF_LENS_TYPE)
+                        && crate::exiftool_tables::find_table("Canon", "FileInfo").is_some_and(
+                            |table| table.fields.iter().any(|field| field.name == "RFLensType"),
+                        )
+                    {
                         tags.insert(
                             "Canon:RFLensType".to_string(),
                             decode_file_info_enum("RFLensType", i64::from(rf_lens_type as u16)),
@@ -7755,7 +7801,7 @@ mod tests {
         assert_eq!(CAMERA_SETTINGS_FOCUS_TYPE, 18);
         assert_eq!(CAMERA_SETTINGS_AF_POINT, 19);
         assert_eq!(CAMERA_SETTINGS_EXPOSURE_MODE, 20);
-        assert_eq!(CAMERA_SETTINGS_FLASH_MODEL, 28);
+        assert_eq!(CAMERA_SETTINGS_FLASH_SLOT, 28);
         assert_eq!(CAMERA_SETTINGS_FOCUS_CONTINUOUS, 32);
     }
 
@@ -7845,6 +7891,56 @@ mod tests {
         assert_eq!(EXPOSURE_MODE.decode(6), "M-Dep");
         assert_eq!(EXPOSURE_MODE.decode(7), "Bulb");
         assert_eq!(EXPOSURE_MODE.decode(99), "Unknown (99)");
+    }
+
+    #[test]
+    fn camera_settings_flash_slot_uses_selected_identity_and_raw_rules() {
+        use crate::exiftool_tables::{Mask, PrintConv};
+
+        let selected = crate::exiftool_tables::find_table("Canon", "CameraSettings")
+            .unwrap()
+            .fields
+            .iter()
+            .find(|field| field.index == 28 && field.sub.is_none())
+            .copied()
+            .unwrap();
+        let mut activity = selected;
+        activity.name = "FlashActivity";
+        activity.mask = None;
+        activity.print_conv = PrintConv::None;
+        assert_eq!(camera_settings_flash_field(-1, &activity), None);
+        assert_eq!(
+            camera_settings_flash_field(0, &activity),
+            Some(("Canon:FlashActivity".into(), "0".into()))
+        );
+        assert_eq!(
+            camera_settings_flash_field(128, &activity),
+            Some(("Canon:FlashActivity".into(), "128".into()))
+        );
+
+        let mut model = selected;
+        model.name = "FlashModel";
+        model.mask = Some(Mask {
+            bits: 0x7f,
+            shift: 0,
+        });
+        assert_eq!(camera_settings_flash_field(127, &model), None);
+        assert_eq!(camera_settings_flash_field(-1, &model), None);
+        assert_eq!(
+            camera_settings_flash_field(128, &model),
+            Some(("Canon:FlashModel".into(), "n/a".into()))
+        );
+        assert_eq!(
+            camera_settings_flash_field(1, &model),
+            Some(("Canon:FlashModel".into(), "Unknown (1)".into()))
+        );
+
+        let expected = match selected.name {
+            "FlashActivity" => camera_settings_flash_field(0, &activity),
+            "FlashModel" => camera_settings_flash_field(0, &model),
+            other => panic!("unhandled Canon CameraSettings slot 28: {other}"),
+        };
+        assert_eq!(camera_settings_flash_slot(0), expected);
     }
 
     #[test]
@@ -9336,7 +9432,7 @@ mod tests {
         );
         assert_eq!(
             tags.get("Canon:ShutterMode").map(String::as_str),
-            Some("Electronic First Curtain")
+            (selected_source_pin() != "11.78").then_some("Electronic First Curtain")
         );
         assert_eq!(
             tags.get("Canon:FlashExposureLock").map(String::as_str),
@@ -9344,11 +9440,11 @@ mod tests {
         );
         assert_eq!(
             tags.get("Canon:AntiFlicker").map(String::as_str),
-            Some("Off")
+            (selected_source_pin() == "13.59").then_some("Off")
         );
         assert_eq!(
             tags.get("Canon:RFLensType").map(String::as_str),
-            Some("n/a")
+            (selected_source_pin() != "11.78").then_some("n/a")
         );
     }
 
@@ -9408,7 +9504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_file_info_rf_lens_type_uses_pinned_1359_enum_and_unsigned_fallback() {
+    fn test_parse_file_info_rf_lens_type_uses_selected_enum_and_unsigned_fallback() {
         let cases = [
             (324u16, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
             (0x8001u16, "Unknown (32769)"),
@@ -9424,7 +9520,13 @@ mod tests {
 
             assert_eq!(
                 tags.get("Canon:RFLensType").map(String::as_str),
-                Some(expected),
+                (selected_source_pin() != "11.78").then_some(
+                    if raw == 324 && selected_source_pin() == "12.64" {
+                        "Unknown (324)"
+                    } else {
+                        expected
+                    }
+                ),
                 "raw RFLensType {raw}"
             );
         }
@@ -11158,6 +11260,14 @@ mod tests {
                     if name != case || table != tag {
                         continue;
                     }
+                    let expected = match (selected_source_pin(), key) {
+                        ("11.78", "Canon:ShutterMode" | "Canon:RFLensType")
+                        | ("11.78" | "12.64", "Canon:AntiFlicker") => None,
+                        ("12.64", name) if name == "Canon:RFLensType" && raw == 324 => {
+                            Some("Unknown (324)")
+                        }
+                        _ => expected,
+                    };
                     assert_eq!(
                         printed.get(key).map(String::as_str),
                         expected,

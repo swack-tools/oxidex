@@ -370,29 +370,67 @@ struct Planned<'a> {
     filter: Option<&'a str>,
 }
 
-/// This physical EXIF maker-note inference may use decoded MakerNotes rows
-/// only when they came from an EXIF maker-note table. CanonRaw.pm:50/ProcessCanonRaw and
-/// KyoceraRaw.pm:27/ProcessRAW describe standalone RAW file directories;
-/// neither is an `ExifIFD:MakerNote<vendor>` source block.
+/// Decoded MakerNotes rows can suggest the vendor of a physical EXIF block,
+/// but cannot establish that the block exists. CanonRaw.pm:50/ProcessCanonRaw
+/// and KyoceraRaw.pm:27/ProcessRAW describe standalone RAW directories.
 fn has_physical_exif_maker_note(occurrence: &TagOccurrence) -> bool {
     family0_label(occurrence) == "MakerNotes"
         && !matches!(family1_label(occurrence), "CanonRaw" | "KyoceraRaw")
+}
+
+/// A decoded maker-note row is not proof of an EXIF block. The source's
+/// physical census proves absence only when it found no entries and walked
+/// every relevant directory. A non-TIFF RAW may embed EXIF that this scanner
+/// does not expose (RAF does), so only the standalone CIFF and Kyocera RAW
+/// directories have a proven absence without an EXIF census.
+fn source_may_have_physical_exif_maker_note(source_path: &Path) -> bool {
+    let Ok(reader) = MMapReader::new(source_path) else {
+        return true;
+    };
+    let Ok(format) = detect_format(&reader) else {
+        return true;
+    };
+    if matches!(
+        format,
+        FileFormat::CameraRaw(crate::parsers::raw::RawFormat::CanonCRW)
+    ) {
+        return false;
+    }
+    if matches!(
+        format,
+        FileFormat::CameraRaw(crate::parsers::raw::RawFormat::GenericRAW)
+    ) && reader
+        // Kyocera's signature helper requires its complete 156-byte header.
+        .read(0, reader.size().min(156) as usize)
+        .is_ok_and(crate::parsers::raw::looks_like_kyocera_raw)
+    {
+        return false;
+    }
+    if !matches!(format, FileFormat::JPEG | FileFormat::PNG)
+        && !is_surgical_tiff_target(format, &reader)
+    {
+        return true;
+    }
+    drop(reader);
+    let census = crate::core::operations::conversion_makernote_census(source_path);
+    census.makernotes_group_entries != 0 || census.uncertain_outside_ifd1 || census.uncertain_ifd1
 }
 
 /// A selection of the physical `ExifIFD:MakerNote<Make>` source block copies
 /// it whole. Pinned 13.59 selects the block with `all`, `EXIF:all`, or
 /// `ExifIFD:all`, but not `Canon:all` or `MakerNotes:all`, even though its
 /// decoded rows use those latter family groups. oxidex does not copy the
-/// block; it names each row only when the physical block was selected.
+/// block; a selected physical block must refuse the copy before any write.
 ///
 /// The block is written only where its `MakerNotes::Main` `Condition`
 /// holds for the destination's Make as the write leaves it (13.59:
 /// `-TagsFromFile Canon.jpg -all --Make` into a non-Canon JPEG writes no
-/// Canon maker note). oxidex does not evaluate those conditions; it names
+/// Canon maker note). oxidex does not evaluate those conditions; it refuses
 /// the block when that Make is the source's own -- the Make the source's
 /// block was selected by -- and names nothing otherwise.
 fn maker_note_rows<'a>(
     source: &'a MetadataMap,
+    source_path: &Path,
     selectors: &CopySelectors,
     format: FileFormat,
     surgical: bool,
@@ -417,6 +455,10 @@ fn maker_note_rows<'a>(
         || selectors
             .selections("ExifIFD", "ExifIFD", &block)
             .is_empty()
+        // Decoded Canon rows also come from a standalone CIFF RAW directory.
+        // Only the source file's physical EXIF entries can establish a block
+        // for TagsFromFile. An unprovable census stays conservative.
+        || !source_may_have_physical_exif_maker_note(source_path)
     {
         return Vec::new();
     }
@@ -469,6 +511,7 @@ fn arbitrate_rows<'a>(
 /// (`core::operations::copy_metadata_report`).
 pub(crate) fn copy_tags(
     source_metadata: &MetadataMap,
+    source_path: &Path,
     dest: &Path,
     selectors: &CopySelectors,
     retain: impl Fn(&str) -> bool,
@@ -586,7 +629,8 @@ pub(crate) fn copy_tags(
                 && source_group
                     .as_deref()
                     .is_none_or(|group| copy_group_matches(group, "ExifIFD", "ExifIFD"))
-                && !selectors.excluded_after(*position, "ExifIFD", "ExifIFD", source_name);
+                && !selectors.excluded_after(*position, "ExifIFD", "ExifIFD", source_name)
+                && source_may_have_physical_exif_maker_note(source_path);
             if !physical_block {
                 continue;
             }
@@ -787,6 +831,33 @@ pub(crate) fn copy_tags(
             }
         }
     }
+    // A maker note is a physical EXIF block, not the set of decoded Canon
+    // rows. Selected copies cannot safely omit it and report an update.
+    // Check before the write loop so both API and CLI leave bytes untouched.
+    let final_make = final_make_override.unwrap_or_else(|| {
+        writes
+            .iter()
+            .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
+            .map(|(key, value, _)| printed_text(value, key))
+            .or_else(|| printed_make(&dest_baseline))
+    });
+    if let Some((group1, _)) = maker_note_rows(
+        source_metadata,
+        source_path,
+        selectors,
+        format,
+        surgical,
+        final_make,
+        &retain,
+    )
+    .first()
+    {
+        return Err(ExifToolError::tag_not_written(
+            format!("ExifIFD:MakerNote{group1}"),
+            "the selected physical maker note block cannot be copied by oxidex",
+        ));
+    }
+
     // One write transaction; a selected tag the writer refuses is skipped
     // and named, a named one refuses the copy.
     // ExifTool queues copied sets: a later replacement removes the pending
@@ -865,28 +936,6 @@ pub(crate) fn copy_tags(
             .collect();
         report.uncopied_tags.extend(consequences);
     }
-    let final_make = final_make_override.unwrap_or_else(|| {
-        writes
-            .iter()
-            .find(|(key, _, _)| key.eq_ignore_ascii_case("IFD0:Make"))
-            .map(|(key, value, _)| printed_text(value, key))
-            .or_else(|| printed_make(&dest_baseline))
-    });
-    for (group1, occurrence) in maker_note_rows(
-        source_metadata,
-        selectors,
-        format,
-        surgical,
-        final_make,
-        &retain,
-    ) {
-        report.uncopied_tags.push(TagNotWritten::new(
-            format!("{group1}:{}", occurrence.name),
-            "13.59 copies the source's maker note block whole; oxidex does not copy a \
-             maker note block",
-        ));
-    }
-
     let mut seen = std::collections::HashSet::new();
     report
         .uncopied_tags
@@ -904,6 +953,26 @@ pub(crate) fn copy_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unwalkable_source_exif_does_not_prove_physical_makernote_absent() {
+        // A valid TIFF root with an ExifIFD pointer outside the file. The
+        // physical scanner finds zero entries but cannot walk the directory.
+        let mut tiff = vec![0_u8; 26];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        tiff[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        tiff[10..12].copy_from_slice(&0x8769_u16.to_le_bytes());
+        tiff[12..14].copy_from_slice(&4_u16.to_le_bytes());
+        tiff[14..18].copy_from_slice(&1_u32.to_le_bytes());
+        tiff[18..22].copy_from_slice(&0xffff_fff0_u32.to_le_bytes());
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("unwalkable.tif");
+        std::fs::write(&source, tiff).unwrap();
+        let census = crate::core::operations::conversion_makernote_census(&source);
+        assert_eq!(census.makernotes_group_entries, 0);
+        assert!(census.uncertain_outside_ifd1);
+        assert!(source_may_have_physical_exif_maker_note(&source));
+    }
 
     fn selectors(filters: &[&str]) -> CopySelectors {
         CopySelectors::parse(&filters.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()

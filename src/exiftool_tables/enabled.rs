@@ -264,6 +264,22 @@ pub fn is_enabled(table: &BinaryTable) -> bool {
             .is_ok()
 }
 
+/// Selected native captures: in 11.78/12.64 Olympus::AFInfo is a zero-tag
+/// ProcessBinaryData shell, and the other two tables are absent.
+/// No unprobed release may silently inherit this exception.
+#[cfg(test)]
+pub(crate) fn source_unavailable_allowlist() -> &'static [(&'static str, &'static str)] {
+    match crate::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" | "12.64" => &[
+            ("Olympus", "AFInfo"),
+            ("Olympus", "AFTargetInfo"),
+            ("Olympus", "SubjectDetectInfo"),
+        ],
+        "13.59" => &[],
+        version => panic!("unprobed ExifTool source {version}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,12 +299,19 @@ mod tests {
     /// otherwise be indistinguishable from a table that is simply off.
     #[test]
     fn every_allowlist_entry_names_a_real_table() {
+        let missing: Vec<_> = ENABLED
+            .iter()
+            .copied()
+            .filter(|(module, table)| find_table(module, table).is_none())
+            .collect();
+        assert_eq!(missing, source_unavailable_allowlist());
         for (module, table) in ENABLED {
-            assert!(
-                find_table(module, table).is_some(),
-                "{module}::{table} is on the Step 28 allowlist but no such \
-                 table is generated"
-            );
+            if !source_unavailable_allowlist().contains(&(module, table)) {
+                assert!(
+                    find_table(module, table).is_some(),
+                    "{module}::{table} is unexpectedly absent"
+                );
+            }
         }
     }
 
@@ -298,7 +321,10 @@ mod tests {
     #[test]
     fn no_allowlist_entry_is_blocked_by_gate_a() {
         for (module, table) in ENABLED {
-            let t = find_table(module, table).expect("checked above");
+            let Some(t) = find_table(module, table) else {
+                assert!(source_unavailable_allowlist().contains(&(module, table)));
+                continue;
+            };
             assert!(
                 t.gate_a.passes(),
                 "{module}::{table} is allowlisted but gate A blocks it: {:?}",
@@ -320,7 +346,7 @@ mod tests {
             .collect();
         assert_eq!(
             enabled.len(),
-            ENABLED.len(),
+            ENABLED.len() - source_unavailable_allowlist().len(),
             "exactly the allowlisted tables may be enabled, found {enabled:?}"
         );
     }

@@ -1860,17 +1860,18 @@ mod tests {
     /// Before Step 11 this was 993 decoded / 11 refused: 11 fractional
     /// entries declared no `Mask`, and the runtime withheld them entirely.
     /// ExifTool.pm:9957 says otherwise -- it reads the whole word at
-    /// `floor(index)` whether or not `Mask` is set -- so all 1004 fractional
-    /// entries across the generated tables are decodable now, and none are
-    /// refused. Pinning both halves makes a regeneration that changes the
-    /// balance visible instead of silent.
+    /// `floor(index)` whether or not `Mask` is set -- so every selected-source
+    /// fractional primary field is decodable now, and none is refused.
+    /// The source census excludes accepted `_variants` alternatives because
+    /// `all_fractional_census` traverses primary `fields` only. Pinning both
+    /// halves makes a regeneration that changes the balance visible.
     #[test]
     fn generated_fractional_entries_are_all_decodable() {
         let census = all_fractional_census();
         assert_eq!(
             census,
             FractionalCensus {
-                decoded: 1004,
+                decoded: super::super::selected_binary_source_census().fractional_primary,
                 refused: 0,
             },
             "fractional-entry split moved; if `just regen-tables` caused this, \
@@ -1898,6 +1899,15 @@ mod tests {
     /// on that whole word.
     #[test]
     fn pentax_afinfok3iii_afmode_decodes_the_maskless_fractional_word() {
+        if matches!(crate::exiftool_tables::EXIFTOOL_VERSION, "11.78" | "12.64") {
+            // The selected Pentax.pm does not declare this later table.
+            // The synthetic maskless fractional test and the independent
+            // NikonCustom::SettingsD5 carrier below still exercise decoding.
+            assert!(find_table("Pentax", "AFInfoK3III").is_none());
+            assert!(find_table("NikonCustom", "SettingsD5").is_some());
+            return;
+        }
+        assert_eq!(crate::exiftool_tables::EXIFTOOL_VERSION, "13.59");
         let table = find_table("Pentax", "AFInfoK3III").expect("generated Pentax::AFInfoK3III");
         let field = table
             .fields
@@ -2297,9 +2307,11 @@ mod tests {
         assert!(title.field.omitted.value_conv);
         assert_eq!(title.emit(), None);
 
-        // The same shape on a table gate A blocks: unchanged strict read.
-        let afinfo = find_table("Pentax", "AFInfoK3III").expect("generated Pentax::AFInfoK3III");
-        assert!(!afinfo.enabled(), "gate A blocks Pentax::AFInfoK3III");
+        // A ProcessBinaryData table present in every selected source still
+        // supplies the blocked control. Its unsupported format keeps Gate A
+        // closed in all three releases.
+        let afinfo = find_table("Pentax", "AFPointInfo").expect("generated Pentax::AFPointInfo");
+        assert!(!afinfo.enabled(), "gate A blocks Pentax::AFPointInfo");
         assert!(
             !afinfo.gate_a.passes(),
             "and it is blocked by gate A, not merely absent from the allowlist"
@@ -2991,6 +3003,16 @@ mod tests {
         // to something approximate. Samsung::DualShotExtra's reads the data
         // block and runs a regex over it; `Omitted::hook` still marks it.
         let samsung = find_table("Samsung", "DualShotExtra").expect("Samsung::DualShotExtra");
+        if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" {
+            // The old source has seven ordinary fields and no Hook-bearing
+            // DualShotDummy; its ProcessBinaryData table still exists.
+            assert!(samsung.fields.iter().all(|f| f.name != "DualShotDummy"));
+            return;
+        }
+        assert!(matches!(
+            crate::exiftool_tables::EXIFTOOL_VERSION,
+            "12.64" | "13.59"
+        ));
         let dummy = samsung
             .fields
             .iter()

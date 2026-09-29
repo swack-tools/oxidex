@@ -288,7 +288,9 @@ impl MemberVal {
             MemberVal::Str(s) => match numify_str(s) {
                 PerlNum::Int(0)
                     if s.trim_start_matches(|c: char| c.is_ascii() && is_perl_space(c as u8))
-                        .starts_with('-') =>
+                        .as_bytes()
+                        .get(0..2)
+                        .is_some_and(|prefix| prefix[0] == b'-' && prefix[1].is_ascii_digit()) =>
                 {
                     -0.0
                 }
@@ -446,14 +448,13 @@ impl Default for Session {
 /// the ported helpers and their call sites read. An option absent here reads
 /// as `undef`, which is also its ExifTool default (`CoordFormat`,
 /// `DateFormat`, `GlobalTimeShift`, `KeepUTCTime`, `StrictDate`,
-/// `CharsetEXIF`, `CharsetFileName`, `Validate`). `CharsetRIFF`,
-/// `SystemTimeRes` and `Verbose` default to the integer 0 (see
-/// [`Session::new`]). The helper oracle
+/// `CharsetEXIF`, `CharsetFileName`, `Validate`). `CharsetRIFF` and
+/// `Verbose` default to the integer 0 in all reviewed sources;
+/// `SystemTimeRes` does so only at 13.59 (see [`Session::new`]). The helper oracle
 /// captures `Image::ExifTool->new`'s own values for all of these, and
 /// `helpers::tests::session_option_defaults_match_the_pinned_perl` holds
 /// this table to them.
 const DEFAULT_OPTIONS: &[(&str, &str)] = &[
-    ("ByteUnit", "SI"),
     ("Charset", "UTF8"),
     ("CharsetID3", "Latin"),
     ("CharsetIPTC", "Latin"),
@@ -462,7 +463,7 @@ const DEFAULT_OPTIONS: &[(&str, &str)] = &[
 ];
 
 /// Options whose `@availableOptions` default is the integer 0.
-const DEFAULT_ZERO_OPTIONS: &[&str] = &["CharsetRIFF", "SystemTimeRes", "Verbose"];
+const DEFAULT_ZERO_OPTIONS: &[&str] = &["CharsetRIFF", "Verbose"];
 
 /// The scalar members `ExifTool::Init` (ExifTool.pm:4330-4376, pinned 13.59)
 /// sets before any file is read, with the value it sets. They are
@@ -503,7 +504,16 @@ impl Session {
             .iter()
             .map(|(k, v)| ((*k).to_string(), MemberVal::Str((*v).to_string())))
             .collect();
-        // ExifTool.pm: [ 'CharsetRIFF', 0, ... ], [ 'SystemTimeRes', 0, ... ]
+        // The reviewed 13.59 source defaults ByteUnit to SI and
+        // SystemTimeRes to 0. Both are undef in the reviewed 11.78/12.64
+        // sources; an unreviewed source gets no invented default.
+        if super::helpers::selected_port_source("Image::ExifTool::ConvertFileSize")
+            == Some("887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e")
+        {
+            options.insert("ByteUnit".to_string(), MemberVal::Str("SI".to_string()));
+            options.insert("SystemTimeRes".to_string(), MemberVal::Int(0));
+        }
+        // The zero defaults shared by all three reviewed ExifTool sources.
         for name in DEFAULT_ZERO_OPTIONS {
             options.insert((*name).to_string(), MemberVal::Int(0));
         }
@@ -768,8 +778,31 @@ mod tests {
         assert!(s.set_member("Make", MemberVal::Int(1)).is_err());
         s.set_member("FacesDetected", MemberVal::Int(2)).unwrap();
         assert_eq!(s.member("FacesDetected"), MemberVal::Int(2));
-        assert_eq!(s.option("ByteUnit"), MemberVal::Str("SI".into()));
+        let byte_unit = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => MemberVal::Undef,
+            "13.59" => MemberVal::Str("SI".into()),
+            other => panic!("unreviewed ByteUnit default source: {other}"),
+        };
+        assert_eq!(s.option("ByteUnit"), byte_unit);
         assert_eq!(s.option("DateFormat"), MemberVal::Undef);
+    }
+
+    #[test]
+    fn perl_nv_distinguishes_a_sign_only_string_from_negative_zero() {
+        for s in ["-", "-x", "-.abc", "- 0"] {
+            assert_eq!(
+                MemberVal::Str(s.into()).perl_nv().to_bits(),
+                0.0f64.to_bits(),
+                "{s}"
+            );
+        }
+        for s in ["-0", "-00", "-0abc", "-.0"] {
+            assert_eq!(
+                MemberVal::Str(s.into()).perl_nv().to_bits(),
+                (-0.0f64).to_bits(),
+                "{s}"
+            );
+        }
     }
 
     #[test]

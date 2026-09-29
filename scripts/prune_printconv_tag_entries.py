@@ -200,6 +200,14 @@ def classify(table: str, tag_id: str, name: str, gt: GroundTruth) -> str | None:
         here = _as_int(tag_id or "")
         if not wanted or here is None or here in wanted:
             return None
+        # The legacy registry omits the section prefix of real LNK StringData
+        # tags. Older listx also calls Flags bits 4/8 Description/RelativePath;
+        # that coincidence is not evidence that the real tags are fabricated.
+        # Restrict the alias to the source-proven 0x30000 StringData section.
+        if (table == "LNK::Main" and 0 <= here <= 0xffff
+                and any(tid & ~0xffff == 0x30000 and tid & 0xffff == here
+                        for tid in wanted)):
+            return None
         if name in gt.keys.get(table, {}).get(here, ()):
             return "printconv-value-shadowing-a-real-tag-name"
         return None  # an id disagreement, but not provably a value row

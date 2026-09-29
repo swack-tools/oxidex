@@ -11,15 +11,16 @@
 //! file with one of those extensions -- no error, no warning, no count. It
 //! is now backed by `crate::filetype`'s extension table, generated from
 //! ExifTool's own `%fileTypeLookup`, so it cannot drift the same way again.
-//! These tests assert against that real table's contents, not against a
-//! list an author has to remember to extend.
+//! These tests assert against the selected source table's contents, not
+//! against a list an author has to remember to extend.
 
 use std::path::Path;
 
 /// Test that all camera raw extensions ExifTool actually recognizes are
 /// identified by the batch processor.
 ///
-/// Five entries from the original hand-maintained list -- `ari`, `mdc`,
+/// ORI and HIF enter `%fileTypeLookup` after 11.78. Five entries from the
+/// original hand-maintained list -- `ari`, `mdc`,
 /// `sti`, `cam`, `rev` -- are deliberately absent here: none of them appear
 /// anywhere in the pinned ExifTool's `%fileTypeLookup`
 /// (`lib/Image/ExifTool.pm:231`), so they were never real extensions to
@@ -29,6 +30,11 @@ use std::path::Path;
 /// exists to remove.
 #[test]
 fn test_raw_extensions_supported() {
+    let (ori_registered, hif_registered) = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => (false, false),
+        "12.64" | "13.59" => (true, true),
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     let raw_extensions = vec![
         // Canon
         "cr2", "cr3", "crw", // Nikon
@@ -56,10 +62,14 @@ fn test_raw_extensions_supported() {
         let path_str = format!("test.{}", ext);
         let path = Path::new(&path_str);
 
-        assert!(
+        assert_eq!(
             oxidex::cli::batch_processor::is_supported_file(path),
-            "Extension '{}' not recognized by the batch processor",
-            ext
+            match ext {
+                "ori" => ori_registered,
+                "hif" => hif_registered,
+                _ => true,
+            },
+            "Extension '{ext}' differs from the selected ExifTool fileTypeLookup"
         );
     }
 }
@@ -103,10 +113,16 @@ fn test_existing_formats_still_supported() {
 /// Formats the old hand-maintained `SUPPORTED_EXTENSIONS` list dropped even
 /// though OxiDex has a real, dispatched parser for each of them
 /// (`crate::core::format_dispatch::dispatch_format_parser`). These are
-/// exactly the files `oxidex -r` used to skip in total silence; they must
-/// be recognized now.
+/// exactly the files `oxidex -r` used to skip in total silence. ICO enters
+/// `%fileTypeLookup` after 11.78; all other listed extensions are required
+/// for every selected pin.
 #[test]
 fn test_previously_dropped_but_parseable_extensions_now_supported() {
+    let ico_registered = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => false,
+        "12.64" | "13.59" => true,
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
     let dropped = vec![
         "mp3", "zip", "docx", "xlsx", "pptx", "txt", "html", "epub", "flac", "wav", "gif", "bmp",
         "webp", "ico",
@@ -116,11 +132,10 @@ fn test_previously_dropped_but_parseable_extensions_now_supported() {
         let path_str = format!("test.{}", ext);
         let path = Path::new(&path_str);
 
-        assert!(
+        assert_eq!(
             oxidex::cli::batch_processor::is_supported_file(path),
-            "Extension '{}' has a real parser but was not recognized -- \
-             this is the exact defect the extension allow-list caused",
-            ext
+            ext != "ico" || ico_registered,
+            "Extension '{ext}' differs from the selected ExifTool fileTypeLookup"
         );
     }
 }

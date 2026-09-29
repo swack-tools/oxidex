@@ -307,6 +307,60 @@ pub fn find_unemitted_table(module: &str, table: &str) -> Option<&'static Unemit
         .find(|t| t.module == module && t.table == table)
 }
 
+/// Source-side binary census for the selected, independently dumped release.
+/// These are `codegen.py` acceptance counts from the pinned Perl captures,
+/// not counts copied from `ALL_BINARY_TABLES`. The fractional count excludes
+/// accepted `_variants` alternatives because `all_fractional_census` walks
+/// primary `fields` only. See the historical census evidence receipt.
+#[cfg(test)]
+pub(crate) struct BinarySourceCensus {
+    pub hook_fields: usize,
+    pub subdir_primary: usize,
+    pub subdir_all: usize,
+    pub subdir_modeled: usize,
+    pub subdir_processproc_refused: usize,
+    pub print_conv_refused: usize,
+    pub print_conv_tables: usize,
+    pub fractional_primary: usize,
+}
+
+#[cfg(test)]
+pub(crate) fn selected_binary_source_census() -> BinarySourceCensus {
+    match EXIFTOOL_VERSION {
+        "11.78" => BinarySourceCensus {
+            hook_fields: 25,
+            subdir_primary: 52,
+            subdir_all: 55,
+            subdir_modeled: 52,
+            subdir_processproc_refused: 3,
+            print_conv_refused: 19,
+            print_conv_tables: 9,
+            fractional_primary: 984,
+        },
+        "12.64" => BinarySourceCensus {
+            hook_fields: 27,
+            subdir_primary: 58,
+            subdir_all: 63,
+            subdir_modeled: 59,
+            subdir_processproc_refused: 4,
+            print_conv_refused: 23,
+            print_conv_tables: 9,
+            fractional_primary: 993,
+        },
+        "13.59" => BinarySourceCensus {
+            hook_fields: 35,
+            subdir_primary: 63,
+            subdir_all: 68,
+            subdir_modeled: 64,
+            subdir_processproc_refused: 4,
+            print_conv_refused: 28,
+            print_conv_tables: 12,
+            fractional_primary: 1004,
+        },
+        source => panic!("no independently verified binary census for ExifTool {source}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,12 +446,18 @@ mod tests {
         assert_eq!(entry.refusal, "table_not_binary");
         assert!(find_table("Canon", "AFInfo").is_none());
         // Same table name, different modules, genuinely ProcessBinaryData.
-        for module in ["Nikon", "Olympus", "Pentax"] {
+        // Olympus::AFInfo is a zero-tag native shell in 11.78/12.64 and is
+        // deliberately not generated from those selected sources.
+        for module in ["Nikon", "Pentax"] {
             assert!(
                 find_table(module, "AFInfo").is_some(),
                 "{module}::AFInfo is emitted; only Canon's is serial"
             );
         }
+        assert_eq!(
+            find_table("Olympus", "AFInfo").is_none(),
+            enabled::source_unavailable_allowlist().contains(&("Olympus", "AFInfo"))
+        );
     }
 
     #[test]
@@ -566,7 +626,7 @@ mod tests {
 
     /// The census sibling of `hook_and_subdirectory_census_matches_the_13_59_
     /// dump`, for the flag that closed Step 28's `conv_dropped` refusal
-    /// class. 23 fields across 11 tables carry an ExifTool `PrintConv` --
+    /// class. Selected-source fields carry an ExifTool `PrintConv` --
     /// always a Perl CODE or ARRAY ref -- that
     /// `tools/exiftool-tables/exprs.py`'s `CODE_REFS` registry does not
     /// recognise, and every one of them is now WITHHELD rather than reported
@@ -602,14 +662,38 @@ mod tests {
             refused += here;
             tables += usize::from(here > 0);
         }
-        // Slice I-4 (parenthesised Condition groups) let two more binary
-        // tables past Gate A -- Nikon::AFInfo2V0101 and ::AFInfo2V0400,
-        // refused -> eligible, nothing moved the other way -- so their fields
-        // are emitted now and their refused PrintConvs are counted here. The
-        // invariant above (refused => no conversion) is what this test is
-        // for; these two numbers only say how much honest absence there is.
-        assert_eq!(refused, 28, "fields whose PrintConv the generator refused");
-        assert_eq!(tables, 12, "tables carrying at least one such field");
+        let source = selected_binary_source_census();
+        // Native declarations still contain these three CODE refs, but
+        // ConvertFileSize is now reproduced for Palm::MOBI and both
+        // RIFF::ds64 fields in the historical generated output.
+        let (recovered, recovered_tables) = match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => (3, 2),
+            "13.59" => (0, 0),
+            other => panic!("unverified print conversion census source: {other}"),
+        };
+        for (module, table, name) in [
+            ("Palm", "MOBI", "UncompressedTextLength"),
+            ("RIFF", "DS64", "RIFFSize64"),
+            ("RIFF", "DS64", "DataSize64"),
+        ] {
+            let field = find_table(module, table)
+                .and_then(|t| t.fields.iter().find(|f| f.name == name))
+                .unwrap_or_else(|| panic!("native {module}::{table} {name} was not transcribed"));
+            assert!(
+                !field.omitted.print_conv && !matches!(field.print_conv, PrintConv::None),
+                "{module}::{table} {name} must carry the verified ConvertFileSize conversion"
+            );
+        }
+        assert_eq!(
+            refused + recovered,
+            source.print_conv_refused,
+            "native CODE-ref fields: refused plus verified lowerings"
+        );
+        assert_eq!(
+            tables + recovered_tables,
+            source.print_conv_tables,
+            "native tables carrying a refused or verified CODE ref"
+        );
     }
 
     /// The other half of the `conv_dropped` story: the conversions that were
@@ -645,19 +729,27 @@ mod tests {
     /// over -- a branch no file reaches is not a branch this test covers.
     #[test]
     fn recovered_conversions_match_the_pinned_oracle_on_real_carriers() {
+        let palm_want = match helpers::selected_port_source("Image::ExifTool::ConvertFileSize") {
+            Some("20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e") => "168 kB",
+            Some(
+                "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117"
+                | "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
+            ) => "172 kB",
+            _ => panic!("unverified native ConvertFileSize source"),
+        };
         // (module, table, field, ExifTool `-n` value, ExifTool printed value,
         //  carrier)
-        const CASES: &[(&str, &str, &str, i64, &str, &str)] = &[
+        let cases: &[(&str, &str, &str, i64, &str, &str)] = &[
             // exiftool-pinned.sh -s -G1 [-n] -UncompressedTextLength Palm.mobi
             //   [MOBI] UncompressedTextLength : 171966   (-n)
-            //   [MOBI] UncompressedTextLength : 172 kB
+            //   [MOBI] UncompressedTextLength : 168 kB (11.78), 172 kB (12.64/13.59)
             // Palm.pm:121-124 -> ExifTool.pm:6851-6871.
             (
                 "Palm",
                 "MOBI",
                 "UncompressedTextLength",
                 171_966,
-                "172 kB",
+                palm_want,
                 "Palm.mobi",
             ),
             // exiftool-pinned.sh -s -G1 [-n] -PF* Canon/CanonEOS-1DmkII.jpg
@@ -689,7 +781,7 @@ mod tests {
                 "Canon/CanonEOS-1DSmkII.jpg",
             ),
         ];
-        for (module, table, name, raw, want, carrier) in CASES {
+        for (module, table, name, raw, want, carrier) in cases {
             let t = find_table(module, table)
                 .unwrap_or_else(|| panic!("{module}::{table} is not in the generated set"));
             let f = t
@@ -700,7 +792,7 @@ mod tests {
             assert_eq!(
                 runtime::render(f.print_conv, &DecodedValue::Integer(*raw)).as_deref(),
                 Some(*want),
-                "{module}::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} \
+                "{module}::{table} {name} on {carrier}: selected ExifTool prints {want:?} \
                  for the raw value {raw}",
             );
         }
@@ -760,26 +852,37 @@ mod tests {
                 "NikonZ30.jpg",
             ),
         ];
-        for (table, name, raw, want, carrier) in NIKON {
-            let t = find_table("Nikon", table).expect("Nikon table is in the generated set");
-            let rendered: Vec<String> = t
-                .variants
-                .iter()
-                .flat_map(|g| g.alternatives.iter().map(|(_, f)| f))
-                .filter(|f| f.name == *name)
-                .filter_map(|f| runtime::render(f.print_conv, &DecodedValue::Integer(*raw)))
-                .collect();
-            assert!(
-                rendered.iter().any(|r| r == want),
-                "Nikon::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} for \
+        match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => {
+                // These native releases have Nikon::AFInfo2, but no
+                // AFInfo2V0300 hash or matching FocusPosition carriers.
+                assert!(find_table("Nikon", "AFInfo2V0300").is_none());
+            }
+            "13.59" => {
+                for (table, name, raw, want, carrier) in NIKON {
+                    let t =
+                        find_table("Nikon", table).expect("Nikon table is in the generated set");
+                    let rendered: Vec<String> = t
+                        .variants
+                        .iter()
+                        .flat_map(|g| g.alternatives.iter().map(|(_, f)| f))
+                        .filter(|f| f.name == *name)
+                        .filter_map(|f| runtime::render(f.print_conv, &DecodedValue::Integer(*raw)))
+                        .collect();
+                    assert!(
+                        rendered.iter().any(|r| r == want),
+                        "Nikon::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} for \
                  the raw value {raw}, but no alternative's PrintConv rendered it \
                  (got {rendered:?})",
-            );
+                    );
+                }
+            }
+            other => panic!("unverified native Nikon source: {other}"),
         }
     }
 
     /// Step 9's accounting identity: the count of fields the generator flags
-    /// `hook`/`subdirectory` must equal what a census of the ExifTool 13.59
+    /// `hook`/`subdirectory` must equal what the selected ExifTool source
     /// dump found (measured independently with `tools/exiftool-tables/
     /// codegen.py`'s own report, and cross-checked again by `verify.py`
     /// against the live Perl hashes). Pinning the numbers here means a future
@@ -795,20 +898,25 @@ mod tests {
                 subdirs += usize::from(f.omitted.subdirectory);
             }
         }
-        assert_eq!(hooks, 35, "Hook-carrying emitted fields");
-        assert_eq!(subdirs, 63, "SubDirectory-carrying emitted fields");
+        let source = selected_binary_source_census();
+        assert_eq!(hooks, source.hook_fields, "Hook-carrying emitted fields");
+        assert_eq!(
+            subdirs, source.subdir_primary,
+            "SubDirectory-carrying emitted primary fields"
+        );
     }
 
     /// Step 27's accounting identity, the sequel to the one above: every
-    /// `SubDirectory`-carrying field (63 in `fields:` + 5 inside `_variants`
-    /// groups = 68, matching `codegen.py`'s `omitted_subdirectory` REPORT
-    /// line) either gets a modeled [`subdir::SubdirEdge`] or is refused with
+    /// `SubDirectory`-carrying field (primary `fields` plus accepted
+    /// `_variants` alternatives, matching `codegen.py`'s
+    /// `omitted_subdirectory` REPORT line) either gets a modeled
+    /// [`subdir::SubdirEdge`] or is refused with
     /// a reason -- never silently neither. At 13.59 the only refusal reason
     /// live is a `ProcessProc` override (Panasonic `PANA`'s three
-    /// `Image::ExifTool::ProcessTIFF`-routed `ExifData` fields plus its
-    /// `ProcessLeicaLEIC`-routed `MakerNoteLeica5` field -- `PANA`'s fifth
-    /// ProcessProc-routed field, `JPEG-likeData`, never reaches this check at
-    /// all: its `Format => 'undef[$size-0x10]'` is a data-dependent width
+    /// `Image::ExifTool::ProcessTIFF`-routed `ExifData` fields, plus the
+    /// `ProcessLeicaLEIC`-routed `MakerNoteLeica5` field in 12.64/13.59 --
+    /// `PANA`'s further ProcessProc-routed `JPEG-likeData` never reaches this
+    /// check: its `Format => 'undef[$size-0x10]'` is a data-dependent width
     /// this generator already refuses on unrelated grounds
     /// (`tag_fmt_unsupported`), so it is not among the 68 flagged fields to
     /// begin with. `subdir.rs`'s module doc has the full citation). A future
@@ -848,14 +956,18 @@ mod tests {
                 }
             }
         }
+        let source = selected_binary_source_census();
         assert_eq!(
-            flagged, 68,
+            flagged, source.subdir_all,
             "SubDirectory-carrying fields (fields + variants)"
         );
-        assert_eq!(modeled, 64, "fields that got a modeled SubdirEdge");
         assert_eq!(
-            process_proc_refused, 4,
-            "fields refused for a custom ProcessProc (Panasonic PANA ExifData x3, MakerNoteLeica5 x1)"
+            modeled, source.subdir_modeled,
+            "fields that got a modeled SubdirEdge"
+        );
+        assert_eq!(
+            process_proc_refused, source.subdir_processproc_refused,
+            "fields refused for a custom ProcessProc"
         );
     }
 
@@ -974,7 +1086,7 @@ mod tests {
         // allowlist grows.
         assert_eq!(
             enabled,
-            ENABLED.len(),
+            ENABLED.len() - enabled::source_unavailable_allowlist().len(),
             "enabled tables must equal the Gate B allowlist size"
         );
 
@@ -1074,8 +1186,24 @@ mod tests {
             );
             affected_fields += hit;
         }
-        assert_eq!(affected_tables, 7, "tables with a live var_* offset hazard");
-        assert_eq!(affected_fields, 88, "fields past the hazard boundary");
+        // DNG::ImageSeq first appears in the 13.59 native source. Its
+        // var_string at index 0 puts five later declared fields past the
+        // hazard boundary; the other six tables exist in all three pins.
+        let has_image_seq = match EXIFTOOL_VERSION {
+            "11.78" | "12.64" => false,
+            "13.59" => true,
+            version => panic!("unprobed ExifTool source {version}"),
+        };
+        assert_eq!(
+            affected_tables,
+            if has_image_seq { 7 } else { 6 },
+            "tables with a live var_* offset hazard"
+        );
+        assert_eq!(
+            affected_fields,
+            if has_image_seq { 88 } else { 83 },
+            "fields past the hazard boundary"
+        );
 
         let expect = [
             ("BPG", "Main", 6),
@@ -1087,6 +1215,10 @@ mod tests {
             ("Photoshop", "VersionInfo", 5),
         ];
         for (module, table, bound) in expect {
+            if (module, table) == ("DNG", "ImageSeq") && !has_image_seq {
+                assert!(find_table(module, table).is_none());
+                continue;
+            }
             let t = find_table(module, table).unwrap_or_else(|| panic!("{module}::{table}"));
             assert_eq!(
                 t.offsets_sound_until,
@@ -1126,13 +1258,15 @@ mod tests {
 
     #[test]
     fn ifd_tables_are_present() {
-        // 496 in 13.59: the 495 tables with no PROCESS_PROC plus FujiFilm::IFD,
-        // which names Exif::ProcessExif explicitly.
-        assert!(
-            ALL_IFD_TABLES.len() > 400,
-            "expected the generated IFD table set, found {}",
-            ALL_IFD_TABLES.len()
-        );
+        // Independently counted from each selected native dump: tables with
+        // no PROCESS_PROC plus those naming Exif::ProcessExif explicitly.
+        let source_tables = match EXIFTOOL_VERSION {
+            "11.78" => 291,
+            "12.64" => 298,
+            "13.59" => 496,
+            version => panic!("unprobed ExifTool source {version}"),
+        };
+        assert_eq!(ALL_IFD_TABLES.len(), source_tables);
         assert!(
             find_ifd_table("FujiFilm", "IFD").is_some(),
             "FujiFilm::IFD is the one table selected by an explicit PROCESS_PROC"

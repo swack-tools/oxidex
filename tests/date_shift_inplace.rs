@@ -632,6 +632,108 @@ fn shift_metadata_dates_missing_tag_is_a_no_op() {
 // CLI-level tests: run the oxidex binary with the exact commands from issue #14
 // ============================================================================
 
+#[test]
+fn signed_alldates_shift_keeps_other_cli_assignments() {
+    let src = fixture("makernotes/canon_sample.jpg");
+    let original = std::fs::read(&src).unwrap();
+    let original_dates = read_metadata(&src).unwrap();
+    let dates = |path: &Path| {
+        let map = read_metadata(path).unwrap();
+        [
+            "IFD0:ModifyDate",
+            "ExifIFD:DateTimeOriginal",
+            "ExifIFD:CreateDate",
+        ]
+        .map(|key| map.get_string(key).map(str::to_owned))
+    };
+    let expected_dates = [
+        "IFD0:ModifyDate",
+        "ExifIFD:DateTimeOriginal",
+        "ExifIFD:CreateDate",
+    ]
+    .map(|key| original_dates.get_string(key).map(str::to_owned));
+    for (request, invalid) in [
+        ("-AllDates+=-1:0:0 0:0:0", true),
+        ("-AllDates-=-1:0:0 0:0:0", false),
+    ] {
+        let standalone = temp_copy(&src, "signed-standalone.jpg");
+        let output = run_oxidex(request, standalone.path());
+        assert_eq!(output.status.success(), !invalid, "{request}: {output:?}");
+        if invalid {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid shift string"));
+        }
+        assert_eq!(std::fs::read(standalone.path()).unwrap(), original);
+
+        for shift_first in [false, true] {
+            let mixed = temp_copy(&src, "signed-mixed.jpg");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+            command.arg("-overwrite_original");
+            if shift_first {
+                command
+                    .arg(request)
+                    .arg("-IFD0:Artist=HistoricalNegativeProbe");
+            } else {
+                command
+                    .arg("-IFD0:Artist=HistoricalNegativeProbe")
+                    .arg(request);
+            }
+            let output = command.arg(mixed.path()).output().unwrap();
+            assert!(output.status.success(), "{request}: {output:?}");
+            assert_eq!(dates(mixed.path()), expected_dates);
+            assert_eq!(
+                read_metadata(mixed.path())
+                    .unwrap()
+                    .get_string("IFD0:Artist"),
+                Some("HistoricalNegativeProbe")
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_compact_alldates_refuses_timezone_with_other_sets_atomically() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        return;
+    };
+    let source = fixture("makernotes/canon_sample.jpg");
+    let prepared = temp_copy(&source, "signed-xmp.jpg");
+    let setup = oracle
+        .command()
+        .args([
+            "-config",
+            "",
+            "-overwrite_original",
+            "-XMP:CreateDate=2020:01:02 03:04:05+02:00",
+        ])
+        .arg(prepared.path())
+        .output()
+        .unwrap();
+    assert!(setup.status.success(), "{setup:?}");
+    assert_eq!(
+        read_metadata(prepared.path())
+            .unwrap()
+            .get_string("XMP:CreateDate"),
+        Some("2020:01:02 03:04:05+02:00")
+    );
+    let before = std::fs::read(prepared.path()).unwrap();
+    for request in ["-AllDates+=-1", "-AllDates-=-1"] {
+        let destination = temp_copy(prepared.path(), "signed-xmp-case.jpg");
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .arg("-overwrite_original")
+            .arg("-IFD0:Artist=ShouldNotCommit")
+            .arg(request)
+            .arg(destination.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{request}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Timezone-only AllDates shift"),
+            "{request}: {output:?}"
+        );
+        assert_eq!(std::fs::read(destination.path()).unwrap(), before);
+    }
+}
+
 /// Runs the oxidex binary with one shift argument against a file.
 fn run_oxidex(shift_arg: &str, file: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_oxidex"))

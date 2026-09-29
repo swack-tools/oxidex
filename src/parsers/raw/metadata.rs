@@ -28,7 +28,7 @@ use crate::core::formatters::{
     file_source_label_bytes, format_color_space, format_contrast, format_custom_rendered,
     format_sharpness,
 };
-use crate::core::tag_conversion::apply_tile_offsets_value_conv;
+use crate::core::tag_conversion::{apply_tile_offsets_value_conv, exif_entry_to_tag_value};
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
@@ -233,6 +233,28 @@ fn panasonic_raw_ifd0_tag_name(tag_id: u16) -> Option<&'static str> {
         0x83BB => "IPTC-NAA",
         _ => return None,
     })
+}
+
+/// Source membership for the selected PanasonicRaw::Main, including native
+/// entries the IFD generator deliberately refuses to transcribe. In
+/// particular, an offset pair is still a native tag even though
+/// `IfdTable::tag` has no row for it. These residual IDs were checked against
+/// the 11.78, 12.64, and 13.59 PanasonicRaw.pm Main tables; the generated
+/// IFD identity ledger test below checks the complete selected inventory.
+fn panasonic_raw_main_declares(tag_id: u16) -> bool {
+    let Some(table) = crate::exiftool_tables::find_ifd_table("PanasonicRaw", "Main") else {
+        return false;
+    };
+    if table.tag(tag_id).is_some() || table.variant_group(tag_id).is_some() {
+        return true;
+    }
+    match crate::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => matches!(tag_id, 0x002e | 0x0111 | 0x0117 | 0x0118),
+        "12.64" | "13.59" => {
+            matches!(tag_id, 0x002e | 0x0111 | 0x0117 | 0x0118 | 0x0127)
+        }
+        _ => false,
+    }
 }
 
 /// Display values for the Panasonic RAW IFD0 tags whose stored representation
@@ -929,6 +951,16 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // 0x0118 (RawDataOffset) and "IFD0:XResolution" = 1 for
                     // 0x011A (which PanasonicRaw::Main does not define at all,
                     // so ExifTool does not report it).
+                    // The handwritten names cover the newest reviewed table.
+                    // Historical selected sources omit some of those rows
+                    // (including 0x0037 and 0x013b); only the selected
+                    // PanasonicRaw::Main may authorize an outer IFD0 name.
+                    if format == RawFormat::PanasonicRW2
+                        && ifd_index == 0
+                        && !panasonic_raw_main_declares(*tag_id)
+                    {
+                        continue;
+                    }
                     let tag_name = if format == RawFormat::PanasonicRW2 && ifd_index == 0 {
                         match panasonic_raw_ifd0_tag_name(*tag_id) {
                             Some(name) => format!("{}:{}", ifd_name, name),
@@ -1115,8 +1147,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             exif_make = Some(make_str.trim_end_matches('\0').trim().to_string());
                         }
 
+                        // The registry contains the production spelling, but
+                        // older selected Exif::Main sources have no 0x9287
+                        // row. Match the TIFF/JPEG source gate here too.
+                        if *tag_id == 0x9287
+                            && crate::core::tag_conversion::exif_main_residual_port(*tag_id)
+                                .is_none()
+                        {
+                            continue;
+                        }
                         let tag_name = lookup_tag_name(*tag_id, "ExifIFD");
-                        let tag_value = if let Some(value) = format_exif_display_value(
+                        let tag_value = if *tag_id == 0x9287 {
+                            let Some(value) = exif_entry_to_tag_value(
+                                bytes,
+                                *field_type,
+                                *value_count,
+                                *tag_id,
+                                byte_order,
+                            ) else {
+                                continue;
+                            };
+                            value
+                        } else if let Some(value) = format_exif_display_value(
                             *tag_id,
                             bytes,
                             *field_type,
@@ -4826,6 +4878,43 @@ mod dng_thumbnail_tiff_tests {
 #[cfg(test)]
 mod panasonic_rw2_tests {
     use super::*;
+
+    #[test]
+    fn selected_panasonic_raw_main_source_inventory_is_exactly_admitted() {
+        // The producer's selected-source ledger retains refused rows that
+        // `IfdTable::tag` omits. Compare the entire native ID inventory to the
+        // runtime gate, so a future regeneration cannot quietly lose a known
+        // Panasonic RAW tag or claim one absent from the selected source.
+        let ledger: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/exiftool-tables/ifd_identity_ledger.json"
+        )))
+        .expect("selected IFD identity ledger");
+        assert_eq!(
+            ledger["exiftool_version"].as_str(),
+            Some(crate::exiftool_tables::EXIFTOOL_VERSION)
+        );
+        let declared: std::collections::HashSet<u16> = ledger["rows"]
+            .as_array()
+            .expect("IFD rows")
+            .iter()
+            .filter(|row| row["module"] == "PanasonicRaw" && row["table"] == "Main")
+            .map(|row| {
+                row["raw_key"]
+                    .as_str()
+                    .expect("numeric Panasonic RAW ID")
+                    .parse::<u16>()
+                    .expect("u16 Panasonic RAW ID")
+            })
+            .collect();
+        for id in 0..=u16::MAX {
+            assert_eq!(
+                panasonic_raw_main_declares(id),
+                declared.contains(&id),
+                "PanasonicRaw::Main source membership differs at {id:#06x}"
+            );
+        }
+    }
 
     #[test]
     fn extracts_black_level_blue_from_panasonic_raw_tag() {
@@ -12682,16 +12771,28 @@ mod rational_array_tests {
                 Some("136"),
                 "route {route}"
             );
+            // Canon.pm 11.78 has no FileInfo RFLensType row; 12.64/13.59
+            // declare it at 0x3d and read the zero from this record.
+            let rf_type = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                "11.78" => None,
+                "12.64" | "13.59" => Some("0"),
+                other => panic!("unsupported ExifTool source {other}"),
+            };
             assert_eq!(
                 metadata.value_form("Canon:RFLensType"),
-                Some("0"),
+                rf_type,
                 "route {route}"
             );
             metadata.insert("EXIF:FocalLength", TagValue::new_string("20"));
             crate::composite::apply(&mut metadata);
+            let lens = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                "11.78" => "Tamron SP 15-30mm f/2.8 Di VC USD",
+                "12.64" | "13.59" => "Tamron SP 15-30mm f/2.8 Di VC USD (A012)",
+                other => panic!("unsupported ExifTool source {other}"),
+            };
             assert_eq!(
                 metadata.get_string("Composite:LensID"),
-                Some("Tamron SP 15-30mm f/2.8 Di VC USD (A012)"),
+                Some(lens),
                 "route {route}"
             );
         }

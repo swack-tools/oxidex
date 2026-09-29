@@ -7,8 +7,11 @@ use oxidex::core::operations::read_metadata;
 
 #[test]
 fn tnef_correlation_keys_are_read_from_the_real_carrier() {
-    let Some(path) = fixtures::pinned_t_images_fixture_path("TNEF.tnef") else {
-        eprintln!("skipping: pinned fixture TNEF.tnef is absent");
+    // The verified combined corpus supplies this later TNEF carrier even
+    // when the selected historical native tree has no TNEF sample. Assert
+    // Rust parsing only; this is not historical ExifTool parity evidence.
+    let Some(path) = fixtures::pinned_combined_fixture_path("TNEF.tnef") else {
+        eprintln!("skipping: combined fixture TNEF.tnef is absent");
         return;
     };
 

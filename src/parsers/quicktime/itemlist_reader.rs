@@ -7,6 +7,7 @@
 //! creates: that protocol remains outside this ItemList-only executor.
 
 use super::generated_itemlist_specs::{ITEMLIST_SPECS, ItemListSpec, SourceFormat};
+use super::generated_protocol_caps::{IMPLICIT_INT64, SHORTEN_EXPLICIT_WIDTH};
 use crate::core::{Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use encoding_rs::{SHIFT_JIS, UTF_16BE};
 
@@ -73,7 +74,11 @@ pub(crate) fn decode_data_atom(spec: &ItemListSpec, data: &[u8]) -> Option<(TagV
 
     match spec.source_format {
         SourceFormat::Unsigned(width) => {
-            let width = adjusted_width(width / 8, value.len())?;
+            let width = if SHORTEN_EXPLICIT_WIDTH {
+                adjusted_width(width / 8, value.len())?
+            } else {
+                width / 8
+            };
             decode_array(spec, value, width, |chunk| {
                 decode_unsigned(chunk, width).map(unsigned_raw)
             })
@@ -128,6 +133,13 @@ fn trim_one_nul(value: &str) -> &str {
 }
 
 fn decode_implicit(spec: &ItemListSpec, flags: u32, value: &[u8]) -> Option<(TagValue, TagValue)> {
+    // The older QuickTimeFormat maps signed/unsigned flags only through 32 bits.
+    if !IMPLICIT_INT64 && matches!(flags, 21 | 22) && value.len() == 8 {
+        return Some((
+            TagValue::Binary(value.to_vec()),
+            TagValue::Binary(value.to_vec()),
+        ));
+    }
     match flags {
         21 if matches!(value.len(), 1 | 2 | 4 | 8) => decode_signed(value)
             .map(|number| numeric_values(spec, number.to_string(), TagValue::Integer(number))),
@@ -245,6 +257,19 @@ mod tests {
         bytes
     }
 
+    fn unsigned_protocol_spec() -> ItemListSpec {
+        // Exercise the source-selected ProcessMOV numeric branch independently
+        // of plID, whose name and Count changed across pinned releases.
+        ItemListSpec {
+            raw_fourcc: *b"test",
+            name: "ProtocolInteger",
+            group: "ItemList",
+            group0: "QuickTime",
+            source_format: SourceFormat::Unsigned(64),
+            safe_enum_operands: &[],
+        }
+    }
+
     #[test]
     fn text_enum_still_applies_printconv() {
         let mut metadata = MetadataMap::new();
@@ -266,13 +291,15 @@ mod tests {
         floats.extend_from_slice(&2.5_f32.to_be_bytes());
         assert!(read_item(b"\xa9nam", &payload(23, &floats), &mut metadata));
         assert_eq!(metadata.get_string("QuickTime:Title"), Some("1.25 2.5"));
-        assert!(read_item(b"plID", &payload(0, &[0; 9]), &mut metadata));
+        let spec = unsigned_protocol_spec();
         assert_eq!(
-            metadata.get("QuickTime:AlbumID"),
-            Some(&TagValue::Integer(0))
+            decode_data_atom(&spec, &payload(0, &[0; 9])).unwrap().1,
+            TagValue::Integer(0)
         );
-        assert!(read_item(b"plID", &payload(0, &[0; 3]), &mut metadata));
-        assert_eq!(metadata.get_string("QuickTime:AlbumID"), Some(""));
+        assert_eq!(
+            decode_data_atom(&spec, &payload(0, &[0; 3])).unwrap().1,
+            TagValue::String(String::new())
+        );
     }
 
     #[test]
@@ -287,6 +314,21 @@ mod tests {
             metadata.get("QuickTime:Title"),
             Some(&TagValue::Binary(vec![1, 2, 3]))
         );
+    }
+
+    #[test]
+    fn implicit_u64_follows_selected_quicktime_format() {
+        let spec = ITEMLIST_SPECS
+            .iter()
+            .find(|spec| spec.raw_fourcc == *b"\xa9nam")
+            .unwrap();
+        let raw = 42u64.to_be_bytes();
+        let decoded = decode_data_atom(spec, &payload(22, &raw)).unwrap().1;
+        if IMPLICIT_INT64 {
+            assert_eq!(decoded, TagValue::Integer(42));
+        } else {
+            assert_eq!(decoded, TagValue::Binary(raw.to_vec()));
+        }
     }
 
     #[test]
@@ -370,31 +412,20 @@ mod tests {
 
     #[test]
     fn unsigned_64_above_i64_is_a_decimal_string() {
-        let mut metadata = MetadataMap::new();
-        assert!(read_item(
-            b"plID",
-            &payload(22, &u64::MAX.to_be_bytes()),
-            &mut metadata
-        ));
+        let spec = unsigned_protocol_spec();
+        let pair = decode_data_atom(&spec, &payload(22, &u64::MAX.to_be_bytes())).unwrap();
         let expected = TagValue::String(u64::MAX.to_string());
-        assert_eq!(metadata.get("QuickTime:AlbumID"), Some(&expected));
-        assert_eq!(
-            metadata.without_print_conv().get("QuickTime:AlbumID"),
-            Some(&expected)
-        );
+        assert_eq!(pair, (expected.clone(), expected));
     }
 
     #[test]
     fn explicit_unsigned_format_uses_a_short_payload_width() {
-        let mut metadata = MetadataMap::new();
-        assert!(read_item(
-            b"plID",
-            &payload(22, &[0x12, 0x34]),
-            &mut metadata
-        ));
-        assert_eq!(
-            metadata.get("QuickTime:AlbumID"),
-            Some(&TagValue::Integer(0x1234))
-        );
+        let spec = unsigned_protocol_spec();
+        let decoded = decode_data_atom(&spec, &payload(22, &[0x12, 0x34]));
+        if SHORTEN_EXPLICIT_WIDTH {
+            assert_eq!(decoded.unwrap().1, TagValue::Integer(0x1234));
+        } else {
+            assert_eq!(decoded.unwrap().1, TagValue::String(String::new()));
+        }
     }
 }

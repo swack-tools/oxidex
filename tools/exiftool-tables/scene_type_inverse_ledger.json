@@ -1,0 +1,9 @@
+{
+  "exiftool_version": "13.59",
+  "mode": "masked_chr",
+  "schema": "scene_type_inverse_v1",
+  "source_row_sha256": "2fcf051082e36166a841a8319622007058ca3f4b4e3e54367b3d209ebc5a0040",
+  "source_table": "Exif::Main",
+  "source_tag_id": "0xa301",
+  "source_value_conv_inv": "chr($val & 0xff)"
+}

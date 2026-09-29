@@ -733,6 +733,20 @@ fn plan_changes<'a>(
         ) {
             continue;
         }
+        // PNG.pm 11.78 gives gAMA and sRGB no writable tag addresses. An
+        // explicit library deletion must be refused even when its chunk is
+        // absent, before the generic no-op check can discard the request.
+        if matches!(
+            crate::parsers::detection::detect_format(reader)?,
+            crate::core::FileFormat::PNG
+        ) && crate::writers::png_writer::old_png_read_only_tag(change.tag())
+        {
+            refused.push(TagNotWritten::new(
+                change.tag(),
+                crate::writers::write_request::sorry_not_writable(change.tag()),
+            ));
+            continue;
+        }
         // #945: an EXIF-group request in a PDF is ExifTool's "unchanged"
         // (a PDF carries no EXIF block), a set or a deletion alike -- for a
         // name `SetNewValue` accepts in that group; any other is refused by

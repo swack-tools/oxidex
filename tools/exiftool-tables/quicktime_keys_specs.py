@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse, hashlib, json
 from pathlib import Path
 import quicktime_atom_tables as selector
-from quicktime_generated_specs import source_format, rust_string, render_format, processor_reason, reader_protocol_reason, itemlist_use
+from quicktime_generated_specs import source_format, rust_string, render_format, processor_reason, reader_protocol_reason, itemlist_use, require_nonempty_supported, source_body_sha256
 
 ROOT = selector.ROOT
 SNAPSHOT = ROOT / "tools/exiftool-tables/fixtures/quicktime_source_13_59.json"
@@ -17,6 +17,15 @@ LEDGER = ROOT / "tools/exiftool-tables/quicktime_generated_keys_ledger.json"
 RUST = ROOT / "src/parsers/quicktime/generated_keys_specs.rs"
 PROCESSOR = "Image::ExifTool::QuickTime::ProcessKeys"
 PROCESSOR_SHA256 = "294ea57533595f3e988c8042e2588f0fa874e46bd456af55936633273f051c76"
+# 12.64's ProcessKeys performs the same direct lookup, mdta prefix retry,
+# ordinal substitution, and Keys group assignment as 13.59. The changes are
+# verbose logging and the displayed original key in a verbose message.
+REVIEWED_PROCESSOR_SHA256 = {
+    "11.78": "08885b5f5cca269c8e4b41f05816996e704905aae1c4275e693575be6e71faa5",
+    "12.64": "93692082a70dbfa525a500ef7463b1cc31ae63ac95f5d1ea4a41f184de46151c",
+    "13.59": PROCESSOR_SHA256,
+}
+REVIEWED_LONG_TAGS = {"11.78": "3", "12.64": "7", "13.59": "9"}
 
 
 def compile_document(document):
@@ -34,9 +43,9 @@ def compile_document(document):
     blocked = processor_reason(document) or reader_protocol_reason(document)
     if blocked is None and (not isinstance(proc, dict) or proc.get("__name") != PROCESSOR or proc.get("__perl") != "CODE" or proc.get("__opaque") is not True):
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
-    elif blocked is None and hashlib.sha256(proc.get("__deparse", "").encode()).hexdigest() != PROCESSOR_SHA256:
+    elif blocked is None and hashlib.sha256(proc.get("__deparse", "").encode()).hexdigest() != REVIEWED_PROCESSOR_SHA256.get(document.get("exiftool_version")):
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
-    elif blocked is None and (meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != "9"):
+    elif blocked is None and (meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != REVIEWED_LONG_TAGS.get(document.get("exiftool_version"))):
         blocked = "missing_or_changed_processor_contract:Keys_metadata"
     specs=[]; ledger=[]
     keys_family = next(f for f in base["families"] if f["table"] == "Keys")
@@ -54,7 +63,8 @@ def compile_document(document):
             specs.append(operand); entry["generated_spec_sha256"]=hashlib.sha256(json.dumps(operand,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
         ledger.append(entry)
     specs.sort(key=lambda x:x["source_key"]); ledger.sort(key=lambda x:(x["identity"]["raw_key"],x["identity"]["variant_path"]))
-    return {"schema":"quicktime_generated_keys_specs_v1","scope":"direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted","source":{"exiftool_version":base["exiftool_version"],"table_sha256":keys_family["source_table_sha256"]},"protocol":{"processor":{"__name":PROCESSOR,"__deparse_sha256":PROCESSOR_SHA256,"source_file":proc.get("source_file"),"source_sha256":proc.get("source_sha256")},"normalization":"ProcessKeys: NUL-truncate; for mdta try com./com.apple.quicktime.-stripped key then full key; ordinal starts at 1","eligible":blocked is None,"reason":blocked},"specs":specs,"ledger":ledger,"identity_counts":{"source_records":len(ledger),"generated":len(specs),"omitted":len(ledger)-len(specs)}}
+    normalization = ("ProcessKeys: NUL-truncate; for mdta strip com.apple.quicktime. only; ordinal starts at 1" if document.get("exiftool_version") == "11.78" else "ProcessKeys: NUL-truncate; for mdta try com./com.apple.quicktime.-stripped key then full key; ordinal starts at 1")
+    return {"schema":"quicktime_generated_keys_specs_v1","scope":"direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted","source":{"exiftool_version":base["exiftool_version"],"table_sha256":keys_family["source_table_sha256"]},"protocol":{"processor":{"__name":PROCESSOR,"__deparse_sha256":source_body_sha256(proc),"source_file":proc.get("source_file"),"source_sha256":proc.get("source_sha256")},"normalization":normalization,"eligible":blocked is None,"reason":blocked},"specs":specs,"ledger":ledger,"identity_counts":{"source_records":len(ledger),"generated":len(specs),"omitted":len(ledger)-len(specs)}}
 
 def render_rust(result):
     lines=["","#[derive(Clone, Copy, Debug, Eq, PartialEq)]","pub(crate) struct KeySpec {", "    pub source_key: &'static str,", "    pub data: ItemListSpec,", "}","","#[rustfmt::skip]","pub(crate) static KEYS_SPECS: &[KeySpec] = &["]
@@ -71,7 +81,7 @@ def serialized(x): return json.dumps(x,sort_keys=True,indent=2,ensure_ascii=Fals
 def main():
  p=argparse.ArgumentParser();p.add_argument('--dump',type=Path,default=SNAPSHOT);p.add_argument('--ledger',type=Path,default=LEDGER);p.add_argument('--rust',type=Path,default=RUST);p.add_argument('--replace',action='store_true');p.add_argument('--check',action='store_true');a=p.parse_args()
  if a.check and a.replace:p.error('mutually exclusive')
- r=compile_document(json.loads(a.dump.read_text())); outs=[(a.ledger,serialized(r)),(a.rust,render_rust(r))]
+ r=compile_document(json.loads(a.dump.read_text())); require_nonempty_supported(r, 'Keys'); outs=[(a.ledger,serialized(r)),(a.rust,render_rust(r))]
  for path,body in outs:
   if a.check:
    if not path.is_file() or path.read_text()!=body:p.error('stale generated Keys artifact: '+str(path))

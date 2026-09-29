@@ -16,6 +16,18 @@ TOOLS = ROOT / "tools" / "exiftool-tables"
 LEDGER = TOOLS / "conv_exif_main_ledger.json"
 WORKLIST = TOOLS / "exif_main_refusal_worklist.json"
 HELPER_CAPTURE = TOOLS / "testdata" / "helper_oracle_outputs.json"
+SOURCE_CONTRACTS = TOOLS / "testdata" / "exif_main_refusal_source_contracts.json"
+PINNED_REFUSAL_IDS = {
+    "11.78": ("0x00fe", "0x00ff", "0x0103", "0x0111", "0x0117", "0x014a",
+              "0x0201", "0x0202", "0x8298", "0x927c", "0xa462", "0xc51b",
+              "0xc634", "0xc740", "0xc741", "0xc74e", "0xc763"),
+    "12.64": ("0x00fe", "0x00ff", "0x0103", "0x0111", "0x0117", "0x014a",
+              "0x0201", "0x0202", "0x8298", "0x927c", "0xa462", "0xc51b",
+              "0xc634", "0xc740", "0xc741", "0xc74e", "0xc763"),
+    "13.59": ("0x00fe", "0x00ff", "0x0103", "0x0111", "0x0117", "0x014a",
+              "0x0201", "0x0202", "0x8298", "0x927c", "0x9287", "0xa462",
+              "0xc634", "0xc740", "0xc741", "0xc74e", "0xc763"),
+}
 sys.path.insert(0, str(TOOLS))
 import helper_oracle as H  # noqa: E402
 
@@ -24,13 +36,24 @@ class RefusalWorklist(unittest.TestCase):
     def setUp(self):
         self.ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
         self.worklist = json.loads(WORKLIST.read_text(encoding="utf-8"))
+        self.release = (ROOT / ".exiftool-version").read_text().strip()
+        self.assertIn(self.release, PINNED_REFUSAL_IDS, "unreviewed Exif::Main release")
+        self.native = json.loads(SOURCE_CONTRACTS.read_text(encoding="utf-8"))[self.release]["rows"]
+        self.assertEqual(tuple(sorted(self.native)), PINNED_REFUSAL_IDS[self.release])
 
     def test_enumerates_the_exact_current_refusal_set(self):
         self.assertEqual(self.worklist["schema"], "oxidex_exif_main_refusal_worklist_v1")
         self.assertEqual(self.worklist["table"], "Exif::Main")
-        self.assertEqual(self.worklist["source_release"], "13.59")
+        self.assertEqual(self.worklist["source_release"], self.release)
         rows = self.worklist["rows"]
         self.assertEqual(len(rows), 17)
+        self.assertEqual(tuple(row["id"] for row in rows), PINNED_REFUSAL_IDS[self.release])
+        self.assertEqual(
+            {row["id"]: {"name": row["name"], "source_sha256": row["source_sha256"]}
+             for row in rows},
+            self.native,
+            "refusal rows must match the retained selected native Exif::Main table",
+        )
         self.assertEqual(
             [(row["id"], row["name"], row["current_reason"]) for row in rows],
             [(row["id"], row["name"], row["reason"]) for row in self.ledger["refused"]],
@@ -60,12 +83,17 @@ class RefusalWorklist(unittest.TestCase):
                     [
                         ROOT / "tests" / "exif_main_refusal_closure.rs",
                         ROOT / "tests" / "learning_opt_out_in.rs",
+                        TOOLS / "test_conv_codegen.py",
                     ]
                 )
                 definitions = "\n".join(
                     path.read_text(encoding="utf-8") for path in test_sources
                 )
-                self.assertIn(f"fn {row['named_test']}(", definitions)
+                self.assertTrue(
+                    f"fn {row['named_test']}(" in definitions
+                    or f"def {row['named_test']}(" in definitions,
+                    f"missing named closure test for {row['id']}: {row['named_test']}",
+                )
 
     def test_count_or_classification_drift_requires_a_worklist_update(self):
         rows = {row["id"]: row for row in self.worklist["rows"]}
@@ -78,11 +106,16 @@ class RefusalWorklist(unittest.TestCase):
 
     def test_behavioral_evidence_is_not_conflated_with_owner_classification(self):
         rows = {row["id"]: row for row in self.worklist["rows"]}
-        for tag_id in ("0x00fe", "0x00ff", "0x0103"):
+        planned = ("0x00fe", "0x00ff", "0x0103")
+        if self.release != "13.59":
+            planned += ("0xc51b",)
+        for tag_id in planned:
             self.assertEqual(rows[tag_id]["verification_status"], "planned_residual")
             self.assertEqual(
                 rows[tag_id]["named_test"],
-                "stateful_refusals_are_explicitly_planned_not_characterized",
+                ("test_reviewed_historical_reentry_has_a_planned_closure"
+                 if tag_id == "0xc51b"
+                 else "stateful_refusals_are_explicitly_planned_not_characterized"),
             )
         for row in rows.values():
             if row["target_owner"] == "walker":
@@ -94,6 +127,7 @@ class RefusalWorklist(unittest.TestCase):
 
     def test_characterized_residuals_have_source_selected_native_capture(self):
         capture = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
+        self.assertEqual(capture["capture"]["exiftool_version"], self.release)
         residuals = capture["residuals"]
         characterized = {
             row["id"]: row
@@ -133,7 +167,8 @@ class RefusalWorklist(unittest.TestCase):
         )
         self.assertEqual(
             bytes.fromhex(inputs[b"0 0 0 128 153 153 158 128"]["print"]["hex"]),
-            b"1900-01-00T00:00:00NaN.00+00:00",
+            (b"1900-01-00T00:00:00NaN.00+00:00" if self.release == "13.59"
+             else b"1900-01-00T00:00:00.00+00:00"),
         )
 
     def test_helper_capture_uses_portable_verified_interpreter_identity(self):
@@ -142,7 +177,7 @@ class RefusalWorklist(unittest.TestCase):
         self.assertNotIn("perl", identity)
         self.assertNotIn("perl_sha256", identity)
         self.assertEqual(identity["perl_version"], "v5.38.2")
-        self.assertEqual(identity["exiftool_version"], "13.59")
+        self.assertEqual(identity["exiftool_version"], self.release)
         self.assertEqual(identity["capability_probe"], {"OOXML.docx": "DOCX"})
         self.assertNotIn(str(Path.home()), HELPER_CAPTURE.read_text(encoding="utf-8"))
 

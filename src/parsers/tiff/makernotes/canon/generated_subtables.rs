@@ -306,6 +306,12 @@ mod tests {
     fn serial_info_applies_the_word_prefix_raw_conv() {
         let mut tags = HashMap::new();
         insert_serial_info(b"AD0010003\0\0\0", ByteOrder::LittleEndian, &mut tags);
+        // Canon::SerialInfo key 0 was added after 12.64; key 9 alone
+        // cannot read this short carrier.
+        if super::super::selected_source_pin() != "13.59" {
+            assert!(tags.is_empty());
+            return;
+        }
         assert_eq!(
             tags.get("Canon:InternalSerialNumber2").map(String::as_str),
             Some("AD0010003")

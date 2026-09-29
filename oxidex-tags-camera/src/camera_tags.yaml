@@ -14360,10 +14360,6 @@ tables:
         name: "AutoCaptureCriteriaSubjectType"
         writable: false
         description: "AutoCaptureCriteriaSubjectType tag"
-      - id: "0x0003"
-        name: "Vehicle"
-        writable: false
-        description: "Vehicle tag"
   - name: Nikon::BarometerInfo
     tags:
       - id: "0x0000"

@@ -687,10 +687,15 @@ mod tests {
             exact.contains(&"JPEG") && exact.contains(&"ZIP"),
             "{exact:?}"
         );
+        // The selected source controls the number of magic rows (96 in
+        // 11.78, 105 in 12.64, 114 in 13.59). Keep a proportional coverage
+        // floor rather than a 13.59-sized count. At 13.59 this still requires
+        // at least 60 folds, the original performance guard.
         assert!(
-            folded.len() >= 60,
-            "only {} folds: {folded:?}",
-            folded.len()
+            folded.len() * 40 >= tables::MAGIC.len() * 21,
+            "only {} of {} folds: {folded:?}",
+            folded.len(),
+            tables::MAGIC.len()
         );
         println!(
             "{} of {} magic rows fold to a literal prefix, {} of them exact",
@@ -871,17 +876,26 @@ mod tests {
 
     #[test]
     fn pfm_is_two_formats_told_apart_by_the_header() {
-        // `.pfm` resolves to one FileType and two MIME types. Both rows below
-        // are what the pinned ExifTool 13.59 reports for the two `.pfm` files
-        // in its own distribution, t/images/PFM.pfm and t/images/Font.pfm.
+        // Portable FloatMap support was added after 11.78: that source only
+        // declares the Font reader for .pfm, without PFM2 or a PFM magic row.
         let float = identify(
             b"PF\x0a512 768\x0a-1.000000\x0a\x00\x00\x00\x00",
             Some("pfm"),
-        )
-        .expect("a Portable FloatMap is identified");
-        assert_eq!(float.file_type, "PFM");
-        assert_eq!(float.extension, "pfm");
-        assert_eq!(float.mime_type, Some("image/x-pfm"));
+        );
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => {
+                assert!(!tables::MAGIC.iter().any(|(name, _)| *name == "PFM"));
+                assert!(float.is_none(), "11.78 has no Portable FloatMap reader");
+            }
+            "12.64" | "13.59" => {
+                assert!(tables::MAGIC.iter().any(|(name, _)| *name == "PFM"));
+                let float = float.expect("a Portable FloatMap is identified");
+                assert_eq!(float.file_type, "PFM");
+                assert_eq!(float.extension, "pfm");
+                assert_eq!(float.mime_type, Some("image/x-pfm"));
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        }
 
         // A Printer Font Metrics file opens with its version field, 0x0100
         // little-endian, which is what the Font module's magic number matches.
@@ -1032,7 +1046,6 @@ mod tests {
             ("djvu", "DJVU", "AIFF"),
             ("ttf", "TTF", "Font"),
             ("j2c", "J2C", "JP2"),
-            ("csv", "CSV", "TXT"),
             ("wmv", "WMV", "ASF"),
             // A root format is its own root.
             ("jpg", "JPEG", "JPEG"),
@@ -1040,6 +1053,15 @@ mod tests {
             let id = identify_by_extension(ext).unwrap();
             assert_eq!(id.file_type, want_type, "FileType for .{ext}");
             assert_eq!(id.root_type, want_root, "root for .{ext}");
+        }
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => assert!(identify_by_extension("csv").is_none()),
+            "12.64" | "13.59" => {
+                let csv = identify_by_extension("csv").expect("source declares CSV");
+                assert_eq!(csv.file_type, "CSV");
+                assert_eq!(csv.root_type, "TXT");
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
         }
     }
 
@@ -1077,7 +1099,13 @@ mod tests {
             identify_by_extension("torrent").unwrap().file_type,
             "Torrent"
         );
-        assert_eq!(identify_by_extension("macos").unwrap().file_type, "MacOS");
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => assert!(identify_by_extension("macos").is_none()),
+            "12.64" | "13.59" => {
+                assert_eq!(identify_by_extension("macos").unwrap().file_type, "MacOS");
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        }
     }
 
     /// A sub-type is corroborated through its root, because `%magicNumber` is

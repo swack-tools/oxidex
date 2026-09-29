@@ -748,9 +748,7 @@ mod tests {
     }
 
     fn read(bytes: &[u8]) -> MetadataMap {
-        let mut metadata = MetadataMap::new();
-        parse_records(bytes, &mut metadata);
-        metadata
+        extract(&FIT_PROTOCOL, bytes)
     }
 
     fn text(value: &TagValue) -> String {
@@ -771,6 +769,54 @@ mod tests {
             .iter()
             .map(|occurrence| occurrence.group1.as_ref().to_string())
             .collect()
+    }
+
+    /// The source-selected protocol has either the complete active tables or
+    /// a proven module-absence fact. A refused capture is neither state.
+    fn selected_protocol_is_absent() -> bool {
+        let pin = crate::exiftool_oracle::repo_pin();
+        match (pin, FIT_PROTOCOL.refusal) {
+            ("11.78" | "12.64", Some(FitUnavailable::ModuleAbsent { exiftool_version }))
+                if exiftool_version == pin =>
+            {
+                assert!(FIT_PROTOCOL.messages.is_empty());
+                assert!(FIT_PROTOCOL.base_types.is_empty());
+                assert!(FIT_PROTOCOL.common.fields.is_empty());
+                assert_eq!(FIT_PROTOCOL.header_name, None);
+                assert!(!FIT_PROTOCOL.active());
+                true
+            }
+            ("13.59", None) => {
+                assert!(!FIT_PROTOCOL.messages.is_empty());
+                assert!(!FIT_PROTOCOL.base_types.is_empty());
+                assert!(!FIT_PROTOCOL.common.fields.is_empty());
+                assert_eq!(FIT_PROTOCOL.header_name, Some("ProtocolVersion"));
+                assert!(FIT_PROTOCOL.active());
+                assert!(
+                    FIT_PROTOCOL
+                        .messages
+                        .iter()
+                        .all(|message| message.withheld.is_none())
+                );
+                false
+            }
+            (_, Some(FitUnavailable::Refused(reasons))) => {
+                panic!("FIT protocol refused: {reasons}")
+            }
+            _ => panic!("unprobed or mismatched FIT protocol for ExifTool {pin}"),
+        }
+    }
+
+    /// Historical source absence positively requires both the direct walk
+    /// and the public executor to return no rows for the constructed stream.
+    fn assert_absent_output_or_active(stream: &[u8], metadata: &MetadataMap) -> bool {
+        if selected_protocol_is_absent() {
+            assert!(metadata.is_empty(), "absent Garmin source yielded FIT rows");
+            assert!(extract(&FIT_PROTOCOL, stream).is_empty());
+            true
+        } else {
+            false
+        }
     }
 
     /// The Session fields the replaced handwritten parser reported, with the
@@ -797,7 +843,11 @@ mod tests {
     #[test]
     fn replaced_session_values_are_preserved_under_their_message_group() {
         for big in [false, true] {
-            let metadata = read(&fit(&session_record(big)));
+            let stream = fit(&session_record(big));
+            let metadata = read(&stream);
+            if assert_absent_output_or_active(&stream, &metadata) {
+                continue;
+            }
             let expected = [
                 ("Garmin:AvgHeartRate", "87 bpm"),
                 ("Garmin:AvgCadence", "13 rpm"),
@@ -835,7 +885,11 @@ mod tests {
             &[(200, 1, 0x55), (16, 1, 0x02), (18, 1, 0x02)],
         );
         records.extend_from_slice(&[0, 50, 60, 70]);
-        let metadata = read(&fit(&records));
+        let stream = fit(&records);
+        let metadata = read(&stream);
+        if assert_absent_output_or_active(&stream, &metadata) {
+            return;
+        }
         assert_eq!(
             value(&metadata, "Garmin:AvgHeartRate").as_deref(),
             Some("50 bpm")
@@ -861,7 +915,11 @@ mod tests {
     fn only_the_first_record_of_a_message_is_read() {
         let mut records = definition(0, 18, false, &[(16, 1, 0x02)]);
         records.extend_from_slice(&[0, 87, 0, 99]);
-        let metadata = read(&fit(&records));
+        let stream = fit(&records);
+        let metadata = read(&stream);
+        if assert_absent_output_or_active(&stream, &metadata) {
+            return;
+        }
         assert_eq!(
             value(&metadata, "Garmin:AvgHeartRate").as_deref(),
             Some("87 bpm")
@@ -879,7 +937,11 @@ mod tests {
         records.extend(definition(1, 20, false, &[(3, 1, 0x02)]));
         records.push(0x80 | (1 << 5) | ((TS + 3) & 0x1f) as u8);
         records.push(70);
-        let metadata = read(&fit(&records));
+        let stream = fit(&records);
+        let metadata = read(&stream);
+        if assert_absent_output_or_active(&stream, &metadata) {
+            return;
+        }
         assert_eq!(
             group1(&metadata, "Garmin:TimeStamp"),
             ["Activity", "Record"]
@@ -895,7 +957,11 @@ mod tests {
     fn stream_errors_end_the_walk_with_the_native_warning() {
         let mut records = session_record(false);
         records.extend_from_slice(&[3, 0]);
-        let metadata = read(&fit(&records));
+        let stream = fit(&records);
+        let metadata = read(&stream);
+        if assert_absent_output_or_active(&stream, &metadata) {
+            return;
+        }
         assert_eq!(
             value(&metadata, "Garmin:AvgHeartRate").as_deref(),
             Some("87 bpm")
@@ -915,21 +981,7 @@ mod tests {
         // value reader) must fail loudly here, not ship a silent FIT reader.
         // A release proven to ship no Garmin module is the one other
         // accepted state, and it must define nothing at all.
-        match FIT_PROTOCOL.refusal {
-            None => assert!(
-                FIT_PROTOCOL
-                    .messages
-                    .iter()
-                    .all(|message| message.withheld.is_none())
-            ),
-            Some(FitUnavailable::ModuleAbsent { .. }) => {
-                assert!(FIT_PROTOCOL.messages.is_empty());
-                assert!(FIT_PROTOCOL.base_types.is_empty());
-                assert!(FIT_PROTOCOL.common.fields.is_empty());
-                assert_eq!(FIT_PROTOCOL.header_name, None);
-            }
-            Some(FitUnavailable::Refused(reasons)) => panic!("FIT protocol refused: {reasons}"),
-        }
+        selected_protocol_is_absent();
     }
 
     /// A protocol like the one generated for a release without the module.

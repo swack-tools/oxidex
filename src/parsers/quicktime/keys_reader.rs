@@ -4,6 +4,7 @@
 //! ProcessKeys also falls back to ItemList/UserData and can construct unknown
 //! names; neither is a generated claim here.
 use super::generated_keys_specs::{KEYS_SPECS, KeySpec, REFUSED_SOURCE_KEYS};
+use super::generated_protocol_caps::{MDTA_RETRY_FULL_KEY, MDTA_STRIP_GENERIC_COM};
 use super::itemlist_reader;
 use crate::core::MetadataMap;
 
@@ -46,7 +47,11 @@ pub(crate) fn resolve_keys(data: &[u8]) -> Vec<ResolvedKey> {
 fn normalized_name<'a>(namespace: &[u8], full: &'a [u8]) -> &'a [u8] {
     if namespace == b"mdta" {
         full.strip_prefix(b"com.apple.quicktime.")
-            .or_else(|| full.strip_prefix(b"com."))
+            .or_else(|| {
+                MDTA_STRIP_GENERIC_COM
+                    .then(|| full.strip_prefix(b"com."))
+                    .flatten()
+            })
             .unwrap_or(full)
     } else {
         full
@@ -54,7 +59,11 @@ fn normalized_name<'a>(namespace: &[u8], full: &'a [u8]) -> &'a [u8] {
 }
 fn resolve_name(namespace: &[u8], full: &[u8]) -> Option<&'static KeySpec> {
     let short = normalized_name(namespace, full);
-    find(short).or_else(|| (short != full).then(|| find(full)).flatten())
+    find(short).or_else(|| {
+        (MDTA_RETRY_FULL_KEY && short != full)
+            .then(|| find(full))
+            .flatten()
+    })
 }
 fn find(key: &[u8]) -> Option<&'static KeySpec> {
     KEYS_SPECS
@@ -127,13 +136,23 @@ mod tests {
     }
     #[test]
     fn full_retry_after_mdta_prefix_strip_and_unknown_are_not_invented() {
+        let full = b"com.android.version";
+        assert_eq!(
+            normalized_name(b"mdta", full),
+            if MDTA_STRIP_GENERIC_COM {
+                &full[4..]
+            } else {
+                full
+            }
+        );
         let r = resolve_keys(&keys(&[
-            (b"mdta", b"com.android.model"),
+            // This full key is declared in all three reviewed source trees.
+            (b"mdta", b"com.android.version"),
             (b"mdta", b"not.source.defined\0ignored"),
         ]));
         let mut m = MetadataMap::new();
-        assert!(read_indexed(1, &r, &data(b"Pixel"), &mut m));
-        assert_eq!(m.get_string("QuickTime:AndroidModel"), Some("Pixel"));
+        assert!(read_indexed(1, &r, &data(b"14"), &mut m));
+        assert_eq!(m.get_string("QuickTime:AndroidVersion"), Some("14"));
         assert!(!read_indexed(2, &r, &data(b"x"), &mut m));
     }
     #[test]

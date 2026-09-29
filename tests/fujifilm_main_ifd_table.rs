@@ -8,8 +8,8 @@
 //!
 //! `main_engine.rs`'s unit tests build synthetic notes, which is right for
 //! insertion order and cannot observe a conversion defect: a builder writes
-//! the bytes its author believes in. Every expectation below is the pinned
-//! ExifTool 13.59 oracle's own output for files this repository did not
+//! the bytes its author believes in. The selected source's output supplies
+//! every expectation below for files this repository did not
 //! write. Both probes were run first, as `AGENTS.md` requires:
 //!
 //! ```text
@@ -161,7 +161,14 @@ fn fujifilm_raf_main_tags_match_the_pinned_oracle() {
             ("FujiFilm:SequenceNumber", "0"),
             ("FujiFilm:DynamicRange", "Wide"),
             ("FujiFilm:FilmMode", "F0/Standard (Provia)"),
-            ("FujiFilm:DynamicRangeSetting", "Auto"),
+            (
+                "FujiFilm:DynamicRangeSetting",
+                match oxidex::exiftool_oracle::repo_pin() {
+                    "11.78" => "Auto (100-400%)",
+                    "12.64" | "13.59" => "Auto",
+                    pin => panic!("unreviewed ExifTool pin {pin}"),
+                },
+            ),
             ("FujiFilm:MinFocalLength", "28"),
             ("FujiFilm:MaxFocalLength", "70"),
             ("FujiFilm:MaxApertureAtMinFocal", "2.8"),

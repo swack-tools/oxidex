@@ -1,0 +1,66 @@
+{
+  "records": {
+    "11.78": {
+      "dump_scope": "full",
+      "dump_sha256": "021df4370833664f8a353e79341739c8fc5513cd8c13b77ea0bc98739b158ffa",
+      "row": {
+        "Name": "SceneType",
+        "PrintConv": {
+          "directives": null,
+          "kind": "enum",
+          "map": {
+            "1": "Directly photographed"
+          }
+        },
+        "ValueConvInv": {
+          "expr": "chr($val)",
+          "kind": "expr"
+        },
+        "Writable": "undef"
+      },
+      "source_file_sha256": "5698565b0be128a0d88eb1dfaffc75d51470438fbb32bb88600d48d7603ec233"
+    },
+    "12.64": {
+      "dump_scope": "full",
+      "dump_sha256": "fa4987716e69137e2e697cc24a3a057a9e55448b97be6871c26ff7bdaa5fd7ed",
+      "row": {
+        "Name": "SceneType",
+        "PrintConv": {
+          "directives": null,
+          "kind": "enum",
+          "map": {
+            "1": "Directly photographed"
+          }
+        },
+        "ValueConvInv": {
+          "expr": "chr($val & 0xff)",
+          "kind": "expr"
+        },
+        "Writable": "undef"
+      },
+      "source_file_sha256": "5dce0468fdd62b6dc5f128c0817e58a3e6c864241b2c42da56e9b440e4bc9579"
+    },
+    "13.59": {
+      "dump_scope": "Exif module only",
+      "dump_sha256": "303c7f473ff3566f054dac93bf352f67c3d4db2e425a7b7640722c58c42db25b",
+      "row": {
+        "Name": "SceneType",
+        "PrintConv": {
+          "directives": null,
+          "kind": "enum",
+          "map": {
+            "1": "Directly photographed"
+          }
+        },
+        "ValueConvInv": {
+          "expr": "chr($val & 0xff)",
+          "kind": "expr"
+        },
+        "Writable": "undef"
+      },
+      "source_file_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22"
+    }
+  },
+  "schema": "scene_type_inverse_source_fixtures_v1",
+  "source": "pinned Perl 5.38.2 dump_tables.pl selected Exif::Main 0xa301; 13.59 module-only capture, historical full dumps"
+}

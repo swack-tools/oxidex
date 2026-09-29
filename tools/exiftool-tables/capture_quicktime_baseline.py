@@ -118,6 +118,14 @@ def extract(document, *, full_hash, source_commit, perl_version, tool_hash):
         result["quicktime_userdata_reader_protocol"] = document["quicktime_userdata_reader_protocol"]
     if "quicktime_itemlist_reader_protocol" in document:
         result["quicktime_itemlist_reader_protocol"] = document["quicktime_itemlist_reader_protocol"]
+    import quicktime_protocol_caps as caps
+    result["quicktime_main_mdat_tags"] = caps.selected_main_mdat_rows(document)
+    source_sha = document["hydrated_layouts"]["source_provenance"]["sources"]["Image/ExifTool/QuickTime.pm"]["sha256"]
+    result["capture_scope"]["main_mdat_augmentation"] = {
+        "method": "hydrated full dump Main mdat declarations",
+        "source_file": "Image/ExifTool/QuickTime.pm", "source_sha256": source_sha,
+        "fact_sha256": selector.digest(result["quicktime_main_mdat_tags"]),
+    }
     return result
 
 

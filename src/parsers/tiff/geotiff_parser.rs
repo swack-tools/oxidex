@@ -542,7 +542,14 @@ mod tests {
         #[test]
         fn epsg_pcs() {
             // ProjectedCSType PrintConv, GeoTiff.pm:557-1559
-            assert_eq!(EPSG_PCS.len(), 995);
+            // Native GeoTiff.pm %Main{3072}{PrintConv}: 993 in 11.78,
+            // 995 in 12.64 and 13.59 (probed with pinned Perl 5.38.2).
+            let count = match crate::exiftool_tables::EXIFTOOL_VERSION {
+                "11.78" => 993,
+                "12.64" | "13.59" => 995,
+                other => panic!("unsupported ExifTool source {other}"),
+            };
+            assert_eq!(EPSG_PCS.len(), count);
             assert_eq!(get(EPSG_PCS, 2100), Some("GGRS87 Greek Grid")); // :559
             // GeoTiff.pm assigns 2177 twice (:562 'zone 6', :563 'zone 7');
             // Perl's last-assignment-wins is what ExifTool prints.

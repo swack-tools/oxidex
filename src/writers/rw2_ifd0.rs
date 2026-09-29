@@ -362,6 +362,28 @@ impl Rw2 {
                 .filter(|tag| !self.outer_holds(key, tag, value))
                 .collect();
             if changed.is_empty() {
+                // Before ExifTool added PanasonicRaw 0x0037, ISO had only
+                // outer row 0x0017. A set to its existing value still makes
+                // WriteExif rewrite IFD0 (`-v2`: - ISO / + ISO), and the
+                // selected 12.64 oracle reports the file updated. Returning
+                // Ok here made oxidex report an update without changing one
+                // byte. This writer cannot reproduce that full RAW rewrite.
+                if name.eq_ignore_ascii_case("ISO")
+                    && self.embedded.is_none()
+                    && outer.len() == 1
+                    && outer[0].id == 0x0017
+                {
+                    return Some(
+                        self.refused(
+                            "Writing",
+                            key,
+                            "pinned ExifTool rewrites PanasonicRaw IFD0 ISO 0x0017 even when it \
+                         already holds this value, but this writer cannot reproduce that RAW \
+                         rewrite"
+                                .to_string(),
+                        ),
+                    );
+                }
                 return None;
             }
             return Some(self.refused(

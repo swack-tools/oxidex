@@ -11,7 +11,7 @@ use crate::core::{FileFormat, FileReader};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
-use chrono::{DateTime, Duration, Months, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, Months, NaiveDate, NaiveDateTime, Utc};
 use std::path::Path;
 
 /// Operation type for date shifting
@@ -380,6 +380,73 @@ fn key_matches_pattern(key: &str, pattern: &str) -> bool {
     false
 }
 
+/// ExifTool prepends the operation sign before validating a time shift.
+/// A second sign makes one or two numeric components a timezone shift;
+/// larger signed additions are invalid, while larger subtractions are no-ops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignedAllDatesShift {
+    Invalid,
+    Unchanged,
+    TimezoneOnly,
+}
+
+pub(crate) fn signed_alldates_shift(
+    tag_pattern: &str,
+    offset_or_value: &str,
+    op: ShiftOperation,
+) -> Option<SignedAllDatesShift> {
+    if !tag_pattern.eq_ignore_ascii_case("AllDates") || op == ShiftOperation::Set {
+        return None;
+    }
+    let operand = offset_or_value.trim();
+    if !operand.starts_with(['+', '-']) {
+        return None;
+    }
+    // Shift.pl::CheckShift removes the operation sign, then SplitTime treats
+    // this remaining signed word as a timezone. The signed branch accepts
+    // one or two numeric captures, rejects more than two, and rejects an
+    // additional numeric word because its timezone slot is already filled.
+    // SplitTime's numeric capture is /(?=\d|\.\d)\d*(?:\.\d*)?/g.
+    let numeric_captures = |word: &str| {
+        let bytes = word.as_bytes();
+        let mut at = 0;
+        let mut count = 0;
+        while at < bytes.len() {
+            let starts = bytes[at].is_ascii_digit()
+                || (bytes[at] == b'.' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit));
+            if !starts {
+                at += 1;
+                continue;
+            }
+            count += 1;
+            while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                at += 1;
+            }
+            if bytes.get(at) == Some(&b'.') {
+                at += 1;
+                while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                    at += 1;
+                }
+            }
+        }
+        count
+    };
+    let mut words = operand.split_whitespace();
+    let first = words.next().unwrap_or("");
+    let first_count = numeric_captures(first);
+    let invalid =
+        first_count == 0 || first_count > 2 || words.any(|word| numeric_captures(word) != 0);
+    Some(if invalid {
+        if op == ShiftOperation::Add {
+            SignedAllDatesShift::Invalid
+        } else {
+            SignedAllDatesShift::Unchanged
+        }
+    } else {
+        SignedAllDatesShift::TimezoneOnly
+    })
+}
+
 /// Shifts date/time tags in a file's metadata.
 ///
 /// # Arguments
@@ -434,6 +501,12 @@ pub fn shift_metadata_dates(
     offset_or_value: &str,
     op: ShiftOperation,
 ) -> Result<()> {
+    let signed_shift = signed_alldates_shift(tag_pattern, offset_or_value, op);
+    if signed_shift == Some(SignedAllDatesShift::Invalid) {
+        return Err(ExifToolError::parse_error(format!(
+            "Invalid shift string ({offset_or_value}) for IFD0:ModifyDate"
+        )));
+    }
     // An absolute set of an EXIF date in a JPEG, TIFF or PNG is an ordinary
     // write: ExifTool writes it to the tag's directory and deletes the copy
     // in the other of IFD0/ExifIFD (`writers::exif_cross_delete`), where
@@ -466,7 +539,11 @@ pub fn shift_metadata_dates(
         let value = crate::cli::value_parser::parse_cli_tag_value(tag_pattern, offset_or_value)?;
         return crate::core::operations::modify_tag(path, tag_pattern, value).map(|_| ());
     }
-    let spec = build_shift_spec(offset_or_value, op)?;
+    let spec = if signed_shift.is_none() {
+        Some(build_shift_spec(offset_or_value, op)?)
+    } else {
+        None
+    };
 
     let (format, classic_tiff_raw, walkable_tiff_raw) = {
         let reader = MMapReader::new(path)?;
@@ -486,8 +563,15 @@ pub fn shift_metadata_dates(
         (format, classic_tiff_raw, walkable_tiff_raw)
     };
 
+    if signed_shift == Some(SignedAllDatesShift::Unchanged) {
+        return Ok(());
+    }
+    if signed_shift == Some(SignedAllDatesShift::TimezoneOnly) {
+        return shift_signed_alldates_timezone_only(path, format, offset_or_value, op);
+    }
+    let spec = spec.expect("a regular shift has a parsed spec");
     if format == FileFormat::JPEG {
-        return shift_jpeg_dates(path, tag_pattern, &spec);
+        return shift_jpeg_dates(path, tag_pattern, offset_or_value, &spec);
     }
     // A TIFF's or PNG's EXIF dates shift in place too, every IFD0/ExifIFD
     // copy of each: the map route below sees only the copy the reader
@@ -511,16 +595,98 @@ pub fn shift_metadata_dates(
         return crate::core::write_transaction::transact(path, |scratch| {
             let shifted =
                 crate::writers::exif_inplace::shift_tiff_png_exif_dates(scratch, &targets, &spec)?;
-            shift_map_dates_after_exif(scratch, tag_pattern, &spec, shifted)
+            shift_map_dates_after_exif(scratch, tag_pattern, offset_or_value, &spec, shifted)
         })
         .map(|_| ());
     }
-    shift_map_dates(path, tag_pattern, &spec)
+    shift_map_dates(path, tag_pattern, offset_or_value, &spec)
+}
+
+fn date_text_has_timezone(text: &str) -> bool {
+    let (date, has_zone) = if let Some(date) = text.strip_suffix('Z') {
+        (date, true)
+    } else if text.len() >= 6 {
+        let Some(date) = text.get(..text.len() - 6) else {
+            return false;
+        };
+        let suffix = &text[text.len() - 6..];
+        let bytes = suffix.as_bytes();
+        let valid_zone = matches!(bytes[0], b'+' | b'-')
+            && bytes[1..3].iter().all(u8::is_ascii_digit)
+            && bytes[3] == b':'
+            && bytes[4..6].iter().all(u8::is_ascii_digit);
+        (date, valid_zone)
+    } else {
+        return false;
+    };
+    if !has_zone {
+        return false;
+    }
+    let (whole, fraction_ok) = match date.split_once('.') {
+        Some((whole, fraction)) => (
+            whole,
+            !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()),
+        ),
+        None => (date, true),
+    };
+    fraction_ok
+        && (NaiveDateTime::parse_from_str(whole, "%Y:%m:%d %H:%M:%S").is_ok()
+            || NaiveDateTime::parse_from_str(whole, "%Y-%m-%dT%H:%M:%S").is_ok()
+            || NaiveDate::parse_from_str(whole, "%Y:%m:%d").is_ok()
+            || NaiveDate::parse_from_str(whole, "%Y-%m-%d").is_ok())
+}
+
+/// A compact signed AllDates operand is a timezone shift in native Shift.pl,
+/// so EXIF date strings without zones are left untouched. The current writer
+/// cannot persist timezone-bearing XMP/PDF/PNG date rows. Refuse those rows
+/// atomically instead of reporting an unchanged success for a missed edit.
+/// The selected 11.78 PNG AddChunks guard is the sole supported exception:
+/// it creates absent PNG:CreateDate with the literal operation sign and
+/// operand, even though no date or timezone value was present to shift.
+fn shift_signed_alldates_timezone_only(
+    path: &Path,
+    format: FileFormat,
+    offset_or_value: &str,
+    op: ShiftOperation,
+) -> Result<()> {
+    let mut metadata = read_metadata(path)?;
+    let timezoned = metadata.iter().find(|(key, value)| {
+        let name = key.rsplit_once(':').map_or(key.as_str(), |(_, name)| name);
+        ALL_DATES_NAMES.contains(&name.to_ascii_lowercase().as_str())
+            && value.as_string().is_some_and(date_text_has_timezone)
+    });
+    if let Some((key, _)) = timezoned {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Timezone-only AllDates shift cannot write {key}; nothing was written"
+        )));
+    }
+    if format == FileFormat::PNG
+        && crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+        && !metadata.contains_key("PNG:CreateDate")
+    {
+        if png_has_create_date_chunk(path)? {
+            return Err(ExifToolError::parse_error(
+                "Cannot shift an unreadable existing PNG create-date chunk",
+            ));
+        }
+        let sign = if op == ShiftOperation::Add { '+' } else { '-' };
+        metadata.insert(
+            "PNG:CreateDate",
+            TagValue::new_string(format!("{sign}{offset_or_value}")),
+        );
+        write_metadata(path, &metadata)?;
+    }
+    Ok(())
 }
 
 /// JPEG path: patch EXIF date/time values in place. Never rewrites the EXIF
 /// segment, so binary tags are preserved byte-for-byte.
-fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+fn shift_jpeg_dates(
+    path: &Path,
+    tag_pattern: &str,
+    offset_or_value: &str,
+    spec: &ShiftSpec,
+) -> Result<()> {
     let Some(targets) = resolve_exif_targets(tag_pattern) else {
         // These names are not ExifTool aliases for EXIF's writable dates.
         // A JPEG with no matching XMP row treats either shift as unchanged;
@@ -529,7 +695,7 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
             .iter()
             .any(|name| tag_pattern.eq_ignore_ascii_case(name))
         {
-            return shift_map_dates(path, tag_pattern, spec);
+            return shift_map_dates(path, tag_pattern, offset_or_value, spec);
         }
         return Err(ExifToolError::parse_error(format!(
             "Shifting tag '{}' is not supported for JPEG. Supported: AllDates, \
@@ -545,8 +711,13 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
 }
 
 /// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
-fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
-    shift_map_dates_after_exif(path, tag_pattern, spec, None)
+fn shift_map_dates(
+    path: &Path,
+    tag_pattern: &str,
+    offset_or_value: &str,
+    spec: &ShiftSpec,
+) -> Result<()> {
+    shift_map_dates_after_exif(path, tag_pattern, offset_or_value, spec, None)
 }
 
 /// [`shift_map_dates`]; `exif_shifted` is the number of IFD0/ExifIFD values
@@ -554,11 +725,13 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
 fn shift_map_dates_after_exif(
     path: &Path,
     tag_pattern: &str,
+    offset_or_value: &str,
     spec: &ShiftSpec,
     exif_shifted: Option<usize>,
 ) -> Result<()> {
     let mut metadata = read_metadata(path)?;
     let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
+    let is_png = matches!(detect_format(&MMapReader::new(path)?)?, FileFormat::PNG);
 
     let keys: Vec<String> = metadata.iter().map(|(k, _)| k.clone()).collect();
     let mut modified = 0;
@@ -599,6 +772,34 @@ fn shift_map_dates_after_exif(
         modified += 1;
     }
 
+    // In the selected 11.78 WritePNG.pl, AddChunks accepts the negative
+    // "unknown" IsOverwriting result for an absent shifted PNG text tag.
+    // SetNewValue leaves the signed shift operand as its new value, and the
+    // create-date inverse leaves it literal. Later AddChunks requires > 0,
+    // so it does not create this tag. This applies only to the PNG text
+    // CreateDate target, never an absent EXIF date.
+    if is_png
+        && crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+        && (all_dates || key_matches_pattern("PNG:CreateDate", tag_pattern))
+        && !metadata.contains_key("PNG:CreateDate")
+        && let ShiftSpec::Relative { op, .. } = spec
+    {
+        if png_has_create_date_chunk(path)? {
+            return Err(ExifToolError::parse_error(
+                "Cannot shift an unreadable existing PNG create-date chunk",
+            ));
+        }
+        let shift = match op {
+            ShiftOperation::Add => format!("+{}", offset_or_value.trim_start_matches(['+', '-'])),
+            ShiftOperation::Subtract => {
+                format!("-{}", offset_or_value.trim_start_matches(['+', '-']))
+            }
+            ShiftOperation::Set => unreachable!(),
+        };
+        metadata.insert("PNG:CreateDate", TagValue::new_string(shift));
+        modified += 1;
+    }
+
     if modified == 0 {
         // Nothing to shift: the file is left as it is (13.59: `unchanged`).
         return Ok(());
@@ -607,10 +808,173 @@ fn shift_map_dates_after_exif(
     Ok(())
 }
 
+fn png_has_create_date_chunk(path: &Path) -> Result<bool> {
+    use crate::parsers::png::chunk_parser::parse_chunk;
+
+    let reader = MMapReader::new(path)?;
+    let mut offset = 8;
+    while offset < reader.size() {
+        let (next, chunk) = parse_chunk(&reader, offset)?;
+        if chunk.is_text_chunk() && chunk.data.starts_with(b"create-date\0") {
+            return Ok(true);
+        }
+        if chunk.chunk_type == *b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone, Timelike};
+
+    #[test]
+    fn png_absent_create_date_shift_follows_selected_addchunks_guard() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/png/sample.png");
+        for (operation, literal) in [
+            (ShiftOperation::Add, "+1:0:0 0:0:0"),
+            (ShiftOperation::Subtract, "-1:0:0 0:0:0"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("sample.png");
+            std::fs::copy(&fixture, &file).unwrap();
+            assert!(
+                read_metadata(&file)
+                    .unwrap()
+                    .get("PNG:CreateDate")
+                    .is_none()
+            );
+            shift_metadata_dates(&file, "AllDates", "1:0:0 0:0:0", operation).unwrap();
+            let actual = read_metadata(&file)
+                .unwrap()
+                .get_string("PNG:CreateDate")
+                .map(str::to_owned);
+            let expected =
+                crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+                    .then_some(literal.to_owned());
+            assert_eq!(
+                actual, expected,
+                "the selected AddChunks guard controls absent PNG CreateDate"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_alldates_shift_operands_do_not_change_the_file() {
+        // Pinned 11.78 and 13.59 both refuse +=-1:0:0 with an invalid-shift
+        // warning; -=-1:0:0 reports unchanged. Neither shifts an EXIF date.
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/png/sample.png");
+        for (operation, expects_error) in [
+            (ShiftOperation::Add, true),
+            (ShiftOperation::Subtract, false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("sample.png");
+            std::fs::copy(&fixture, &file).unwrap();
+            let original = std::fs::read(&file).unwrap();
+            let result = shift_metadata_dates(&file, "AllDates", "-1:0:0 0:0:0", operation);
+            assert_eq!(result.is_err(), expects_error);
+            assert_eq!(std::fs::read(&file).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn signed_alldates_compact_grammar_matches_native() {
+        for operand in ["-1", "-1:2", "-1.5", "--1", "+-1"] {
+            assert_eq!(
+                signed_alldates_shift("AllDates", operand, ShiftOperation::Add),
+                Some(SignedAllDatesShift::TimezoneOnly),
+                "{operand}"
+            );
+        }
+        for operand in ["-garbage", "--garbage", "+1:0:0", "-1:0:0 0:0:0"] {
+            assert_eq!(
+                signed_alldates_shift("AllDates", operand, ShiftOperation::Add),
+                Some(SignedAllDatesShift::Invalid),
+                "{operand}"
+            );
+            assert_eq!(
+                signed_alldates_shift("AllDates", operand, ShiftOperation::Subtract),
+                Some(SignedAllDatesShift::Unchanged),
+                "{operand}"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_compact_alldates_refuses_unwritable_timezone_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        for value in ["2020:01:02 03:04:05+02:00", "2020:01:02 03:04:05.123+02:00"] {
+            let file = dir.path().join("dates.xmp");
+            let xmp = format!(
+                r#"<?xpacket begin="" id=""?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+ xmp:CreateDate="{value}" />
+</rdf:RDF><?xpacket end="w"?>"#
+            );
+            std::fs::write(&file, &xmp).unwrap();
+            assert_eq!(
+                read_metadata(&file).unwrap().get_string("XMP:CreateDate"),
+                Some(value)
+            );
+            let error =
+                shift_metadata_dates(&file, "AllDates", "-1", ShiftOperation::Add).unwrap_err();
+            assert!(error.to_string().contains("XMP:CreateDate"), "{error}");
+            assert_eq!(std::fs::read(&file).unwrap(), xmp.as_bytes());
+        }
+    }
+
+    #[test]
+    fn signed_compact_alldates_preserves_selected_png_literal() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/png/sample.png");
+        for (op, literal) in [
+            (ShiftOperation::Add, "+-1"),
+            (ShiftOperation::Subtract, "--1"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("sample.png");
+            std::fs::copy(&fixture, &file).unwrap();
+            shift_metadata_dates(&file, "AllDates", "-1", op).unwrap();
+            let expected =
+                crate::writers::generated_png_shift_contract::PNG_ABSENT_CREATE_DATE_SHIFT_LITERAL
+                    .then_some(literal);
+            assert_eq!(
+                read_metadata(&file).unwrap().get_string("PNG:CreateDate"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn signed_alldates_noop_still_checks_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.png");
+        assert!(
+            shift_metadata_dates(
+                &missing,
+                "AllDates",
+                "-1:0:0 0:0:0",
+                ShiftOperation::Subtract,
+            )
+            .is_err()
+        );
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/png/sample.png");
+        let mut bad_crc = std::fs::read(fixture).unwrap();
+        assert_eq!(&bad_crc[12..16], b"IHDR");
+        bad_crc[16] ^= 1;
+        let file = dir.path().join("bad-crc.png");
+        std::fs::write(&file, &bad_crc).unwrap();
+        assert!(
+            shift_metadata_dates(&file, "AllDates", "-1:0:0 0:0:0", ShiftOperation::Subtract,)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(file).unwrap(), bad_crc);
+    }
 
     #[test]
     fn test_parse_offset_full_form() {

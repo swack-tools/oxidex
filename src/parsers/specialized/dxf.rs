@@ -302,12 +302,31 @@ mod tests {
                       $INSUNITS\r\n 70\r\n     4\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
         let bare = padded.replace("\r\n", "\n").replace("  0\n", "0\n");
 
+        let source_declares_dxf = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => false,
+            "12.64" | "13.59" => true,
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        assert_eq!(
+            crate::filetype::tables::MAGIC
+                .iter()
+                .any(|(name, _)| *name == "DXF"),
+            source_declares_dxf,
+            "selected source DXF magic row"
+        );
+
         for (label, source) in [("padded CRLF", padded), ("bare LF", bare.as_str())] {
             let reader = TestReader::new(source.as_bytes().to_vec());
-            assert!(
+            assert_eq!(
                 DXFParser::verify_signature(&reader).unwrap(),
-                "{label} failed the signature check"
+                source_declares_dxf,
+                "{label} signature differs from selected source"
             );
+            if !source_declares_dxf {
+                let err = parse_dxf_metadata(&reader).expect_err("11.78 declines DXF");
+                assert!(err.contains("Invalid DXF signature"), "{label}: {err}");
+                continue;
+            }
             let metadata = parse_dxf_metadata(&reader).expect("parse should succeed");
             assert_eq!(
                 metadata.get("AutoCADVersion"),

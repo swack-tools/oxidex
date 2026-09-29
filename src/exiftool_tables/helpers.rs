@@ -220,6 +220,76 @@ pub const PORTS: &[HelperPort] = &[
     },
 ];
 
+/// Reviewed folded native source for a port in a known ExifTool release.
+/// Unknown releases and unported subs refuse admission.
+#[must_use]
+pub fn selected_port_source_for_version(version: &str, perl: &str) -> Option<&'static str> {
+    match (version, perl) {
+        ("11.78", "Image::ExifTool::ConvertDateTime") => {
+            Some("14b595dc50ff73b7e3ba40e474b6e80dc13c9fc2ac62f11ee33e360967878be1")
+        }
+        ("11.78", "Image::ExifTool::ConvertFileSize") => {
+            Some("20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e")
+        }
+        ("11.78", "Image::ExifTool::ConvertUnixTime") => {
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee")
+        }
+        ("11.78", "Image::ExifTool::Encode") => {
+            Some("9810479e9b0ee6be7c5c03aff6e20df7a64e9d3a8d21a38bc5e61a7f3c1372e2")
+        }
+        ("11.78", "Image::ExifTool::Exif::PrintExposureTime") => {
+            Some("90f77cb8733bb7e3f93e16f5b6e3815f7c10c06d6ea0678f2e83668ec9b7a180")
+        }
+        ("11.78", "Image::ExifTool::GPS::ToDMS") => {
+            Some("00d7ec75c5a1ad1d67e215c182390a922f9c7995afa3e9491230a019645e8b72")
+        }
+        ("11.78", "Image::ExifTool::GPS::ToDegrees") => {
+            Some("2a673a743dfb66f36972400c549b96bcc1876d95e8d241da25f789fcf17cc539")
+        }
+        ("11.78", "Image::ExifTool::GetUnixTime") => {
+            Some("4b6e1babf8d17d4f43b3e8591f9c33a36909039cdfef88944eea613ad599c8ee")
+        }
+        ("11.78", "Image::ExifTool::Printable") => {
+            Some("80b805ee1fbd6bb79f2e686681286cccc56477af0ac85a7e243ddc7a3a3693f6")
+        }
+        ("11.78", "Image::ExifTool::XMP::ConvertXMPDate") => {
+            Some("96a2f2acf9adb8585ddc3253322d40dcf0f223efc664a300666d085dace7c2ae")
+        }
+        ("12.64", "Image::ExifTool::ConvertDateTime") => {
+            Some("de9f9f6e44242aa6e171881847b7e1804dc3e020f9dcd286629cff7f3bedb0c4")
+        }
+        ("12.64", "Image::ExifTool::ConvertFileSize") => {
+            Some("54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117")
+        }
+        ("12.64", "Image::ExifTool::ConvertUnixTime") => {
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee")
+        }
+        ("12.64", "Image::ExifTool::Encode") => {
+            Some("9810479e9b0ee6be7c5c03aff6e20df7a64e9d3a8d21a38bc5e61a7f3c1372e2")
+        }
+        ("12.64", "Image::ExifTool::GPS::ToDMS") => {
+            Some("87e718031f1cf07c5fce36efb6cb8fc107aa9f0c19577a24ca912c16d5833366")
+        }
+        ("12.64", "Image::ExifTool::Printable") => {
+            Some("80b805ee1fbd6bb79f2e686681286cccc56477af0ac85a7e243ddc7a3a3693f6")
+        }
+        ("12.64", "Image::ExifTool::XMP::ConvertXMPDate") => {
+            Some("96a2f2acf9adb8585ddc3253322d40dcf0f223efc664a300666d085dace7c2ae")
+        }
+        ("11.78" | "12.64" | "13.59", _) => PORTS
+            .iter()
+            .find(|port| port.perl == perl)
+            .map(|port| port.source_sha256),
+        _ => None,
+    }
+}
+
+/// Selected release wrapper for native-source dispatch.
+#[must_use]
+pub fn selected_port_source(perl: &str) -> Option<&'static str> {
+    selected_port_source_for_version(super::EXIFTOOL_VERSION, perl)
+}
+
 /// The engine subs a port above reproduces inline rather than calls, by
 /// folded-source sha256 in the pinned tree: `(port, module, sub, digest)`.
 /// A port is proven only for a tree where these match too; the helper
@@ -473,6 +543,7 @@ perl_re!(
     TO_DEG_SOUTH_WEST,
     r"(?i-u)[^A-Z](?:S(?:outh)?|W(?:est)?)[\t\n\x0B\x0C\r ]*\n?\z"
 );
+perl_re!(TO_DEG_1178_SOUTH_WEST, r"(?i-u)[^A-Z](?:S|W)\n?\z");
 perl_re!(
     XMP_DATE,
     r"(?-u)^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}:[0-9]{2})(:[0-9]{2})?[\t\n\x0B\x0C\r ]*([^\t\n\x0B\x0C\r ]*)\n?\z"
@@ -481,6 +552,10 @@ perl_re!(XMP_DATE_PREFIX, r"(?-u)^[0-9]{4}(?:-[0-9]{2}){0,2}");
 perl_re!(
     UNIX_TIME_STR,
     r"(?-u)^([0-9]+)[-:]([0-9]+)[-:]([0-9]+)[\t\n\x0B\x0C\r ]+([0-9]+):([0-9]+):([0-9]+)(.*)"
+);
+perl_re!(
+    UNIX_TIME_STR_1178,
+    r"(?-u)^([0-9]+):([0-9]+):([0-9]+)[\t\n\x0B\x0C\r ]+([0-9]+):([0-9]+):([0-9]+)(.*)"
 );
 perl_re!(UNIX_TIME_ZONE, r"(?i-u)(?:Z|([-+])([0-9]+):([0-9]+))");
 perl_re!(UNIX_TIME_FRAC, r"(?-u)^(\.[0-9]+)");
@@ -567,16 +642,33 @@ pub fn convert_fraction(val: &MemberVal) -> HelperResult {
     Ok(MemberVal::Float(num.as_f64() / den.as_f64()))
 }
 
-/// `Image::ExifTool::Exif::PrintExposureTime($secs)`: the `IsFloat` gate
-/// (non-numbers returned as they are, comma decimals rewritten), then the
-/// existing numeric port [`crate::core::formatters::exif_print_conv::print_exposure_time`]
-/// -- except where `int(0.5 + 1/$secs)` leaves `i64`, where Perl's `%d`
-/// wraps and the delegated port saturates, which this port reproduces itself.
+/// `Image::ExifTool::Exif::PrintExposureTime($secs)`: 12.64/13.59 first call
+/// `IsFloat` (non-numbers returned as they are, comma decimals rewritten),
+/// while 11.78 has no such gate and numerically coerces every input. Then
+/// the existing numeric port
+/// [`crate::core::formatters::exif_print_conv::print_exposure_time`]
+/// handles finite values -- except where `int(0.5 + 1/$secs)` leaves `i64`,
+/// where Perl's `%d` wraps and the delegated port saturates.
 pub fn print_exposure_time(val: &MemberVal) -> HelperResult {
-    let (ok, secs) = is_float(val);
-    if !ok.is_truthy() {
-        return Ok(secs);
-    }
+    print_exposure_time_for_source(super::EXIFTOOL_VERSION, val)
+}
+
+fn print_exposure_time_for_source(source_version: &str, val: &MemberVal) -> HelperResult {
+    let secs = match source_version {
+        "11.78" => val.clone(),
+        "12.64" | "13.59" => {
+            let (ok, secs) = is_float(val);
+            if !ok.is_truthy() {
+                return Ok(secs);
+            }
+            secs
+        }
+        _ => {
+            return Err(HelperError::Refused(
+                "unverified PrintExposureTime source release",
+            ));
+        }
+    };
     // NV context: `sprintf("%.1f", "-0")` is `-0.0` (see `MemberVal::perl_nv`).
     let v = secs.perl_nv();
     if v < 0.25001 && v > 0.0 {
@@ -586,9 +678,12 @@ pub fn print_exposure_time(val: &MemberVal) -> HelperResult {
             return Ok(MemberVal::Str(format!("1/{}", sprintf_d(i, false))));
         }
     }
-    Ok(MemberVal::Str(
-        crate::core::formatters::exif_print_conv::print_exposure_time(v),
-    ))
+    let printed = if v.is_finite() {
+        crate::core::formatters::exif_print_conv::print_exposure_time(v)
+    } else {
+        sprintf_f(1, v)
+    };
+    Ok(MemberVal::Str(printed))
 }
 
 /// `Image::ExifTool::Exif::PrintFNumber($val)`:
@@ -740,6 +835,8 @@ pub fn canon_ev_inv(val: &MemberVal) -> HelperResult {
 }
 
 /// `Image::ExifTool::GPS::ToDegrees($val [, $doSign [, $coord]])`:
+/// 11.78 has no `$coord` argument and recognizes only terminal `S` or `W`.
+/// 12.64/13.59 add pair selection and long direction names.
 ///
 /// ```perl
 /// return '' if $val =~ /\b(inf|undef)\b/;
@@ -755,11 +852,27 @@ pub fn canon_ev_inv(val: &MemberVal) -> HelperResult {
 /// return $deg;
 /// ```
 pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> HelperResult {
+    let source = selected_port_source("Image::ExifTool::GPS::ToDegrees")
+        .ok_or(HelperError::Refused("unverified ToDegrees source release"))?;
+    to_degrees_for_source(source, val, do_sign, coord)
+}
+
+fn to_degrees_for_source(
+    source_digest: &str,
+    val: &MemberVal,
+    do_sign: &MemberVal,
+    coord: &MemberVal,
+) -> HelperResult {
+    let pair_and_long_suffix = match source_digest {
+        "2a673a743dfb66f36972400c549b96bcc1876d95e8d241da25f789fcf17cc539" => false,
+        "c9137f3bf19849ae0b73ab1d2eb49444e845d264a6eafeaf8ca17362e4a8c54d" => true,
+        _ => return Err(HelperError::Refused("unverified ToDegrees source release")),
+    };
     let mut s = val.perl_bytes().into_owned();
     if TO_DEG_INVALID.is_match(&s) {
         return Ok(MemberVal::Str(String::new()));
     }
-    if coord.is_truthy() {
+    if pair_and_long_suffix && coord.is_truthy() {
         let c = coord.perl_bytes();
         if c.as_ref() == b"lat" || c.as_ref() == b"lon" {
             if let Some(m) = TO_DEG_PAIR.captures(&s) {
@@ -790,7 +903,11 @@ pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> He
         return Err(BEYOND_2_53);
     }
     let negate = if do_sign.is_truthy() {
-        TO_DEG_SOUTH_WEST.is_match(&s)
+        if pair_and_long_suffix {
+            TO_DEG_SOUTH_WEST.is_match(&s)
+        } else {
+            TO_DEG_1178_SOUTH_WEST.is_match(&s)
+        }
     } else {
         deg < 0.0
     };
@@ -798,7 +915,9 @@ pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> He
 }
 
 /// `Image::ExifTool::GPS::ToDMS($et, $val [, $doPrintConv [, $ref]])`
-/// (GPS.pm, pinned 13.59) -- every branch except `$doPrintConv eq '1'` with
+/// (GPS.pm) -- 11.78 treats mode 3 as the ordinary XMP print format;
+/// 12.64/13.59 instead return signed numeric components in mode 3.
+/// Every branch except `$doPrintConv eq '1'` with
 /// a Perl-true `CoordFormat` option (a user `sprintf` format), which refuses.
 /// A `$ref` carrying a `%` or a regex metacharacter would change the format
 /// or the XMP trailing-zero substitution it is interpolated into; refused.
@@ -808,6 +927,24 @@ pub fn to_dms(
     do_print_conv: &MemberVal,
     ref_: &MemberVal,
 ) -> HelperResult {
+    let source = selected_port_source("Image::ExifTool::GPS::ToDMS")
+        .ok_or(HelperError::Refused("unverified ToDMS source release"))?;
+    to_dms_for_source(source, session, val, do_print_conv, ref_)
+}
+
+fn to_dms_for_source(
+    source_digest: &str,
+    session: &Session,
+    val: &MemberVal,
+    do_print_conv: &MemberVal,
+    ref_: &MemberVal,
+) -> HelperResult {
+    let mode_three_keeps_sign = match source_digest {
+        "00d7ec75c5a1ad1d67e215c182390a922f9c7995afa3e9491230a019645e8b72" => false,
+        "87e718031f1cf07c5fce36efb6cb8fc107aa9f0c19577a24ca912c16d5833366"
+        | "b27f5e39644a3b90c81c4ca36a0baf06c3eaae9039f9e6220d816ab7039216dc" => true,
+        _ => return Err(HelperError::Refused("unverified ToDMS source release")),
+    };
     let dpc_bytes = do_print_conv.perl_bytes();
     let dpc_is = |s: &str| do_print_conv.is_truthy() && dpc_bytes.as_ref() == s.as_bytes();
     // unless (length $val)
@@ -846,7 +983,7 @@ pub fn to_dms(
             Some(spaced)
         };
     } else {
-        if dpc_is("3") {
+        if mode_three_keeps_sign && dpc_is("3") {
             neg = v < 0.0;
             do_print = false;
         }
@@ -973,12 +1110,58 @@ fn trim_xmp_zeros(s: &str, suffix: &str) -> String {
     format!("{}{}", &body[..keep_to], suffix)
 }
 
+/// The selected source ledger records the folded native sub body.
+/// A release label or the running host's ExifTool is not a source identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DateHelperSource {
+    V1178,
+    V1264,
+    V1359,
+}
+
+fn date_helper_source(perl: &str) -> Result<DateHelperSource, HelperError> {
+    let digest = selected_port_source(perl);
+    let source = match (perl, digest) {
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("14b595dc50ff73b7e3ba40e474b6e80dc13c9fc2ac62f11ee33e360967878be1"),
+        ) => DateHelperSource::V1178,
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("de9f9f6e44242aa6e171881847b7e1804dc3e020f9dcd286629cff7f3bedb0c4"),
+        ) => DateHelperSource::V1264,
+        (
+            "Image::ExifTool::ConvertDateTime",
+            Some("22a3fea0970c697c98d4002710c50ed9fe89b91ed1e314c65220c26c99e9028d"),
+        ) => DateHelperSource::V1359,
+        (
+            "Image::ExifTool::ConvertUnixTime",
+            Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee"),
+        ) => DateHelperSource::V1264,
+        (
+            "Image::ExifTool::ConvertUnixTime",
+            Some("ee1e09f50ee91f3b67b9d6166af39cdaed3e3ce375080ff51b5465cedad4f7ac"),
+        ) => DateHelperSource::V1359,
+        (
+            "Image::ExifTool::GetUnixTime",
+            Some("4b6e1babf8d17d4f43b3e8591f9c33a36909039cdfef88944eea613ad599c8ee"),
+        ) => DateHelperSource::V1178,
+        (
+            "Image::ExifTool::GetUnixTime",
+            Some("7c4b9ade78e619553b6b82a15a31af83cad4ae24325ad21d41a3af0e822fdaff"),
+        ) => DateHelperSource::V1359,
+        _ => return Err(HelperError::Refused("unreviewed date helper source")),
+    };
+    Ok(source)
+}
+
 /// `$self->ConvertDateTime($date)` (ExifTool.pm, pinned 13.59): the date
 /// unchanged, unless `$$self{OPTIONS}{GlobalTimeShift}` or
 /// `$$self{OPTIONS}{DateFormat}` is Perl-TRUE -- a `"0"` of either leaves the
 /// identity branch, exactly as the Perl's `if ($shift)` / `if ($fmt)` do.
 /// Those branches (ShiftTime, strftime, StrictDate) refuse.
 pub fn convert_date_time(session: &Session, date: &MemberVal) -> HelperResult {
+    let _source = date_helper_source("Image::ExifTool::ConvertDateTime")?;
     if session.option("GlobalTimeShift").is_truthy() {
         return Err(HelperError::Refused("GlobalTimeShift option"));
     }
@@ -1000,9 +1183,33 @@ pub fn convert_unix_time(
     to_local: &MemberVal,
     dec: &MemberVal,
 ) -> HelperResult {
+    let source = date_helper_source("Image::ExifTool::ConvertUnixTime")?;
+    convert_unix_time_for_source(source, session, time, to_local, dec)
+}
+
+fn convert_unix_time_for_source(
+    source: DateHelperSource,
+    session: &Session,
+    time: &MemberVal,
+    to_local: &MemberVal,
+    dec: &MemberVal,
+) -> HelperResult {
     let t = time.perl_num().as_f64();
     if t == 0.0 {
         return Ok(MemberVal::Str("0000:00:00 00:00:00".to_string()));
+    }
+    if source != DateHelperSource::V1359 {
+        // The 11.78/12.64 sub ignores SystemTimeRes and takes this branch
+        // whenever its explicit `$dec` is false, including a defined zero.
+        if dec.is_truthy() {
+            return Err(HelperError::Refused("old sub-second $dec"));
+        }
+        if !t.is_finite() {
+            return Err(HelperError::Refused("non-finite time"));
+        }
+        return Ok(MemberVal::Str(
+            super::exprs::convert_unix_time_trunc_epsilon(t, to_local.is_truthy()),
+        ));
     }
     if dec.is_defined() || session.option("SystemTimeRes").is_truthy() {
         return Err(HelperError::Refused("sub-second $dec / SystemTimeRes"));
@@ -1052,11 +1259,25 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 /// second out of range) and any year outside 1000-9999 (its two-digit-year
 /// window depends on the current date).
 pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult {
+    let source = date_helper_source("Image::ExifTool::GetUnixTime")?;
+    get_unix_time_for_source(source, time_str, is_local)
+}
+
+fn get_unix_time_for_source(
+    source: DateHelperSource,
+    time_str: &MemberVal,
+    is_local: &MemberVal,
+) -> HelperResult {
     let s = time_str.perl_bytes();
     if s.as_ref() == b"0000:00:00 00:00:00" {
         return Ok(MemberVal::Int(0));
     }
-    let Some(c) = UNIX_TIME_STR.captures(&s) else {
+    let regex = if source == DateHelperSource::V1178 {
+        &*UNIX_TIME_STR_1178
+    } else {
+        &*UNIX_TIME_STR
+    };
+    let Some(c) = regex.captures(&s) else {
         return Ok(MemberVal::Undef);
     };
     let field = |i: usize| bytes_str(&c[i]).to_string();
@@ -1074,7 +1295,7 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
                 tz_sec = (h * 60 + m) * if sign.as_bytes() == b"-" { -60 } else { 60 };
             }
             local = false;
-        } else if is_local.perl_bytes().as_ref() == b"2" {
+        } else if source != DateHelperSource::V1178 && is_local.perl_bytes().as_ref() == b"2" {
             local = false;
         }
     }
@@ -1107,14 +1328,101 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
             "Time::Local range check / two-digit-year window",
         ));
     }
-    let t = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec - tz_sec;
-    if let Some(f) = UNIX_TIME_FRAC.captures(&tz_str) {
+    let calendar_year = if source == DateHelperSource::V1178 {
+        let time_local_year = year - 1900;
+        if (0..100).contains(&time_local_year) {
+            return Err(HelperError::Refused(
+                "old Time::Local moving two-digit-year window",
+            ));
+        }
+        if time_local_year >= 1000 {
+            time_local_year
+        } else {
+            year
+        }
+    } else {
+        year
+    };
+    let t = days_from_civil(calendar_year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec
+        - tz_sec;
+    if source != DateHelperSource::V1178
+        && let Some(f) = UNIX_TIME_FRAC.captures(&tz_str)
+    {
         let frac = MemberVal::Str(bytes_str(&f[1]).to_string())
             .perl_num()
             .as_f64();
         return Ok(MemberVal::Float(t as f64 + frac));
     }
     Ok(MemberVal::Int(t))
+}
+
+#[cfg(test)]
+mod date_helper_source_tests {
+    use super::*;
+
+    #[test]
+    fn old_unix_time_uses_the_native_truncation_and_ignores_new_options() {
+        let mut session = Session::new();
+        session.set_option("SystemTimeRes", MemberVal::Int(4));
+        session.set_option("KeepUTCTime", MemberVal::Int(1));
+        let run = |time: f64| {
+            convert_unix_time_for_source(
+                DateHelperSource::V1264,
+                &session,
+                &MemberVal::Float(time),
+                &MemberVal::Undef,
+                &MemberVal::Int(0),
+            )
+            .expect("old whole-second path")
+            .perl_string()
+        };
+        // Pinned 11.78 and 12.64 captures, UTC: old int($time + 1e-6).
+        assert_eq!(run(-0.5), "1970:01:01 00:00:00");
+        assert_eq!(run(0.666_666_7), "1970:01:01 00:00:00");
+        assert_eq!(run(12.7), "1970:01:01 00:00:12");
+        assert_eq!(
+            convert_unix_time_for_source(
+                DateHelperSource::V1359,
+                &Session::new(),
+                &MemberVal::Float(12.7),
+                &MemberVal::Undef,
+                &MemberVal::Undef,
+            )
+            .expect("new rounded path")
+            .perl_string(),
+            "1970:01:01 00:00:13"
+        );
+    }
+
+    #[test]
+    fn old_get_unix_time_keeps_its_colon_grammar_and_year_rules() {
+        let old = |s: &str| {
+            get_unix_time_for_source(
+                DateHelperSource::V1178,
+                &MemberVal::Str(s.to_string()),
+                &MemberVal::Undef,
+            )
+        };
+        assert_eq!(
+            old("2020:01:02 03:04:05.123")
+                .expect("old source discards fractional seconds")
+                .perl_string(),
+            "1577934245"
+        );
+        assert!(matches!(old("2020-01-02 03:04:05"), Ok(MemberVal::Undef)));
+        assert_eq!(
+            old("9999:12:31 23:59:59")
+                .expect("old Time::Local absolute-year interpretation")
+                .perl_string(),
+            "193444156799"
+        );
+        assert!(matches!(
+            old("1970:01:01 00:00:00"),
+            Err(HelperError::Refused(
+                "old Time::Local moving two-digit-year window"
+            ))
+        ));
+    }
 }
 
 /// `Image::ExifTool::XMP::ConvertXMPDate($val [, $unsure])` in scalar
@@ -1156,11 +1464,35 @@ pub fn convert_xmp_date(val: &MemberVal, unsure: &MemberVal) -> MemberVal {
     val.clone()
 }
 
-/// `Image::ExifTool::ConvertFileSize($val [, $et])`: SI units, or binary
-/// ones when `$et` is given and its `ByteUnit` option is exactly `Binary`.
-/// Both branches are ported (the v1 `exprs.rs` port has the SI one only).
+/// `Image::ExifTool::ConvertFileSize($val [, $et])`: 11.78 always uses
+/// 1024-based divisors with kB/MB/GB labels; 12.64 always uses SI divisors;
+/// 13.59 optionally uses 1024-based divisors and KiB/MiB/GiB labels when
+/// `$et` has `ByteUnit=Binary`.
 pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperResult {
-    let binary = session.is_some_and(|s| s.option("ByteUnit").perl_bytes().as_ref() == b"Binary");
+    let source = selected_port_source("Image::ExifTool::ConvertFileSize").ok_or(
+        HelperError::Refused("unverified ConvertFileSize source release"),
+    )?;
+    convert_file_size_for_source(source, val, session)
+}
+
+fn convert_file_size_for_source(
+    source_digest: &str,
+    val: &MemberVal,
+    session: Option<&Session>,
+) -> HelperResult {
+    let (binary_scale, binary_label) = match source_digest {
+        "20bf3b7b89080e3c892395db4f39e5a0850adde708478980a9f12434da7a742e" => (true, false),
+        "54132152c9f6fe192c5dc6060601e65568758500a24e7df343ed7046c1339117" => (false, false),
+        "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e" => (
+            session.is_some_and(|s| s.option("ByteUnit").perl_bytes().as_ref() == b"Binary"),
+            true,
+        ),
+        _ => {
+            return Err(HelperError::Refused(
+                "unverified ConvertFileSize source release",
+            ));
+        }
+    };
     let v = val.perl_num().as_f64();
     let bytes = || {
         let mut out = val.perl_bytes().into_owned();
@@ -1169,21 +1501,26 @@ pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperRe
     };
     let unit =
         |p: usize, div: f64, u: &str| MemberVal::Str(format!("{} {u}", sprintf_f(p, v / div)));
-    let out = if binary {
+    let out = if binary_scale {
+        let (k, m, g) = if binary_label {
+            ("KiB", "MiB", "GiB")
+        } else {
+            ("kB", "MB", "GB")
+        };
         if v < 2048.0 {
             bytes()
         } else if v < 10240.0 {
-            unit(1, 1024.0, "KiB")
+            unit(1, 1024.0, k)
         } else if v < 2_097_152.0 {
-            unit(0, 1024.0, "KiB")
+            unit(0, 1024.0, k)
         } else if v < 10_485_760.0 {
-            unit(1, 1_048_576.0, "MiB")
+            unit(1, 1_048_576.0, m)
         } else if v < 2_147_483_648.0 {
-            unit(0, 1_048_576.0, "MiB")
+            unit(0, 1_048_576.0, m)
         } else if v < 10_737_418_240.0 {
-            unit(1, 1_073_741_824.0, "GiB")
+            unit(1, 1_073_741_824.0, g)
         } else {
-            unit(0, 1_073_741_824.0, "GiB")
+            unit(0, 1_073_741_824.0, g)
         }
     } else if v < 2000.0 {
         bytes()
@@ -1805,8 +2142,72 @@ mod tests {
     const CAPTURE: &str =
         include_str!("../../tools/exiftool-tables/testdata/helper_oracle_outputs.json");
 
+    fn reviewed_source_pins() -> Value {
+        let pins: Value = serde_json::from_str(include_str!(
+            "../../tools/exiftool-tables/testdata/helper_source_pins.json"
+        ))
+        .expect("reviewed source pins are JSON");
+        let selected = &pins[super::super::EXIFTOOL_VERSION];
+        assert!(selected.is_object(), "unreviewed helper source release");
+        selected.clone()
+    }
+
     fn capture() -> Value {
-        serde_json::from_str(CAPTURE).expect("capture is JSON")
+        let cap: Value = serde_json::from_str(CAPTURE).expect("capture is JSON");
+        assert_eq!(
+            cap["capture"]["exiftool_version"].as_str(),
+            Some(super::super::EXIFTOOL_VERSION),
+            "helper oracle capture must come from the selected ExifTool source"
+        );
+        cap
+    }
+
+    #[test]
+    fn helper_capture_covers_selected_source() {
+        let cap = capture();
+        assert!(cap["capture"].get("scope").is_none());
+        let residuals = cap["residuals"].as_object().expect("residuals");
+        let expected = match super::super::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => 6,
+            "13.59" => 7,
+            other => panic!("unreviewed helper capture release {other}"),
+        };
+        assert_eq!(residuals.len(), expected);
+    }
+
+    #[test]
+    fn print_exposure_time_uses_selected_native_source_gate() {
+        // Pinned Perl 5.38.2 calls into the retained Exif.pm subs. 11.78
+        // sub hash 90f77cb8..., 12.64/13.59 sub hash 2326b19e....
+        let cases = [
+            ("-", "0", "-"),
+            ("inf", "Inf", "inf"),
+            ("undef", "0", "undef"),
+            ("1 2", "1", "1 2"),
+            ("1,5", "1", "1.5"),
+            ("12abc", "12", "12abc"),
+            ("0x1A", "0", "0x1A"),
+            ("-0", "-0", "-0"),
+            ("1/250", "1", "1/250"),
+            ("NaN", "NaN", "NaN"),
+        ];
+        for (input, old, newer) in cases {
+            let val = MemberVal::Str(input.into());
+            for (source, expected) in [("11.78", old), ("12.64", newer), ("13.59", newer)] {
+                let got = print_exposure_time_for_source(source, &val).unwrap();
+                assert_eq!(
+                    got.perl_bytes().as_ref(),
+                    expected.as_bytes(),
+                    "{source} {input}"
+                );
+            }
+        }
+        assert!(matches!(
+            print_exposure_time_for_source("14.00", &MemberVal::Int(1)),
+            Err(HelperError::Refused(
+                "unverified PrintExposureTime source release"
+            ))
+        ));
     }
 
     fn hex_bytes(h: &str) -> Vec<u8> {
@@ -1987,6 +2388,136 @@ mod tests {
         }
     }
 
+    /// The three source-varying ports can be replayed against a retained
+    /// native capture even while the checkout still selects 13.59. The
+    /// caller names that capture with `OXIDEX_SIZE_GPS_CAPTURE`; the normal
+    /// test run uses its compiled selected-source capture. The external
+    /// replay tests the per-source bodies; a generated historical checkout
+    /// still has to prove that its compiled public wrappers select them.
+    #[test]
+    fn size_and_gps_ports_match_the_named_native_capture() {
+        let external = std::env::var("OXIDEX_SIZE_GPS_CAPTURE").ok();
+        let cap: Value = if let Some(path) = &external {
+            serde_json::from_slice(&std::fs::read(path).expect("named native capture"))
+                .expect("named capture JSON")
+        } else {
+            capture()
+        };
+        let version = if external.is_some() {
+            cap["exiftool_version"].as_str()
+        } else {
+            cap["capture"]["exiftool_version"].as_str()
+        }
+        .expect("capture source pin");
+        assert!(matches!(version, "11.78" | "12.64" | "13.59"));
+        let mut matched = 0usize;
+        let mut refused = 0usize;
+        let mut failures = Vec::new();
+        for (name, expected_count) in [
+            ("Image::ExifTool::ConvertFileSize", 786),
+            ("Image::ExifTool::GPS::ToDMS", 2940),
+            ("Image::ExifTool::GPS::ToDegrees", 343),
+        ] {
+            let cases = cap["helpers"][name]["cases"].as_array().expect("cases");
+            assert_eq!(cases.len(), expected_count, "{version} {name}");
+            let source = selected_port_source_for_version(version, name)
+                .expect("reviewed selected helper source");
+            assert_eq!(
+                Some(source),
+                cap["helpers"][name]["source_sha256"].as_str(),
+                "{version} {name}: source digest"
+            );
+            for case in cases {
+                let args: Vec<MemberVal> = case["args"]
+                    .as_array()
+                    .expect("args")
+                    .iter()
+                    .map(arg)
+                    .collect();
+                let a = |i: usize| args.get(i).cloned().unwrap_or(MemberVal::Undef);
+                let mut session = Session::new();
+                if let Some(opts) = case.get("options").and_then(Value::as_object) {
+                    for (k, v) in opts {
+                        session.set_option(k, arg(v));
+                    }
+                }
+                let got = match name {
+                    "Image::ExifTool::ConvertFileSize" => convert_file_size_for_source(
+                        source,
+                        &a(0),
+                        case.get("with_session").map(|_| &session),
+                    ),
+                    "Image::ExifTool::GPS::ToDMS" => {
+                        to_dms_for_source(source, &session, &a(0), &a(1), &a(2))
+                    }
+                    "Image::ExifTool::GPS::ToDegrees" => {
+                        to_degrees_for_source(source, &a(0), &a(1), &a(2))
+                    }
+                    _ => unreachable!(),
+                };
+                match got {
+                    Err(HelperError::Refused(_)) => refused += 1,
+                    Err(HelperError::Dies(_)) if case.get("die").is_some() => matched += 1,
+                    Ok(value)
+                        if case.get("die").is_none()
+                            && out_bytes(&value) == expected(&case["out"][0]) =>
+                    {
+                        matched += 1
+                    }
+                    result => failures.push(format!(
+                        "{name} args {} options {}: {result:?}",
+                        case["args"],
+                        case.get("options").unwrap_or(&Value::Null)
+                    )),
+                }
+            }
+        }
+        eprintln!(
+            "size/GPS native {version}: {matched} matched, {refused} refused, {} mismatched",
+            failures.len()
+        );
+        // All three retained captures exercise the same 4,069 call shapes.
+        // A new blanket refusal must not turn a byte mismatch green.
+        assert_eq!(matched, 3632, "{version}: lost proven helper cases");
+        assert_eq!(refused, 437, "{version}: changed refusal envelope");
+        assert!(
+            failures.is_empty(),
+            "{}",
+            failures
+                .iter()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    #[test]
+    fn size_and_gps_ports_refuse_an_unreviewed_source() {
+        let val = MemberVal::Str("12.5".to_string());
+        let session = Session::new();
+        assert_eq!(
+            convert_file_size_for_source("unreviewed", &val, None),
+            Err(HelperError::Refused(
+                "unverified ConvertFileSize source release"
+            ))
+        );
+        assert_eq!(
+            to_dms_for_source(
+                "unreviewed",
+                &session,
+                &val,
+                &MemberVal::Undef,
+                &MemberVal::Undef
+            ),
+            Err(HelperError::Refused("unverified ToDMS source release"))
+        );
+        assert_eq!(
+            to_degrees_for_source("unreviewed", &val, &MemberVal::Undef, &MemberVal::Undef),
+            Err(HelperError::Refused("unverified ToDegrees source release"))
+        );
+    }
+
     /// `$toLocal` renders in the host zone on both sides (localtime /
     /// chrono::Local); the capture was taken under TZ=UTC, so those probes
     /// are only comparable on a host whose zone is UTC (CI runners). They
@@ -2101,23 +2632,34 @@ mod tests {
         );
     }
 
-    /// Exact source: each port names the digest of the sub it was proven
-    /// against, and the capture (taken from the pinned tree) agrees. A
-    /// helper the capture marks ported must be in PORTS and vice versa.
+    /// The native capture must name the independently reviewed source for
+    /// the selected release. PORTS retains its 13.59 baseline; behavioural
+    /// replay below decides whether each old-source implementation qualifies.
     #[test]
     fn every_port_names_the_pinned_source_it_was_proven_against() {
         let cap = capture();
+        let pins = reviewed_source_pins();
         let helpers = cap["helpers"].as_object().expect("helpers");
+        let reviewed = pins["helpers"].as_object().expect("reviewed helpers");
+        assert_eq!(helpers.len(), reviewed.len());
+        for (name, h) in helpers {
+            assert_eq!(
+                h["source_sha256"], reviewed[name],
+                "{name}: unreviewed source"
+            );
+        }
         for port in PORTS {
             let h = &helpers[port.perl];
             assert_eq!(h["status"], "ported", "{}", port.perl);
             assert_eq!(h["module"], port.module, "{}", port.perl);
-            assert_eq!(
-                h["source_sha256"].as_str(),
-                Some(port.source_sha256),
-                "{}: pinned source differs from the one this port was proven against",
-                port.perl
-            );
+            if super::super::EXIFTOOL_VERSION == "13.59" {
+                assert_eq!(
+                    h["source_sha256"].as_str(),
+                    Some(port.source_sha256),
+                    "{}",
+                    port.perl
+                );
+            }
         }
         let ported: BTreeSet<&str> = PORTS.iter().map(|p| p.perl).collect();
         let refused: BTreeSet<&str> = REFUSED_HELPERS.iter().map(|(p, _)| *p).collect();
@@ -2128,10 +2670,36 @@ mod tests {
                     refused.contains(name.as_str()),
                     "{name} not in REFUSED_HELPERS"
                 ),
-                s => panic!("{name}: status {s:?}"),
+                other => panic!("{name}: status {other:?}"),
             }
         }
         assert_eq!(ported.len() + refused.len(), helpers.len());
+    }
+
+    #[test]
+    fn selected_port_sources_are_exactly_the_reviewed_native_pins() {
+        let all: Value = serde_json::from_str(include_str!(
+            "../../tools/exiftool-tables/testdata/helper_source_pins.json"
+        ))
+        .expect("reviewed pins");
+        for version in ["11.78", "12.64", "13.59"] {
+            for port in PORTS {
+                assert_eq!(
+                    selected_port_source_for_version(version, port.perl),
+                    all[version]["helpers"][port.perl].as_str(),
+                    "{version}: {}",
+                    port.perl
+                );
+            }
+        }
+        assert_eq!(
+            selected_port_source_for_version("14.00", PORTS[0].perl),
+            None
+        );
+        assert_eq!(
+            selected_port_source_for_version("11.78", "unreviewed"),
+            None
+        );
     }
 
     #[test]
@@ -2155,18 +2723,22 @@ mod tests {
         }
     }
 
-    /// Every inline-reproduced engine sub a port names has the digest the
-    /// capture recorded from the pinned tree.
+    /// Inline engine dependencies are selected from reviewed native source,
+    /// with the original 13.59 port declaration still checked exactly.
     #[test]
     fn port_dependencies_match_the_capture() {
         let cap = capture();
-        for (port, module, sub, digest) in PORT_DEPENDENCIES {
+        let pins = reviewed_source_pins();
+        for (port, module, sub, digest_1359) in PORT_DEPENDENCIES {
             assert!(PORTS.iter().any(|p| p.perl == *port), "{port} not in PORTS");
+            let key = format!("{module}::{sub}");
             assert_eq!(
-                cap["helpers"][*port]["dependencies"][&format!("{module}::{sub}")].as_str(),
-                Some(*digest),
-                "{port}: {module}::{sub}"
+                cap["helpers"][*port]["dependencies"][&key], pins["dependencies"][&key],
+                "{port}: {key}"
             );
+            if super::super::EXIFTOOL_VERSION == "13.59" {
+                assert_eq!(pins["dependencies"][&key].as_str(), Some(*digest_1359));
+            }
         }
     }
 
@@ -2175,6 +2747,7 @@ mod tests {
     #[test]
     fn decode_dependencies_and_charset_tables_match_the_capture() {
         let cap = capture();
+        let pins = reviewed_source_pins();
         for helper in ["Image::ExifTool::Decode", "Image::ExifTool::Encode"] {
             let deps = cap["helpers"][helper]["dependencies"]
                 .as_object()
@@ -2182,19 +2755,21 @@ mod tests {
             for (module, sub, digest) in DECODE_DEPENDENCIES {
                 assert_eq!(
                     deps[&format!("{module}::{sub}")].as_str(),
-                    Some(*digest),
+                    pins["dependencies"][&format!("{module}::{sub}")].as_str(),
                     "{helper}: {module}::{sub}"
                 );
+                if super::super::EXIFTOOL_VERSION == "13.59" {
+                    assert_eq!(
+                        pins["dependencies"][&format!("{module}::{sub}")].as_str(),
+                        Some(*digest)
+                    );
+                }
             }
         }
-        let decode = PORTS
-            .iter()
-            .find(|p| p.perl == "Image::ExifTool::Decode")
-            .expect("Decode");
         assert_eq!(
             cap["helpers"]["Image::ExifTool::Encode"]["dependencies"]["Image/ExifTool.pm::Decode"]
                 .as_str(),
-            Some(decode.source_sha256)
+            pins["helpers"]["Image::ExifTool::Decode"].as_str()
         );
         let sources = cap["charset_sources"].as_object().expect("charset_sources");
         assert_eq!(sources.len(), super::super::charset_tables::SOURCES.len());

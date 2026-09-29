@@ -238,7 +238,14 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         {
             let permissions = file_metadata.permissions();
             let mode = permissions.mode();
+            // ExifTool.pm 11.78's FilePermissions PrintConv emits the nine
+            // rwx bits; the file-type prefix was added by later sources.
             let perm_str = format_unix_permissions(mode);
+            let perm_str = if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" {
+                perm_str[1..].to_string()
+            } else {
+                perm_str
+            };
             insert_system_tag(
                 &mut metadata,
                 "File:FilePermissions",
@@ -656,9 +663,20 @@ mod tests {
             // Font.pm and LNK.pm declare these the same way RIFF and
             // QuickTime do -- in the module, so `%mimeType` has no row.
             ("afm", "application/x-font-afm"),
-            ("url", "application/x-mswinurl"),
         ] {
             assert_eq!(identify_extension(ext, b"").2, want, "MIMEType for .{ext}");
+        }
+        // LNK.pm's URL reader and the .url lookup were added after 12.64.
+        // A selected older source must not claim that format from the suffix.
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => {
+                assert!(crate::filetype::identify_by_extension("url").is_none());
+                assert_eq!(identify_extension("url", b"").2, UNKNOWN_MIME_TYPE);
+            }
+            "13.59" => {
+                assert_eq!(identify_extension("url", b"").2, "application/x-mswinurl");
+            }
+            pin => panic!("unreviewed ExifTool source {pin}"),
         }
     }
 

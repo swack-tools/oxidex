@@ -2036,8 +2036,7 @@ fn plan_exif_write_inner(
         if borrowed_keys.iter().any(|k| *k == key) && original_map.get(&key) == Some(value) {
             continue;
         }
-        if let Some(refusal) = crate::writers::write_request::exif_duplicate_row_misaddressed(&key)
-        {
+        if let Some(refusal) = crate::writers::write_request::exif_row_misaddressed(&key) {
             return Err(refusal);
         }
         if requires_subifd_write(&key) {
@@ -3607,6 +3606,80 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
     serialize_exif_keeping(plan, None)
 }
 
+/// MakerNotes.pm 11.78 gives Leica9 `Base => '$start - 8'`, the MakerNote's
+/// start. The two exposure values (Panasonic.pm `Leica9` 0x311/0x312) can sit
+/// past the note's declared byte count. Reserve those TIFF spans before
+/// placing a rewritten IFD, which can otherwise overwrite them.
+fn leica9_exposure_spans(
+    tiff: &[u8],
+    note_at: usize,
+    note_len: usize,
+    bo: ByteOrder,
+) -> Vec<(usize, usize)> {
+    if crate::exiftool_tables::EXIFTOOL_VERSION != "11.78"
+        || tiff.get(note_at..note_at.saturating_add(8)) != Some(&b"LEICA\0\x02\0"[..])
+    {
+        return Vec::new();
+    }
+    let Some(table_at) = note_at.checked_add(8) else {
+        return Vec::new();
+    };
+    let Some(ifd_data) = tiff.get(table_at..) else {
+        return Vec::new();
+    };
+    // MakerNotes.pm marks Leica9's byte order Unknown. Use the same count
+    // sniff as its reader before locating the out-of-line values.
+    let bo = crate::parsers::tiff::makernotes::leica::resolve_unknown_byte_order(ifd_data, bo);
+    let read_u16 = |at: usize| -> Option<u16> {
+        let bytes: [u8; 2] = tiff.get(at..at.checked_add(2)?)?.try_into().ok()?;
+        Some(match bo {
+            ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
+            ByteOrder::BigEndian => u16::from_be_bytes(bytes),
+        })
+    };
+    let read_u32 = |at: usize| -> Option<u32> {
+        let bytes: [u8; 4] = tiff.get(at..at.checked_add(4)?)?.try_into().ok()?;
+        Some(match bo {
+            ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
+            ByteOrder::BigEndian => u32::from_be_bytes(bytes),
+        })
+    };
+    let Some(count) = read_u16(table_at).map(usize::from).filter(|n| *n <= 200) else {
+        return Vec::new();
+    };
+    let Some(table_end) = table_at.checked_add(2 + count * 12) else {
+        return Vec::new();
+    };
+    let Some(note_end) = note_at.checked_add(note_len) else {
+        return Vec::new();
+    };
+    if table_end > note_end || note_end > tiff.len() {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    for i in 0..count {
+        let entry = table_at + 2 + i * 12;
+        if !matches!(read_u16(entry), Some(0x0311 | 0x0312))
+            || read_u16(entry + 2) != Some(10)
+            || read_u32(entry + 4) != Some(1)
+        {
+            continue;
+        }
+        let Some(start) =
+            read_u32(entry + 8).and_then(|offset| note_at.checked_add(offset as usize))
+        else {
+            continue;
+        };
+        let Some(end) = start.checked_add(8).filter(|end| *end <= tiff.len()) else {
+            continue;
+        };
+        if start >= 8 && (end <= note_at || start >= note_end) {
+            spans.push((start, end));
+        }
+    }
+    spans
+}
+
 /// [`serialize_exif`] for a plan derived from the block `original`.
 ///
 /// When that block has a MakerNote (pinned at its original offset, as
@@ -3623,6 +3696,14 @@ pub fn serialize_exif(plan: &WritePlan) -> Result<Vec<u8>> {
 /// all of that. Without a MakerNote (or without `original`) the layout is
 /// exactly [`serialize_exif`]'s compact one.
 pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) -> Result<Vec<u8>> {
+    serialize_exif_with_layout(plan, original, true)
+}
+
+fn serialize_exif_with_layout(
+    plan: &WritePlan,
+    original: Option<&[u8]>,
+    keep_layout: bool,
+) -> Result<Vec<u8>> {
     // A thumbnail is surviving content: an IFD1 holding only the
     // JPEGInterchangeFormat/Length pair (which the scanner moves into
     // `plan.thumbnail`) is emitted with those pointers synthesized below.
@@ -3693,7 +3774,7 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
     // thing whose offsets into the rest of the block this writer cannot
     // follow.
     let keep = original
-        .filter(|_| pinned.is_some())
+        .filter(|_| keep_layout && pinned.is_some())
         .and_then(|tiff| super::makernote_guard::OriginalLayout::of(tiff).map(|l| (tiff, l)));
     let kinds = [
         IfdKind::Ifd0,
@@ -3722,6 +3803,14 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
         lists.iter().map(|l| vec![None; l.len()]).collect();
     let mut thumb_pin = None;
     let mut holes: Vec<(usize, usize)> = Vec::new();
+    let mut leica9_spans = Vec::new();
+    if let (Some(tiff), Some(pin), Some(len)) = (original, pinned, makernote_len) {
+        for (start, end) in leica9_exposure_spans(tiff, pin, len, bo) {
+            if alloc.reserve(start, end - start) {
+                leica9_spans.push((start, end));
+            }
+        }
+    }
     // The chain past IFD1 (#954). Kept in place with everything else in
     // keep-in-place mode: its tables, values and in-block data are owned by
     // `OriginalLayout`, so they are no hole, and pinned here (roll-up of
@@ -3936,7 +4025,8 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
 
     let mut total = alloc
         .cursor
-        .max(pinned.map_or(0, |p| p + makernote_len.unwrap_or(0)));
+        .max(pinned.map_or(0, |p| p + makernote_len.unwrap_or(0)))
+        .max(alloc.reserved_end());
     if let Some((_, layout)) = &keep {
         // never shorter: data past the block's end stays where it was
         total = total.max(alloc.reserved_end()).max(layout.len);
@@ -4038,6 +4128,11 @@ pub(crate) fn serialize_exif_keeping(plan: &WritePlan, original: Option<&[u8]>) 
     }
     if let Some((tiff, _)) = &keep {
         for (start, end) in holes {
+            out[start..end].copy_from_slice(&tiff[start..end]);
+        }
+    }
+    if let Some(tiff) = original {
+        for (start, end) in leica9_spans {
             out[start..end].copy_from_slice(&tiff[start..end]);
         }
     }
@@ -4763,7 +4858,10 @@ pub(crate) fn relayout_exif(tiff: &[u8]) -> Result<Vec<u8>> {
     let scan = scan_exif_entries(tiff)?;
     let empty = MetadataMap::new();
     let plan = plan_exif_write_inner(&scan, &empty, &empty, &[], false, MandatorySeeding::Off)?;
-    serialize_exif(&plan)
+    // The 11.78 Leica9 exposure values can live beyond the MakerNote's
+    // declared length. Carry their exact bytes through this compacting pass
+    // without pinning the grown directory tables that need relayout.
+    serialize_exif_with_layout(&plan, Some(tiff), false)
 }
 
 /// The TIFF payload of a JPEG's first `Exif\0\0` APP1 block, if any.

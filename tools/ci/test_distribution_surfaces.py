@@ -73,7 +73,7 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertIn("not published to crates.io", README)
 
     def test_beta_docs_keep_format_and_detection_scopes_explicit(self):
-        self.assertIn("16,684 generated metadata tag", README)
+        self.assertIn("16,683 generated metadata tag", README)
         self.assertIn("131 formats for detection and 129 to a", README)
         self.assertNotIn("140+ formats", README)
         package_description = next(

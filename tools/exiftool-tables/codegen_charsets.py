@@ -224,8 +224,12 @@ def generated_tables(path=OUT):
     {trail: kind}})} with kind "One"/"Many", plus {name: [(u, key)]} scalar
     values -- what the helper oracle's table-coverage probes are built from,
     so every generated entry is exercised against the pinned Perl."""
+    return generated_tables_from_text(Path(path).read_text(encoding="utf-8"))
+
+
+def generated_tables_from_text(text):
+    """Parse a charset render without depending on the checked-out output."""
     import re
-    text = Path(path).read_text(encoding="utf-8")
     cs = {n: int(t, 16) for n, t in
           re.findall(r'^    \("(\w+)", (0x[0-9a-f]+)\),$', text, re.M)
           if not n.startswith("Image/")}

@@ -448,26 +448,68 @@ mod tests {
     }
 
     #[test]
-    fn m4a_uses_generated_reader_with_u64_and_retains_duplicates() {
-        let data = m4a_item(
-            b"plID",
-            &[
-                payload(0, &4294967297u64.to_be_bytes()),
-                payload(0, &u64::MAX.to_be_bytes()),
-            ],
-        );
+    fn m4a_uses_generated_reader_and_retains_duplicates() {
+        let data = m4a_item(b"\xa9nam", &[payload(1, b"First"), payload(1, b"Second")]);
         let reader = TestReader::new(data);
         let metadata = AacParser.parse(&reader).unwrap();
-        let rows = metadata.occurrences_for("QuickTime:AlbumID");
+        let rows = metadata.occurrences_for("QuickTime:Title");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].raw.as_integer(), Some(4294967297));
-        assert_eq!(rows[0].value_conv().as_integer(), Some(4294967297));
-        assert_eq!(rows[1].raw.as_string(), Some("18446744073709551615"));
-        assert_eq!(
-            rows[1].value_conv().as_string(),
-            Some("18446744073709551615")
-        );
+        assert_eq!(rows[0].raw.as_string(), Some("First"));
+        assert_eq!(rows[0].value_conv().as_string(), Some("First"));
+        assert_eq!(rows[1].raw.as_string(), Some("Second"));
+        assert_eq!(rows[1].value_conv().as_string(), Some("Second"));
         assert!(rows.iter().all(|row| row.group1.as_ref() == "ItemList"));
+        assert_eq!(
+            metadata,
+            crate::parsers::quicktime::parse_quicktime_metadata(&reader).unwrap()
+        );
+    }
+
+    #[test]
+    fn m4a_plid_uses_selected_source_declaration_and_retains_duplicates() {
+        let pin = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.exiftool-version")).trim();
+        let (name, values): (&str, &[u64]) = match pin {
+            "11.78" => ("QuickTime:PlayListID", &[17, 23]),
+            "12.64" => ("QuickTime:PlayListID", &[17, 23]),
+            "13.59" => ("QuickTime:AlbumID", &[4_294_967_297, u64::MAX]),
+            other => panic!("unreviewed QuickTime plID source pin: {other}"),
+        };
+        let width = match pin {
+            "11.78" => 1, // source Format=int8u
+            "12.64" => 8, // full Count=8 payload; the source row is still ineligible
+            "13.59" => 8, // source Format=int64u
+            _ => unreachable!(),
+        };
+        let payloads: Vec<Vec<u8>> = values
+            .iter()
+            .map(|value| payload(0, &value.to_be_bytes()[8 - width..]))
+            .collect();
+        let reader = TestReader::new(m4a_item(b"plID", &payloads));
+        let metadata = AacParser.parse(&reader).unwrap();
+        let rows = metadata.occurrences_for(name);
+        if pin == "12.64" {
+            let generated = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/parsers/quicktime/generated_itemlist_specs.rs"
+            ));
+            assert!(!generated.contains("raw_fourcc: [0x70, 0x6c, 0x49, 0x44]"));
+            assert!(rows.is_empty(), "Count=8 plID must remain refused");
+            assert!(metadata.get("QuickTime:AlbumID").is_none());
+            return;
+        }
+
+        assert_eq!(rows.len(), 2);
+        for (row, value) in rows.iter().zip(values) {
+            if *value <= i64::MAX as u64 {
+                assert_eq!(row.raw.as_integer(), Some(*value as i64));
+                assert_eq!(row.value_conv().as_integer(), Some(*value as i64));
+            } else {
+                let expected = value.to_string();
+                assert_eq!(row.raw.as_string(), Some(expected.as_str()));
+                assert_eq!(row.value_conv().as_string(), Some(expected.as_str()));
+            }
+            assert_eq!(row.group1.as_ref(), "ItemList");
+        }
         assert_eq!(
             metadata,
             crate::parsers::quicktime::parse_quicktime_metadata(&reader).unwrap()

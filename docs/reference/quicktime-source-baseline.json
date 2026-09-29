@@ -70,9 +70,24 @@
       "dump_tool_sha256": "b9000a0be27e4d9bd350730234f5104deba0d2ac32b06b49edbd41b8228c76eb",
       "full_dump_sha256": "933f0c6b585b2b6039d68c9ac1f553fb596ba33f4b889f589d2b19bba444f068",
       "kind": "verbatim selected tables from hydrated dump",
+      "main_mdat_augmentation": {
+        "fact_sha256": "6f5eee1eea3b5b83da3270736f488841f4e1c7062df31433b7998cda3eedf857",
+        "method": "pinned Perl 5.38.2 direct Main mdat declarations",
+        "source_file": "Image/ExifTool/QuickTime.pm",
+        "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
+      },
       "perl_version": "5.38.2",
       "projection": "effective hydrated rows with authenticated wrapper removal",
       "source_commit": "6f34cff4a9771107edaf5a1198eabe7238c7594a",
+      "source_fact_refresh": {
+        "captured_dump_tool_sha256": "b9000a0be27e4d9bd350730234f5104deba0d2ac32b06b49edbd41b8228c76eb",
+        "dump_tool_sha256": "da9dcbc9ed8a45e014c44d231a169e7d1a47b962e68b8458fa0c205fb0ce29e1",
+        "exiftool_version": "13.59",
+        "full_dump_sha256": "5c3970016f344eb16c919436cd15186f506c98ce42444fda6662472d674bb3ed",
+        "kind": "quicktime_userdata_reader_protocol_from_canonical_perl",
+        "perl_version": "5.38.2",
+        "protocol_sha256": "8aad4c620ecb74dda9123d40afecee9f6a95fc3346008296041ecf1c2ea35fd1"
+      },
       "source_module_table_count": 87,
       "tables": [
         "QuickTime::ItemList",
@@ -80,7 +95,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "2430438fbc4245928ab2f2d1156349f97364ac5c36a8a066597a5964146daf29",
-    "selector_sha256": "4f05e7442beb4c4c9cd83d8b2f88d0bbfbe7572416d1ed3f3792e04ed998254a"
+    "dump_sha256": "8b4edfb3ef3a775b00a1e579e3291fc9077595b2c153c4a9eb81566a9ccacb0c",
+    "selector_sha256": "d2277e2d3565dd780c9ce2476e7fa15eb42e2d358deb25edf0453e8d05b67893"
   }
 }

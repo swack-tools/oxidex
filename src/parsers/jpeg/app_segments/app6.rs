@@ -1175,14 +1175,26 @@ mod tests {
         payload.resize(192, 0); // CorrectionAsix float[30], all zero
 
         let m = parse_app6_ijpeg(&payload, true).unwrap();
-        assert_eq!(m.get_integer("APP6:MixMode"), Some(0));
-        assert_eq!(m.get_string("APP6:FusionIntensity"), Some("100.0 %"));
-        assert_eq!(m.get_string("APP6:OffsetAdjustment"), Some("2"));
-        assert_eq!(
-            m.get_string("APP6:CorrectionAsix"),
-            Some(["0"; 30].join(" ").as_str())
-        );
-        assert_eq!(m.len(), 4);
+        // ExifTool.pm 11.78 has no IJPEG carrier and InfiRay.pm does not
+        // exist. Both appear by 12.64; require every native row there.
+        match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => {
+                assert!(super::super::infiray_tables::MIX_MODE.is_empty());
+                assert!(m.is_empty());
+            }
+            "12.64" | "13.59" => {
+                assert_eq!(super::super::infiray_tables::MIX_MODE.len(), 4);
+                assert_eq!(m.get_integer("APP6:MixMode"), Some(0));
+                assert_eq!(m.get_string("APP6:FusionIntensity"), Some("100.0 %"));
+                assert_eq!(m.get_string("APP6:OffsetAdjustment"), Some("2"));
+                assert_eq!(
+                    m.get_string("APP6:CorrectionAsix"),
+                    Some(["0"; 30].join(" ").as_str())
+                );
+                assert_eq!(m.len(), 4);
+            }
+            other => panic!("unsupported ExifTool source {other}"),
+        }
 
         // Without the APP2 IJPEG version header ExifTool reads nothing here,
         // because this record has no identifier of its own.

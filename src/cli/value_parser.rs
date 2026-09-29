@@ -53,6 +53,8 @@ use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use chrono::{NaiveDate, TimeZone, Timelike, Utc};
 use std::borrow::Cow;
 
+include!("generated_scene_type_inverse.rs");
+
 /// The largest numerator/denominator [`Rationalize`] may produce.
 ///
 /// ExifTool's `Rationalize` takes the cap as an argument: `0xffffffff` for
@@ -2110,15 +2112,23 @@ fn file_source_raw(raw: &str) -> TagValue {
     })
 }
 
-/// SceneType's raw write (Exif.pm 0xa301 `ValueConvInv => 'chr($val &
-/// 0xff)'`) uses Perl's integer coercion before masking. Non-exponent
-/// decimal strings retain their integer part exactly, including fixed
-/// fractions, across Perl's signed IV / unsigned UV 64-bit ranges. Sending
-/// these through f64 first loses low bits above 2^53 (PR959 local review).
+/// SceneType's raw write uses the selected Exif::Main 0xa301 ValueConvInv:
+/// 11.78 has `chr($val)`, while 12.64 and 13.59 use `chr($val & 0xff)`.
+/// The unmasked source writes wide Perl characters above 255 into the JPEG
+/// byte stream and invalidates offsets, so those inputs are refused before
+/// any write. The masked `& 0xff` path retains the integer part of fixed
+/// decimals exactly across Perl's IV / UV 64-bit ranges; sending those through
+/// f64 loses low bits above 2^53 (PR959 local review). The unmasked
+/// `chr($val)` path instead uses Perl's floating-point conversion for fixed
+/// decimals: a value just below 1 can round to 1 before chr truncates it.
 /// Exponent strings use Perl's floating-point coercion; only finite values
 /// below 2^53 are supported here. Larger exponent values and decimal integer
 /// parts outside the IV/UV ranges refuse rather than guess at coercion.
 fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
+    scene_type_raw_with_mask(tag_name, raw, SCENE_TYPE_MASKS_TO_BYTE)
+}
+
+fn scene_type_raw_with_mask(tag_name: &str, raw: &str, masks_to_byte: bool) -> Result<TagValue> {
     if !matches_float_shape(raw, b'.') {
         return Err(invalid(
             tag_name,
@@ -2136,7 +2146,31 @@ fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
                     "SceneType exponent value exceeds the supported precision range (abs < 2^53)",
                 )
             })?;
-        (numeric.trunc() as i64 as u64 & 0xff) as u8
+        let integer = numeric.trunc();
+        if !masks_to_byte && (numeric < 0.0 || !(0.0..=255.0).contains(&integer)) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        (integer as i64 as u64 & 0xff) as u8
+    } else if !masks_to_byte && raw.contains('.') {
+        // Perl chr($val) converts a fixed decimal to NV before its integer
+        // coercion. In contrast, `$val & 0xff` uses the decimal integer part.
+        // Keep the two source-selected paths separate; 11.78's unmasked chr
+        // can round 0.999999999999999999999 to 1 and 254.99999999999999
+        // to 255. A negative nonzero fixed decimal is refused before write,
+        // matching the native warning/no-touch boundary.
+        if raw.starts_with('-') && raw.bytes().any(|byte| (b'1'..=b'9').contains(&byte)) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        let numeric = raw
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| scene_type_unmasked_refusal(tag_name))?;
+        let integer = numeric.trunc();
+        if !(0.0..=255.0).contains(&integer) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
+        integer as u8
     } else {
         let negative = raw.starts_with('-');
         let unsigned = raw.strip_prefix(['+', '-']).unwrap_or(raw);
@@ -2155,10 +2189,20 @@ fn scene_type_raw(tag_name: &str, raw: &str) -> Result<TagValue> {
                 "SceneType decimal integer part exceeds the supported signed/unsigned 64-bit range",
             )
         })?;
+        if !masks_to_byte && (magnitude > 255 || negative && magnitude != 0) {
+            return Err(scene_type_unmasked_refusal(tag_name));
+        }
         let byte = (magnitude & 0xff) as u8;
         if negative { byte.wrapping_neg() } else { byte }
     };
     Ok(TagValue::Binary(vec![byte]))
+}
+
+fn scene_type_unmasked_refusal(tag_name: &str) -> ExifToolError {
+    invalid(
+        tag_name,
+        "SceneType source chr($val) permits only 0..=255 for a lossless write; wide or negative code points are unsupported",
+    )
 }
 
 /// Exif.pm's `ConvertParameter` inverse conversion used by Sharpness (0xa40a).
@@ -3300,14 +3344,44 @@ mod tests {
     /// has nothing.
     #[test]
     fn registry_absent_transcribed_enum_rows_still_invert() {
-        assert_eq!(
-            parse("EXIF:ShadingCorrection", "Yes").unwrap(),
-            TagValue::Integer(1)
-        );
-        assert_eq!(
-            parse("EXIF:NoiseReduction", "No").unwrap(),
-            TagValue::Integer(0)
-        );
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        let modern = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => false,
+            "13.59" => true,
+            pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+        };
+        for (id, name, label, code) in [
+            (0xa411, "ShadingCorrection", "Yes", 1),
+            (0xa412, "NoiseReduction", "No", 0),
+        ] {
+            let key = format!("EXIF:{name}");
+            assert!(
+                get_tag_descriptor(&key).is_none(),
+                "{key} gained a registry row"
+            );
+            assert_eq!(
+                table.tag(id).is_some(),
+                modern,
+                "selected source row {name}"
+            );
+            match table.tag(id) {
+                Some(row) => {
+                    assert_eq!(row.name, name);
+                    assert!(row.writable.is_some());
+                    assert!(matches!(
+                        row.print_conv,
+                        crate::exiftool_tables::PrintConv::IntEnum(_)
+                    ));
+                    assert_eq!(parse(&key, label).unwrap(), TagValue::Integer(code));
+                }
+                None => {
+                    // Exif 3.1's 0xa411/0xa412 do not exist in the selected
+                    // 11.78/12.64 source. No enum inverse may be invented.
+                    assert!(table.tags.iter().all(|row| row.name != name));
+                    assert_eq!(parse(&key, label).unwrap(), TagValue::String(label.into()));
+                }
+            }
+        }
     }
 
     /// PR #959 review `4112816741`: raw mode (`#`, `--no-print-conv`) skips
@@ -3412,12 +3486,20 @@ mod tests {
                 "FileSource#={value}"
             );
         }
-        for (value, byte) in [("1", 1u8), ("1.5", 1), ("257", 1), ("-1", 255)] {
+        for (value, byte) in [("1", 1u8), ("1.5", 1), ("255", 255)] {
             assert_eq!(
                 raw("ExifIFD:SceneType", value).unwrap(),
                 TagValue::Binary(vec![byte]),
                 "SceneType#={value}"
             );
+        }
+        for (value, masked_byte) in [("257", 1u8), ("-1", 255)] {
+            let result = raw("ExifIFD:SceneType", value);
+            if SCENE_TYPE_MASKS_TO_BYTE {
+                assert_eq!(result.unwrap(), TagValue::Binary(vec![masked_byte]));
+            } else {
+                assert!(result.unwrap_err().to_string().contains("lossless write"));
+            }
         }
         for value in ["abc", "0x2"] {
             assert!(
@@ -3441,6 +3523,66 @@ mod tests {
                 raw("ExifIFD:ComponentsConfiguration", value).is_err(),
                 "ComponentsConfiguration#={value}"
             );
+        }
+    }
+
+    #[test]
+    fn scene_type_inverse_modes_preserve_byte_values_and_refuse_old_wide_writes() {
+        for (raw, byte) in [
+            ("0", 0),
+            ("1", 1),
+            ("1.5", 1),
+            ("255", 255),
+            ("-0.0", 0),
+            ("0.999999999999999999999", 1),
+            ("0.9999999999999999", 0),
+            ("254.99999999999999", 255),
+        ] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "unmasked {raw}"
+            );
+        }
+        for raw in [
+            "-1",
+            "256",
+            "257",
+            "9007199254740993",
+            "2.57e2",
+            "255.99999999999999999999",
+            "-0.00000000000000000001",
+            "-0.5e0",
+        ] {
+            let error = scene_type_raw_with_mask("ExifIFD:SceneType", raw, false).unwrap_err();
+            assert!(
+                error.to_string().contains("lossless write"),
+                "{raw}: {error}"
+            );
+        }
+        for (raw, byte) in [("-1", 255), ("256", 0), ("257", 1), ("9007199254740993", 1)] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, true).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "masked {raw}"
+            );
+        }
+        for (raw, byte) in [
+            ("0.999999999999999999999", 0),
+            ("254.99999999999999", 254),
+            ("255.99999999999999999999", 255),
+            ("-0.00000000000000000001", 0),
+        ] {
+            assert_eq!(
+                scene_type_raw_with_mask("ExifIFD:SceneType", raw, true).unwrap(),
+                TagValue::Binary(vec![byte]),
+                "masked {raw}"
+            );
+        }
+        for masked in [false, true] {
+            for raw in ["abc", "18446744073709551616", "-9223372036854775809"] {
+                assert!(scene_type_raw_with_mask("ExifIFD:SceneType", raw, masked).is_err());
+            }
         }
     }
 
@@ -3503,6 +3645,49 @@ mod tests {
     /// (also `IFD0:`, `EXIF:` and bare) to 0xa410 and refuses `=Auto`.
     #[test]
     fn duplicate_enum_rows_resolve_by_destination_directory() {
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        for (id, name) in [
+            (0x7034, "ChromaticAberrationCorrection"),
+            (0x7036, "DistortionCorrection"),
+        ] {
+            assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+        }
+        let modern_rows = [
+            (0xa410, "ChromaticAberrationCorrection"),
+            (0xa40f, "DistortionCorrection"),
+        ];
+        let present = modern_rows
+            .iter()
+            .filter(|(id, _)| table.tag(*id).is_some())
+            .count();
+        let expected = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => 0,
+            "13.59" => modern_rows.len(),
+            pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+        };
+        assert_eq!(present, expected, "selected source Exif 3.1 enum rows");
+        if present == 0 {
+            for (name, label) in [
+                ("ChromaticAberrationCorrection", "Auto"),
+                ("DistortionCorrection", "Auto"),
+            ] {
+                let key = format!("ExifIFD:{name}");
+                assert_eq!(parse(&key, label).unwrap(), TagValue::Integer(1));
+                assert!(
+                    parse(&key, "Yes").is_err(),
+                    "{key}: historical Sony row has no Yes"
+                );
+                assert_eq!(
+                    crate::writers::write_request::exif_main_row_for_destination(&key)
+                        .map(|row| row.id),
+                    None
+                );
+            }
+            return;
+        }
+        for (id, name) in modern_rows {
+            assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+        }
         for tag in [
             "ChromaticAberrationCorrection",
             "EXIF:ChromaticAberrationCorrection",

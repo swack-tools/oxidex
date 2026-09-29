@@ -1367,13 +1367,21 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), CANON_LENS_ALTERNATIVES.len());
-        assert_eq!(CANON_LENS_ALTERNATIVES.len(), 239);
+        // Counts are from each source's in-memory %canonLensTypes, including
+        // only integer IDs here. Fractional keys contribute alternatives.
+        let (canon_ids, with_alternatives) = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => (235, 64),
+            "12.64" => (236, 69),
+            "13.59" => (239, 71),
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        assert_eq!(CANON_LENS_ALTERNATIVES.len(), canon_ids);
         assert_eq!(
             CANON_LENS_ALTERNATIVES
                 .iter()
                 .filter(|(_, _, alts)| !alts.is_empty())
                 .count(),
-            71
+            with_alternatives
         );
         let mut labels: Vec<_> = PENTAX_LENS_ALTERNATIVES
             .iter()
@@ -1660,19 +1668,35 @@ mod tests {
         }
         let mut inputs = [None; 13];
         inputs[0] = Some("Canon EF 300mm f/2.8L USM");
-        inputs[12] = Some("Canon RF 50mm F1.2L USM");
+        let has_rf = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => false,
+            "12.64" | "13.59" => true,
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        assert_eq!(!CANON_RF_LENS_ALTERNATIVES.is_empty(), has_rf);
+        if has_rf {
+            inputs[12] = Some("Canon RF 50mm F1.2L USM");
+        }
         assert_eq!(
             compute_primary(
                 &inputs,
                 Some("Canon"),
                 None,
                 false,
-                Some("unused malformed identity"),
+                Some(if has_rf {
+                    "unused malformed identity"
+                } else {
+                    "129"
+                }),
                 Some("257"),
                 Some("Canon")
             )
             .as_deref(),
-            inputs[12]
+            Some(if has_rf {
+                "Canon RF 50mm F1.2L USM"
+            } else {
+                "Canon EF 300mm f/2.8L USM"
+            })
         );
     }
 

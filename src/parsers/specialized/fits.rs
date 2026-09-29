@@ -1065,13 +1065,18 @@ mod dicom_tests {
 
     #[test]
     fn transcribed_dictionary_is_complete() {
-        // 13.59's %Image::ExifTool::DICOM::Main has 5674 tag-ID lines, five
-        // of which are Perl hash-literal duplicate keys (later wins), and
-        // %uid has 1979 lines with one duplicate. A shrink here means the
-        // generator or its input changed; re-run
-        // tools/exiftool-tables/gen_dicom_dict.py against the pinned tree.
-        assert_eq!(dicom_dict::DICOM_MAIN.len(), 5669);
-        assert_eq!(dicom_dict::DICOM_UID.len(), 1978);
+        // Independent loaded Perl hashes (verify_dicom_dict.py native_facts):
+        // 11.78/12.64 have 3152 Main literal rows, six duplicate keys, and
+        // 307 UID rows; 13.59 has 5674 Main rows, five duplicates, and 1979
+        // UID rows with one duplicate. Keep exact source counts, not a count
+        // derived from the generated Rust arrays under test.
+        let (main, uid) = match crate::exiftool_oracle::repo_pin() {
+            "11.78" | "12.64" => (3146, 307),
+            "13.59" => (5669, 1978),
+            pin => panic!("unprobed DICOM dictionary count for ExifTool {pin}"),
+        };
+        assert_eq!(dicom_dict::DICOM_MAIN.len(), main);
+        assert_eq!(dicom_dict::DICOM_UID.len(), uid);
         // Sorted (byte order) so the binary-search lookups are sound.
         assert!(dicom_dict::DICOM_MAIN.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(dicom_dict::DICOM_UID.windows(2).all(|w| w[0].0 < w[1].0));

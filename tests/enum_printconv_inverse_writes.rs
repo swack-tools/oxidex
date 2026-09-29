@@ -19,6 +19,7 @@
 mod fixtures;
 
 use oxidex::exiftool_oracle;
+use oxidex::exiftool_tables::find_ifd_table;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -537,6 +538,28 @@ fn calibration_illuminant_matches_oracle() {
         "IFD0:CalibrationIlluminant2",
         "IFD0:CalibrationIlluminant3",
     ] {
+        let name = tag.rsplit(':').next().unwrap();
+        let table = find_ifd_table("Exif", "Main").expect("selected Exif::Main table");
+        if !table.tags.iter().any(|row| row.name == name) {
+            // 11.78 has only CalibrationIlluminant1/2. The third slot was
+            // added later; prove absence instead of inventing a write.
+            assert_eq!(name, "CalibrationIlluminant3");
+            let dir = tempfile::tempdir().unwrap();
+            let path = copy_into(&dir, &base, "absent.jpg");
+            let before = std::fs::read(&path).unwrap();
+            let out = oracle
+                .command()
+                .args([
+                    "-overwrite_original",
+                    "-IFD0:CalibrationIlluminant3=Daylight",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert!(!String::from_utf8_lossy(&out.stdout).contains("1 image files updated"));
+            continue;
+        }
         for (label, code) in [
             ("Daylight", 1),
             ("D55", 20),
@@ -1423,6 +1446,83 @@ fn duplicate_enum_rows_never_write_the_wrong_row() {
         eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
         return;
     };
+    let table = find_ifd_table("Exif", "Main").expect("selected Exif::Main table");
+    for (id, name) in [
+        (0x7034, "ChromaticAberrationCorrection"),
+        (0x7036, "DistortionCorrection"),
+    ] {
+        assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+    }
+    let modern = [
+        (0xa410, "ChromaticAberrationCorrection"),
+        (0xa40f, "DistortionCorrection"),
+    ];
+    let present = modern
+        .iter()
+        .filter(|(id, _)| table.tag(*id).is_some())
+        .count();
+    let expected = match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => 0,
+        "13.59" => modern.len(),
+        pin => panic!("unprobed Exif 3.1 declarations for {pin}"),
+    };
+    assert_eq!(present, expected, "selected source Exif 3.1 enum rows");
+    if present == 0 {
+        // Selected 11.78/12.64 have only Sony's SubIFD destinations. A
+        // parser can invert Auto to 1, but that code must never be created
+        // as ExifIFD/IFD0 tag 0x7034 or 0x7036 on this Canon carrier.
+        for arg in [
+            "-ExifIFD:ChromaticAberrationCorrection=Auto",
+            "-ExifIFD:ChromaticAberrationCorrection#=1",
+            "-IFD0:DistortionCorrection=Auto",
+            "-ExifIFD:ChromaticAberrationCorrection=Yes",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = copy_into(&dir, &base, "legacy.jpg");
+            let before = std::fs::read(&path).unwrap();
+            let out = oxidex(&[arg, path.to_str().unwrap()]);
+            assert!(
+                !out.status.success(),
+                "oxidex {arg} must refuse a missing destination row"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "oxidex {arg} wrote a Sony row into an Exif destination"
+            );
+        }
+        // In 12.64 the native oracle reports the valid Sony label and raw
+        // code unchanged on Canon.jpg. 11.78 instead writes them into this
+        // carrier despite their SubIFD declaration; retain the safe refusal
+        // above rather than teaching the writer that wrong address.
+        if exiftool_oracle::repo_pin() == "12.64" {
+            for arg in [
+                "-ExifIFD:ChromaticAberrationCorrection=Auto",
+                "-ExifIFD:ChromaticAberrationCorrection#=1",
+                "-IFD0:DistortionCorrection=Auto",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = copy_into(&dir, &base, "native.jpg");
+                let before = std::fs::read(&path).unwrap();
+                let out = oracle
+                    .command()
+                    .args(["-overwrite_original", arg])
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "native {arg}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), before, "native 12.64 {arg}");
+            }
+        }
+        return;
+    }
+    for (id, name) in modern {
+        assert_eq!(table.tag(id).map(|row| row.name), Some(name));
+    }
     // Refused by both tools.
     for arg in [
         "-ExifIFD:ChromaticAberrationCorrection=Auto",
@@ -1559,6 +1659,45 @@ fn raw_mode_skips_hand_written_inverses_like_the_oracle() {
     }
 }
 
+fn scene_type_masks_to_byte() -> bool {
+    let ledger: serde_json::Value = serde_json::from_str(include_str!(
+        "../tools/exiftool-tables/scene_type_inverse_ledger.json"
+    ))
+    .expect("generated SceneType inverse ledger");
+    match ledger["mode"]
+        .as_str()
+        .expect("source-selected inverse mode")
+    {
+        "masked_chr" => true,
+        "unmasked_chr" => false,
+        mode => panic!("unreviewed SceneType inverse mode: {mode}"),
+    }
+}
+
+fn assert_unmasked_scene_type_no_touch(base: &Path, raw: &str, global_raw: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = copy_into(&dir, base, "refused.jpg");
+    let before = std::fs::read(&path).unwrap();
+    let arg = format!(
+        "-ExifIFD:SceneType{}={raw}",
+        if global_raw { "" } else { "#" }
+    );
+    let mut args = vec!["--backup", "-IFD0:Artist=must not commit", arg.as_str()];
+    if global_raw {
+        args.push("--no-print-conv");
+    }
+    args.push(path.to_str().unwrap());
+    let out = oxidex(&args);
+    assert!(!out.status.success(), "{raw}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("lossless write"),
+        "source refusal must be explicit: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before, "{raw}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
 /// Codex pre-review of PR #959 (round 5, second run): raw FileSource,
 /// SceneType and ComponentsConfiguration writes follow each tag's own
 /// ValueConvInv / `CheckValue` exactly as pinned 13.59 does (FileSource
@@ -1579,7 +1718,6 @@ fn raw_undef_enum_writes_match_the_oracle() {
         "-ExifIFD:FileSource#=1.5",
         "-ExifIFD:FileSource#=abc",
         "-ExifIFD:SceneType#=1.5",
-        "-ExifIFD:SceneType#=257",
         "-ExifIFD:SceneType#=abc",
         "-ExifIFD:ComponentsConfiguration#=1 2",
         "-ExifIFD:ComponentsConfiguration#=1.5 2 3 0",
@@ -1587,6 +1725,17 @@ fn raw_undef_enum_writes_match_the_oracle() {
     ] {
         let tag = arg[1..].split('#').next().unwrap();
         assert_write_matches_oracle(oracle, &base, &[arg], &[arg], &[tag]);
+    }
+    if scene_type_masks_to_byte() {
+        assert_write_matches_oracle(
+            oracle,
+            &base,
+            &["-ExifIFD:SceneType#=257"],
+            &["-ExifIFD:SceneType#=257"],
+            &["ExifIFD:SceneType"],
+        );
+    } else {
+        assert_unmasked_scene_type_no_touch(&base, "257", false);
     }
 }
 
@@ -1810,12 +1959,19 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
     let Some(base) = canon_jpg() else {
         panic!("Canon.jpg not resolved from the pinned t/images corpus");
     };
-    for arg in [
+    let has_exif_chromatic_row = find_ifd_table("Exif", "Main")
+        .expect("selected Exif::Main table")
+        .tag(0xa410)
+        .is_some();
+    let mut unsupported = vec![
         "-GPS:GPSDateStamp#=20240102",
         "-GPS:GPSDateStamp=2024:01:02 00:30:00+02:00",
         "-ExifIFD:DateTimeOriginal#=2020-01-02 03:04:05",
-        "-ExifIFD:ChromaticAberrationCorrection=Yes",
-    ] {
+    ];
+    if has_exif_chromatic_row {
+        unsupported.push("-ExifIFD:ChromaticAberrationCorrection=Yes");
+    }
+    for arg in unsupported {
         for companion_first in [true, false] {
             let dir = tempfile::tempdir().unwrap();
             let path = copy_into(&dir, &base, "atomic.jpg");
@@ -1840,32 +1996,60 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
             );
         }
     }
+    if !has_exif_chromatic_row {
+        let oracle = exiftool_oracle::graded().expect("historical native oracle required");
+        // Historical ExifTool warns about the missing Yes conversion but
+        // still commits the valid companion; this is not an atomic refusal.
+        let out = assert_write_matches_oracle(
+            oracle,
+            &base,
+            &[
+                "-IFD0:Artist=atomic companion",
+                "-ExifIFD:ChromaticAberrationCorrection=Yes",
+            ],
+            &[
+                "-IFD0:Artist=atomic companion",
+                "-ExifIFD:ChromaticAberrationCorrection=Yes",
+            ],
+            &["IFD0:Artist"],
+        );
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("not in PrintConv"));
+    }
 }
 
-/// Raw SceneType uses Perl's integer coercion before masking, preserving
-/// low bits even when an integer or fixed decimal exceeds f64 precision.
+/// Raw SceneType uses the selected source inverse. The masked branch preserves
+/// low bits of large integers; the unmasked branch refuses native wide writes.
 #[test]
-fn raw_scene_type_preserves_integer_bits_at_numeric_boundaries() {
+fn raw_scene_type_respects_selected_inverse_at_numeric_boundaries() {
     let oracle = exiftool_oracle::graded().expect("pinned oracle required");
     let base = canon_jpg().expect("Canon.jpg required");
-    for (raw, code) in [
-        ("9007199254740993", "1"),
-        ("+9007199254740993", "1"),
-        ("-9007199254740993", "255"),
-        ("9223372036854775807", "255"),
-        ("9223372036854775808", "0"),
-        ("18446744073709551615", "255"),
-        ("-9223372036854775808", "0"),
-        ("9007199254740993.5", "1"),
-        ("18446744073709551615.0", "255"),
-        ("-9007199254740993.5", "255"),
-        ("0.999999999999999999999", "0"),
-        ("1.5", "1"),
-        ("-1.5", "255"),
-        ("2.57e2", "1"),
-        ("-2.57e2", "255"),
+    for (raw, code, unmasked_safe) in [
+        ("9007199254740993", "1", false),
+        ("+9007199254740993", "1", false),
+        ("-9007199254740993", "255", false),
+        ("9223372036854775807", "255", false),
+        ("9223372036854775808", "0", false),
+        ("18446744073709551615", "255", false),
+        ("-9223372036854775808", "0", false),
+        ("9007199254740993.5", "1", false),
+        ("18446744073709551615.0", "255", false),
+        ("-9007199254740993.5", "255", false),
+        ("0.999999999999999999999", "0", true),
+        ("254.99999999999999", "254", true),
+        ("255.99999999999999999999", "255", false),
+        ("-0.0", "0", true),
+        ("-0.00000000000000000001", "0", false),
+        ("1.5", "1", true),
+        ("-1.5", "255", false),
+        ("2.57e2", "1", false),
+        ("-2.57e2", "255", false),
     ] {
         for global_raw in [false, true] {
+            if !scene_type_masks_to_byte() && !unmasked_safe {
+                assert_unmasked_scene_type_no_touch(&base, raw, global_raw);
+                continue;
+            }
             let arg = format!(
                 "-ExifIFD:SceneType{}={raw}",
                 if global_raw { "" } else { "#" }
@@ -1894,7 +2078,16 @@ fn raw_scene_type_preserves_integer_bits_at_numeric_boundaries() {
             let mut args = ox_args;
             args.push(path.to_str().unwrap());
             assert!(oxidex(&args).status.success());
-            assert_eq!(oracle_read_n(oracle, &path, "ExifIFD:SceneType"), code);
+            let expected = if scene_type_masks_to_byte() {
+                code
+            } else {
+                match raw {
+                    "0.999999999999999999999" => "1",
+                    "254.99999999999999" => "255",
+                    _ => code,
+                }
+            };
+            assert_eq!(oracle_read_n(oracle, &path, "ExifIFD:SceneType"), expected);
         }
     }
 }

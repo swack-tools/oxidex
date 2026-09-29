@@ -65,11 +65,23 @@ mod tests {
         data.resize(INFIRAY_ISOTHERMAL_MIN_LENGTH, 0);
 
         let m = parse_infiray_isothermal(&data);
-        assert_eq!(m.get_string("APP8:IsothermalMax"), Some("80"));
-        assert_eq!(m.get_string("APP8:IsothermalMin"), Some("-20"));
-        assert_eq!(m.get_string("APP8:ChromaBarMax"), Some("80"));
-        assert_eq!(m.get_string("APP8:ChromaBarMin"), Some("-20"));
-        assert_eq!(m.len(), 4);
+        // Native 11.78 has neither InfiRay.pm nor the APP8 IJPEG carrier;
+        // both are present in 12.64 and 13.59.
+        match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => {
+                assert!(ISOTHERMAL.is_empty());
+                assert!(m.is_empty());
+            }
+            "12.64" | "13.59" => {
+                assert_eq!(ISOTHERMAL.len(), 4);
+                assert_eq!(m.get_string("APP8:IsothermalMax"), Some("80"));
+                assert_eq!(m.get_string("APP8:IsothermalMin"), Some("-20"));
+                assert_eq!(m.get_string("APP8:ChromaBarMax"), Some("80"));
+                assert_eq!(m.get_string("APP8:ChromaBarMin"), Some("-20"));
+                assert_eq!(m.len(), 4);
+            }
+            other => panic!("unsupported ExifTool source {other}"),
+        }
     }
 
     #[test]

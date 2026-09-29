@@ -19,49 +19,74 @@ use crate::core::operations_helpers::{
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
-/// Exact ExifTool 13.59 source projections admitted for hand-owned
-/// `Exif::Main` conversion residuals. The helper oracle independently dumps
-/// the pinned table, checks these hashes, executes the native entries, and
-/// commits their channel outputs for the Rust replay below.
-pub(crate) const EXIF_MAIN_RESIDUAL_PORTS: &[(u16, &str)] = &[
-    (
-        0x8298,
-        "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd",
-    ),
-    (
-        0x9287,
-        "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c",
-    ),
-    (
-        0xA462,
-        "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953",
-    ),
-    (
-        0xC740,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC741,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC74E,
-        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
-    ),
-    (
-        0xC763,
-        "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5",
-    ),
-];
+/// Reviewed native Exif::Main residual rows for 11.78, 12.64 and 13.59.
+/// An absent source row or unreviewed release has no hand-port admission.
+pub(crate) const EXIF_MAIN_RESIDUAL_IDS: &[u16] =
+    &[0x8298, 0x9287, 0xA462, 0xC740, 0xC741, 0xC74E, 0xC763];
 
 #[must_use]
 pub(crate) fn exif_main_residual_source(tag_id: u16) -> Option<&'static str> {
-    EXIF_MAIN_RESIDUAL_PORTS
-        .binary_search_by_key(&tag_id, |(id, _)| *id)
-        .ok()
-        .map(|index| EXIF_MAIN_RESIDUAL_PORTS[index].1)
+    match (crate::exiftool_tables::EXIFTOOL_VERSION, tag_id) {
+        ("11.78", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("11.78", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("11.78", 0xC740) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC741) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC74E) => {
+            Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01")
+        }
+        ("11.78", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        ("12.64", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("12.64", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("12.64", 0xC740) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC741) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC74E) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("12.64", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        ("13.59", 0x8298) => {
+            Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")
+        }
+        ("13.59", 0x9287) => {
+            Some("e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c")
+        }
+        ("13.59", 0xA462) => {
+            Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")
+        }
+        ("13.59", 0xC740) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC741) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC74E) => {
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f")
+        }
+        ("13.59", 0xC763) => {
+            Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")
+        }
+        _ => None,
+    }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExifMainResidualPort {
     Copyright,
@@ -88,11 +113,28 @@ pub(crate) fn exif_main_residual_port(tag_id: u16) -> Option<ExifMainResidualPor
         }
         (
             0xC740 | 0xC741 | 0xC74E,
-            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"),
+            Some(
+                "7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01"
+                | "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+            ),
         ) => Some(ExifMainResidualPort::OpcodeList),
-        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")) => {
+        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5"))
+            if time_codes_unix_nan_suffix().is_some() =>
+        {
             Some(ExifMainResidualPort::TimeCodes)
         }
+        _ => None,
+    }
+}
+
+/// The TimeCodes row calls ConvertUnixTime. Its direct Exif::Main source is
+/// unchanged across these releases, but the called native helper is not.
+/// Both digests come from the reviewed selected helper source manifest.
+fn time_codes_unix_nan_suffix() -> Option<bool> {
+    match crate::exiftool_tables::helpers::selected_port_source("Image::ExifTool::ConvertUnixTime")
+    {
+        Some("226e2e874ab09e80ed3a4e7966bb3b3782399cb6b7df460b281a1a82e5efb5ee") => Some(false),
+        Some("ee1e09f50ee91f3b67b9d6166af39cdaed3e3ce375080ff51b5465cedad4f7ac") => Some(true),
         _ => None,
     }
 }
@@ -213,7 +255,9 @@ pub fn raw_bytes_to_tag_value(
     // backend intentionally refuses ConvertBinary, while this reader still
     // has the exact bytes and can enforce every bounds check in the source.
     if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::OpcodeList) {
-        return TagValue::new_string(format_opcode_list(bytes));
+        if let Some(rendered) = format_opcode_list(tag_id, bytes) {
+            return TagValue::new_string(rendered);
+        }
     }
 
     // Exif.pm 13.59 0xc763: ValueConv groups eight int8u values as lowercase
@@ -469,9 +513,18 @@ fn format_copyright(bytes: &[u8]) -> String {
         .unwrap_or_else(|| String::from_utf8_lossy(&rendered).into_owned())
 }
 
-fn format_opcode_list(bytes: &[u8]) -> String {
+fn format_opcode_list(tag_id: u16, bytes: &[u8]) -> Option<String> {
+    format_opcode_list_for_source(exif_main_residual_source(tag_id), bytes)
+}
+
+fn format_opcode_list_for_source(source: Option<&str>, bytes: &[u8]) -> Option<String> {
+    let knows_opcode_14 = match source {
+        Some("7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01") => false,
+        Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f") => true,
+        _ => return None,
+    };
     if bytes.len() <= 4 {
-        return String::new();
+        return Some(String::new());
     }
     let count = u32::from_be_bytes(bytes[..4].try_into().expect("four-byte opcode count"));
     let mut position = 4usize;
@@ -502,7 +555,7 @@ fn format_opcode_list(bytes: &[u8]) -> String {
             11 => "DeltaPerColumn".to_string(),
             12 => "ScalePerRow".to_string(),
             13 => "ScalePerColumn".to_string(),
-            14 => "WarpRectilinear2".to_string(),
+            14 if knows_opcode_14 => "WarpRectilinear2".to_string(),
             other => format!("[opcode {other}]"),
         });
         let Ok(payload_len) = usize::try_from(payload_len) else {
@@ -513,7 +566,7 @@ fn format_opcode_list(bytes: &[u8]) -> String {
         };
         position = next;
     }
-    operations.join(", ")
+    Some(operations.join(", "))
 }
 
 fn bcd_text(value: u8) -> String {
@@ -552,7 +605,7 @@ fn perl_numeric_f64(text: &str) -> f64 {
     crate::exiftool_tables::session::numify_str(text).as_f64()
 }
 
-fn format_time_codes(bytes: &[u8]) -> String {
+fn format_time_codes(bytes: &[u8], append_nan_for_nonfinite: bool) -> String {
     bytes
         .chunks_exact(8)
         .map(|group| {
@@ -583,7 +636,7 @@ fn format_time_codes(bytes: &[u8]) -> String {
                 let unix = (julian - 40_587.0) * 24.0 * 3_600.0
                     + (((hour as f64 + zone_hours) * 60.0 + minute as f64) * 60.0 + second as f64);
                 rendered = crate::exiftool_tables::exprs::convert_unix_time(unix, false);
-                if !unix.is_finite() {
+                if !unix.is_finite() && append_nan_for_nonfinite {
                     // ExifTool's ConvertUnixTime reaches failed gmtime with a
                     // NaN fractional component for +/-Inf and appends `NaN`.
                     rendered.push_str("NaN");
@@ -634,6 +687,7 @@ fn time_codes_forms_for_admission(
     if admission != Some(ExifMainResidualPort::TimeCodes) {
         return None;
     }
+    let append_nan_for_nonfinite = time_codes_unix_nan_suffix()?;
     let complete = bytes.len() / 8 * 8;
     let stored = bytes
         .iter()
@@ -654,7 +708,7 @@ fn time_codes_forms_for_admission(
     Some(TimeCodesForms {
         stored: TagValue::new_string(stored),
         value: TagValue::new_string(value),
-        print: TagValue::new_string(format_time_codes(bytes)),
+        print: TagValue::new_string(format_time_codes(bytes, append_nan_for_nonfinite)),
     })
 }
 
@@ -1876,46 +1930,61 @@ mod tests {
             .filter(|tag| is_plain_undefined_exif_tag(tag))
             .map(|tag| tag.name)
             .collect();
-        assert_eq!(
-            names,
-            [
-                "ProcessingSoftware",
-                "DocumentName",
-                "Make",
-                "Model",
-                "PageName",
-                "Software",
-                "Artist",
-                "HostComputer",
-                "TargetPrinter",
-                "SEMInfo",
-                "SpectralSensitivity",
-                "OffsetTime",
-                "OffsetTimeOriginal",
-                "OffsetTimeDigitized",
-                "ImageHistory",
-                "RelatedSoundFile",
-                "ImageUniqueID",
-                "OwnerName",
-                "SerialNumber",
-                "LensMake",
-                "LensModel",
-                "LensSerialNumber",
-                "ImageTitle",
-                "Photographer",
-                "ImageEditor",
-                "CameraFirmware",
-                "RAWDevelopingSoftware",
-                "ImageEditingSoftware",
-                "MetadataEditingSoftware",
-                "GDALMetadata",
-                "GDALNoData",
-                "UniqueCameraModel",
-                "CameraSerialNumber",
-                "ReelName",
-                "CameraLabel",
-            ]
-        );
+        let mut expected = vec![
+            "ProcessingSoftware",
+            "DocumentName",
+            "Make",
+            "Model",
+            "PageName",
+            "Software",
+            "Artist",
+            "HostComputer",
+            "TargetPrinter",
+            "SEMInfo",
+            "SpectralSensitivity",
+            "OffsetTime",
+            "OffsetTimeOriginal",
+            "OffsetTimeDigitized",
+            "ImageHistory",
+            "RelatedSoundFile",
+            "ImageUniqueID",
+            "OwnerName",
+            "SerialNumber",
+            "LensMake",
+            "LensModel",
+            "LensSerialNumber",
+            "ImageTitle",
+            "Photographer",
+            "ImageEditor",
+            "CameraFirmware",
+            "RAWDevelopingSoftware",
+            "ImageEditingSoftware",
+            "MetadataEditingSoftware",
+            "GDALMetadata",
+            "GDALNoData",
+            "UniqueCameraModel",
+            "CameraSerialNumber",
+            "ReelName",
+            "CameraLabel",
+        ];
+        match crate::exiftool_oracle::repo_pin() {
+            "11.78" => expected.retain(|name| {
+                !matches!(
+                    *name,
+                    "ImageTitle"
+                        | "Photographer"
+                        | "ImageEditor"
+                        | "CameraFirmware"
+                        | "RAWDevelopingSoftware"
+                        | "ImageEditingSoftware"
+                        | "MetadataEditingSoftware"
+                )
+            }),
+            "12.64" => expected.retain(|name| *name != "ImageTitle"),
+            "13.59" => {}
+            release => panic!("unsupported native Exif::Main profile: {release}"),
+        }
+        assert_eq!(names, expected);
         let plain = *IFD_EXIF_MAIN.tag(0x010d).unwrap();
         for flags in [
             IfdFlags {
@@ -2329,9 +2398,30 @@ mod tests {
         )))
         .expect("valid helper capture");
         let residuals = capture["residuals"].as_object().expect("residual capture");
-        assert_eq!(residuals.len(), EXIF_MAIN_RESIDUAL_PORTS.len());
+        assert_eq!(
+            capture["capture"]["exiftool_version"].as_str(),
+            Some(crate::exiftool_tables::EXIFTOOL_VERSION)
+        );
+        let selected = EXIF_MAIN_RESIDUAL_IDS
+            .iter()
+            .filter_map(|&id| exif_main_residual_source(id).map(|source| (id, source)))
+            .collect::<Vec<_>>();
+        assert_eq!(residuals.len(), selected.len());
+        let expected_cases = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => 19,
+            "13.59" => 20,
+            other => panic!("unreviewed residual release {other}"),
+        };
+        assert_eq!(
+            residuals
+                .values()
+                .map(|entry| entry["cases"].as_array().expect("cases").len())
+                .sum::<usize>(),
+            expected_cases,
+            "selected native residual battery is incomplete"
+        );
 
-        for &(tag_id, source_sha256) in EXIF_MAIN_RESIDUAL_PORTS {
+        for (tag_id, source_sha256) in selected {
             let key = format!("0x{tag_id:04x}");
             let proof = &residuals[&key];
             assert_eq!(proof["source_sha256"].as_str(), Some(source_sha256));
@@ -2368,7 +2458,9 @@ mod tests {
                     0xC740 | 0xC741 | 0xC74E => (
                         input.clone(),
                         input.clone(),
-                        format_opcode_list(&input).into_bytes(),
+                        format_opcode_list(tag_id, &input)
+                            .expect("admitted opcode source")
+                            .into_bytes(),
                     ),
                     0xC763 => {
                         let bytes = std::str::from_utf8(&input)
@@ -2405,6 +2497,38 @@ mod tests {
                 assert_eq!(print, channel(case, "print"), "{key} PrintConv");
             }
         }
+    }
+
+    #[test]
+    fn opcode_and_time_codes_select_reviewed_native_source_behavior() {
+        // Pinned native residual captures: Exif 11.78 lacks opcode 14;
+        // 12.64/13.59 name it. The direct 0xc763 body is unchanged, but
+        // ConvertUnixTime 11.78/12.64 does not append NaN on this edge.
+        let truncated_opcode = [0, 0, 0, 2, 0, 0, 0, 14, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let old_opcode = "7a6e12219aa814b001a61b106d43883e560e743ceb48cae23e00a407977f2d01";
+        let newer_opcode = "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f";
+        assert_eq!(
+            format_opcode_list_for_source(Some(old_opcode), &truncated_opcode).as_deref(),
+            Some("[opcode 14], <err>")
+        );
+        assert_eq!(
+            format_opcode_list_for_source(Some(newer_opcode), &truncated_opcode).as_deref(),
+            Some("WarpRectilinear2, <err>")
+        );
+        assert_eq!(
+            format_opcode_list_for_source(Some("unreviewed"), &truncated_opcode),
+            None
+        );
+
+        let time_codes = [0, 0, 0, 0x80, 0x99, 0x99, 0x9e, 0x80];
+        assert_eq!(
+            format_time_codes(&time_codes, false),
+            "1900-01-00T00:00:00.00+00:00"
+        );
+        assert_eq!(
+            format_time_codes(&time_codes, true),
+            "1900-01-00T00:00:00NaN.00+00:00"
+        );
     }
 
     #[test]

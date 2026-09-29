@@ -205,6 +205,12 @@ pub(super) fn insert_rows(
         if !is_fuji_main_row(&row) {
             continue;
         }
+        // The 11.78/12.64 tables can report the plain tone hash, but the
+        // hand arms own both ids on every pin (including its fallback).
+        // Filter by source coordinate before either row can replace them.
+        if matches!(row.source_id, oxidex_tags::TagId::Numeric(0x1040 | 0x1041)) {
+            continue;
+        }
         // 0x0000 `Version` is `TagValue::Binary` and stops here; the residual
         // arm is its producer.
         let Some(text) = engine_value_text(&row.value) else {
@@ -331,6 +337,16 @@ mod tests {
         0xb211,
     ];
 
+    // Native FujiFilm::Main numeric keys absent before 13.59. The generated
+    // engine's exact owned set is the 13.59 set minus these source rows.
+    const ABSENT_1178: &[u16] = &[
+        0x100f, 0x1037, 0x104b, 0x104c, 0x104e, 0x1051, 0x1052, 0x1053, 0x1102, 0x1105, 0x1106,
+        0x1150, 0x1151, 0x1152, 0x1447, 0x1448, 0x144a, 0x144b, 0x144c, 0x144d,
+    ];
+    const ABSENT_1264: &[u16] = &[
+        0x1037, 0x1051, 0x1052, 0x1053, 0x1102, 0x1150, 0x1151, 0x1152, 0x144a, 0x144b, 0x144c,
+    ];
+
     #[test]
     fn lists_are_sorted_and_unique() {
         for (name, list) in [
@@ -388,7 +404,11 @@ mod tests {
             .collect();
         assert_eq!(
             doubled,
-            [0x0000],
+            if super::super::selected_source_pin() != "13.59" {
+                &[0x0000, 0x1040, 0x1041][..]
+            } else {
+                &[0x0000][..]
+            },
             "a residual id the engine reports would be produced twice"
         );
         assert!(table.variant_group(0x0000).is_none());
@@ -448,11 +468,22 @@ mod tests {
             .copied()
             .filter(|&id| engine_owns(table, id))
             .collect();
+        let absent = match super::super::selected_source_pin() {
+            "11.78" => ABSENT_1178,
+            "12.64" => ABSENT_1264,
+            "13.59" => &[],
+            _ => unreachable!(),
+        };
+        let expected: Vec<u16> = FUJI_MAIN_ENGINE_IDS
+            .iter()
+            .copied()
+            .filter(|id| !absent.contains(id))
+            .collect();
         assert_eq!(
-            owned, FUJI_MAIN_ENGINE_IDS,
-            "the ids the engine produces while the FujiFilm::Main line is in force"
+            owned, expected,
+            "exact native FujiFilm::Main engine-owned ids for the selected source"
         );
-        assert_eq!(reported.len(), 90, "89 engine ids plus 0x0000 Version");
+        assert_eq!(reported.len(), expected.len() + doubled.len());
     }
 
     /// Test 4(a): the no-replay premise, half one. Engine-last insertion is
@@ -660,6 +691,30 @@ mod tests {
         }
         buffer.extend_from_slice(&values);
         buffer
+    }
+
+    #[test]
+    fn tone_residual_wins_over_historical_generated_rows() {
+        // The native carrier in the refinement receipt has these same two
+        // int32s values. Older tables can report both ids, but only the hand
+        // producer has the complete selected-source conversion.
+        let note = le_note(&[
+            (0x1040, 9, 1, 0i32.to_le_bytes().to_vec()),
+            (0x1041, 9, 1, 1i32.to_le_bytes().to_vec()),
+        ]);
+        let (tags, _) = parse(&note, None);
+        assert_eq!(
+            tags.get("FujiFilm:ShadowTone").map(String::as_str),
+            Some("0 (normal)")
+        );
+        assert_eq!(
+            tags.get("FujiFilm:HighlightTone").map(String::as_str),
+            Some(if super::super::selected_source_pin() == "13.59" {
+                "-0.0625"
+            } else {
+                "Unknown (1)"
+            })
+        );
     }
 
     fn short(id: u16, value: u16) -> (u16, u16, u32, Vec<u8>) {
@@ -912,6 +967,20 @@ mod tests {
             };
             let (tags, _) = parse(&le_note(&[entry]), None);
             let key = format!("FujiFilm:{name}");
+            let want = match (super::super::selected_source_pin(), id, raw) {
+                ("11.78", 0x1002, 1) => "Unknown (0x1)",
+                ("11.78", 0x1002, 2) => "Unknown (0x2)",
+                ("11.78" | "12.64", 0x104d, 8) => "Unknown (8)",
+                ("11.78" | "12.64", 0x1154, 2) => "Up",
+                ("11.78" | "12.64", 0x1154, 3) => "Left",
+                ("11.78" | "12.64", 0x1201, 0x130002) => "Unknown (0x130002)",
+                ("11.78", 0x1401, 0xa00) => "Unknown (0xa00)",
+                ("11.78" | "12.64", 0x1401, 0xb00) => "Unknown (0xb00)",
+                ("11.78", 0x1402, 0) => "Auto (100-400%)",
+                ("11.78", 0x1444, 3) => "Unknown (3)",
+                ("11.78", 0x3803, 0x30) => "Unknown (0x30)",
+                _ => want,
+            };
             if get(&tags, &key) != Some(want) {
                 wrong.push(format!(
                     "{id:#06x}={raw:#x}: {key} is {:?}, want {want:?}",
@@ -1029,7 +1098,14 @@ mod tests {
             );
         }
         let (tags, _) = parse(&le_note(&[short(0x1100, 6)]), None);
-        assert_eq!(get(&tags, "FujiFilm:AutoBracketing"), Some("Pixel Shift"));
+        assert_eq!(
+            get(&tags, "FujiFilm:AutoBracketing"),
+            Some(if super::super::selected_source_pin() == "11.78" {
+                "Unknown (6)"
+            } else {
+                "Pixel Shift"
+            })
+        );
 
         let group = fuji_main()
             .variant_group(0x1100)

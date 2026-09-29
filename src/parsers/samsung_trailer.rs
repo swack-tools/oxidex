@@ -112,7 +112,9 @@ fn walk_trailer_chain(
             samsung.data_pos
         } else if is_unsized_trailer_after_samsung(window) {
             return ChainEnd::Unsized(end);
-        } else if crate::parsers::vivo::has_footer_at(file, end) {
+        } else if crate::exiftool_tables::find_ifd_table("Trailer", "Vivo").is_some()
+            && crate::parsers::vivo::has_footer_at(file, end)
+        {
             jpeg_trailer_start
                 .and_then(|trailer_start| {
                     crate::parsers::vivo::process_vivo(file, end, trailer_start)

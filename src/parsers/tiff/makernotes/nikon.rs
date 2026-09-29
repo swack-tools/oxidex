@@ -23,6 +23,26 @@ pub mod sub_ifds;
 pub mod sub_tables;
 pub mod value_reader;
 
+/// Independently reviewed Nikon source inventories for fixture assertions.
+/// The pin is selected with the native source, before any generator runs.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestedSource {
+    V1178,
+    V1264,
+    V1359,
+}
+
+#[cfg(test)]
+fn tested_source() -> TestedSource {
+    match crate::exiftool_oracle::REPO_PIN.trim() {
+        "11.78" => TestedSource::V1178,
+        "12.64" => TestedSource::V1264,
+        "13.59" => TestedSource::V1359,
+        pin => panic!("Nikon source inventory has not been reviewed for {pin}"),
+    }
+}
+
 use super::nikon_capture_data;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -2368,23 +2388,35 @@ mod tests {
         tags.get("Nikon:FocusShiftShooting").cloned()
     }
 
+    fn focus_shift_supported() -> bool {
+        // 11.78 has no encrypted table transcription; 12.64's SeqInfoZ9
+        // is explicitly refused because its PrintConv is not represented.
+        let supported = binary_data::table_index("SeqInfoZ9").is_some();
+        assert_eq!(supported, tested_source() == TestedSource::V1359);
+        assert_eq!(
+            binary_data::table_index("MenuSettingsZ9").is_some(),
+            supported
+        );
+        supported
+    }
+
     /// Oracle: `a_fs_ps0.tif` -> `On: Frame 3 of 100`. FocusShiftNumberShots
     /// lives in MenuSettingsZ9, which is walked after SeqInfoZ9.
     #[test]
     fn focus_shift_shooting_reads_the_shot_count_decoded_after_it() {
         assert_eq!(
             focus_shift(3, 100, Some(0), false, true).as_deref(),
-            Some("On: Frame 3 of 100")
+            focus_shift_supported().then_some("On: Frame 3 of 100")
         );
         // `i_ps0_56after91.tif`
         assert_eq!(
             focus_shift(3, 100, Some(0), true, true).as_deref(),
-            Some("On: Frame 3 of 100")
+            focus_shift_supported().then_some("On: Frame 3 of 100")
         );
         // `d_no56.tif`: no MakerNotes0x56 at all.
         assert_eq!(
             focus_shift(3, 100, None, false, true).as_deref(),
-            Some("On: Frame 3 of 100")
+            focus_shift_supported().then_some("On: Frame 3 of 100")
         );
     }
 
@@ -2394,16 +2426,16 @@ mod tests {
     fn focus_shift_shooting_drops_the_total_when_pixel_shift_is_active() {
         assert_eq!(
             focus_shift(3, 100, Some(1), false, true).as_deref(),
-            Some("On: Frame 3")
+            focus_shift_supported().then_some("On: Frame 3")
         );
         assert_eq!(
             focus_shift(3, 100, Some(1), true, true).as_deref(),
-            Some("On: Frame 3")
+            focus_shift_supported().then_some("On: Frame 3")
         );
         // `e_ps2.tif`: `$$self{PixelShiftActive} eq 1` is false for 2.
         assert_eq!(
             focus_shift(3, 100, Some(2), false, true).as_deref(),
-            Some("On: Frame 3 of 100")
+            focus_shift_supported().then_some("On: Frame 3 of 100")
         );
     }
 
@@ -2414,15 +2446,15 @@ mod tests {
     fn focus_shift_shooting_off_and_absent_shot_count() {
         assert_eq!(
             focus_shift(0, 100, Some(0), false, true).as_deref(),
-            Some("Off")
+            focus_shift_supported().then_some("Off")
         );
         assert_eq!(
             focus_shift(3, 100, Some(0), false, false).as_deref(),
-            Some("On: Frame 3 of 0")
+            focus_shift_supported().then_some("On: Frame 3 of 0")
         );
         assert_eq!(
             focus_shift(3, 100, Some(1), false, false).as_deref(),
-            Some("On: Frame 3")
+            focus_shift_supported().then_some("On: Frame 3")
         );
     }
 
@@ -2542,13 +2574,28 @@ mod tests {
     const INTERVAL_LAYOUTS: [IntervalLayout; 3] =
         [IntervalLayout::Z9, IntervalLayout::D6, IntervalLayout::Z7II];
 
+    fn interval_layout_supported(layout: IntervalLayout) -> bool {
+        let table = match layout {
+            IntervalLayout::Z9 => "SeqInfoZ9",
+            IntervalLayout::D6 => "SeqInfoD6",
+            IntervalLayout::Z7II => "IntervalInfoZ7II",
+        };
+        let supported = binary_data::table_index(table).is_some();
+        let expected = match layout {
+            IntervalLayout::Z9 => tested_source() == TestedSource::V1359,
+            IntervalLayout::D6 | IntervalLayout::Z7II => tested_source() != TestedSource::V1178,
+        };
+        assert_eq!(supported, expected, "{table} transcription changed");
+        supported
+    }
+
     /// Oracle: `{z9,d6,z7ii}_full.tif` -> `On: Interval 2 of 5 Frame 1 of 3`.
     #[test]
     fn interval_shooting_reads_members_decoded_after_it() {
         for layout in INTERVAL_LAYOUTS {
             assert_eq!(
                 interval_shooting(layout, 2, 1, 5, 3, true).as_deref(),
-                Some("On: Interval 2 of 5 Frame 1 of 3")
+                interval_layout_supported(layout).then_some("On: Interval 2 of 5 Frame 1 of 3")
             );
         }
     }
@@ -2560,11 +2607,11 @@ mod tests {
         for layout in INTERVAL_LAYOUTS {
             assert_eq!(
                 interval_shooting(layout, 2, 1, 5, 1, true).as_deref(),
-                Some("On: Interval 2 of 5")
+                interval_layout_supported(layout).then_some("On: Interval 2 of 5")
             );
             assert_eq!(
                 interval_shooting(layout, 0, 1, 5, 3, true).as_deref(),
-                Some("Off")
+                interval_layout_supported(layout).then_some("Off")
             );
         }
     }
@@ -2576,7 +2623,7 @@ mod tests {
         for layout in INTERVAL_LAYOUTS {
             assert_eq!(
                 interval_shooting(layout, 2, 1, 5, 3, false).as_deref(),
-                Some("On: Interval 2 of 0")
+                interval_layout_supported(layout).then_some("On: Interval 2 of 0")
             );
         }
     }

@@ -391,8 +391,7 @@ mod tests {
     #[test]
     fn dxf_section_must_be_its_own_record() {
         let dxf = "0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n";
-        assert!(looks_like_dxf(dxf.as_bytes()));
-        assert_eq!(detect_text_formats(&probe(dxf)), Some(FileFormat::DXF));
+        assert_dxf_source_support(dxf);
 
         assert!(!looks_like_dxf(b"0\ndescribing a SECTION of the plan\n"));
         assert!(!looks_like_dxf(b"1\nSECTION\n"));
@@ -406,8 +405,30 @@ mod tests {
     #[test]
     fn dxf_written_with_padded_crlf_group_codes_is_dxf() {
         let dxf = "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n";
-        assert!(looks_like_dxf(dxf.as_bytes()));
-        assert_eq!(detect_text_formats(&probe(dxf)), Some(FileFormat::DXF));
+        assert_dxf_source_support(dxf);
+    }
+
+    fn assert_dxf_source_support(dxf: &str) {
+        // 11.78 has neither a DXF magic row nor a .dxf lookup and reports
+        // this header as TXT. The selected-source table first adds DXF in
+        // 12.64; the detector must not invent it on the older pin.
+        let source_declares_dxf = match crate::exiftool_oracle::repo_pin() {
+            "11.78" => false,
+            "12.64" | "13.59" => true,
+            pin => panic!("unreviewed ExifTool source {pin}"),
+        };
+        assert_eq!(
+            crate::filetype::tables::MAGIC
+                .iter()
+                .any(|(name, _)| *name == "DXF"),
+            source_declares_dxf,
+            "selected source DXF magic row"
+        );
+        assert_eq!(looks_like_dxf(dxf.as_bytes()), source_declares_dxf);
+        assert_eq!(
+            detect_text_formats(&probe(dxf)) == Some(FileFormat::DXF),
+            source_declares_dxf
+        );
     }
 
     /// Detection and the identity tags now read one table, so they cannot

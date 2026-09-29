@@ -62,6 +62,27 @@ type Entry = (u16, u16, u32, Vec<u8>);
 /// A dumped entry's TIFF type, count and value bytes.
 type Field = (u16, u32, Vec<u8>);
 
+/// Raw IFD0 entries selected WriteExif.pl seeds into a newly created IFD0.
+/// Native writes of a blank PNG confirm these entries in 11.78, 12.64 and
+/// 13.59; keep the byte-level expectation independent of the Rust recipe.
+fn created_ifd0_defaults(order: Order) -> Vec<(String, Field)> {
+    let mut out = Vec::new();
+    match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => {
+            let rational = [order.u32(72), order.u32(1)].concat();
+            out.extend([
+                ("IFD0:0x011a".to_string(), (5, 1, rational.clone())),
+                ("IFD0:0x011b".to_string(), (5, 1, rational)),
+                ("IFD0:0x0128".to_string(), (3, 1, order.u16(2).to_vec())),
+            ]);
+        }
+        "13.59" => {}
+        pin => panic!("unprobed IFD0 defaults for ExifTool {pin}"),
+    }
+    out.push(("IFD0:0x0213".to_string(), (3, 1, order.u16(1).to_vec())));
+    out
+}
+
 /// An expected change: the entry key and its new field (`None`: deleted).
 type Change<'a> = (&'a str, Option<(u16, u32, &'a [u8])>);
 
@@ -494,7 +515,7 @@ fn a_non_exif_edit_carries_the_exif_chunk_verbatim() {
 }
 
 /// Oracle for a PNG with no EXIF: `-IFD0:Artist=you` creates a big-endian
-/// block holding Artist and the mandatory YCbCrPositioning, in a new eXIf
+/// block holding Artist and the selected source's mandatory IFD0 entries, in a new eXIf
 /// chunk placed after the existing text chunk, immediately before IDAT
 /// (`AddChunks(..., 'IFD0')`, PNG.pm 13.59:1538-1539).
 #[test]
@@ -508,13 +529,12 @@ fn a_new_exif_chunk_goes_immediately_before_idat() {
     let tiff = exif_of(&out).unwrap();
     assert_eq!(&tiff[..4], b"MM\0*");
     let entries = dump(&tiff);
-    assert_eq!(
-        entries.into_iter().collect::<Vec<_>>(),
-        vec![
-            ("IFD0:0x013b".to_string(), (2, 4, b"you\0".to_vec())),
-            ("IFD0:0x0213".to_string(), (3, 1, vec![0, 1])),
-        ]
+    let mut expected = created_ifd0_defaults(Order::Mm);
+    expected.insert(
+        expected.partition_point(|(tag, _)| tag.as_str() < "IFD0:0x013b"),
+        ("IFD0:0x013b".to_string(), (2, 4, b"you\0".to_vec())),
     );
+    assert_eq!(entries.into_iter().collect::<Vec<_>>(), expected);
     assert_eq!(chunks(&out)[1].1, text);
 }
 
@@ -1361,9 +1381,9 @@ fn a_family_alias_removal_of_a_carried_entry_is_refused() {
 #[test]
 fn an_rw2_edit_passes_the_post_write_check() {
     let dir = tempfile::tempdir().unwrap();
-    // Synthetic RW2 header (`IIU\0`, magic 85, little-endian as Panasonic
-    // writes it): IFD0 {Make "Panasonic", Artist "me"}.
-    for order in [Order::Ii] {
+    // Synthetic RW2 headers (TIFF magic 85, both byte orders): IFD0 holds
+    // Make "Panasonic" and Artist "me", with no embedded JpgFromRaw.
+    for order in [Order::Ii, Order::Mm] {
         let mut t = match order {
             Order::Ii => b"II".to_vec(),
             Order::Mm => b"MM".to_vec(),
@@ -1380,13 +1400,33 @@ fn an_rw2_edit_passes_the_post_write_check() {
         t.extend(order.u32(0));
         t.extend(b"Panasonic\0");
         let path = write(dir.path(), "synthetic.rw2", &t);
-        modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+        let original = std::fs::read(&path).unwrap();
+        let outcome = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
             .unwrap_or_else(|e| panic!("{order:?} synthetic RW2: {e}"));
-        assert_eq!(
-            read_metadata(&path).unwrap().get_string("IFD0:Artist"),
-            Some("x"),
-            "{order:?}"
-        );
+        match exiftool_oracle::repo_pin() {
+            "11.78" => {
+                // PanasonicRaw::Main 11.78 has no Artist row. With no embedded
+                // JpgFromRaw, native writes of this synthetic LE/BE carrier are
+                // unchanged despite its physical 0x013b entry.
+                assert_eq!(
+                    outcome,
+                    oxidex::core::write_transaction::WriteOutcome::Unchanged
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+                assert_eq!(
+                    read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                    None
+                );
+            }
+            "12.64" | "13.59" => {
+                assert_eq!(
+                    read_metadata(&path).unwrap().get_string("IFD0:Artist"),
+                    Some("x"),
+                    "{order:?}"
+                );
+            }
+            pin => panic!("unreviewed ExifTool pin {pin}"),
+        }
     }
     let Some(sample) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") else {
         return;
@@ -1394,9 +1434,14 @@ fn an_rw2_edit_passes_the_post_write_check() {
     let path = dir.path().join("Panasonic.rw2");
     std::fs::copy(&sample, &path).unwrap();
     let original = std::fs::read(&path).unwrap();
-    let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
-        .expect_err("t/images/Panasonic.rw2: IFD0:Artist written outside the JpgFromRaw");
-    assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+    match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" | "13.59" => {
+            let err = modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                .expect_err("t/images/Panasonic.rw2: IFD0:Artist written inside JpgFromRaw");
+            assert!(err.to_string().contains("JpgFromRaw"), "{err}");
+        }
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    }
     assert!(std::fs::read(&path).unwrap() == original, "file touched");
 }
 
@@ -1661,11 +1706,11 @@ fn deleting_the_last_row_keeps_a_thumbnail_only_ifd1() {
 /// - one pass, `-ExifIFD:ISO= -IFD0:Artist=you`: IFD0 = {Artist} (IFD0 had
 ///   an entry, so nothing is seeded) -- one `write_metadata` here;
 /// - two passes, `-ExifIFD:ISO=` then `-IFD0:Artist=you`: IFD0 = {Artist,
-///   YCbCrPositioning} (the second pass finds IFD0 with no entries) -- the
+///   selected mandatory defaults} (the second pass finds IFD0 with no entries) -- the
 ///   same two writes here, which is also what the oxidex CLI does with both
 ///   flags, as it applies each `-TAG=` as its own write;
 /// - no EXIF at all, `-IFD0:Artist=you`: MM, IFD0 = {Artist,
-///   YCbCrPositioning} (see `a_new_exif_chunk_goes_immediately_before_idat`).
+///   selected mandatory defaults} (see `a_new_exif_chunk_goes_immediately_before_idat`).
 #[test]
 fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
     let dir = tempfile::tempdir().unwrap();
@@ -1686,7 +1731,6 @@ fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
                 .collect()
         };
         let artist = ("IFD0:0x013b".to_string(), (2, 4, b"you\0".to_vec()));
-        let ycbcr = ("IFD0:0x0213".to_string(), (3, 1, order.u16(1).to_vec()));
         for (name, original) in [
             ("seed.png", png(&[(b"eXIf", tiff.clone())], &[])),
             ("seed.jpg", jpeg_with(&tiff)),
@@ -1709,11 +1753,12 @@ fn mandatory_ifd0_seeding_follows_the_ifd0_each_write_sees() {
             remove_tag(&path, "ExifIFD:ISO").unwrap();
             modify_tag(&path, "IFD0:Artist", TagValue::new_string("you")).unwrap();
             let out = tiff_of(name, &std::fs::read(&path).unwrap());
-            assert_eq!(
-                ifd0(&out),
-                vec![artist.clone(), ycbcr.clone()],
-                "{order:?} {name} two passes"
+            let mut expected = created_ifd0_defaults(order);
+            expected.insert(
+                expected.partition_point(|(tag, _)| tag.as_str() < "IFD0:0x013b"),
+                artist.clone(),
             );
+            assert_eq!(ifd0(&out), expected, "{order:?} {name} two passes");
             assert_eq!(
                 dump(&out).get("IFD1:thumbnail").map(|t| t.2.clone()),
                 Some(thumb.clone())
@@ -3762,8 +3807,7 @@ fn ifd1_removal_behind_an_empty_ifd0_leaves_the_mandatory_ifd0() {
                     "{label}: oracle failed"
                 );
                 assert_validate_parity(&original, &name, &["-IFD1:All="], &ours, &label);
-                let expected =
-                    BTreeMap::from([("IFD0:0x0213".to_string(), (3, 1, order.u16(1).to_vec()))]);
+                let expected = BTreeMap::from_iter(created_ifd0_defaults(order));
                 assert_eq!(
                     exif_block_at(&theirs).as_deref().map(dump),
                     Some(expected),

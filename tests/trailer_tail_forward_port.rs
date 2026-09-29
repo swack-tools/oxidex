@@ -147,6 +147,23 @@ fn public_metadata_named(name: &str, bytes: &[u8]) -> Metadata {
     Metadata::from_path(&path).expect("public reader parses carrier")
 }
 
+/// The native 11.78/12.64 sources have no Vivo IdentifyTrailer branch or
+/// Trailer.pm; 13.59 has both. Keep that source fact independent of the
+/// generated table that the runtime uses as its availability marker.
+fn source_has_vivo_trailer() -> bool {
+    let native_declares_vivo = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => false,
+        "13.59" => true,
+        pin => panic!("unreviewed ExifTool pin {pin}"),
+    };
+    assert_eq!(
+        oxidex::exiftool_tables::find_ifd_table("Trailer", "Vivo").is_some(),
+        native_declares_vivo,
+        "generated Trailer::Vivo availability must match the selected native source"
+    );
+    native_declares_vivo
+}
+
 #[test]
 fn tiff_carrier_processes_terminal_samsung_trailer() {
     // DoProcessTIFF (ExifTool.pm) calls IdentifyTrailer/ProcessTrailers after
@@ -242,13 +259,14 @@ fn vivo_marker_search_starts_at_the_jpeg_trailer_start() {
     jpeg.extend_from_slice(&samsung_soundshot_trailer());
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        vivo.then_some("{\"version\":1000}")
     );
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
 }
 
@@ -271,13 +289,14 @@ fn samsung_then_vivo_then_mie_chain_is_walked_inward() {
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     jpeg.extend_from_slice(&mie_trailer());
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        vivo.then_some("{\"version\":1000}")
     );
 }
 
@@ -294,7 +313,7 @@ fn vivo_inside_samsung_is_reached_through_the_samsung_trailer_length() {
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        source_has_vivo_trailer().then_some("{\"version\":1000}")
     );
 }
 
@@ -360,14 +379,16 @@ fn public_reader_extracts_all_three_trailer_families() {
     // fixed EOF suffix, then ProcessTrailers identifies Samsung at that offset.
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
 
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
+    let expected_audio = TagValue::new_binary(b"sound-shot-bytes".to_vec());
     assert_eq!(
         metadata.get("MakerNotes:EmbeddedAudioFile"),
-        Some(&TagValue::new_binary(b"sound-shot-bytes".to_vec()))
+        vivo.then_some(&expected_audio)
     );
     for (tag, expected) in [
         ("XML:Tool_Name", "Media Center"),
@@ -377,10 +398,13 @@ fn public_reader_extracts_all_three_trailer_families() {
         ("XML:Album", "2013-09-01"),
         ("XML:Name", "Glass home at night"),
         ("XML:Date", "2013:09:01 20:12:19"),
-        ("Trailer:JSONInfo", "{\"version\":1000}"),
     ] {
         assert_eq!(metadata.get_string(tag), Some(expected), "{tag}");
     }
+    assert_eq!(
+        metadata.get_string("Trailer:JSONInfo"),
+        vivo.then_some("{\"version\":1000}")
+    );
 }
 
 #[test]
@@ -390,14 +414,15 @@ fn samsung_inner_to_vivo_eof_suffix_matches_pinned_trailer_chain() {
     jpeg.extend_from_slice(&samsung_soundshot_trailer());
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
 
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        vivo.then_some("{\"version\":1000}")
     );
 }
 
@@ -408,16 +433,17 @@ fn vivo_uses_first_marker_for_json_and_samsung_trailer_boundary() {
     jpeg.extend_from_slice(&samsung_soundshot_trailer());
     jpeg.extend_from_slice(&vivo_trailer_with_two_json_markers());
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
 
     // Trailer.pm's first marker supplies both the trailer boundary and the
     // first `}\0`-bounded JSON value; it does not select the last marker.
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"first\":1}")
+        vivo.then_some("{\"first\":1}")
     );
 }
 
@@ -511,15 +537,16 @@ fn samsung_before_mie_then_vivo_chain_remains_visible() {
     jpeg.extend_from_slice(&mie_trailer());
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
 
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
     assert_eq!(metadata.get_string("MIE:TrailerSignature"), Some(""));
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        vivo.then_some("{\"version\":1000}")
     );
 }
 
@@ -661,13 +688,14 @@ fn jpeg_trailer_start_is_found_by_walking_entropy_coded_data() {
     jpeg.extend_from_slice(&samsung_soundshot_trailer());
     jpeg.extend_from_slice(&vivo_trailer(b"{\"version\":1000}"));
     let metadata = public_metadata(&jpeg);
+    let vivo = source_has_vivo_trailer();
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some("{\"version\":1000}")
+        vivo.then_some("{\"version\":1000}")
     );
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        vivo.then_some("SoundShot_000")
     );
 }
 
@@ -678,14 +706,16 @@ fn pinned_exiftool_jpeg_walks_vivo_then_samsung() {
         return;
     };
     let metadata = Metadata::from_path(&path).expect("ExifTool.jpg parses");
-    // Pinned ExifTool 13.59: Vivo (340 bytes at 0x64a6), then Samsung.
+    // Each selected t/images carrier has its own bytes: 11.78 and 12.64
+    // end at Samsung QDIOBS, while 13.59 adds the outer Vivo trailer.
+    let vivo = source_has_vivo_trailer();
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
         Some("SoundShot_000")
     );
     assert_eq!(
         metadata.get_string("Trailer:JSONInfo"),
-        Some(concat!(
+        vivo.then_some(concat!(
             "{\"com.android.camera.joint.fullview.orientation\":0,",
             "\"com.android.camera.hdr\":20737,\"com.android.camera.fisheye\":-1,",
             "\"com.android.camera.joint.conshoot\":0,",
@@ -1061,10 +1091,11 @@ fn later_sos_headers_are_scanned_as_exiftool_scans_them() {
     // TrailerStart still finds both.
     let mut trailer = samsung_soundshot_trailer();
     trailer.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    let vivo = source_has_vivo_trailer();
     for (tables, reads_trailers) in [(0x00, true), (0x11, false), (0xd9, true)] {
         let metadata = public_metadata(&multiscan_jpeg(0xff, tables, &trailer));
-        let expected_name = reads_trailers.then_some("SoundShot_000");
-        let expected_json = reads_trailers.then_some("{\"a\":1}");
+        let expected_name = (reads_trailers && vivo).then_some("SoundShot_000");
+        let expected_json = (reads_trailers && vivo).then_some("{\"a\":1}");
         assert_eq!(
             metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
             expected_name,
@@ -1132,9 +1163,12 @@ fn zero_size_photo_mechanic_trailer_still_exposes_samsung() {
     let metadata = public_metadata(&jpeg);
     assert_eq!(
         metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
-        Some("SoundShot_000")
+        source_has_vivo_trailer().then_some("SoundShot_000")
     );
-    assert_eq!(metadata.get_string("Trailer:JSONInfo"), Some("{\"a\":1}"));
+    assert_eq!(
+        metadata.get_string("Trailer:JSONInfo"),
+        source_has_vivo_trailer().then_some("{\"a\":1}")
+    );
 }
 
 #[test]

@@ -607,6 +607,9 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         let brand_bytes = &ftyp.data[0..4];
         if let Ok(brand) = std::str::from_utf8(brand_bytes) {
             let brand_desc = match brand {
+                "isom" if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" => {
+                    "MP4  Base Media v1 [IS0 14496-12:2003]"
+                }
                 "isom" => "MP4 Base Media v1 [IS0 14496-12:2003]",
                 "iso2" => "MP4 Base Media v2",
                 "mp41" => "MP4 v1 [ISO 14496-1:ch13]",
@@ -680,17 +683,17 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         }
     }
 
-    // Extract media data offset and size from mdat atom
+    // Main's mdat pseudo-tag names come from the selected native source.
     // We need to track position in the original file
     let mut offset = 0u64;
     for atom in root_atoms {
         if atom.atom_type.matches("mdat") {
             metadata.insert(
-                "QuickTime:MediaDataSize".to_string(),
+                super::generated_protocol_caps::MDAT_SIZE_TAG.to_string(),
                 TagValue::Integer(atom.data.len() as i64),
             );
             metadata.insert(
-                "QuickTime:MediaDataOffset".to_string(),
+                super::generated_protocol_caps::MDAT_OFFSET_TAG.to_string(),
                 TagValue::Integer((offset + atom.header_size as u64) as i64),
             );
         }
@@ -3449,10 +3452,11 @@ mod tests {
 
     #[test]
     fn multiple_mdat_atoms_keep_individual_sizes_and_sum_only_for_bitrate() {
-        // Pinned QuickTime.pm mdat-size has no aggregate ValueConv. Its
-        // AvgBitrate RawConv alone walks every MediaDataSize via NextTagKey.
-        // Native 13.59 reports last size 9 / 5 for these two carriers, every
-        // individual size under -a, and AvgBitrate 56 for both (14*8/2).
+        // Native 11.78, 12.64 and 13.59 keep each mdat size and offset
+        // under their selected Main names. AvgBitrate walks both sizes and
+        // reports 56 for either order (14*8/2).
+        let size_tag = super::super::generated_protocol_caps::MDAT_SIZE_TAG;
+        let offset_tag = super::super::generated_protocol_caps::MDAT_OFFSET_TAG;
         for sizes in [[5usize, 9], [9, 5]] {
             let ftyp = child_atom(b"ftyp", b"qt  \0\0\0\0qt  ");
             let mut mvhd = [0u8; 100];
@@ -3472,7 +3476,7 @@ mod tests {
                     .expect("valid two-mdat carrier");
             crate::composite::apply(&mut metadata);
 
-            let occurrences = metadata.occurrences_for("QuickTime:MediaDataSize");
+            let occurrences = metadata.occurrences_for(size_tag);
             assert_eq!(occurrences.len(), 2);
             for (occurrence, size) in occurrences.iter().zip(sizes) {
                 for no_print_conv in [false, true] {
@@ -3487,15 +3491,13 @@ mod tests {
                 }
             }
             assert_eq!(
-                metadata
-                    .without_print_conv()
-                    .get_integer("QuickTime:MediaDataSize"),
+                metadata.without_print_conv().get_integer(size_tag),
                 Some(sizes[1] as i64),
                 "default raw output keeps the last block, not their sum",
             );
             assert_eq!(
                 metadata
-                    .occurrences_for("QuickTime:MediaDataOffset")
+                    .occurrences_for(offset_tag)
                     .iter()
                     .map(|occurrence| occurrence.raw.clone())
                     .collect::<Vec<_>>(),

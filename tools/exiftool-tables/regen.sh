@@ -72,6 +72,23 @@ if [[ ! -d "$LIB" && -z "${OXIDEX_EXIFTOOL_LIB:-}" ]]; then
 fi
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB" >&2; exit 1; }
 
+echo ">> selecting PNG absent-date shift behavior from native source"
+python3 "$HERE/png_shift_contract.py" "$LIB" \
+    --output "$(artifact_path png-shift-contract)"
+
+# Both generated contracts are part of tier 1's declared write set. Helper
+# probes derive their charset cases from the selected native source in memory,
+# so this capture does not depend on a prior charset_tables.rs in the checkout.
+# The final oracle check proves both selected artifacts.
+echo ">> capturing selected-source helper and residual oracle"
+python3 "$HERE/helper_oracle.py" --write --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
+echo ">> generating selected-source charset tables"
+python3 "$HERE/codegen_charsets.py" --write --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
+python3 "$HERE/helper_oracle.py" --check --perl "$PERL" \
+    --exiftool-dir "$(dirname "$LIB")"
+
 echo ">> extracting tag tables from Perl symbol table"
 # Keep writer capture separate from reader hydration. Hydration attaches a
 # large native object graph; traversing it again in the writer projection is
@@ -132,6 +149,9 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --fit-out "$FIT_OUT" --fit-ledger-out "$FIT_LEDGER" --fit-protocol-fact "$FIT_FACT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
+echo ">> selecting SceneType's raw write inverse from Exif::Main"
+python3 "$HERE/scene_type_inverse_codegen.py" --dump "$JSON" --replace
+
 echo
 echo ">> generating Autogeneration v2 conversion arms (Exif::Main) and proving them"
 # conv_codegen.py compiles each field's RawConv/ValueConv/PrintConv from this
@@ -159,6 +179,8 @@ OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" \
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_keys_specs.py" \
     --dump "$HYDRATED_JSON" --replace
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_userdata_specs.py" \
+    --dump "$HYDRATED_JSON" --replace
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_protocol_caps.py" \
     --dump "$HYDRATED_JSON" --replace
 
 echo
