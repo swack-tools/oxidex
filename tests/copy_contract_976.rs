@@ -82,6 +82,24 @@ fn explicit_empty_filter_copies_nothing_while_none_keeps_copy_all() {
 }
 
 #[test]
+fn embedded_raf_exif_does_not_count_as_proven_absent() {
+    let source = fixtures::required_t_images_fixture_path("FujiFilm.raf");
+    let dir = TempDir::new().unwrap();
+    let destination = duplicate(&dir, Path::new(JPEG), "raf-copy.jpg");
+    let before = fs::read(&destination).unwrap();
+    let metadata = fs::metadata(&destination).unwrap();
+    let error = copy_metadata_report(
+        &source,
+        &destination,
+        Some(&filters(&["MakerNoteFujiFilm"])),
+    )
+    .unwrap_err();
+    assert_eq!(error.tags_not_written()[0].tag, "MakerNoteFujiFilm");
+    assert!(error.to_string().contains("physical maker note block"));
+    unchanged(&destination, &before, &metadata);
+}
+
+#[test]
 fn physical_canon_block_follows_exif_selection_and_valid_exclusions() {
     let canon = fixtures::required_t_images_fixture_path("Canon.jpg");
     let dir = TempDir::new().unwrap();

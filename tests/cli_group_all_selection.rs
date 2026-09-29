@@ -367,7 +367,13 @@ fn canon_and_kyocera_raw_rows_keep_makernotes_family_selection() {
 
         // Family-0 selection is a read identity. A standalone RAW directory
         // is not an ExifIFD:MakerNote<vendor> block for TagsFromFile.
-        for selector in ["-all", "-MakerNotes:all", &format!("-MakerNote{group1}")] {
+        for selector in [
+            "-all",
+            "-MakerNotes:all",
+            &format!("-MakerNote{group1}"),
+            &format!("-MakerNote{}", group1.trim_end_matches("Raw")),
+            &format!("-ExifIFD:MakerNote{}", group1.trim_end_matches("Raw")),
+        ] {
             let dir = tempfile::tempdir().expect("isolated copy destination");
             let destination = dir.path().join("destination.jpg");
             std::fs::copy(REPO_FIXTURE, &destination).expect("copy destination");
