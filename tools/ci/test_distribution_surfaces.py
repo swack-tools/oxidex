@@ -1,12 +1,13 @@
 """Keep beta distribution documentation and helpers honest.
 
-The beta release workflow publishes GitHub release assets only.  These tests
+The beta release workflow publishes GitHub release assets only. These tests
 are intentionally text-level and buildless so the CI tools discovery catches
 regressions before a stale package instruction becomes user-facing again.
 """
 
-from pathlib import Path
+import tomllib
 import unittest
+from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -71,6 +72,32 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertNotIn("crates.io/crates/oxidex", README)
         self.assertNotIn("docs.rs/oxidex", README)
         self.assertIn("not published to crates.io", README)
+
+    def test_pre_tag_install_surfaces_do_not_offer_pending_beta_assets(self):
+        self.assertIn("Beta release binaries for Linux, macOS, and Windows are pending", README)
+        self.assertNotIn("are available there", README)
+        for name, surface in {
+            "README": README,
+            "packaging guide": PACKAGING_GUIDE,
+            "Homebrew": HOMEBREW_README,
+        }.items():
+            with self.subTest(surface=name):
+                self.assertIn("signed tag and binary assets are pending", surface)
+                self.assertIn("build from source", surface.lower())
+                self.assertNotIn("use the signed Git tag", surface)
+
+    def test_beta_registry_policy_covers_all_workspace_crates(self):
+        manifests = [REPO / "Cargo.toml", *sorted(REPO.glob("oxidex-tags*/Cargo.toml"))]
+        self.assertEqual(len(manifests), 9)
+        for manifest in manifests:
+            with self.subTest(manifest=manifest):
+                with manifest.open("rb") as fh:
+                    self.assertIs(tomllib.load(fh)["package"].get("publish"), False)
+        self.assertRegex(
+            RELEASE_PAGE,
+            r"no\s+crates\.io publication for the root crate or any tag crate",
+        )
+        self.assertNotIn("cargo publish --workspace --exclude oxidex", RELEASE_PAGE)
 
     def test_beta_docs_keep_format_and_detection_scopes_explicit(self):
         self.assertIn("16,683 generated metadata tag", README)

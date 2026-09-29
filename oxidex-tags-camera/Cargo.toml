@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["OxiDex Contributors"]
 description = "Camera-specific tag definitions for OxiDex"
 license = "GPL-3.0"
+publish = false
 
 [lib]
 name = "oxidex_tags_camera"

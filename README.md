@@ -20,18 +20,19 @@ labelled historical measurements.
 - **Compiled Rust with parallel directory processing** - candidate performance has not been measured for this beta; see the [performance status](https://oxidex.net/performance/)
 - **Memory safe** - No buffer overflows, use-after-free, or data races
 - **ExifTool-style CLI** - familiar arguments with documented differences
-- **Cross-platform** - Prebuilt binaries for Linux, macOS, and Windows
+- **Cross-platform** - Beta release binaries for Linux, macOS, and Windows are pending
 - **Library + CLI** - Use as a Rust crate or standalone binary
 - **Optional Magika detection** - use the Magika model for file-type identification (`--features magika`)
 
 ## Quick Start
 
-### Download Binary
+### Build from source
 
-Pre-built binaries available on the [Releases page](https://github.com/swack-tools/oxidex/releases).
-The `2.0.0-beta.1` release is not published to crates.io; Rust users should
-use the signed Git tag or build from a checkout. Debian/RPM and Homebrew
-packages are not published by the beta release automation either.
+The `2.0.0-beta.1` signed tag and binary assets are pending. To use the
+development snapshot, build from source on `refactor/tag-machinery` or an
+explicitly chosen development commit. Beta crates are not published to crates.io
+by this project. Debian/RPM and Homebrew packages are not published by the beta
+release automation either.
 
 ## Usage
 
@@ -121,7 +122,7 @@ just fmt      # Format code
 
 ## Contributing
 
-Contributions welcome! Please ensure:
+Contributions are welcome. Before contributing, ensure:
 - Tests pass (`cargo test`)
 - Code is formatted (`cargo fmt`)
 - Clippy lints pass (`cargo clippy`)

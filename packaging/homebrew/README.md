@@ -1,14 +1,15 @@
 # Homebrew distribution
 
 Homebrew is not enabled for the beta `2.0.0-beta.1` release.
-The release workflow publishes signed GitHub release assets only; it does not
-publish a formula or bottles to Homebrew.
+The signed tag and binary assets are pending.
+The release workflow is configured to publish GitHub assets after tag
+authorization. It does not publish a formula or bottles to Homebrew.
 
 There is deliberately no active formula in this directory. The disabled
 placeholder is retained only as a reminder that a future formula must be
 created from a real published release asset. Do not add a URL, tag, or
 checksum until that release policy is approved and the asset has been
-published. A source build from a checkout remains available to developers:
+published. Developers can build from source in a checkout:
 
 ```bash
 cargo build --release

@@ -2,12 +2,10 @@
 
 ::: warning Beta: v2.0.0-beta.1
 The library API may still change before 2.0.0. This is pre-tag guidance: the
-v2.0.0-beta.1 signed tag is pending. OxiDex is not published on crates.io (the
-`oxidex` name there belongs to an unrelated crate), so depend on the Git
-repository for development use. This beta will not publish the root crate to
-crates.io; signed-tag dependency instructions remain pending until the tag is
-authorized. The selected no-crates.io policy also covers the separate
-`oxidex-tags-*` crates for this beta.
+v2.0.0-beta.1 signed tag is pending. This project does not publish the root
+crate or tag crates to crates.io for this beta. Depend on the Git repository at a
+development branch or commit for development use. Signed-tag dependency
+instructions remain pending until the tag is authorized.
 The 2.0 API differs from 1.x; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
 :::
