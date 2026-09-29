@@ -10,18 +10,21 @@ use crate::cli::output_formatter::{
     CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
-use crate::cli::write_transaction::{WriteOutcome, partition_defined, write_file};
+use crate::cli::write_transaction::{
+    WriteOutcome, partition_defined, prepare_write_file, write_plan_file,
+};
 use crate::core::MetadataMap;
 use crate::core::operations::read_metadata_report_with_detector_and_options;
 use crate::core::read_report::{ParseStatus, ReadReport};
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -874,10 +877,13 @@ pub fn batch_write(
     let updated_count = AtomicUsize::new(0);
     let unchanged_count = AtomicUsize::new(0);
     let error_count = AtomicUsize::new(0);
+    let warnings = Mutex::new(BTreeSet::<String>::new());
 
     // Process files in parallel
     files.par_iter().for_each(|path| {
-        match apply_modifications(path, &modifications, args) {
+        let (result, file_warnings) = apply_modifications(path, &modifications, args);
+        warnings.lock().unwrap().extend(file_warnings);
+        match result {
             Ok(WriteOutcome::Updated) => {
                 updated_count.fetch_add(1, Ordering::Relaxed);
             }
@@ -897,6 +903,9 @@ pub fn batch_write(
     });
 
     progress.finish_and_clear();
+    for warning in warnings.into_inner().unwrap() {
+        eprintln!("Warning: {warning}");
+    }
 
     Ok(BatchStats {
         files_read: 0,
@@ -920,17 +929,28 @@ fn apply_modifications(
     path: &Path,
     modifications: &[(String, OsString)],
     args: &CliArgs,
-) -> std::result::Result<WriteOutcome, String> {
+) -> (std::result::Result<WriteOutcome, String>, Vec<String>) {
+    let (plan, warnings) = prepare_write_file(path, modifications, !args.exiftool_compat());
     // Every write target is checked as the single-file write checks it
     // (`main.rs`'s `prepare_write_target`) and as `-all=`/`-TagsFromFile`
     // over a file list does: a read-only file is refused, never replaced.
     // The atomic rename below would replace a 0444 file in a writable
     // directory, so `-Artist=x ro.jpg other.jpg` modified the very file
     // `-Artist=x ro.jpg` refuses.
-    let target = fs::metadata(path)
-        .map_err(|e| format!("Cannot access file '{}': {}", path.display(), e))?;
+    let target = match fs::metadata(path) {
+        Ok(target) => target,
+        Err(e) => {
+            return (
+                Err(format!("Cannot access file '{}': {}", path.display(), e)),
+                warnings,
+            );
+        }
+    };
     if target.permissions().readonly() {
-        return Err(format!("File is read-only: {}", path.display()));
+        return (
+            Err(format!("File is read-only: {}", path.display())),
+            warnings,
+        );
     }
     // Preserve original file times if requested
     let original_metadata = args.preserve_file_times.then_some(target);
@@ -949,7 +969,10 @@ fn apply_modifications(
             .map_err(|e| e.to_string())
     };
 
-    let outcome = write_file(path, modifications, !args.exiftool_compat(), backup)?;
+    let outcome = match write_plan_file(path, &plan, backup) {
+        Ok(done) => done.outcome,
+        Err(error) => return (Err(error), warnings),
+    };
 
     // Restore file times if requested
     if outcome == WriteOutcome::Updated
@@ -963,7 +986,7 @@ fn apply_modifications(
         }
     }
 
-    Ok(outcome)
+    (Ok(outcome), warnings)
 }
 
 /// Creates a progress bar for batch processing.

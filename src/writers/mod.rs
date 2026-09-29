@@ -4,7 +4,11 @@
 
 #![allow(dead_code)]
 
+// WriteExif's %crossDelete: an IFD0/ExifIFD set deletes the other copy.
 pub mod atomic_writer;
+pub(crate) mod exif_cross_delete;
+// The mandatory entries of an ExifIFD a TIFF write creates.
+pub(crate) mod exif_ifd_creation;
 pub mod exif_inplace;
 pub mod exif_surgical;
 // Keeps maker-note data outside the MakerNote through a surgical EXIF rewrite.
@@ -45,6 +49,7 @@ pub mod pdf_writer;
 pub mod png_writer;
 pub(crate) mod rw2_ifd0;
 // Source-selected final scalar stage remains internal until file parity is proved.
+pub(crate) mod generated_makernote_groups;
 pub(crate) mod generated_tag_exists;
 // Where pinned ExifTool's `-TagsFromFile` writes each copied name (SetNewValue
 // captured per name), and which of those a destination realises.
@@ -82,3 +87,6 @@ pub(crate) mod exif_surgical_test_support {
         panic!("no EXIF segment in test JPEG");
     }
 }
+
+/// Refusal for EXIF edits of JPEGs with several EXIF records.
+pub(crate) mod jpeg_multi_exif;

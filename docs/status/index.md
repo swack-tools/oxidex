@@ -153,7 +153,7 @@ Explicitly refused, with a recorded reason (4): `InverseDateTime`, `ValidateImag
 
 ### Generated artifacts
 
-**269** files are regenerated from ExifTool's source (tier 1: 244, tier 2: 25; 242 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
+**270** files are regenerated from ExifTool's source (tier 1: 244, tier 2: 26; 243 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
 
 ## Generated share of correct output
 

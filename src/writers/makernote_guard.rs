@@ -61,7 +61,9 @@ use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::writers::exif_surgical::{IfdKind, scan_entries_with_magics, type_size};
+use crate::writers::exif_surgical::{
+    IfdKind, is_makernote_entry, scan_entries_with_magics, type_size,
+};
 
 const EXIF_IFD_POINTER: u16 = 0x8769;
 const GPS_IFD_POINTER: u16 = 0x8825;
@@ -605,7 +607,7 @@ fn makernotes(
     let layout = OriginalLayout::of(tiff);
     let mut notes = Vec::new();
     for entry in &scan.entries {
-        if entry.tag_id != MAKERNOTE || entry.value.len() <= 4 {
+        if !is_makernote_entry(entry.ifd, entry.tag_id) || entry.value.len() <= 4 {
             continue;
         }
         if notes.iter().any(|(ifd, _, _)| *ifd == entry.ifd) {
@@ -637,7 +639,7 @@ fn physical_makernotes(tiff: &[u8]) -> Vec<(IfdKind, usize, &[u8])> {
     layout
         .values
         .iter()
-        .filter(|(_, tag, _, _)| *tag == MAKERNOTE)
+        .filter(|(ifd, tag, _, _)| is_makernote_entry(*ifd, *tag))
         .filter_map(|(ifd, _, at, len)| Some((*ifd, *at, tiff.get(*at..at.checked_add(*len)?)?)))
         .collect()
 }
