@@ -448,6 +448,55 @@ fn accepted_type(code: u16, in_maker_notes: bool, ctx: &cond::Ctx) -> Option<Ent
     if accepted { entry_type(code) } else { None }
 }
 
+/// Decode an already bounded non-Apple MakerNote field through the same
+/// `ProcessExif` type admission and `ReadValue` plan as the IFD walker.
+/// The caller remains responsible for locating the entry's physical bytes.
+pub(crate) fn declared_non_apple_makernote_value(
+    code: u16,
+    count: u32,
+    bytes: &[u8],
+    order: ByteOrder,
+) -> Option<(DecodedValue, TagValue)> {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    let ty = non_apple_makernote_entry_type(code, &ctx)?;
+    let size = u64::from(count).checked_mul(u64::try_from(ty.size).ok()?)?;
+    if size > 0x7fff_ffff || usize::try_from(size).ok()? != bytes.len() {
+        return None;
+    }
+    let located = Located {
+        value_pos: 0,
+        bytes,
+        ty,
+    };
+    let plan = read_plan(&located, None)?;
+    // Exif.pm:6763-6773 refuses excessive non-string arrays for this row.
+    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+        return None;
+    }
+    let decoded = decode_plan(&located, plan, order)?;
+    let stored = stored_plan(&located, plan, order, &decoded);
+    Some((decoded, stored))
+}
+
+/// Exif.pm's physical type size under the same non-Apple MakerNote rule.
+pub(crate) fn non_apple_makernote_type_size(code: u16) -> Option<usize> {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    non_apple_makernote_entry_type(code, &ctx).map(|ty| ty.size)
+}
+
+// Exif.pm 11.78 accepts only its declared 1..13 formats. The 129 UTF8
+// exception entered ProcessExif by 12.64. Keep this projection tied to the
+// source version of the generated IFD tables, without changing the walker.
+fn non_apple_makernote_entry_type(code: u16, ctx: &cond::Ctx) -> Option<EntryType> {
+    match super::IFD_EXIFTOOL_VERSION {
+        "11.78" if (1..=13).contains(&code) => entry_type(code),
+        "12.64" | "13.59" => accepted_type(code, true, ctx),
+        _ => None,
+    }
+}
+
 /// A member's original byte representation where one exists.
 ///
 /// `ProcessBinaryData` RawConv can seed the shared map with a Perl byte
