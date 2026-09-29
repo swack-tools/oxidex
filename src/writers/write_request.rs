@@ -1436,6 +1436,26 @@ pub(crate) fn ensure_makernote_entry_not_named(
     Ok(())
 }
 
+/// The family scope of the unit-bearing ExifIFD tags. Creation resolves to
+/// ExifIFD, but an unqualified or EXIF deletion still names every directory.
+pub(crate) fn unit_suffix_family_key(tag: &str) -> Option<String> {
+    let (group, leaf) = tag
+        .rsplit_once(':')
+        .map_or((None, tag), |(g, n)| (Some(g), n));
+    if group.is_some_and(|g| !g.eq_ignore_ascii_case("EXIF")) {
+        return None;
+    }
+    [
+        "FocalLength",
+        "FocalLengthIn35mmFormat",
+        "SubjectDistance",
+        "AmbientTemperature",
+    ]
+    .into_iter()
+    .find(|name| leaf.eq_ignore_ascii_case(name))
+    .map(|name| format!("EXIF:{name}"))
+}
+
 /// Why pinned ExifTool may also write `name` in the file's maker note, or
 /// `None` when it provably cannot: the name has no writable `MakerNotes`
 /// candidate ([`MAKERNOTE_CANDIDATES`], the pinned `FindTagInfo` over every

@@ -44,11 +44,6 @@ const CASES: &[Case] = &[
     (&["-GPS:All="], "GPS:All"),
 ];
 
-/// Requests MIE plays no part in that oxidex refuses for another reason,
-/// file untouched: the TIFF writer edits entries in place and cannot
-/// shrink an IFD table ("not yet supported"), independent of MIE.
-const NON_MIE_REFUSALS: &[(&str, &[&str])] = &[("ExifTool.tif+MIE", &["-IFD0:Software="])];
-
 /// Every MIE trailer of `file`, in file order: each big-endian `zmie`
 /// footer's length back from its end (MIE.pm:1705-1730).
 fn mie_trailers(file: &[u8]) -> Vec<&[u8]> {
@@ -233,16 +228,6 @@ fn grade(
                      untouched -- oxidex exit {:?}, changed {}, said {stderr:?}",
                     ox.status.code(),
                     ox_bytes != original
-                ));
-            }
-            continue;
-        }
-        if NON_MIE_REFUSALS.contains(&(label, requests)) {
-            if ox.status.success() || ox_bytes != original || stderr.contains("MIE") {
-                failures.push(format!(
-                    "{case}: expected the TIFF writer's own refusal, file untouched; \
-                     oxidex exit {:?}, said {stderr:?}",
-                    ox.status.code()
                 ));
             }
             continue;

@@ -1033,6 +1033,16 @@ pub(crate) fn write_metadata_counted(
     metadata: &MetadataMap,
     mutations: &[String],
 ) -> Result<(WriteOutcome, usize)> {
+    write_metadata_counted_among(path, metadata, mutations, &[])
+}
+
+/// Count copied assignments while protecting earlier proven CLI destinations.
+pub(crate) fn write_metadata_counted_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize)> {
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     // Infer the request and plan it against the same handle that is copied.
@@ -1119,8 +1129,9 @@ pub(crate) fn write_metadata_counted(
     ordered.sort_by_key(|(at, _)| *at);
     let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     drop(reader);
-    let receipt =
-        crate::core::write_transaction::apply_tag_changes_on_opened(path, &changes, original)?;
+    let receipt = crate::core::write_transaction::apply_tag_changes_on_opened_among(
+        path, &changes, original, siblings,
+    )?;
     Ok(finish_metadata_write(
         metadata,
         read,
@@ -1241,7 +1252,8 @@ pub(crate) fn write_metadata_with_removals(
 /// this transaction, the XP strings' direct write -- all ask). A value that
 /// differs from the file's is a set whatever its provenance (a carried row
 /// never differs); an assigned key whose value equals the file's is a set
-/// too, which the values alone cannot show. When such a same-value set falls under
+/// too, which the values alone cannot show. When a same-value set, or a
+/// surviving explicit directory assignment after a family-name delete, falls under
 /// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
 /// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
 /// ExifTool's order -- the removals, then the sets -- as two passes on a
@@ -1253,22 +1265,54 @@ pub(crate) fn write_metadata_transaction(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_metadata_transaction_among(path, metadata, removed, &[])
+}
+
+/// Apply cross-directory replacement with the surviving resolved sibling sets.
+pub(crate) fn write_metadata_transaction_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    siblings: &[String],
+) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
     crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
+    let expanded = crate::writers::exif_cross_delete::with_cross_deletions(
+        path, &baseline, metadata, removed, &assigned, siblings,
+    )?;
+    let (metadata, removed) = match &expanded {
+        Some((desired, removed)) => (desired, removed.as_slice()),
+        None => (metadata, removed),
+    };
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
-    // Same-value sets a removal covers: the only ones the map cannot tell
-    // from carried rows, and the only ones that need the two passes.
+    // Sets a removal covers: same-value assignments need provenance to be
+    // distinguished from carried rows, and family-name deletion followed by
+    // an explicit directory assignment needs the same atomic two passes.
     let resets: Vec<(String, TagValue)> = assigned
         .iter()
         .filter_map(|key| {
             let value = metadata.get(key)?.clone();
             let key = canonical(key);
-            (baseline.get(key.as_str()) == Some(&value)
-                && removals.iter().any(|removal| {
-                    crate::writers::exif_surgical::removal_covers(removal, &key, &baseline)
-                }))
+            (removals.iter().any(|removal| {
+                let family_covers = removal.strip_prefix("EXIF:").is_some_and(|leaf| {
+                    [
+                        "FocalLength",
+                        "FocalLengthIn35mmFormat",
+                        "SubjectDistance",
+                        "AmbientTemperature",
+                    ]
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(leaf))
+                        && key.split_once(':').is_some_and(|(group, name)| {
+                            matches!(group, "IFD0" | "ExifIFD") && name.eq_ignore_ascii_case(leaf)
+                        })
+                });
+                family_covers
+                    || (baseline.get(key.as_str()) == Some(&value)
+                        && crate::writers::exif_surgical::removal_covers(removal, &key, &baseline))
+            }))
             .then_some((key, value))
         })
         .collect();
@@ -1291,7 +1335,7 @@ pub(crate) fn write_metadata_transaction(
         .tempfile_in(dir)
         .map_err(ExifToolError::from)?;
     std::fs::copy(path, staged.path()).map_err(ExifToolError::from)?;
-    // Pass 1: the removals, with the same-value sets they cover left out.
+    // Pass 1: the removals, with covered assignments left out.
     let mut first = metadata.clone();
     for (key, _) in &resets {
         first.remove(key);
@@ -2152,9 +2196,7 @@ pub(crate) fn removal_is_no_op_with_reader(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
     ) || crate::writers::exif_surgical::chain_key_dir(key).is_some();
-    if !exif_group && group != "PDF" && group != "PNG" {
-        return Ok(false);
-    }
+
     let removed = [key.to_string()];
     let format = detect_format(reader)?;
     // A maker-note tag is never judged absent from the map alone: the
@@ -2185,6 +2227,11 @@ pub(crate) fn removal_is_no_op_with_reader(
     // 13.59 checks every CRC before it learns nothing changed.
     if matches!(format, FileFormat::PNG) {
         crate::writers::png_writer::refuse_bad_chunk_crcs(reader)?;
+    }
+    if !exif_group && group != "PDF" && group != "PNG" {
+        // The shared group-deletion proof also proves a named deletion
+        // absent when the file holds none of that whole supported family.
+        return Ok(group_is_empty(group, metadata));
     }
     // A single-tag removal acts on every block alike (only a group-wide
     // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
@@ -2593,6 +2640,18 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<Wr
     )
 }
 
+/// Set all resolved EXIF dates through the shared request transaction.
+pub(crate) fn set_exif_dates(path: &Path, keys: &[&str], raw: &str) -> Result<()> {
+    let changes: Result<Vec<_>> = keys
+        .iter()
+        .map(|key| {
+            crate::cli::value_parser::parse_cli_tag_value(key, raw)
+                .map(|value| crate::core::write_transaction::TagChange::set(*key, value))
+        })
+        .collect();
+    crate::core::write_transaction::apply_tag_changes(path, &changes?).map(|_| ())
+}
+
 /// Removes a metadata tag from a file.
 ///
 /// This function reads the file's metadata, removes the specified tag,
@@ -2757,6 +2816,9 @@ pub struct CopyReport {
     /// from a PDF, are one copy), on the filtered and the copy-all path
     /// alike.
     pub copied: usize,
+    /// Destination addresses proven by this copy. The CLI uses these as
+    /// sibling sets while applying later requests in the same command.
+    pub(crate) copied_destinations: Vec<String>,
     /// Tags the copy set: the source tags (one per name) and named tags
     /// pinned ExifTool 13.59 has a writable destination for anywhere --
     /// its tags "set from" the source. When it is zero the copy found
@@ -2819,7 +2881,7 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_report_retaining(src, dest, tags, |_| true, None)
+    copy_metadata_report_retaining(src, dest, tags, |_| true, None, &[], &mut Vec::new())
 }
 
 /// Resolves and validates the copy, retaining only destination sets that
@@ -2832,6 +2894,8 @@ pub(crate) fn copy_metadata_report_retaining(
     // The final Make supplied by CLI requests after this copy. `Some(None)`
     // means a later request deletes Make; `None` means use this copy's result.
     final_make_override: Option<Option<String>>,
+    siblings: &[String],
+    copied_values: &mut Vec<(String, TagValue)>,
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
     // The public Option is semantic: CLI's bare -TagsFromFile maps its empty
@@ -2847,6 +2911,8 @@ pub(crate) fn copy_metadata_report_retaining(
         &selectors,
         retain,
         final_make_override,
+        siblings,
+        copied_values,
     )
 }
 

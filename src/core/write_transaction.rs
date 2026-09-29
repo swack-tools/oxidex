@@ -47,7 +47,7 @@ use crate::core::operations::{
     bare_removal_is_no_op_with_reader, exif_group_in_pdf_with_reader, field_spellings,
     group_removal_takes_effect_with_reader, mie_census_with_reader,
     plan_group_deletion_with_reader, read_metadata, removal_is_no_op_with_reader, remove_field,
-    resolve_write_key_in_request_with_reader, write_metadata_transaction,
+    resolve_write_key_in_request_with_reader, write_metadata_transaction_among,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -152,6 +152,8 @@ pub(crate) struct AppliedWrite {
     pub(crate) outcome: WriteOutcome,
     pub(crate) sets: usize,
     pub(crate) caller_fields: Vec<(String, String)>,
+    /// Proven destinations with their original typed request values.
+    pub(crate) caller_values: Vec<(String, TagValue)>,
     pub(crate) original: Option<SourceIdentity>,
     pub(crate) written: Option<SourceIdentity>,
 }
@@ -163,13 +165,46 @@ pub(crate) fn apply_tag_changes_with_receipt(
     apply_with_planning_hook(path, changes, || {})
 }
 
+/// Return proven sets and their resolved destinations while protecting
+/// assignments made by other phases of the enclosing CLI command.
+/// Planning, no-op decisions and copying retain the same opened file.
+pub(crate) fn apply_tag_changes_counted_among(
+    path: &Path,
+    changes: &[TagChange],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize, Vec<String>, Vec<(String, TagValue)>)> {
+    let original = super::filesystem_metadata::open_destination(path)?;
+    let receipt = apply_on_opened_with_hook(path, changes, original, siblings, || {})?;
+    Ok((
+        receipt.outcome,
+        receipt.sets,
+        receipt
+            .caller_fields
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect(),
+        receipt.caller_values,
+    ))
+}
+
+/// Apply inferred copy assignments while protecting surviving CLI assignments
+/// made before the copy. Keep the same opened-file planning and proof path.
+pub(crate) fn apply_tag_changes_on_opened_among(
+    path: &Path,
+    changes: &[TagChange],
+    original: fs::File,
+    siblings: &[String],
+) -> Result<AppliedWrite> {
+    apply_on_opened_with_hook(path, changes, original, siblings, || {})
+}
+
 fn apply_with_planning_hook(
     path: &Path,
     changes: &[TagChange],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     let original = super::filesystem_metadata::open_destination(path)?;
-    apply_on_opened_with_hook(path, changes, original, after_plan)
+    apply_on_opened_with_hook(path, changes, original, &[], after_plan)
 }
 
 pub(crate) fn apply_tag_changes_on_opened(
@@ -177,13 +212,14 @@ pub(crate) fn apply_tag_changes_on_opened(
     changes: &[TagChange],
     original: fs::File,
 ) -> Result<AppliedWrite> {
-    apply_on_opened_with_hook(path, changes, original, || {})
+    apply_on_opened_with_hook(path, changes, original, &[], || {})
 }
 
 fn apply_on_opened_with_hook(
     path: &Path,
     changes: &[TagChange],
     original: fs::File,
+    siblings: &[String],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     // Every request is resolved, and every no-op decided, against the file
@@ -203,17 +239,19 @@ fn apply_on_opened_with_hook(
             outcome: WriteOutcome::Unchanged,
             sets: 0,
             caller_fields: Vec::new(),
+            caller_values: Vec::new(),
             original: original_identity,
             written: original_identity,
         });
     }
     let mut proven_sets = 0;
     let mut caller_fields = Vec::new();
+    let mut caller_values = Vec::new();
     let (outcome, written) = transact_opened_with(
         path,
         original,
         |scratch| {
-            (proven_sets, caller_fields) = execute_plan(scratch, &plan)?;
+            (proven_sets, caller_fields, caller_values) = execute_plan(scratch, &plan, siblings)?;
             Ok(())
         },
         || Ok(()),
@@ -223,6 +261,7 @@ fn apply_on_opened_with_hook(
         outcome,
         sets: proven_sets,
         caller_fields,
+        caller_values,
         original: original_identity,
         written,
     })
@@ -661,6 +700,23 @@ fn plan_changes<'a>(
             }
             Err(other) => return Err(other),
         }
+        if change.value().is_some()
+            && let Err(error) = crate::writers::exif_cross_delete::date_set_keys(
+                &baseline,
+                change.tag(),
+                crate::core::operations::is_surgical_tiff_target(
+                    crate::parsers::detection::detect_format(reader)?,
+                    reader,
+                ),
+            )
+        {
+            request_refusals.push((
+                at,
+                change.tag(),
+                TagNotWritten::new(change.tag(), error.to_string()),
+            ));
+            continue;
+        }
         // A maker-note request in a request whose group deletion takes the
         // maker note away is a no-op: ExifTool never creates a maker-note
         // tag, and a tag or entry of a note that is gone is nothing to
@@ -681,7 +737,12 @@ fn plan_changes<'a>(
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
-                    key,
+                    key: if change.value().is_none() {
+                        crate::writers::write_request::unit_suffix_family_key(change.tag())
+                            .unwrap_or(key)
+                    } else {
+                        key
+                    },
                     value: change.value(),
                 },
                 addressed,
@@ -704,13 +765,26 @@ fn plan_changes<'a>(
     refused.extend(request_refusals.into_iter().map(|(_, _, tag)| tag));
 
     // The last request for a field replaces every earlier one.
-    let replaced: Vec<bool> = (0..pending.len())
-        .map(|index| {
-            pending[index + 1..]
-                .iter()
-                .any(|later| same_field(&later.request.key, &pending[index].request.key))
-        })
-        .collect();
+    let replaced: Vec<bool> =
+        (0..pending.len())
+            .map(|index| {
+                pending[index + 1..].iter().any(|later| {
+                    same_field(&later.request.key, &pending[index].request.key)
+                        || (later.request.value.is_none()
+                            && crate::writers::write_request::unit_suffix_family_key(
+                                later.request.requested,
+                            )
+                            .is_some_and(|family| {
+                                pending[index].request.key.starts_with("ExifIFD:")
+                                    && family.split_once(':').is_some_and(|(_, leaf)| {
+                                        pending[index].request.key.split_once(':').is_some_and(
+                                            |(_, name)| name.eq_ignore_ascii_case(leaf),
+                                        )
+                                    })
+                            }))
+                })
+            })
+            .collect();
     let last: Vec<Pending<'a>> = pending
         .into_iter()
         .zip(replaced)
@@ -916,7 +990,20 @@ pub(crate) fn group_covers(group: &str, tag: &str) -> bool {
 /// request). The writer's own no-op decision and post-write check
 /// (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`, #943) run
 /// inside every pass (`write_metadata_transaction`).
-fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, String)>)> {
+fn execute_plan(
+    path: &Path,
+    plan: &Plan<'_>,
+    protected: &[String],
+) -> Result<(usize, Vec<(String, String)>, Vec<(String, TagValue)>)> {
+    let mut siblings: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Field(request) if request.value.is_some() => Some(request.key.clone()),
+            _ => None,
+        })
+        .collect();
+    siblings.extend_from_slice(protected);
     let mut index = 0;
     while index < plan.steps.len() {
         let is_group = matches!(plan.steps[index], Step::Group(_));
@@ -926,7 +1013,23 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
             .map_or(plan.steps.len(), |offset| index + offset);
         let mut desired = read_metadata(path)?;
         let mut removed: Vec<String> = Vec::new();
-        for step in &plan.steps[index..end] {
+        // A family-name deletion removes every physical copy before any
+        // surviving explicit directory assignment repopulates its own slot.
+        // ExifTool retains an explicit IFD0 assignment in either argument
+        // order; a later family delete only supersedes the canonical ExifIFD
+        // new-value request (reduced above).
+        let mut ordered: Vec<&Step<'_>> = plan.steps[index..end].iter().collect();
+        ordered.sort_by_key(|step| match step {
+            Step::Field(request)
+                if request.value.is_none()
+                    && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                        .is_some() =>
+            {
+                0
+            }
+            _ => 1,
+        });
+        for step in ordered {
             match step {
                 // A group removal's post-condition is the writer's: #943's
                 // expansion decides which blocks the group names (and
@@ -935,6 +1038,28 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
                 Step::Group(key) => removed.push(key.clone()),
                 Step::Field(request) => {
                     remove_field(&mut desired, &request.key);
+                    // A family-0 deletion names all native EXIF rows with
+                    // this leaf. The TIFF writer decides whether a surfaced
+                    // entry was deleted from the native key's absence in the
+                    // desired map, so remove those rows before it runs.
+                    if request.value.is_none()
+                        && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                            .is_some()
+                        && let (Some(group), leaf) = group_and_name(&request.key)
+                        && group.eq_ignore_ascii_case("EXIF")
+                    {
+                        let native: Vec<String> = desired
+                            .iter()
+                            .filter(|(key, _)| {
+                                matches!(group_and_name(key), (Some(directory), name)
+                                    if is_exif_directory(directory) && name.eq_ignore_ascii_case(leaf))
+                            })
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        for key in native {
+                            remove_field(&mut desired, &key);
+                        }
+                    }
                     match request.value {
                         Some(value) => {
                             // `insert` marks the occurrence assigned
@@ -954,7 +1079,8 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
                 }
             }
         }
-        write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
+        write_metadata_transaction_among(path, &desired, &removed, &siblings)
+            .map_err(typed_refusal)?;
         index = end;
     }
     // The read-back proves every field request no later group removal
@@ -989,7 +1115,15 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
         .filter(|request| request.value.is_some())
         .map(|request| (request.requested.to_owned(), request.key.clone()))
         .collect();
-    Ok((caller_fields.len(), caller_fields))
+    let caller_values = proven
+        .iter()
+        .filter_map(|request| {
+            request
+                .value
+                .map(|value| (request.key.clone(), value.clone()))
+        })
+        .collect();
+    Ok((caller_fields.len(), caller_fields, caller_values))
 }
 
 /// A format writer's own refusal of one key (`exif_surgical`,
@@ -1231,6 +1365,18 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
     let file_bytes = fs::read(path)?;
     let mut failed = Vec::new();
     for request in requests {
+        let retained_family_sets: Vec<&str> = requests
+            .iter()
+            .filter(|other| other.value.is_some())
+            .filter_map(|other| {
+                let (_, name) = other.key.split_once(':')?;
+                let (_, family_name) = request.key.split_once(':')?;
+                (request.value.is_none()
+                    && request.key.starts_with("EXIF:")
+                    && name.eq_ignore_ascii_case(family_name))
+                .then_some(other.key.as_str())
+            })
+            .collect();
         // `PNG:XMP` names an ordinary text chunk when the file had one whose
         // keyword is literally `XMP` (the reader reported it, and the PNG
         // writer edits that chunk: `png_writer::plan_text_chunks`); only
@@ -1242,9 +1388,20 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
         };
         let reason = match request.value {
             Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets),
-            None if packets.map_or(!rows_at(&stored, &request.key).is_empty(), |packets| {
-                !packets.is_empty()
-            }) =>
+            None if packets.map_or(
+                if retained_family_sets.is_empty() {
+                    !rows_at(&stored, &request.key).is_empty()
+                } else {
+                    let (_, leaf) = request.key.split_once(':').unwrap_or(("", ""));
+                    stored.keys().any(|row| {
+                        matches!(group_and_name(row), (Some(group), name)
+                            if is_exif_directory(group)
+                                && name.eq_ignore_ascii_case(leaf)
+                                && !retained_family_sets.iter().any(|keep| row.eq_ignore_ascii_case(keep)))
+                    })
+                },
+                |packets| !packets.is_empty(),
+            ) =>
             {
                 Some(format!(
                     "after writing, {} is still present; nothing was written",

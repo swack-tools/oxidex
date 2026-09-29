@@ -447,10 +447,6 @@ fn a_shift_and_a_set_of_different_directories_both_apply() {
             "-IFD0:CreateDate=2020:01:02 03:04:05",
         ),
         (
-            "-ExifIFD:DateTimeDigitized+=1:0:0 0:0:0",
-            "-EXIF:CreateDate=2020:01:02 03:04:05",
-        ),
-        (
             "-DateTimeOriginal+=1:0:0 0:0:0",
             "-EXIF:DateTimeOriginal=2020:01:02 03:04:05",
         ),
@@ -469,6 +465,56 @@ fn a_shift_and_a_set_of_different_directories_both_apply() {
             err(&o)
         );
         assert_eq!(sha(&file), before, "{shift} {set}");
+    }
+}
+
+/// 13.59 does not regard the grouped DateTimeDigitized spelling as a
+/// writable EXIF date. It warns, skips that shift, and still applies a real
+/// EXIF:CreateDate set. OxiDex currently refuses the unsupported shift
+/// atomically; this is a known conservative gap, not a same-field conflict.
+#[test]
+fn unsupported_grouped_date_alias_is_not_a_same_field_conflict() {
+    let Some(canon) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
+        eprintln!("skipping: pinned t/images/Canon.jpg not available");
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let args = [
+        "-ExifIFD:DateTimeDigitized+=1:0:0 0:0:0",
+        "-EXIF:CreateDate=2020:01:02 03:04:05",
+    ];
+    let ours = copy_into(&dir, &canon, "ours.jpg");
+    let before = sha(&ours);
+    let o = oxidex(&[args[0], args[1], s(&ours)]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(
+        err(&o).contains("Shifting tag 'ExifIFD:DateTimeDigitized' is not supported"),
+        "{}",
+        err(&o)
+    );
+    assert!(!err(&o).contains("both set and shifted"), "{}", err(&o));
+    assert_eq!(sha(&ours), before, "unsupported shift must be atomic");
+
+    if let Some(oracle) = exiftool_oracle::graded() {
+        let native = copy_into(&dir, &canon, "native.jpg");
+        let native_out = oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(args)
+            .arg(&native)
+            .output()
+            .expect("run pinned oracle");
+        assert_eq!(native_out.status.code(), Some(0), "{}", err(&native_out));
+        assert!(
+            err(&native_out).contains("ExifIFD:DateTimeDigitized doesn't exist or isn't writable"),
+            "{}",
+            err(&native_out)
+        );
+        assert_eq!(
+            oracle_value(oracle, &native, "ExifIFD:CreateDate"),
+            "2020:01:02 03:04:05"
+        );
+        assert_ne!(sha(&native), before, "native applies the valid set");
     }
 }
 

@@ -2,12 +2,12 @@
 //!
 //! This module implements date shifting functionality compatible with ExifTool syntax:
 //! - Add offset: `-AllDates+=1:2:3 4:5:6` (add 1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds)
-//! - Subtract offset: `-EXIF:DateTime-=0:0:5 0:0:0` (subtract 5 days)
-//! - Set absolute: `-EXIF:DateTime=2025:01:15 10:30:00` (set to specific date/time)
+//! - Subtract offset: `-EXIF:ModifyDate-=0:0:5 0:0:0` (subtract 5 days)
+//! - Set absolute: `-EXIF:ModifyDate=2025:01:15 10:30:00` (set to specific date/time)
 
 use super::operations::{read_metadata, write_metadata};
 use super::tag_value::TagValue;
-use crate::core::FileFormat;
+use crate::core::{FileFormat, FileReader};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
@@ -96,17 +96,23 @@ impl ExifDateTag {
         match self {
             ExifDateTag::ModifyDate => "IFD0:ModifyDate",
             ExifDateTag::DateTimeOriginal => "ExifIFD:DateTimeOriginal",
-            ExifDateTag::CreateDate => "ExifIFD:DateTimeDigitized",
+            ExifDateTag::CreateDate => "ExifIFD:CreateDate",
         }
     }
 }
 
 /// Resolves a user-supplied tag pattern to the EXIF date tags it names.
 ///
-/// Accepts ExifTool conventions: bare names ("DateTimeOriginal"), name
-/// aliases ("DateTime" for ModifyDate, "DateTimeDigitized" for CreateDate),
-/// the "EXIF:" family, oxidex's internal groups ("IFD0:", "ExifIFD:"), and
-/// the "AllDates" shortcut. Matching is ASCII case-insensitive.
+/// Accepts ExifTool conventions: pinned ExifTool 13.59's tag names
+/// ("DateTimeOriginal"), bare or under the "EXIF:", "IFD0:" or "ExifIFD:"
+/// group, and the "AllDates" shortcut. Matching is ASCII case-insensitive.
+///
+/// The EXIF specification's names for tags 0x0132 and 0x9004 ("DateTime",
+/// "DateTimeDigitized") are not 13.59's: grouped, 13.59 answers "Sorry,
+/// IFD0:DateTimeDigitized doesn't exist or isn't writable" and changes
+/// nothing, and bare, it looks for XMP-exif:DateTimeDigitized (t/images
+/// Canon.jpg: "1 image files unchanged"). Neither shifts an EXIF date, so
+/// neither resolves here (codex pre-review of #964).
 ///
 /// Returns `None` when the pattern does not name a known EXIF date/time tag.
 pub fn resolve_exif_targets(pattern: &str) -> Option<Vec<ExifDateTag>> {
@@ -125,19 +131,18 @@ pub fn resolve_exif_targets(pattern: &str) -> Option<Vec<ExifDateTag>> {
     };
 
     let tag = match name {
-        "modifydate" | "datetime" => ExifDateTag::ModifyDate,
+        "modifydate" => ExifDateTag::ModifyDate,
         "datetimeoriginal" => ExifDateTag::DateTimeOriginal,
-        "createdate" | "datetimedigitized" => ExifDateTag::CreateDate,
+        "createdate" => ExifDateTag::CreateDate,
         _ => return None,
     };
 
-    let family_ok = match family {
-        None => true,
-        Some("exif") => true,
-        Some("ifd0") => tag == ExifDateTag::ModifyDate,
-        Some("exififd") => tag != ExifDateTag::ModifyDate,
-        Some(_) => false,
-    };
+    // Naming either of IFD0/ExifIFD shifts the tag's copies in both: pinned
+    // ExifTool 13.59's `%crossDelete` keeps (and shifts) the copy in the
+    // other directory when the new value is a shift (WriteExif.pl
+    // 13.59:1259), so `-IFD0:CreateDate+=1` on t/images Canon.jpg shifts
+    // its ExifIFD CreateDate.
+    let family_ok = matches!(family, None | Some("exif" | "ifd0" | "exififd"));
     if family_ok { Some(vec![tag]) } else { None }
 }
 
@@ -390,8 +395,8 @@ fn key_matches_pattern(key: &str, pattern: &str) -> bool {
 ///
 /// * **JPEG**: the EXIF date values are patched in place — only the 19 ASCII
 ///   characters of each target value change, every other byte of the file is
-///   preserved. Supported tags: AllDates, ModifyDate (DateTime),
-///   DateTimeOriginal, CreateDate (DateTimeDigitized).
+///   preserved. Supported tags: AllDates, ModifyDate, DateTimeOriginal,
+///   CreateDate.
 /// * **Other formats** (PNG, PDF): tags are shifted through the metadata map
 ///   and rewritten with [`write_metadata`].
 ///
@@ -429,15 +434,86 @@ pub fn shift_metadata_dates(
     offset_or_value: &str,
     op: ShiftOperation,
 ) -> Result<()> {
+    // An absolute set of an EXIF date in a JPEG, TIFF or PNG is an ordinary
+    // write: ExifTool writes it to the tag's directory and deletes the copy
+    // in the other of IFD0/ExifIFD (`writers::exif_cross_delete`), where
+    // this path only patched the copies the file already held.
+    if op == ShiftOperation::Set
+        && let Some(keys) =
+            crate::writers::exif_cross_delete::date_set_keys(&read_metadata(path)?, tag_pattern, {
+                let reader = MMapReader::new(path)?;
+                let format = detect_format(&reader)?;
+                crate::core::operations::is_surgical_tiff_target(format, &reader)
+            })?
+    {
+        return crate::core::operations::set_exif_dates(path, &keys, offset_or_value);
+    }
+    // So is one named by its IFD0 or ExifIFD group (and `EXIF:ModifyDate`),
+    // exactly as the CLI routes it (`CliArgs::parse_date_shift`): the
+    // in-place route below finds the tag in either directory, so
+    // `IFD0:CreateDate` set to a date on a JPEG whose ExifIFD holds
+    // CreateDate patched that copy and reported success, where pinned
+    // ExifTool 13.59 creates `[IFD0] CreateDate` and deletes the ExifIFD one
+    // (codex pre-review of #964).
+    if op == ShiftOperation::Set
+        && resolve_exif_targets(tag_pattern).is_some()
+        && tag_pattern.split_once(':').is_some_and(|(group, name)| {
+            group.eq_ignore_ascii_case("IFD0")
+                || group.eq_ignore_ascii_case("ExifIFD")
+                || (group.eq_ignore_ascii_case("EXIF") && name.eq_ignore_ascii_case("ModifyDate"))
+        })
+    {
+        let value = crate::cli::value_parser::parse_cli_tag_value(tag_pattern, offset_or_value)?;
+        return crate::core::operations::modify_tag(path, tag_pattern, value).map(|_| ());
+    }
     let spec = build_shift_spec(offset_or_value, op)?;
 
-    let format = {
+    let (format, classic_tiff_raw, walkable_tiff_raw) = {
         let reader = MMapReader::new(path)?;
-        detect_format(&reader)?
+        let format = detect_format(&reader)?;
+        // The map and in-place shift routes can both decide that no date is
+        // present without entering the PNG writer. Pinned ExifTool still
+        // checks carried chunk CRCs before that no-op decision.
+        if format == FileFormat::PNG {
+            crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
+        }
+        let walkable_tiff_raw = matches!(format, FileFormat::CameraRaw(_))
+            && crate::core::operations::is_surgical_tiff_target(format, &reader);
+        let classic_tiff_raw = walkable_tiff_raw
+            && reader
+                .read(0, 4)
+                .is_ok_and(|header| matches!(header, b"II\x2a\x00" | b"MM\x00\x2a"));
+        (format, classic_tiff_raw, walkable_tiff_raw)
     };
 
     if format == FileFormat::JPEG {
         return shift_jpeg_dates(path, tag_pattern, &spec);
+    }
+    // A TIFF's or PNG's EXIF dates shift in place too, every IFD0/ExifIFD
+    // copy of each: the map route below sees only the copy the reader
+    // reports, and its write moved the other one away as a set would
+    // (review of #964, PRRT_kwDOQNbr5M6mTAHI). The map route then shifts
+    // the file's other date rows (XMP, ...) as before.
+    //
+    // Both phases run on one private copy, which replaces the file only when
+    // both succeed: the in-place phase committed to `path` before the map
+    // phase could still refuse (a non-EXIF CreateDate that is not a date),
+    // so a direct caller got `Err` with the EXIF copies already shifted
+    // (review of #964, discussion_r4112777222).
+    if walkable_tiff_raw && !classic_tiff_raw && resolve_exif_targets(tag_pattern).is_some() {
+        return Err(ExifToolError::unsupported_format(
+            "Date shifts for this TIFF-derived RAW header are not supported; nothing was written",
+        ));
+    }
+    if (matches!(format, FileFormat::TIFF | FileFormat::PNG) || classic_tiff_raw)
+        && let Some(targets) = resolve_exif_targets(tag_pattern)
+    {
+        return crate::core::write_transaction::transact(path, |scratch| {
+            let shifted =
+                crate::writers::exif_inplace::shift_tiff_png_exif_dates(scratch, &targets, &spec)?;
+            shift_map_dates_after_exif(scratch, tag_pattern, &spec, shifted)
+        })
+        .map(|_| ());
     }
     shift_map_dates(path, tag_pattern, &spec)
 }
@@ -446,9 +522,18 @@ pub fn shift_metadata_dates(
 /// segment, so binary tags are preserved byte-for-byte.
 fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
     let Some(targets) = resolve_exif_targets(tag_pattern) else {
+        // These names are not ExifTool aliases for EXIF's writable dates.
+        // A JPEG with no matching XMP row treats either shift as unchanged;
+        // a matching non-EXIF row is handled by the ordinary map route.
+        if ["DateTime", "DateTimeDigitized"]
+            .iter()
+            .any(|name| tag_pattern.eq_ignore_ascii_case(name))
+        {
+            return shift_map_dates(path, tag_pattern, spec);
+        }
         return Err(ExifToolError::parse_error(format!(
             "Shifting tag '{}' is not supported for JPEG. Supported: AllDates, \
-             ModifyDate (DateTime), DateTimeOriginal, CreateDate (DateTimeDigitized)",
+             ModifyDate, DateTimeOriginal, CreateDate",
             tag_pattern
         )));
     };
@@ -461,6 +546,17 @@ fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<
 
 /// Non-JPEG path: shift date/time tags through the metadata map (PNG, PDF).
 fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
+    shift_map_dates_after_exif(path, tag_pattern, spec, None)
+}
+
+/// [`shift_map_dates`]; `exif_shifted` is the number of IFD0/ExifIFD values
+/// already shifted in place, whose rows are then left alone.
+fn shift_map_dates_after_exif(
+    path: &Path,
+    tag_pattern: &str,
+    spec: &ShiftSpec,
+    exif_shifted: Option<usize>,
+) -> Result<()> {
     let mut metadata = read_metadata(path)?;
     let all_dates = tag_pattern.eq_ignore_ascii_case("AllDates");
 
@@ -477,7 +573,10 @@ fn shift_map_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<(
         } else {
             key_matches_pattern(&key, tag_pattern)
         };
-        if !matches {
+        let exif_row = key
+            .split_once(':')
+            .is_some_and(|(group, _)| matches!(group, "IFD0" | "ExifIFD" | "EXIF"));
+        if !matches || (exif_shifted.is_some() && exif_row) {
             continue;
         }
         // A date the reader keeps as text (a PNG `tIME` row) shifts too, as
@@ -711,23 +810,31 @@ mod tests {
 
     #[test]
     fn test_resolve_aliases() {
-        // ExifTool's names and the EXIF spec's names both resolve
+        // ExifTool's names resolve; the EXIF spec's names for 0x0132 and
+        // 0x9004 are not pinned 13.59's and shift no EXIF date there
+        // (`-ExifIFD:DateTime+=1` and `-IFD0:DateTimeDigitized+=1` on
+        // t/images Canon.jpg: "doesn't exist or isn't writable"; bare
+        // `-DateTime+=1`: "1 image files unchanged").
         assert_eq!(
             resolve_exif_targets("ModifyDate"),
-            Some(vec![ExifDateTag::ModifyDate])
-        );
-        assert_eq!(
-            resolve_exif_targets("DateTime"),
             Some(vec![ExifDateTag::ModifyDate])
         );
         assert_eq!(
             resolve_exif_targets("CreateDate"),
             Some(vec![ExifDateTag::CreateDate])
         );
-        assert_eq!(
-            resolve_exif_targets("DateTimeDigitized"),
-            Some(vec![ExifDateTag::CreateDate])
-        );
+        for alias in [
+            "DateTime",
+            "DateTimeDigitized",
+            "EXIF:DateTime",
+            "EXIF:DateTimeDigitized",
+            "IFD0:DateTime",
+            "IFD0:DateTimeDigitized",
+            "ExifIFD:DateTime",
+            "ExifIFD:DateTimeDigitized",
+        ] {
+            assert_eq!(resolve_exif_targets(alias), None, "{alias}");
+        }
     }
 
     #[test]
@@ -744,8 +851,17 @@ mod tests {
             resolve_exif_targets("IFD0:ModifyDate"),
             Some(vec![ExifDateTag::ModifyDate])
         );
-        // Wrong group for the tag: DateTimeOriginal lives in ExifIFD, not IFD0
-        assert_eq!(resolve_exif_targets("IFD0:DateTimeOriginal"), None);
+        // The other directory's name selects the tag too: a shift covers its
+        // copies in both IFD0 and ExifIFD (WriteExif.pl 13.59:1259).
+        assert_eq!(
+            resolve_exif_targets("IFD0:DateTimeOriginal"),
+            Some(vec![ExifDateTag::DateTimeOriginal])
+        );
+        assert_eq!(
+            resolve_exif_targets("ExifIFD:ModifyDate"),
+            Some(vec![ExifDateTag::ModifyDate])
+        );
+        assert_eq!(resolve_exif_targets("IFD1:ModifyDate"), None);
         // Unknown group
         assert_eq!(resolve_exif_targets("XMP:CreateDate"), None);
     }
