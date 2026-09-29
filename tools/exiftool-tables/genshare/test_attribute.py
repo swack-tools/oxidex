@@ -528,6 +528,7 @@ class RouteLedgerTests(unittest.TestCase):
         "src/parsers/flir_fpf.rs",
         "src/parsers/jpeg/app_segments/infiray.rs",
         "src/parsers/macho/metadata_extractor.rs",
+        "src/parsers/raw/metadata.rs",
         "src/parsers/specialized/fits.rs",
         "src/parsers/tiff/geotiff_parser.rs",
         "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
@@ -537,7 +538,7 @@ class RouteLedgerTests(unittest.TestCase):
         "src/parsers/tiff/makernotes/sony/binary_data.rs",
     )
 
-    def test_exact_task8_boundary_finds_repair_guards_and_keyed_stays_unreachable(self):
+    def test_exact_task8_boundary_finds_repair_guards_and_keyed_carrier(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             repository = pathlib.Path(td) / "repo"
             run_root = pathlib.Path(td) / "run"
@@ -545,7 +546,12 @@ class RouteLedgerTests(unittest.TestCase):
             for relative in self.EXPECTED_BOUNDARY:
                 path = repository / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+                path.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8")
+                    if relative == "src/parsers/raw/metadata.rs"
+                    else "// exact Task8 boundary fixture\n",
+                    encoding="utf-8",
+                )
             guards = {
                 "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
                 "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
@@ -559,7 +565,6 @@ class RouteLedgerTests(unittest.TestCase):
                     handle.write(source + "\n")
             with (repository / "src/main.rs").open("a", encoding="utf-8") as handle:
                 handle.write("process_serial_directory(input);\n")
-
             ledger = attribute._route_ledger(repository, run_root)
 
             self.assertEqual(
@@ -568,7 +573,54 @@ class RouteLedgerTests(unittest.TestCase):
             )
             self.assertTrue(all(ledger["guard_sites"][token] for token in attribute.TOKENS))
             self.assertTrue(ledger["production_reachable"]["serial"])
-            self.assertFalse(ledger["production_reachable"]["keyed"])
+            self.assertTrue(ledger["production_reachable"]["keyed"])
+            route = repository / "src/parsers/raw/metadata.rs"
+            original = route.read_text(encoding="utf-8")
+            call = "let result = process_keyed_directory(table, block, &mut ctx, &mut sink);"
+            self.assertEqual(original.count(call), 1)
+            for replacement in (
+                "// " + call,
+                "if false { " + call + " }",
+                "",
+            ):
+                with self.subTest(replacement=replacement):
+                    changed = original.replace(call, replacement)
+                    if not replacement:
+                        changed += "\n// process_keyed_directory(table, block, &mut ctx, &mut sink);\n"
+                    route.write_text(changed, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        attribute.ReceiptError, "bounded firmware projection or caller"
+                    ):
+                        attribute._route_ledger(repository, run_root)
+            # A body-only digest accepts these context changes: the bounded
+            # function bytes remain, but the route is no longer compiled.
+            name = "fn canon_firmware_from_keyed_entry("
+            start = original.rfind("\n", 0, original.index(name)) + 1
+            end = original.index("\n}\n", start) + 2
+            function = original[start:end]
+            context_mutations = {
+                "whole_function_commented": (
+                    original[:start] + "/*\n" + function + "\n*/" + original[end:]
+                ),
+                "cfg_disabled": original[:start] + "#[cfg(any())]\n" + original[start:],
+                "duplicate_fake_definition": original + "\n#[cfg(any())]\n" + function + "\n",
+            }
+            for label, changed in context_mutations.items():
+                with self.subTest(context=label):
+                    route.write_text(changed, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        attribute.ReceiptError, "bounded firmware projection or caller"
+                    ):
+                        attribute._route_ledger(repository, run_root)
+            route.write_text(
+                original.replace("canon_firmware_from_keyed_entry(entry)", "None"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                attribute.ReceiptError, "bounded firmware projection or caller"
+            ):
+                attribute._route_ledger(repository, run_root)
+            route.write_text(original, encoding="utf-8")
 
     def test_route_ledger_does_not_hide_production_after_cfg_test_helper(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
@@ -578,7 +630,12 @@ class RouteLedgerTests(unittest.TestCase):
             for relative in self.EXPECTED_BOUNDARY:
                 path = repository / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+                path.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8")
+                    if relative == "src/parsers/raw/metadata.rs"
+                    else "// exact Task8 boundary fixture\n",
+                    encoding="utf-8",
+                )
             guards = {
                 "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
                 "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
@@ -605,7 +662,8 @@ class RouteLedgerTests(unittest.TestCase):
             ledger = attribute._route_ledger(repository, run_root)
 
             self.assertTrue(ledger["production_reachable"]["serial"])
-            self.assertFalse(ledger["production_reachable"]["keyed"])
+            self.assertTrue(ledger["production_reachable"]["keyed"])
+            self.assertEqual(len(ledger["production_calls"]["keyed"]), 1)
 
 
 class PreSeamControlTests(unittest.TestCase):

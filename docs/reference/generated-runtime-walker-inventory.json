@@ -122,10 +122,10 @@
       "current_conversion_path": "keyed_engine.rs::emit_resolved_scalar lines 754-852 at the inventory base",
       "target_conversion_path": "pipeline::execute",
       "attribution_token": "Keyed",
-      "enabled_tables": "none: Gate B is supplied only by a caller's KeyedEmissionSink",
-      "production_callers": [],
-      "real_carrier_fixture": "none in production; tests/generated_runtime_walker_contract.rs drives a hand CIFF block through the public entry point",
-      "detected_versus_parsed": "detected-not-parsed: CanonRaw.crw is read by the hand CanonRaw parser, not this walker. Adding a production caller is outside the Task 17 lease and would fail the Task 8 attribution instrument (genshare attribute.py keyed route ledger).",
+      "enabled_tables": "CanonRaw::Main 0x080b-only source-checked projection on CRW/CIFF; whole Main Gate A remains blocked. Gate B is supplied by the carrier sink",
+      "production_callers": ["src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF hand-discovered bounded entry, CanonFirmwareVersion 0x080b)"],
+      "real_carrier_fixture": "t/images/CanonRaw.crw (CanonRaw:CanonFirmwareVersion, source CIFF key 0x080b)",
+      "detected_versus_parsed": "parsed: CanonRaw::Main key 0x080b only; other Main entries remain hand-owned",
       "adapter_policy": {
         "member_value": "engine::member_value",
         "unrepresentable_member": "taint (stop the directory and every pending parent frame)",
@@ -185,7 +185,12 @@
     }
   ],
   "encrypted_walker": {
-    "status": "none",
-    "reason": "No decrypted buffer reaches one of the four generated walkers at the inventory base. Nikon (src/parsers/tiff/makernotes/nikon/encrypted.rs) and Sony (src/parsers/tiff/makernotes/sony/enciphered.rs) decrypt into hand-written readers. A fixture for this case would have to invent a carrier, so the contract test pins the absence instead."
+    "status": "parsed-narrow",
+    "source_table": "Nikon::LensData0204",
+    "encrypted_carrier": "Nikon::Main 0x0098",
+    "real_carrier_fixture": "combined-samples/Nikon/NikonD810.jpg",
+    "production_route": "Nikon encrypted::parse_lens_data selects the 0204 root, derives SerialNumber/ShutterCount keys, decrypts from byte 4, then passes plaintext to engine::process_binary_data and pipeline::execute",
+    "generated_occurrence_fields": ["ExitPupilPosition", "AFAperture", "FocusPosition", "LensFStops"],
+    "residual": "Other Nikon::LensData0204 fields remain with the hand reader; Sony enciphered blocks and other Nikon encrypted tables are not credited here."
   }
 }

@@ -80,8 +80,8 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
         // `parse_xmp_typed_with_rational_forms` for why the composite layer needs
         // it and why this carriage is tactical (Step 8 of
         // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
-        let (xmp_tags, rational_forms) =
-            rdf_parser::parse_xmp_entries_with_rational_forms(xmp_data)?;
+        let (xmp_tags, rational_forms, gps_sources) =
+            rdf_parser::parse_xmp_entries_with_source_forms(xmp_data)?;
 
         // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
         // "Worker 30" step here also synthesized XMP:CreatorTool from the
@@ -90,8 +90,13 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
         // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
         // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
         // fabricated tags and are gone.)
-        for entry in &xmp_tags {
-            rdf_parser::insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+        for (entry, source) in xmp_tags.iter().zip(&gps_sources) {
+            rdf_parser::insert_xmp_entry_with_source(
+                &mut metadata,
+                entry,
+                entry.tag_value(true),
+                source.as_deref(),
+            );
             // `set_value_form` only attaches to a tag already present in the map,
             // which the insert just above guarantees.
             if !entry.shadowed
@@ -109,6 +114,120 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn normalized_crop_corners_are_numeric_typed_xmp_values() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description xmlns:xmpDSA="http://leica-camera.com/digital-shift-assistant/1.0/">
+            <xmpDSA:NormalizedCropCorners><rdf:Seq><rdf:li>0.125</rdf:li><rdf:li>0.5</rdf:li><rdf:li>1</rdf:li></rdf:Seq></xmpDSA:NormalizedCropCorners>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let metadata = parse_xmp_file(&TestReader::from_slice(xml)).expect("parse real sequence");
+        assert_eq!(
+            metadata.get("XMP:NormalizedCropCorners"),
+            Some(&TagValue::Array(vec![
+                TagValue::Float(0.125),
+                TagValue::Float(0.5),
+                TagValue::Float(1.0),
+            ]))
+        );
+    }
+
+    #[test]
+    fn native_digest_sidecar_keeps_exif_and_tiff_source_keys() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                           xmlns:tiff="http://ns.adobe.com/tiff/1.0/"
+                           exif:NativeDigest="exif digest"
+                           tiff:NativeDigest="tiff digest" />
+        </rdf:RDF>"#;
+        let metadata = parse_xmp_file(&TestReader::from_slice(xml)).expect("parse XMP digests");
+        assert_eq!(
+            metadata.get_string("XMP-exif:NativeDigest"),
+            Some("exif digest")
+        );
+        assert_eq!(
+            metadata.get_string("XMP-tiff:NativeDigest"),
+            Some("tiff digest")
+        );
+    }
+
+    #[test]
+    fn xmp_exif_gps_coordinates_keep_print_and_numeric_forms() {
+        // Pinned ExifTool 13.59: XMP.pm applies ToDegrees/ToDMS to all four
+        // tags; the signed-S case specifically negates a negative degree.
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                exif:GPSLatitude="43,30.4233408N"
+                exif:GPSLongitude="16,26.3012136E"
+                exif:GPSDestLatitude="-43,30S"
+                exif:GPSDestLongitude="16,26.3012136W"/>
+            </rdf:RDF>"#;
+        let metadata = parse_xmp_file(&TestReader::from_slice(xml)).unwrap();
+        let cases = [
+            (
+                "XMP-exif:GPSLatitude",
+                "43 deg 30' 25.40\" N",
+                "43.50705568",
+            ),
+            (
+                "XMP-exif:GPSLongitude",
+                "16 deg 26' 18.07\" E",
+                "16.43835356",
+            ),
+            ("XMP-exif:GPSDestLatitude", "42 deg 30' 0.00\" N", "42.5"),
+            (
+                "XMP-exif:GPSDestLongitude",
+                "16 deg 26' 18.07\" W",
+                "-16.43835356",
+            ),
+        ];
+        let numeric = metadata.without_print_conv();
+        let stored = [
+            "43,30.4233408N",
+            "16,26.3012136E",
+            "-43,30S",
+            "16,26.3012136W",
+        ];
+        for ((tag, print, value), original) in cases.into_iter().zip(stored) {
+            assert_eq!(metadata.get_string(tag), Some(print), "{tag} print");
+            assert_eq!(metadata.value_form(tag), Some(value), "{tag} ValueConv");
+            assert_eq!(numeric.get_string(tag), Some(value), "{tag} -n");
+            assert_eq!(
+                metadata.occurrences_for(tag)[0]
+                    .project(crate::core::tag_occurrence::ValueChannel::Stored)
+                    .as_ref(),
+                &TagValue::new_string(original),
+                "{tag} stored packet scalar"
+            );
+        }
+        // Embedded readers use this common insertion path, so their
+        // occurrences must retain the same two forms as a sidecar.
+        let mut embedded = MetadataMap::new();
+        rdf_parser::insert_xmp_packet(&mut embedded, xml, true).unwrap();
+        for (tag, print, value) in cases {
+            assert_eq!(
+                embedded.get_string(tag),
+                Some(print),
+                "{tag} embedded print"
+            );
+            assert_eq!(
+                embedded.value_form(tag),
+                Some(value),
+                "{tag} embedded ValueConv"
+            );
+        }
+        *embedded.get_mut("XMP-exif:GPSLatitude").unwrap() = TagValue::new_string("10,15S");
+        let edited = embedded.occurrences_for("XMP-exif:GPSLatitude");
+        let winner = edited[0];
+        assert_eq!(
+            winner
+                .project(crate::core::tag_occurrence::ValueChannel::Stored)
+                .as_ref(),
+            &TagValue::new_string("10,15S"),
+            "an explicit assignment must not copy the earlier packet scalar"
+        );
+    }
 
     /// Regression test for the Step 8 "tactical rational carriage": a
     /// standalone XMP sidecar declaring Canon FocalPlaneX/YResolution as

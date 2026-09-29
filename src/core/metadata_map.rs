@@ -782,11 +782,22 @@ impl MetadataMap {
     pub(crate) fn record_occurrence(
         &mut self,
         key: String,
+        occurrence: TagOccurrence,
+    ) -> Option<TagValue> {
+        self.record_occurrence_with_eligibility(key, occurrence, true)
+    }
+
+    /// Replays a physical row without letting an earlier removed epoch win.
+    pub(crate) fn record_occurrence_with_eligibility(
+        &mut self,
+        key: String,
         mut occurrence: TagOccurrence,
+        winner_eligible: bool,
     ) -> Option<TagValue> {
         let previous = self.sink.get(&key).cloned();
         occurrence.order = self.sink.next_order();
-        self.sink.record(key, occurrence);
+        self.sink
+            .record_with_eligibility(key, occurrence, winner_eligible);
         previous
     }
 
@@ -812,6 +823,16 @@ impl MetadataMap {
         new_key: String,
         occurrence: &TagOccurrence,
     ) {
+        self.insert_renamed_occurrence_with_eligibility(new_key, occurrence, true);
+    }
+
+    /// Renames a physical row while preserving removed-epoch eligibility.
+    pub(crate) fn insert_renamed_occurrence_with_eligibility(
+        &mut self,
+        new_key: String,
+        occurrence: &TagOccurrence,
+        winner_eligible: bool,
+    ) {
         let order = self.sink.next_order();
         let (group0, name) = match new_key.split_once(':') {
             Some((g, n)) => (
@@ -828,7 +849,8 @@ impl MetadataMap {
         renamed.group0 = group0;
         renamed.name = name;
         renamed.order = order;
-        self.sink.record(new_key, renamed);
+        self.sink
+            .record_with_eligibility(new_key, renamed, winner_eligible);
     }
 
     /// Every occurrence recorded for `key`, winners and losers alike, in
@@ -866,6 +888,13 @@ impl MetadataMap {
         &self,
     ) -> impl Iterator<Item = (&str, &TagOccurrence, bool)> {
         self.sink.keyed_occurrences_with_provenance()
+    }
+
+    /// Physical rows and whether each may win after a removal epoch.
+    pub(crate) fn keyed_occurrences_with_selection(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, bool, bool)> {
+        self.sink.keyed_occurrences_with_selection()
     }
 
     pub(crate) fn keyed_occurrences(&self) -> impl Iterator<Item = (&str, &TagOccurrence)> {
@@ -968,8 +997,11 @@ impl MetadataMap {
     /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         self.raw_blocks.extend(other.raw_blocks);
-        for (key, occurrence, assigned) in other.sink.into_keyed_occurrences_with_provenance() {
-            self.sink.record_keyed_carrying_over(key, occurrence);
+        for (key, occurrence, assigned, eligible) in
+            other.sink.into_keyed_occurrences_with_provenance()
+        {
+            self.sink
+                .record_keyed_carrying_over(key, occurrence, eligible);
             self.set_last_assigned(assigned);
         }
     }
@@ -982,9 +1014,12 @@ impl MetadataMap {
     /// among themselves exactly as they did in `other`.
     pub(crate) fn merge_as_subdocument(&mut self, other: MetadataMap, instance: Instance) {
         self.raw_blocks.extend(other.raw_blocks);
-        for (key, mut occurrence, assigned) in other.sink.into_keyed_occurrences_with_provenance() {
+        for (key, mut occurrence, assigned, eligible) in
+            other.sink.into_keyed_occurrences_with_provenance()
+        {
             occurrence.instance = instance;
-            self.sink.record_keyed_carrying_over(key, occurrence);
+            self.sink
+                .record_keyed_carrying_over(key, occurrence, eligible);
             self.set_last_assigned(assigned);
         }
     }
@@ -1352,6 +1387,195 @@ mod tests {
             read_metadata(&path).unwrap().get_string("IFD0:Artist"),
             Some("saved")
         );
+    }
+
+    #[test]
+    fn priority_zero_public_insert_replaces_read_winner_and_survives_projections() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut map = MetadataMap::new();
+        map.insert_occurrence(
+            key,
+            TagValue::new_string("first read"),
+            0,
+            "XMP-exif",
+            Instance::default(),
+        );
+        map.insert_occurrence(
+            key,
+            TagValue::new_string("second read"),
+            0,
+            "XMP-exif",
+            Instance::default(),
+        );
+        map.mark_read_complete();
+        assert_eq!(map.get_string(key), Some("first read"));
+        assert!(!map.is_assigned(key));
+
+        assert_eq!(
+            map.insert(key, TagValue::new_string("assigned")),
+            Some(TagValue::new_string("first read"))
+        );
+        assert_eq!(map.get_string(key), Some("assigned"));
+        assert!(map.is_assigned(key));
+        assert_eq!(
+            map.winner_occurrences()
+                .find(|(name, _)| name.as_str() == key)
+                .map(|(_, row)| row.priority),
+            Some(0)
+        );
+        assert_eq!(map.occurrences_for(key).len(), 3);
+        assert_eq!(map.clone().get_string(key), Some("assigned"));
+        assert_eq!(map.without_print_conv().get_string(key), Some("assigned"));
+        let mut merged = MetadataMap::new();
+        merged.merge(map.clone());
+        assert_eq!(merged.get_string(key), Some("assigned"));
+        assert!(merged.is_assigned(key));
+
+        map.insert(key, TagValue::new_string("assigned again"));
+        assert_eq!(map.get_string(key), Some("assigned again"));
+        map.mark_read_complete();
+        assert_eq!(map.get_string(key), Some("first read"));
+        assert!(!map.is_assigned(key));
+    }
+
+    #[test]
+    fn removed_epoch_does_not_resurrect_pre_removal_loser_after_merge() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut source = MetadataMap::new();
+        for (value, priority) in [("removed winner", 10), ("old loser", 5)] {
+            source.insert_occurrence(
+                key,
+                TagValue::new_string(value),
+                priority,
+                "XMP-exif",
+                Instance::default(),
+            );
+        }
+        source.remove(key);
+        for (value, priority) in [
+            ("new first zero", 0),
+            ("new second zero", 0),
+            ("new normal", 1),
+        ] {
+            source.insert_occurrence(
+                key,
+                TagValue::new_string(value),
+                priority,
+                "XMP-exif",
+                Instance::default(),
+            );
+        }
+        source.mark_read_complete();
+        assert_eq!(source.get_string(key), Some("new normal"));
+        for subdocument in [false, true] {
+            let mut destination = MetadataMap::new();
+            if subdocument {
+                destination.merge_as_subdocument(source.clone(), Instance(1));
+            } else {
+                destination.merge(source.clone());
+            }
+            destination.mark_read_complete();
+            assert_eq!(
+                destination.get_string(key),
+                Some("new normal"),
+                "subdocument={subdocument}"
+            );
+            let values = |map: &MetadataMap| -> Vec<String> {
+                map.occurrences_for(key)
+                    .iter()
+                    .map(|row| row.raw.as_string().unwrap().to_owned())
+                    .collect()
+            };
+            assert_eq!(values(&destination), values(&source));
+            assert_eq!(
+                values(&destination),
+                [
+                    "old loser",
+                    "new first zero",
+                    "new second zero",
+                    "new normal"
+                ]
+            );
+        }
+        let normalized = crate::core::tag_normalization::normalize_metadata_map(&source);
+        assert_eq!(normalized.get_string(key), Some("new normal"));
+        assert_eq!(
+            normalized.occurrences_for(key).len(),
+            source.occurrences_for(key).len()
+        );
+
+        source.remove(key);
+        source.insert(key, TagValue::new_string("explicit after removal"));
+        assert_eq!(source.get_string(key), Some("explicit after removal"));
+        assert!(source.is_assigned(key));
+        source.mark_read_complete();
+        assert_eq!(source.get_string(key), Some("explicit after removal"));
+        assert!(!source.is_assigned(key));
+    }
+
+    #[test]
+    fn removed_epoch_rows_stay_visible_without_displacing_destination_winners() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut source = MetadataMap::new();
+        source.insert_occurrence(
+            key,
+            TagValue::new_string("removed winner"),
+            10,
+            "XMP-exif",
+            Instance::default(),
+        );
+        source.insert_occurrence(
+            key,
+            TagValue::new_string("old loser"),
+            5,
+            "XMP-exif",
+            Instance::default(),
+        );
+        source.remove(key);
+
+        let mut destination = MetadataMap::new();
+        destination.insert_occurrence(
+            key,
+            TagValue::new_string("destination first"),
+            0,
+            "XMP-exif",
+            Instance::default(),
+        );
+        destination.mark_read_complete();
+        destination.merge(source.clone());
+        destination.mark_read_complete();
+        assert_eq!(destination.get_string(key), Some("destination first"));
+        assert_eq!(destination.occurrences_for(key).len(), 2);
+        assert_eq!(
+            destination.occurrences_for(key)[1].raw.as_string(),
+            Some("old loser")
+        );
+
+        source.insert_occurrence(
+            key,
+            TagValue::new_string("new zero"),
+            0,
+            "XMP-exif",
+            Instance::default(),
+        );
+        destination.merge(source);
+        destination.mark_read_complete();
+        assert_eq!(destination.get_string(key), Some("destination first"));
+        assert_eq!(destination.occurrences_for(key).len(), 4);
+    }
+
+    #[test]
+    fn priority_zero_late_forms_remain_on_the_source_winner_after_read() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut map = MetadataMap::new();
+        map.insert(key, TagValue::new_string("first printed"));
+        map.set_value_form(key, "first numeric");
+        map.insert(key, TagValue::new_string("second printed"));
+        map.set_value_form(key, "second numeric");
+        assert_eq!(map.get_string(key), Some("second printed"));
+        map.mark_read_complete();
+        assert_eq!(map.get_string(key), Some("first printed"));
+        assert_eq!(map.value_form(key), Some("first numeric"));
     }
 
     /// Provenance is a property of each occurrence, driven by the public

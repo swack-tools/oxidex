@@ -65,6 +65,7 @@ use crate::core::formatters::gps_speed_ref::format_gps_dest_distance_ref;
 use crate::core::formatters::gps_status::{
     format_gps_differential, format_gps_measure_mode, format_gps_status,
 };
+use crate::core::formatters::xmp_gps::convert as convert_xmp_gps;
 use crate::core::formatters::{
     decode_cfa_pattern, decode_gps_processing_method, decode_scene_type, decode_version_bytes,
     exiftool_rational_number, file_source_label_bytes, format_color_space,
@@ -202,6 +203,15 @@ pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
 /// uses this stage directly so JSON typing sees the complete scalar.
 pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagValue {
     let base_name = strip_family_prefix(tag_name);
+
+    // XMP.pm's four exif GPS rows share ToDegrees/ToDMS. This compatibility
+    // route covers direct callers; packet readers retain both forms on the
+    // occurrence so `-n` and composites see the full-precision degrees.
+    if let Some(raw) = value.as_string()
+        && let Some(forms) = convert_xmp_gps(tag_name, raw)
+    {
+        return TagValue::new_string(forms.print);
+    }
 
     if base_name == "ProfileEmbedPolicy"
         && let Some(value) = value.as_integer()

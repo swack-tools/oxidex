@@ -369538,7 +369538,7 @@
   ],
   "schema": "oxidex_ifd_identity_ledger_v1",
   "source": {
-    "expr_ledger_sha256": "3b586e23a4aa0cb5caf0a44f6f1bfc594a2c57acd609ad658c68a76f00909fb3",
+    "expr_ledger_sha256": "4fa899fb2309a4903d7b182f93627c0207cd4a9323bf47d2695b6fa28384b37e",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
     "ifd_rust_sha256": "4ca0e7caa4fc1f02639dd4e7272ba34a37e1a95c70bda41141535ba6f29bdd3b",
     "tables_json_sha256": "002b1f70711db04f411287256a69d57744841eeacfacf6c4d6fffda060f0d8ea"

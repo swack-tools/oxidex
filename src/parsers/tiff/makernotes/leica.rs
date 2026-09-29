@@ -14,7 +14,15 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::core::tag_occurrence::{Instance, Provenance, TagOccurrence, intern};
+use crate::core::{TagId, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::ifd_engine::{
+    EntryWarningBudget, FormatAdmission, MakerNoteLocation, declared_non_apple_makernote_value,
+    non_apple_makernote_location, non_apple_makernote_type_size,
+};
+use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Ctx, DecodedValue};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use nom::{
@@ -29,7 +37,7 @@ use super::lens_data::leica as leica_lenses;
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
-use super::shared::table_ifd::fmt_g15;
+use super::shared::table_ifd::{fmt_g15, print_rational};
 use crate::const_decoder;
 
 // ===== Leica MakerNote Tag IDs =====
@@ -140,6 +148,9 @@ mod leica5 {
     /// The only source of `Leica:FocusDistance` on a Leica5/Leica8 body, and
     /// therefore of `Composite:FOV`'s distance term and `Composite:DOF`.
     pub(super) const FOCUS_INFO: u16 = 0x040A;
+    /// Panasonic::Leica5 0x0413 is present in the selected 13.59 table as
+    /// `WB_RGBLevels`, writable rational64u with a declared count of three.
+    pub(super) const WB_RGB_LEVELS: u16 = 0x0413;
 }
 
 /// `%Panasonic::Leica6` (Panasonic.pm:2111), used by the S2 and M (Typ 240)
@@ -437,23 +448,11 @@ fn leica_rational_unsigned(bytes: &[u8], byte_order: ByteOrder) -> Option<String
     })
 }
 
-/// Reads an out-of-line ASCII string value, trimmed of its trailing NUL.
-///
-/// `count` is the TIFF component count (byte length for an ASCII field); a
-/// count of 4 or fewer would normally live inline in the entry rather than
-/// out-of-line, but every caller here is a Leica table entry ExifTool
-/// declares `Writable => 'string'` with no such special case, so this always
-/// resolves through `values`.
-fn read_leica_string(values: LeicaValues<'_>, value_offset: u32, count: u32) -> Option<String> {
-    let len = usize::try_from(count).ok()?;
-    let bytes = values.read(value_offset, len)?;
-    // These are fixed-width buffers padded past a NUL terminator with
-    // trailing spaces, not more NULs (`LeicaT.jpg`'s LensType is 38
-    // meaningful bytes inside a 60-byte field); a C-string read -- stop at
-    // the first NUL -- is what ExifTool's own text extraction does here,
-    // where `trim_end_matches('\0')` alone would leave the space padding in.
+/// Present the already bounded ASCII bytes for Leica5's conditioned rows.
+fn read_leica_string(bytes: &[u8]) -> String {
+    // LensType can be padded with spaces after a NUL terminator.
     let text = bytes.split(|&b| b == 0).next().unwrap_or(bytes);
-    Some(String::from_utf8_lossy(text).trim_end().to_string())
+    String::from_utf8_lossy(text).trim_end().to_string()
 }
 
 /// Resolves a `SubDirectory`'s `ByteOrder => 'Unknown'` the way ExifTool does.
@@ -492,39 +491,145 @@ pub(crate) fn resolve_unknown_byte_order(ifd_data: &[u8], inherited: ByteOrder) 
     inherited
 }
 
-/// Byte width of a TIFF field type, for the types a Leica5 sub-directory
-/// entry is written with. `None` for a type this parser does not size.
-fn tiff_type_size(field_type: u16) -> Option<usize> {
-    Some(match field_type {
-        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
-        3 | 8 => 2,         // SHORT, SSHORT
-        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
-        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
-        _ => return None,
-    })
-}
-
-/// The bytes a `SubDirectory` entry's value spans.
-///
-/// A TIFF entry's four value bytes hold the value itself whenever it fits in
-/// four, and an offset to it otherwise (Exif.pm:6502 sets `$valuePtr = $entry
-/// + 8` and only follows the pointer `if ($size > 4)`) -- the same rule
-/// `l4_string` below spells out for Leica4's short strings. `entry_bytes` is
-/// the whole 12-byte IFD entry, whose value field is its last four bytes.
-fn subdir_bytes<'a>(
+/// Resolve any Leica5/Leica8 IFD value using ProcessExif's physical checks.
+/// `directory` is in the same byte coordinate space as `values`.
+fn leica5_entry_bytes<'a>(
     entry: &IfdEntry,
     entry_bytes: &'a [u8],
     values: Option<LeicaValues<'a>>,
+    directory: std::ops::Range<usize>,
 ) -> Option<&'a [u8]> {
-    let size = tiff_type_size(entry.field_type)?;
-    let len = usize::try_from(entry.value_count).ok()?.checked_mul(size)?;
-    if len == 0 {
-        return None;
-    }
+    let len = usize::try_from(entry.value_count)
+        .ok()?
+        .checked_mul(non_apple_makernote_type_size(entry.field_type)?)?;
     if len <= 4 {
         return entry_bytes.get(8..8 + len);
     }
-    values?.read(entry.value_offset, len)
+    // Exif.pm:6539 and 6549 inspect the stored offset before base
+    // correction. A pointer into the TIFF header or the declaring MakerNote
+    // directory is suspicious for every Leica5/Leica8 entry, not only WB.
+    if entry.value_offset < 8 {
+        return None;
+    }
+    let values = values?;
+    let start = values
+        .base
+        .checked_add(usize::try_from(entry.value_offset).ok()?)?;
+    if super::makernote_context::value_overlaps_directory(
+        start,
+        len,
+        directory.start,
+        directory.end,
+    ) {
+        return None;
+    }
+    values.read(entry.value_offset, len)
+}
+
+/// `ReadValue` handles zero counts, scalar singletons and byte-string forms
+/// before this table's display projection. The generated Leica5 row declares
+/// no Format or Condition override for WB_RGBLevels.
+fn leica5_wb_decoded(
+    entry: &IfdEntry,
+    entry_bytes: &[u8],
+    values: Option<LeicaValues<'_>>,
+    byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
+) -> Option<(DecodedValue, TagValue)> {
+    let bytes = leica5_entry_bytes(entry, entry_bytes, values, directory)?;
+    declared_non_apple_makernote_value(
+        entry.field_type,
+        entry.value_count,
+        bytes,
+        byte_order.to_io_byte_order(),
+    )
+}
+
+fn leica5_wb_text(value: &DecodedValue) -> Option<String> {
+    match value {
+        DecodedValue::Array(values) => values
+            .iter()
+            .map(leica5_wb_text)
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.join(" ")),
+        DecodedValue::UnsignedRational(num, den) => {
+            Some(print_rational(i64::from(*num), i64::from(*den)))
+        }
+        DecodedValue::SignedRational(num, den) if *num == 0 && *den < 0 => {
+            // GetRational64s preserves the negative denominator's zero sign.
+            Some("-0".to_owned())
+        }
+        DecodedValue::SignedRational(num, den) => {
+            Some(print_rational(i64::from(*num), i64::from(*den)))
+        }
+        DecodedValue::Float(number) => Some(fmt_g15(*number)),
+        DecodedValue::Undefined(bytes) => crate::exiftool_tables::runtime::fix_utf8(bytes),
+        DecodedValue::String(text) => Some(text.clone()),
+        value => value.perl_string(),
+    }
+}
+
+fn leica5_wb_rgb_levels(
+    entry: &IfdEntry,
+    entry_bytes: &[u8],
+    values: Option<LeicaValues<'_>>,
+    byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
+) -> Option<String> {
+    let (decoded, _) = leica5_wb_decoded(entry, entry_bytes, values, byte_order, directory)?;
+    // ExifTool's public output strips NULs; the value used by Composite
+    // arithmetic retains them until Perl splits and numifies each component.
+    leica5_wb_text(&decoded).map(|text| text.replace('\0', ""))
+}
+
+fn leica5_wb_admitted() -> Option<u8> {
+    let table = crate::exiftool_tables::find_ifd_table("Panasonic", "Leica5")?;
+    let tag = table.tag(leica5::WB_RGB_LEVELS)?;
+    (tag.name == "WB_RGBLevels"
+        && tag.writable == Some("rational64u")
+        && tag.count == Some(3)
+        && tag.format.is_none()
+        && tag.groups == crate::exiftool_tables::TagGroups::NONE
+        && tag.flags == crate::exiftool_tables::ifd_schema::IfdFlags::NONE
+        && tag.condition.is_none()
+        && tag.omitted == crate::exiftool_tables::Omitted::NONE
+        && tag.raw_conv.is_none()
+        && tag.value_conv.is_none()
+        && matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
+        && tag.subdir.is_none())
+    .then(|| u8::try_from(table.priority.unwrap_or(1)).ok())
+    .flatten()
+}
+
+fn leica5_wb_byte_range(
+    ctx: &MakerNoteContext<'_>,
+    layout: LeicaLayout,
+    entry: &IfdEntry,
+    entry_offset: usize,
+) -> Option<std::ops::Range<u64>> {
+    if !ctx.is_located() {
+        return None;
+    }
+    let len = usize::try_from(entry.value_count)
+        .ok()?
+        .checked_mul(non_apple_makernote_type_size(entry.field_type)?)?;
+    let start = if len <= 4 {
+        ctx.payload_base().checked_add(
+            u64::try_from(
+                layout
+                    .ifd_offset()
+                    .checked_add(entry_offset)?
+                    .checked_add(8)?,
+            )
+            .ok()?,
+        )?
+    } else if layout == LeicaLayout::Leica5 {
+        ctx.payload_base()
+            .checked_add(u64::from(entry.value_offset))?
+    } else {
+        ctx.tiff_base().checked_add(u64::from(entry.value_offset))?
+    };
+    Some(start..start.checked_add(u64::try_from(len).ok()?)?)
 }
 
 /// `%PanasonicRaw::panasonicWhiteBalance` (PanasonicRaw.pm:51-67), the
@@ -999,7 +1104,15 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         // No enclosing block, so a Leica9 payload's TIFF-relative value offsets
         // stay unresolvable and the two tags that need them are skipped rather
         // than guessed. `parse_with_context` is the entry point that has them.
-        self.parse_payload(data, byte_order, None, tags, &mut HashMap::new())
+        self.parse_payload(
+            data,
+            byte_order,
+            None,
+            None,
+            tags,
+            &mut HashMap::new(),
+            None,
+        )
     }
 
     /// Leica9's value offsets need the selected source's base: the MakerNote
@@ -1024,26 +1137,60 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         &self,
         ctx: &MakerNoteContext<'_>,
         byte_order: ByteOrder,
-        _model: Option<&str>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_payload(ctx.payload(), byte_order, Some(ctx), tags, value_forms)
+        self.parse_payload(
+            ctx.payload(),
+            byte_order,
+            Some(ctx),
+            model,
+            tags,
+            value_forms,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        self.parse_payload(
+            ctx.payload(),
+            byte_order,
+            Some(ctx),
+            model,
+            tags,
+            value_forms,
+            Some(occurrences),
+        )
     }
 }
 
 impl LeicaMakerNoteParser {
     /// Routes a payload to the decoder for its layout.
     ///
-    /// `ctx` is the enclosing TIFF block when the caller knows it; only Leica9
-    /// needs it, and only for its two rational exposure measurements.
+    /// `ctx` is the enclosing TIFF block when the caller knows it. Leica3,
+    /// Leica8 and Leica9 use TIFF-relative offsets; Leica5 can reach values
+    /// beyond the MakerNote's declared extent through its located window.
     fn parse_payload(
         &self,
         data: &[u8],
         byte_order: ByteOrder,
         ctx: Option<&MakerNoteContext<'_>>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
+        mut occurrences: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         // Validate minimum data length
         if data.len() < 8 {
@@ -1187,8 +1334,26 @@ impl LeicaMakerNoteParser {
             ));
         }
 
+        // Leica5 offsets index a payload-relative window; Leica8 offsets
+        // index the enclosing TIFF. Keep the declaring IFD in that same
+        // coordinate space before following a WB value pointer.
+        let entry_directory = (|| {
+            let start = if layout == LeicaLayout::Leica8 {
+                ctx?.payload_offset().checked_add(offset)?
+            } else {
+                offset
+            };
+            Some(start..start.checked_add(required_size)?)
+        })();
+
         // Parse each IFD entry
+        let mut warning_budget = EntryWarningBudget::default();
         for i in 0..entry_count {
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
+                && warning_budget.exhausted()
+            {
+                break;
+            }
             let entry_offset = 2 + (i as usize * 12);
             let entry_data = &ifd_data[entry_offset..entry_offset + 12];
             let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
@@ -1209,6 +1374,46 @@ impl LeicaMakerNoteParser {
             let component_count = entry_reader.u32_at(4).unwrap_or(0);
             let value_offset = entry_reader.u32_at(8).unwrap_or(0);
 
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8) {
+                match warning_budget.admit(
+                    usize::from(i),
+                    format,
+                    non_apple_makernote_type_size(format),
+                    model.is_some_and(|model| model.starts_with("ILCE")),
+                ) {
+                    FormatAdmission::Accepted(_) => {}
+                    FormatAdmission::Skip => continue,
+                    FormatAdmission::Stop => break,
+                }
+                let directory_start = entry_directory.as_ref().map_or(offset, |range| range.start);
+                let Some(directory_end) = directory_start.checked_add(required_size) else {
+                    break;
+                };
+                let Some(value_field_pos) = directory_start
+                    .checked_add(entry_offset)
+                    .and_then(|pos| pos.checked_add(8))
+                else {
+                    break;
+                };
+                match non_apple_makernote_location(
+                    format,
+                    component_count,
+                    value_offset,
+                    value_field_pos,
+                    values.map_or(data, |values| values.block),
+                    directory_start,
+                    directory_end,
+                    values.and_then(|values| i64::try_from(values.base).ok()),
+                ) {
+                    MakerNoteLocation::Readable => {}
+                    MakerNoteLocation::Warned => {
+                        warning_budget.warned();
+                        continue;
+                    }
+                    MakerNoteLocation::Unavailable => continue,
+                }
+            }
+
             // Create IfdEntry for this tag
             let entry = IfdEntry {
                 tag_id,
@@ -1216,6 +1421,68 @@ impl LeicaMakerNoteParser {
                 value_count: component_count,
                 value_offset,
             };
+
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
+                && tag_id == leica5::WB_RGB_LEVELS
+            {
+                if let Some(priority) = leica5_wb_admitted()
+                    // A standalone MakerNote passed to `MakerNoteParser::parse`
+                    // has no TIFF coordinates. Inline values need none; the
+                    // decoder still refuses out-of-line values without a
+                    // located `LeicaValues` window.
+                    && let Some(directory) = entry_directory
+                        .clone()
+                        .or_else(|| ctx.is_none().then_some(0..0))
+                    && let Some((decoded, stored)) =
+                        leica5_wb_decoded(&entry, entry_data, values, byte_order, directory)
+                    && let Some(raw_text) = leica5_wb_text(&decoded)
+                {
+                    // Legacy map access exposes the NUL-free display. Keep
+                    // source NULs in ValueConv for composite arithmetic and
+                    // in PrintConv until EscapeJSON selects the JSON type:
+                    // a numeric token ending in NUL must remain a string.
+                    if let Some(rows) = occurrences.as_mut() {
+                        rows.push((
+                            "Leica:WB_RGBLevels".to_string(),
+                            TagOccurrence {
+                                id: TagId::Numeric(leica5::WB_RGB_LEVELS),
+                                name: intern("WB_RGBLevels"),
+                                group0: intern("MakerNotes"),
+                                group1: intern("Leica"),
+                                group2: Some(intern("Camera")),
+                                instance: Instance::default(),
+                                raw: TagValue::String(raw_text.replace('\0', "")),
+                                value: Some(TagValue::String(raw_text.clone())),
+                                print: Some(TagValue::String(raw_text)),
+                                stored: Some(stored),
+                                priority,
+                                is_list: false,
+                                order: 0,
+                                origin: Provenance {
+                                    module: Some("Panasonic"),
+                                    table: Some("Leica5"),
+                                    byte_range: ctx.and_then(|ctx| {
+                                        leica5_wb_byte_range(ctx, layout, &entry, entry_offset)
+                                    }),
+                                },
+                            },
+                        ));
+                    } else {
+                        // `%Panasonic::Leica5` has PRIORITY => 0: the first
+                        // emitted value wins, including an empty count-0
+                        // value. Keep the flat print/value maps in step with
+                        // the occurrence sink's priority selection. A
+                        // refused entry never reaches this point and does
+                        // not reserve the key for a later valid one.
+                        const KEY: &str = "Leica:WB_RGBLevels";
+                        if priority != 0 || !tags.contains_key(KEY) {
+                            tags.insert(KEY.to_string(), raw_text.replace('\0', ""));
+                            value_forms.insert(KEY.to_string(), raw_text);
+                        }
+                    }
+                }
+                continue;
+            }
 
             // Each layout points at its own ExifTool table, and the same
             // numeric id means different things in different tables, so
@@ -1226,14 +1493,19 @@ impl LeicaMakerNoteParser {
                 // One tag table, two dispatch entries: the layouts differ only
                 // in where their out-of-line values are measured from, which
                 // `values` above has already settled.
-                LeicaLayout::Leica5 | LeicaLayout::Leica8 => self.decode_leica5_entry(
-                    &entry,
-                    entry_data,
-                    values,
-                    byte_order,
-                    tags,
-                    value_forms,
-                ),
+                LeicaLayout::Leica5 | LeicaLayout::Leica8 => {
+                    // Detached Leica8 still has inline fields. Its missing
+                    // TIFF window already prevents out-of-line reads.
+                    self.decode_leica5_entry(
+                        &entry,
+                        entry_data,
+                        values,
+                        byte_order,
+                        entry_directory.clone().unwrap_or(0..0),
+                        tags,
+                        value_forms,
+                    );
+                }
                 LeicaLayout::Leica6 => self.decode_leica6_entry(&entry, tags),
                 LeicaLayout::Leica9 => self.decode_leica9_entry(&entry, values, byte_order, tags),
                 // No ExifTool table is known to correspond to this header;
@@ -1444,6 +1716,7 @@ impl LeicaMakerNoteParser {
         entry_bytes: &[u8],
         values: Option<LeicaValues<'_>>,
         byte_order: ByteOrder,
+        directory: std::ops::Range<usize>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) {
@@ -1454,7 +1727,8 @@ impl LeicaMakerNoteParser {
             // `Leica:FocusDistance`, and with it `Composite:DOF` and
             // `Composite:FOV`'s distance term.
             leica5::FOCUS_INFO => {
-                let Some(dir) = subdir_bytes(entry, entry_bytes, values) else {
+                let Some(dir) = leica5_entry_bytes(entry, entry_bytes, values, directory.clone())
+                else {
                     return;
                 };
                 for (name, value, print) in focus_info_fields(dir, byte_order) {
@@ -1465,9 +1739,10 @@ impl LeicaMakerNoteParser {
             // `Condition => '$format eq "string"'` (Panasonic.pm:2003) --
             // field type 2 is TIFF ASCII.
             leica5::LENS_TYPE if entry.field_type == 2 => {
-                if let Some(s) = values.and_then(|values| {
-                    read_leica_string(values, entry.value_offset, entry.value_count)
-                }) {
+                if let Some(bytes) =
+                    leica5_entry_bytes(entry, entry_bytes, values, directory.clone())
+                {
+                    let s = read_leica_string(bytes);
                     tags.insert("Leica:LensType".to_string(), s);
                 }
             }
@@ -1478,9 +1753,10 @@ impl LeicaMakerNoteParser {
                 );
             }
             leica5::ORIGINAL_DIRECTORY if entry.field_type == 2 => {
-                if let Some(s) = values.and_then(|values| {
-                    read_leica_string(values, entry.value_offset, entry.value_count)
-                }) {
+                if let Some(bytes) =
+                    leica5_entry_bytes(entry, entry_bytes, values, directory.clone())
+                {
+                    let s = read_leica_string(bytes);
                     tags.insert("Leica:OriginalDirectory".to_string(), s);
                 }
             }
@@ -1490,7 +1766,8 @@ impl LeicaMakerNoteParser {
             // `LeicaQ3_43.jpg`'s entry holds 0x095c, where its `II*` begins
             // in the enclosing TIFF).
             leica5::CAMERA_IFD => {
-                if let Some(dir) = subdir_bytes(entry, entry_bytes, values) {
+                if let Some(dir) = leica5_entry_bytes(entry, entry_bytes, values, directory.clone())
+                {
                     parse_camera_ifd(dir, tags);
                 }
             }
@@ -1545,9 +1822,12 @@ impl LeicaMakerNoteParser {
                 }
             }
             leica9::USER_PROFILE => {
-                if let Some(s) = values.and_then(|values| {
-                    read_leica_string(values, entry.value_offset, entry.value_count)
-                }) {
+                if let Some(s) = values
+                    .and_then(|values| {
+                        values.read(entry.value_offset, usize::try_from(entry.value_count).ok()?)
+                    })
+                    .map(read_leica_string)
+                {
                     tags.insert("Leica:UserProfile".to_string(), s);
                 }
             }
@@ -1587,9 +1867,12 @@ impl LeicaMakerNoteParser {
                 }
             }
             leica9::LENS_PROFILE_NAME => {
-                if let Some(s) = values.and_then(|values| {
-                    read_leica_string(values, entry.value_offset, entry.value_count)
-                }) {
+                if let Some(s) = values
+                    .and_then(|values| {
+                        values.read(entry.value_offset, usize::try_from(entry.value_count).ok()?)
+                    })
+                    .map(read_leica_string)
+                {
                     tags.insert("Leica:LensProfileName".to_string(), s);
                 }
             }
@@ -2022,6 +2305,169 @@ mod tests {
         }
     }
 
+    #[test]
+    fn detached_leica8_keeps_inline_serial_number() {
+        let mut data = b"LEICA\0\x08\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&leica5::SERIAL_NUMBER.to_le_bytes());
+        data.extend_from_slice(&4u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&123_456u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let mut tags = HashMap::new();
+        LeicaMakerNoteParser
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .unwrap();
+        assert_eq!(
+            tags.get("Leica:SerialNumber").map(String::as_str),
+            Some("123456")
+        );
+    }
+
+    #[test]
+    fn detached_leica_wb_duplicate_maps_keep_first_emitted_priority_zero_value() {
+        let first = (1u16, 3u32, 0x010402u32); // BYTE[3]: 2 4 1
+        let second = (1u16, 3u32, 0x040404u32); // BYTE[3]: 4 4 4
+        let empty = (1u16, 0u32, 0u32);
+        let refused = (5u16, 3u32, 0u32); // RATIONAL[3] into header
+        for layout in [0x06u8, 0x08] {
+            for (name, left, right, expected) in [
+                ("valid then valid", first, second, "2 4 1"),
+                ("empty then valid", empty, second, ""),
+                ("refused then valid", refused, second, "4 4 4"),
+                ("valid then refused", first, refused, "2 4 1"),
+                ("empty then refused", empty, refused, ""),
+            ] {
+                let mut data = vec![0u8; 38];
+                data[..8].copy_from_slice(&[b'L', b'E', b'I', b'C', b'A', 0, layout, 0]);
+                data[8..10].copy_from_slice(&2u16.to_le_bytes());
+                for (index, (kind, count, value)) in [left, right].into_iter().enumerate() {
+                    let at = 10 + index * 12;
+                    data[at..at + 2].copy_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+                    data[at + 2..at + 4].copy_from_slice(&kind.to_le_bytes());
+                    data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                    data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+                }
+                let mut direct = HashMap::new();
+                LeicaMakerNoteParser
+                    .parse(&data, ByteOrder::LittleEndian, &mut direct)
+                    .unwrap();
+                assert_eq!(
+                    direct.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, direct"
+                );
+
+                let mut printed = HashMap::new();
+                let mut forms = HashMap::new();
+                let ctx = MakerNoteContext::detached(&data);
+                LeicaMakerNoteParser
+                    .parse_with_context_and_values(
+                        &ctx,
+                        ByteOrder::LittleEndian,
+                        None,
+                        &mut printed,
+                        &mut forms,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    printed.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, print"
+                );
+                assert_eq!(
+                    forms.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, value"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_leica_wb_header_pointers_spend_directory_warning_budget() {
+        for layout in [0x06u8, 0x08] {
+            for bad_count in [10usize, 11] {
+                let count = bad_count + 1;
+                let mut data = vec![0u8; 8 + 2 + count * 12 + 4];
+                data[..8].copy_from_slice(&[b'L', b'E', b'I', b'C', b'A', 0, layout, 0]);
+                data[8..10].copy_from_slice(&(count as u16).to_le_bytes());
+                for index in 0..count {
+                    let at = 10 + index * 12;
+                    data[at..at + 2].copy_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+                    let (kind, n, pointer) = if index == bad_count {
+                        (1u16, 3u32, 0x010402u32)
+                    } else {
+                        (5u16, 3u32, 0u32)
+                    };
+                    data[at + 2..at + 4].copy_from_slice(&kind.to_le_bytes());
+                    data[at + 4..at + 8].copy_from_slice(&n.to_le_bytes());
+                    data[at + 8..at + 12].copy_from_slice(&pointer.to_le_bytes());
+                }
+                let mut tags = HashMap::new();
+                LeicaMakerNoteParser
+                    .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                    .unwrap();
+                assert_eq!(
+                    tags.get("Leica:WB_RGBLevels").map(String::as_str),
+                    (bad_count == 10).then_some("2 4 1"),
+                    "layout {layout}, bad pointers {bad_count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_leica_wb_keeps_preexisting_map_winner_and_value_form() {
+        let mut data = b"LEICA\0\x08\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&0x010402u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let mut printed =
+            HashMap::from([("Leica:WB_RGBLevels".to_string(), "prior print".to_string())]);
+        let mut forms =
+            HashMap::from([("Leica:WB_RGBLevels".to_string(), "prior value".to_string())]);
+        let ctx = MakerNoteContext::detached(&data);
+        LeicaMakerNoteParser
+            .parse_with_context_and_values(
+                &ctx,
+                ByteOrder::LittleEndian,
+                None,
+                &mut printed,
+                &mut forms,
+            )
+            .unwrap();
+        assert_eq!(
+            printed.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("prior print")
+        );
+        assert_eq!(
+            forms.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("prior value")
+        );
+    }
+
+    #[test]
+    fn leica_wb_type_admission_follows_source_version() {
+        use crate::exiftool_tables::IFD_EXIFTOOL_VERSION;
+
+        assert_eq!(non_apple_makernote_type_size(1), Some(1));
+        assert_eq!(non_apple_makernote_type_size(13), Some(4));
+        assert_eq!(non_apple_makernote_type_size(14), None);
+        assert_eq!(non_apple_makernote_type_size(16), None);
+        assert_eq!(
+            non_apple_makernote_type_size(129),
+            match IFD_EXIFTOOL_VERSION {
+                "11.78" => None,
+                "12.64" | "13.59" => Some(1),
+                version => panic!("unreviewed IFD source version: {version}"),
+            }
+        );
+    }
+
     // `LeicaM10-R.jpg`'s M10 header must keep resolving to Leica9 and not be
     // shadowed by the new Leica5/Leica6 detection.
     #[test]
@@ -2160,26 +2606,133 @@ mod tests {
         );
     }
 
-    // A `SubDirectory` entry whose value is longer than four bytes holds an
-    // offset; one that fits holds the bytes themselves (Exif.pm:6502).
+    // `LeicaX1.jpg`'s real Leica5 0x0413 is rational64u[3], stored at the
+    // payload-relative offset 22. ExifTool 13.59 prints these three values
+    // as 0.5182186235 1 0.7231638418; the decoder must reach the existing
+    // RedBalance/BlueBalance composites through the ordinary tag pipeline.
     #[test]
-    fn subdir_bytes_reads_inline_and_out_of_line() {
-        // int16u[4] = 8 bytes -> out of line, at offset 4 of `block`.
+    fn leica5_wb_rgb_levels_reads_real_x1_rationals() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"LEICA\0\x06\0");
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&0x0413u16.to_le_bytes());
+        payload.extend_from_slice(&5u16.to_le_bytes());
+        payload.extend_from_slice(&3u32.to_le_bytes());
+        payload.extend_from_slice(&22u32.to_le_bytes());
+        for (num, den) in [(256u32, 494u32), (512, 512), (256, 354)] {
+            payload.extend_from_slice(&num.to_le_bytes());
+            payload.extend_from_slice(&den.to_le_bytes());
+        }
+        let mut tags = HashMap::new();
+        LeicaMakerNoteParser
+            .parse(&payload, ByteOrder::LittleEndian, &mut tags)
+            .expect("Leica5 MakerNote parses");
+        assert_eq!(
+            tags.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("0.5182186235 1 0.7231638418")
+        );
+    }
+
+    #[test]
+    fn leica5_wb_rgb_levels_respects_actual_type_count_and_bounds() {
+        let mut data = Vec::new();
+        for (num, den) in [(256u32, 494u32), (512, 512), (256, 354), (90, 45)] {
+            data.extend_from_slice(&num.to_le_bytes());
+            data.extend_from_slice(&den.to_le_bytes());
+        }
+        let decode = |field_type, count, block: &[u8]| {
+            // Out-of-line values begin after the eight-byte TIFF header.
+            let mut stored = vec![0; 8];
+            stored.extend_from_slice(block);
+            let entry = IfdEntry {
+                tag_id: 0x0413,
+                field_type,
+                value_count: count,
+                value_offset: 8,
+            };
+            let mut entry_bytes = [0u8; 12];
+            entry_bytes[2..4].copy_from_slice(&field_type.to_le_bytes());
+            entry_bytes[4..8].copy_from_slice(&count.to_le_bytes());
+            leica5_wb_rgb_levels(
+                &entry,
+                &entry_bytes,
+                Some(LeicaValues {
+                    block: &stored,
+                    base: 0,
+                }),
+                ByteOrder::LittleEndian,
+                0..0,
+            )
+        };
+        // Mutations of LeicaX1.jpg under the pinned 13.59 oracle: Count=2
+        // prints only two quotients, Count=4 includes the next rational, and
+        // a TIFF SHORT[3] reads its actual three short values.
+        assert_eq!(decode(5, 2, &data).as_deref(), Some("0.5182186235 1"));
+        assert_eq!(
+            decode(5, 4, &data).as_deref(),
+            Some("0.5182186235 1 0.7231638418 2")
+        );
+        assert_eq!(decode(3, 3, &data).as_deref(), Some("256 0 494"));
+        assert_eq!(decode(5, 4, &data[..24]), None);
+        assert_eq!(decode(5, u32::MAX, &data), None);
+        assert_eq!(decode(3, 0, &data).as_deref(), Some(""));
+        assert_eq!(decode(7, 3, &data).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn leica5_wb_rgb_levels_matches_native_zero_denominator_forms() {
+        let entry = IfdEntry {
+            tag_id: 0x0413,
+            field_type: 5,
+            value_count: 3,
+            value_offset: 8,
+        };
+        let mut data = vec![0; 8];
+        for (num, den) in [(0u32, 0u32), (512, 0), (256, 354)] {
+            data.extend_from_slice(&num.to_le_bytes());
+            data.extend_from_slice(&den.to_le_bytes());
+        }
+        let mut entry_bytes = [0u8; 12];
+        entry_bytes[2..4].copy_from_slice(&5u16.to_le_bytes());
+        entry_bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(
+            leica5_wb_rgb_levels(
+                &entry,
+                &entry_bytes,
+                Some(LeicaValues {
+                    block: &data,
+                    base: 0
+                }),
+                ByteOrder::LittleEndian,
+                0..0,
+            )
+            .as_deref(),
+            Some("undef inf 0.7231638418")
+        );
+    }
+
+    // A Leica5 entry uses the inline value field when it fits, and bounds an
+    // out-of-line value beyond the TIFF header and declaring IFD.
+    #[test]
+    fn leica5_entry_bytes_reads_inline_and_out_of_line() {
+        // int16u[4] = 8 bytes -> out of line, at stored offset 8.
         let entry = IfdEntry {
             tag_id: leica5::FOCUS_INFO,
             field_type: 3,
             value_count: 4,
-            value_offset: 4,
+            value_offset: 8,
         };
         let entry_bytes = [0u8; 12];
-        let block = [0xffu8, 0xff, 0xff, 0xff, 0x0a, 0x06, 0, 0, 0, 0, 0, 0];
+        let block = [
+            0xffu8, 0xff, 0xff, 0xff, 0x0a, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
         let values = LeicaValues {
             block: &block,
             base: 0,
         };
         assert_eq!(
-            subdir_bytes(&entry, &entry_bytes, Some(values)),
-            Some(&block[4..12])
+            leica5_entry_bytes(&entry, &entry_bytes, Some(values), 0..0),
+            Some(&block[8..16])
         );
 
         // int16u[2] = 4 bytes -> inline, in the entry's own last four bytes.
@@ -2191,7 +2744,7 @@ mod tests {
         };
         let entry_bytes = [0u8, 0, 0, 0, 0, 0, 0, 0, 0xbe, 0x01, 0x50, 0xc3];
         assert_eq!(
-            subdir_bytes(&entry, &entry_bytes, None),
+            leica5_entry_bytes(&entry, &entry_bytes, None, 0..0),
             Some(&entry_bytes[8..12])
         );
     }

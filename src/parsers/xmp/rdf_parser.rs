@@ -47,6 +47,7 @@
 //! ```
 
 use crate::core::formatters::print_fraction;
+use crate::core::formatters::xmp_gps::convert as convert_xmp_gps;
 use crate::core::value_formatter::format_iptc_urgency;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::namespace_resolver::NamespaceResolver;
@@ -184,7 +185,7 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
 pub(crate) fn parse_xmp_typed_with_rational_forms(
     xml_bytes: &[u8],
 ) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
-    let (formatted, _, rational_forms) = parse_xmp_packet(xml_bytes)?;
+    let (formatted, _, rational_forms, _) = parse_xmp_packet(xml_bytes)?;
     Ok((formatted, rational_forms))
 }
 
@@ -260,7 +261,21 @@ impl XmpEntry {
         use crate::core::TagValue;
         match &self.value {
             XmpValue::List(values) if typed => {
-                TagValue::Array(values.iter().cloned().map(TagValue::new_string).collect())
+                // Panasonic::DSA declares this sequence `Writable => real`.
+                // Its JSON values are numbers, unlike ordinary XMP text lists.
+                if self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
+                    TagValue::Array(
+                        values
+                            .iter()
+                            .map(|value| match value.parse::<f64>() {
+                                Ok(number) if number.is_finite() => TagValue::Float(number),
+                                _ => TagValue::new_string(value.clone()),
+                            })
+                            .collect(),
+                    )
+                } else {
+                    TagValue::Array(values.iter().cloned().map(TagValue::new_string).collect())
+                }
             }
             value => TagValue::new_string(value.clone().into_joined()),
         }
@@ -275,10 +290,21 @@ pub fn parse_xmp_entries(xml_bytes: &[u8]) -> Result<Vec<XmpEntry>> {
 /// [`parse_xmp_entries`] plus the rational forms of
 /// [`parse_xmp_typed_with_rational_forms`], keyed by the storage key of the
 /// visible entry they belong to.
+/// Retained for callers that need only the pre-existing rational projection.
+#[allow(dead_code)]
 pub(crate) fn parse_xmp_entries_with_rational_forms(
     xml_bytes: &[u8],
 ) -> Result<(Vec<XmpEntry>, Vec<(String, String)>)> {
-    let (_, entries, rational_forms) = parse_xmp_packet(xml_bytes)?;
+    let (entries, rational_forms, _) = parse_xmp_entries_with_source_forms(xml_bytes)?;
+    Ok((entries, rational_forms))
+}
+
+/// Internal packet projection with one original GPS scalar per emitted entry.
+/// The aligned vector retains distinct sources for duplicate coordinates.
+pub(crate) fn parse_xmp_entries_with_source_forms(
+    xml_bytes: &[u8],
+) -> Result<(Vec<XmpEntry>, Vec<(String, String)>, Vec<Option<String>>)> {
+    let (_, entries, rational_forms, gps_sources) = parse_xmp_packet(xml_bytes)?;
     let rational_forms = rational_forms
         .into_iter()
         .filter_map(|(tag, form)| {
@@ -288,7 +314,7 @@ pub(crate) fn parse_xmp_entries_with_rational_forms(
                 .map(|entry| (entry.key.clone(), form))
         })
         .collect();
-    Ok((entries, rational_forms))
+    Ok((entries, rational_forms, gps_sources))
 }
 
 /// Parses one packet and stores every entry (see [`XmpEntry`]); list values
@@ -299,9 +325,9 @@ pub fn insert_xmp_packet(
     xml_bytes: &[u8],
     typed: bool,
 ) -> Result<usize> {
-    let entries = parse_xmp_entries(xml_bytes)?;
-    for entry in &entries {
-        insert_xmp_entry(metadata, entry, entry.tag_value(typed));
+    let (entries, _, gps_sources) = parse_xmp_entries_with_source_forms(xml_bytes)?;
+    for (entry, source) in entries.iter().zip(&gps_sources) {
+        insert_xmp_entry_with_source(metadata, entry, entry.tag_value(typed), source.as_deref());
     }
     Ok(entries.len())
 }
@@ -330,6 +356,16 @@ pub fn insert_xmp_entry(
     entry: &XmpEntry,
     value: crate::core::TagValue,
 ) {
+    insert_xmp_entry_with_source(metadata, entry, value, None);
+}
+
+/// Internal insertion path that retains the packet scalar beside the public entry.
+pub(crate) fn insert_xmp_entry_with_source(
+    metadata: &mut crate::core::MetadataMap,
+    entry: &XmpEntry,
+    value: crate::core::TagValue,
+    source: Option<&str>,
+) {
     if entry.group1.is_empty() {
         metadata.insert(entry.key.clone(), value);
         return;
@@ -351,13 +387,27 @@ pub fn insert_xmp_entry(
             entry.key.split_once(':').map_or("", |(group, _)| group),
         )
     };
-    metadata.insert_occurrence(
-        entry.key.clone(),
-        value,
-        priority,
-        &entry.group1,
-        crate::core::Instance::default(),
-    );
+    if let Some((source, forms)) =
+        source.and_then(|raw| convert_xmp_gps(&entry.tag, raw).map(|forms| (raw, forms)))
+    {
+        metadata.insert_occurrence_with_forms(
+            entry.key.clone(),
+            value,
+            crate::core::TagValue::new_string(forms.value),
+            Some(crate::core::TagValue::new_string(source.to_owned())),
+            priority,
+            &entry.group1,
+            crate::core::Instance::default(),
+        );
+    } else {
+        metadata.insert_occurrence(
+            entry.key.clone(),
+            value,
+            priority,
+            &entry.group1,
+            crate::core::Instance::default(),
+        );
+    }
 }
 
 /// The emissions of the parser's passes replayed under legacy keys with the
@@ -477,6 +527,7 @@ fn parse_xmp_packet(
     Vec<(String, XmpValue)>,
     Vec<XmpEntry>,
     Vec<(String, String)>,
+    Vec<Option<String>>,
 )> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
@@ -969,6 +1020,9 @@ fn parse_xmp_packet(
                     .collect(),
             );
         }
+        if let Some(forms) = convert_xmp_gps(tag, value) {
+            return XmpValue::Scalar(forms.print);
+        }
         if record_forms {
             if matches!(
                 tag.rsplit(':').next(),
@@ -1015,6 +1069,7 @@ fn parse_xmp_packet(
     // What callers store: every tag the reader used to report under its
     // legacy key first, then the rest of `formatted` (see `XmpEntry`).
     let mut entries: Vec<XmpEntry> = Vec::new();
+    let mut gps_sources: Vec<Option<String>> = Vec::new();
     let mut claimed = vec![false; results.len()];
     // Unclaimed `results` indices per (tag, value), earliest first.
     let mut unclaimed: std::collections::HashMap<(&str, &str), std::collections::VecDeque<usize>> =
@@ -1037,6 +1092,7 @@ fn parse_xmp_packet(
                 formatted[index].1.clone(),
                 false,
             ));
+            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         } else {
             entries.push(XmpEntry::new(
                 legacy_key,
@@ -1044,6 +1100,7 @@ fn parse_xmp_packet(
                 format_value(tag, value, false),
                 false,
             ));
+            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         }
     }
     for (index, (tag, value)) in results.iter().enumerate() {
@@ -1054,6 +1111,7 @@ fn parse_xmp_packet(
                 formatted[index].1.clone(),
                 true,
             ));
+            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         }
     }
 
@@ -1068,6 +1126,7 @@ fn parse_xmp_packet(
     for (tag, value) in decoded_hdrp {
         if !formatted.iter().any(|(t, _)| *t == tag) {
             entries.push(XmpEntry::hdrp(tag.clone(), XmpValue::Scalar(value.clone())));
+            gps_sources.push(None);
             formatted.push((tag, XmpValue::Scalar(value)));
         }
     }
@@ -1097,7 +1156,8 @@ fn parse_xmp_packet(
         }
     }
 
-    Ok((formatted, entries, rational_forms))
+    debug_assert_eq!(entries.len(), gps_sources.len());
+    Ok((formatted, entries, rational_forms, gps_sources))
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
@@ -3704,6 +3764,9 @@ fn capitalize_first_letter(s: &str) -> String {
 /// - **EXIF (exif:)**: ISO, ShutterSpeed, Aperture, ExposureCompensation, FocalLength
 /// - **Basic Job Ticket (xmpBJ:)**: JobName, CreationDate, Status
 fn format_xmp_value(tag: &str, value: &str) -> String {
+    if let Some(forms) = convert_xmp_gps(tag, value) {
+        return forms.print;
+    }
     // Extract local tag name (after colon)
     let local_name = tag.split(':').last().unwrap_or(tag);
 
@@ -7246,6 +7309,56 @@ mod entry_tests {
         format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {namespaces}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
         )
+    }
+
+    #[test]
+    fn public_entry_literal_keeps_its_original_five_fields() {
+        let entry = XmpEntry {
+            key: "XMP-exif:GPSLatitude".into(),
+            tag: "XMP-exif:GPSLatitude".into(),
+            group1: "XMP-exif".into(),
+            value: XmpValue::Scalar("43 deg 30' 0.00\" N".into()),
+            shadowed: false,
+        };
+        assert_eq!(entry.group1, "XMP-exif");
+    }
+
+    #[test]
+    fn gps_sources_stay_aligned_with_emitted_packet_entries() {
+        // The existing RDF parser keeps the first repeated property. Each
+        // distinct emitted coordinate still needs its own original scalar.
+        let xml = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:Description exif:GPSLatitude="43,30.123456N" exif:GPSDestLatitude="42,1.654321S"/><rdf:Description exif:GPSLatitude="44,15.987654S"/></rdf:RDF>"#;
+        let (entries, _, sources) = parse_xmp_entries_with_source_forms(xml.as_bytes()).unwrap();
+        assert_eq!(entries.len(), sources.len());
+        let gps: Vec<_> = entries
+            .iter()
+            .zip(&sources)
+            .filter(|(entry, _)| {
+                matches!(
+                    entry.tag.as_str(),
+                    "XMP-exif:GPSLatitude" | "XMP-exif:GPSDestLatitude"
+                )
+            })
+            .map(|(entry, source)| (entry.tag.as_str(), source.as_deref()))
+            .collect();
+        assert_eq!(
+            gps,
+            [
+                ("XMP-exif:GPSLatitude", Some("43,30.123456N")),
+                ("XMP-exif:GPSDestLatitude", Some("42,1.654321S")),
+            ]
+        );
+
+        let mut metadata = MetadataMap::new();
+        insert_xmp_packet(&mut metadata, xml.as_bytes(), true).unwrap();
+        for (tag, source) in gps {
+            let stored = metadata.occurrences_for(tag);
+            assert_eq!(stored.len(), 1, "{tag}");
+            assert_eq!(
+                stored[0].stored.as_ref().and_then(TagValue::as_string),
+                source
+            );
+        }
     }
 
     #[test]

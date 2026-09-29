@@ -3677,6 +3677,10 @@ mod tests {
             tags.get("Panasonic:RecognizedFace3Position").unwrap(),
             "0 257 1 0"
         );
+        assert_eq!(
+            tags.get("Panasonic:RecognizedFace3Age").unwrap(),
+            "\u{10}\u{1}?"
+        );
     }
 
     /// Transform (0x0059/0x8012) pair decode, from Panasonic.pm:970-983

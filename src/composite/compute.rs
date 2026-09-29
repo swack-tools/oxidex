@@ -449,25 +449,28 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
 
     for (input, lookup) in i.iter().take(9).zip(LOOKUP) {
         let Some(levels) = input else { continue };
-        let Ok(levels) = levels
+        let levels = levels
             .split_whitespace()
-            .map(str::parse)
-            .collect::<Result<Vec<f64>, _>>()
-        else {
-            continue;
-        };
+            // Perl numerically coerces each split component, including
+            // `undef`, a leading numeric prefix, and nonnumeric text.
+            .map(|part| crate::exiftool_tables::session::numify_str(part).as_f64())
+            .collect::<Vec<_>>();
         if levels.len() < 2 {
             continue;
         }
 
         let component_index = lookup[usize::from(blue) * 3];
-        let component = *levels.get(component_index)?;
+        // Perl's absent array element numifies to zero. Keep its explicit
+        // three-element guard below, which applies to every packed layout.
+        let component = levels.get(component_index).copied().unwrap_or(0.0);
         let green_index = lookup[1];
         let green = if green_index < 4 {
             if levels.len() < 3 {
                 continue;
             }
-            let green = (levels[green_index] + levels[lookup[2]]) / 2.0;
+            let green = (levels.get(green_index).copied().unwrap_or(0.0)
+                + levels.get(lookup[2]).copied().unwrap_or(0.0))
+                / 2.0;
             if green == 0.0 {
                 continue;
             }
@@ -480,13 +483,18 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
         return Some(component / green);
     }
 
-    let component = f(get(i, 9))?;
-    let green = f(get(i, 10))?;
-    if component == 0.0 || green == 0.0 {
-        None
-    } else {
-        Some(component / green)
+    let component = get(i, 9)?;
+    let green = get(i, 10)?;
+    if component.is_empty() || component == "0" || green.is_empty() || green == "0" {
+        return None;
     }
+    let green = crate::exiftool_tables::session::numify_str(green).as_f64();
+    // A truthy string may still numify to zero; Perl's guarded ValueConv
+    // then raises division-by-zero and emits no Composite value.
+    if green == 0.0 {
+        return None;
+    }
+    Some(crate::exiftool_tables::session::numify_str(component).as_f64() / green)
 }
 
 /// ExifTool's `Image::ExifTool::IsFloat` (ExifTool.pm:5947-5953), exactly:
@@ -1918,17 +1926,27 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // `int($val * 1e6 + 0.5) * 1e-6`.
         ("Exif", "RedBalance" | "BlueBalance") => {
             let value = red_blue_balance(i, name == "BlueBalance")?;
-            let millionths = (value * 1e6 + 0.5) as i64;
-            let absolute = millionths.unsigned_abs();
-            let sign = if millionths < 0 { "-" } else { "" };
-            let mut printed = format!("{sign}{}.{:06}", absolute / 1_000_000, absolute % 1_000_000);
-            while printed.ends_with('0') {
-                printed.pop();
+            if !value.is_finite() {
+                let printed = if value.is_nan() {
+                    "NaN"
+                } else if value.is_sign_negative() {
+                    "-Inf"
+                } else {
+                    "Inf"
+                };
+                return Computed::new(printed, printed);
             }
-            if printed.ends_with('.') {
-                printed.pop();
-            }
-            Computed::new(value.to_string(), printed)
+            let rounded = (value * 1e6 + 0.5).trunc();
+            // Perl may promote int() to an NV for a large result, then
+            // stringifies both the raw ratio and rounded result at 15 digits.
+            // The printed rounding expression may overflow even when the
+            // raw ratio is finite; ExifTool then prints Inf but retains the
+            // finite numeric value.
+            // Rust's integer cast would saturate and its shortest f64 text
+            // can expose digits Perl would not print.
+            let value = crate::core::formatters::numeric_precision::perl_number(value);
+            let printed = crate::core::formatters::numeric_precision::perl_number(rounded * 1e-6);
+            Computed::new(value, printed)
         }
 
         ("Exif", "SubSecCreateDate" | "SubSecDateTimeOriginal" | "SubSecModifyDate") => {
@@ -2692,6 +2710,49 @@ mod tests {
         rb[8] = Some("412 290");
         assert_eq!(c("RedBalance", &rb).as_deref(), Some("1.609375"));
         assert_eq!(c("BlueBalance", &rb).as_deref(), Some("1.132813"));
+    }
+
+    #[test]
+    fn white_balance_undef_rational_coerces_to_zero_like_pinned_perl() {
+        let mut rgb = vec![None; 11];
+        rgb[6] = Some("undef 1 0.7231638418");
+        assert_eq!(c("RedBalance", &rgb).as_deref(), Some("0"));
+        assert_eq!(c("BlueBalance", &rgb).as_deref(), Some("0.723164"));
+        rgb[6] = Some("0.5182186235 inf 0.7231638418");
+        assert_eq!(c("RedBalance", &rgb).as_deref(), Some("0"));
+        assert_eq!(c("BlueBalance", &rgb).as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn white_balance_short_packed_candidate_does_not_block_blue_fallback() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("256 512");
+        inputs[9] = Some("512");
+        inputs[10] = Some("256");
+        assert_eq!(c("BlueBalance", &inputs).as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn white_balance_large_finite_ratio_does_not_saturate() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("4294967295 2.328306437e-10 0.7231638418");
+        assert_eq!(
+            c("RedBalance", &inputs).as_deref(),
+            Some("1.84467440657598e+19")
+        );
+        assert_eq!(
+            c("BlueBalance", &inputs).as_deref(),
+            Some("3105965049.56534")
+        );
+    }
+
+    #[test]
+    fn white_balance_finite_double_keeps_value_when_print_rounding_overflows() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("1e+308 1 1");
+        let red = compute("Exif", "RedBalance", &inputs, None).unwrap();
+        assert_eq!(red.value, "1e+308");
+        assert_eq!(red.print, "Inf");
     }
 
     #[test]
@@ -3920,5 +3981,58 @@ mod tests {
             .as_deref(),
             Some("16.00 s")
         );
+    }
+
+    #[test]
+    fn white_balance_matches_pinned_native_layout_and_string_matrices() {
+        let layout: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/leica_balance_matrix_1359.json"
+        ))
+        .unwrap();
+        let strings: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/leica_string_balance_1359.json"
+        ))
+        .unwrap();
+        for row in layout["rows"].as_array().unwrap() {
+            let owned: Vec<Option<String>> = row["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| match value {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(text) => Some(text.clone()),
+                    value => Some(value.to_string()),
+                })
+                .collect();
+            let inputs: Vec<Option<&str>> = owned.iter().map(|value| value.as_deref()).collect();
+            let blue = row["blue"].as_u64().unwrap() == 1;
+            let got = red_blue_balance(&inputs, blue).map(perl_number);
+            assert_eq!(got.as_deref(), row["value"].as_str(), "{row}");
+        }
+        for row in strings["rows"].as_array().unwrap() {
+            let mut inputs = vec![None; 11];
+            inputs[6] = row["levels"].as_str();
+            let blue = row["blue"].as_u64().unwrap() == 1;
+            let got = red_blue_balance(&inputs, blue).map(perl_number);
+            assert_eq!(got.as_deref(), row["value"].as_str(), "{row}");
+        }
+    }
+    #[test]
+    fn white_balance_fallback_numifies_truthy_zero_without_dividing_by_it() {
+        for (component, green, expected) in [
+            ("1", "0.0", None),
+            ("1", "-0", None),
+            ("1", "x", None),
+            ("0.0", "2", Some("0")),
+            ("x", "2", Some("0")),
+            ("0", "2", None),
+            ("1", "0", None),
+        ] {
+            let mut inputs = vec![None; 11];
+            inputs[9] = Some(component);
+            inputs[10] = Some(green);
+            let actual = red_blue_balance(&inputs, false).map(perl_number);
+            assert_eq!(actual.as_deref(), expected, "{component:?}/{green:?}");
+        }
     }
 }

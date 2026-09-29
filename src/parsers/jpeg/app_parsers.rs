@@ -724,30 +724,44 @@ pub fn parse_jpeg_hdr_segment(data: &[u8], metadata: &mut MetadataMap) -> Result
 /// `ManufactureIndex` and `ManufactureCode` are plain fixed-width strings
 /// with no `ValueConv`/`PrintConv`, so the generated table's raw
 /// `DecodedValue::String` is already ExifTool's printed value.
-/// `CasioQuality` (has an `IntEnum` `PrintConv`) and `DateTimeOriginal` (has
-/// a `ValueConv`+`PrintConv` this crate does not reproduce) are left out
-/// rather than guessed.
+/// `CasioQuality` has a generated `IntEnum` `PrintConv`, so it can be emitted
+/// exactly. `DateTimeOriginal` has a `ValueConv`+`PrintConv` this crate does
+/// not reproduce and remains omitted rather than guessed.
 pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
     let Some(table) = crate::exiftool_tables::find_table("Casio", "QVCI") else {
         return;
     };
-    // Byte order is irrelevant to every field this function reads (all
-    // fixed-width strings), so this is an arbitrary but harmless choice.
+    // QVCI fields are byte-sized strings or integers. Keep the generated
+    // source table's physical order when recording distinct occurrences.
     let decode =
         crate::exiftool_tables::decode_binary_table(table, data, crate::io::ByteOrder::Big);
-    // All three named fields are `Omitted::NONE` in the generated table, so
-    // `emit` never refuses here.
-    for name in ["ModelType", "ManufactureIndex", "ManufactureCode"] {
-        let Some(decoded) = decode.fields().iter().find(|f| f.field.name == name) else {
+    // These source-selected fields are `Omitted::NONE` in the generated table.
+    // `emit` applies CasioQuality's pinned IntEnum PrintConv.
+    for decoded in decode.fields() {
+        let name = decoded.field.name;
+        if !matches!(
+            name,
+            "ModelType" | "ManufactureIndex" | "ManufactureCode" | "CasioQuality"
+        ) {
             continue;
-        };
-        if let Some(TagValue::String(text)) = decoded.emit() {
+        }
+        if let Some(printed) = decoded.emit() {
             let Ok(source_id) = u16::try_from(decoded.field.index) else {
                 continue;
             };
             let key = format!("{}:{name}", table.group1);
-            let mut row =
-                crate::core::TagOccurrence::from_insert_shim(&key, TagValue::new_string(text), 0);
+            let mut row = crate::core::TagOccurrence::from_insert_shim(&key, printed.clone(), 0);
+            if name == "CasioQuality" {
+                // Casio.pm:1961-1998: byte 0x2c is an int8u with only an
+                // IntEnum PrintConv. Keep its numeric form for `-n` and copy.
+                let Some(raw) = data.get(usize::from(source_id)) else {
+                    continue;
+                };
+                row.raw = TagValue::Integer(i64::from(*raw));
+                row.stored = Some(TagValue::Integer(i64::from(*raw)));
+                row.value = Some(TagValue::Integer(i64::from(*raw)));
+                row.print = Some(printed);
+            }
             row.id = oxidex_tags::TagId::Numeric(source_id);
             row.group0 = crate::core::tag_occurrence::intern(
                 decoded.field.groups.g0.unwrap_or(table.group0),
@@ -795,6 +809,30 @@ mod tests {
             assert_eq!(row.origin.module, Some("Casio"));
             assert_eq!(row.origin.table, Some("QVCI"));
         }
+    }
+
+    #[test]
+    fn qvci_quality_keeps_generated_source_and_numeric_storage() {
+        let mut payload = vec![0u8; 133];
+        payload[..5].copy_from_slice(b"QVCI\0");
+        payload[44] = 1;
+        payload[98..105].copy_from_slice(b"KX-778\0");
+        let mut metadata = MetadataMap::new();
+        parse_casio_qvci_segment(&payload, &mut metadata);
+        assert_eq!(metadata.get_integer("Casio:CasioQuality"), Some(1));
+        let rows = metadata.occurrences_for("Casio:CasioQuality");
+        assert_eq!(rows.len(), 1);
+        let row = rows[0];
+        assert_eq!(row.id, oxidex_tags::TagId::Numeric(44));
+        assert_eq!(row.raw, TagValue::Integer(1));
+        assert_eq!(row.stored, Some(TagValue::Integer(1)));
+        assert_eq!(row.value, Some(TagValue::Integer(1)));
+        assert_eq!(row.print, Some(TagValue::new_string("Economy")));
+        assert_eq!(row.origin.module, Some("Casio"));
+        assert_eq!(row.origin.table, Some("QVCI"));
+        let model = metadata.occurrences_for("Casio:ModelType");
+        assert_eq!(model.len(), 1);
+        assert!(row.order < model[0].order, "QVCI byte 44 precedes byte 98");
     }
 
     /// ExifTool.jpg's APP0 `AVI1` record: pinned 13.59 prints

@@ -7,6 +7,34 @@
 //! - Tag extraction from synthetic test data
 //! - Film simulation modes and dynamic range settings
 
+const FINEPIX_S9200: &str = "FujiFilm/FujiFilmFinePixS9200S9250S9150.jpg";
+
+/// FujiFilm.pm 0x1150-0x1152 are a mode plus two plain uint16 counters.  The
+/// expectations are pinned from ExifTool 13.59's `-G1 -s -a` output on this
+/// real panorama fixture.
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn finepix_s9200_reports_composite_image_fields() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(
+        FINEPIX_S9200,
+    ))
+    .expect("FinePix S9200 parses");
+    assert_eq!(
+        metadata.get_string("FujiFilm:CompositeImageMode"),
+        Some("Panorama")
+    );
+    assert_eq!(
+        metadata.get_string("FujiFilm:CompositeImageCount1"),
+        Some("155")
+    );
+    assert_eq!(
+        metadata.get_string("FujiFilm:CompositeImageCount2"),
+        Some("155")
+    );
+}
+
 #[test]
 fn test_fujifilm_parser_trait() {
     use oxidex::parsers::tiff::makernotes::fujifilm::FujifilmParser;

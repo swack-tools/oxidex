@@ -265,6 +265,25 @@ mod tests {
             .expect("HP maker note should parse");
         assert!(tags.is_empty(), "unexpected HP tags: {tags:?}");
     }
+    #[test]
+    fn type4_source_signatures_emit_camera_datetime() {
+        for signature in [4u8, b'|'] {
+            let mut data = vec![0_u8; 118];
+            data[..4].copy_from_slice(b"IIII");
+            data[4] = signature;
+            data[20..40].copy_from_slice(b"2216/02/28 03:49:48\0");
+            assert!(is_type4(&data));
+            let mut tags = HashMap::new();
+            HpParser::new()
+                .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                .expect("HP Type4 parses");
+            assert_eq!(
+                tags.get("HP:CameraDateTime"),
+                Some(&"2216/02/28 03:49:48".to_string()),
+            );
+        }
+    }
+
     /// HP.pm Type4 0x10 ExposureTime: int32u microseconds, ValueConv
     /// `$val / 1e6`, PrintConv `PrintExposureTime`. Stored 10000 must reach
     /// `raw` as the display form "1/100", not the stored integer.

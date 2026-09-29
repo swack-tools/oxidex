@@ -34,7 +34,7 @@
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::xmp::parse_xmp_history;
-use crate::parsers::xmp::rdf_parser::{XmpEntry, XmpValue, parse_xmp_entries_with_rational_forms};
+use crate::parsers::xmp::rdf_parser::{XmpEntry, XmpValue, parse_xmp_entries_with_source_forms};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
 /// This is a null-terminated string: "http://ns.adobe.com/xap/1.0/\0"
@@ -225,8 +225,17 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, Xm
 pub fn extract_xmp_from_segments_with_value_forms(
     segments: &[Segment],
 ) -> Result<(Vec<XmpEntry>, Vec<(String, String)>)> {
+    let (entries, forms, _) = extract_xmp_from_segments_with_source_forms(segments)?;
+    Ok((entries, forms))
+}
+
+/// Internal extraction with one original GPS scalar for each emitted entry.
+pub(crate) fn extract_xmp_from_segments_with_source_forms(
+    segments: &[Segment],
+) -> Result<(Vec<XmpEntry>, Vec<(String, String)>, Vec<Option<String>>)> {
     let mut all_xmp_tags = Vec::new();
     let mut all_value_forms = Vec::new();
+    let mut all_gps_sources = Vec::new();
 
     // Iterate through all segments looking for XMP APP1 segments
     for segment in segments {
@@ -248,22 +257,25 @@ pub fn extract_xmp_from_segments_with_value_forms(
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(raw_payload);
 
         // Parse the XMP XML data for standard properties
-        let (xmp_tags, value_forms) =
-            parse_xmp_entries_with_rational_forms(xml_payload).map_err(|e| {
+        let (xmp_tags, value_forms, gps_sources) = parse_xmp_entries_with_source_forms(xml_payload)
+            .map_err(|e| {
                 ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
             })?;
 
         all_xmp_tags.extend(xmp_tags);
         all_value_forms.extend(value_forms);
+        all_gps_sources.extend(gps_sources);
 
         // Parse XMP history for forensic metadata
         let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
         if let Ok(history_tags) = parse_xmp_history(xml_str) {
+            let history_len = history_tags.len();
             all_xmp_tags.extend(
                 history_tags
                     .into_iter()
                     .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
             );
+            all_gps_sources.extend(std::iter::repeat_n(None, history_len));
         }
     }
 
@@ -274,21 +286,27 @@ pub fn extract_xmp_from_segments_with_value_forms(
     for packet in assemble_extended_xmp(segments) {
         let converted = xmp_payload_to_utf8(&packet);
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(&packet);
-        if let Ok((xmp_tags, value_forms)) = parse_xmp_entries_with_rational_forms(xml_payload) {
+        if let Ok((xmp_tags, value_forms, gps_sources)) =
+            parse_xmp_entries_with_source_forms(xml_payload)
+        {
             all_xmp_tags.extend(xmp_tags);
             all_value_forms.extend(value_forms);
+            all_gps_sources.extend(gps_sources);
         }
         let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
         if let Ok(history_tags) = parse_xmp_history(xml_str) {
+            let history_len = history_tags.len();
             all_xmp_tags.extend(
                 history_tags
                     .into_iter()
                     .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
             );
+            all_gps_sources.extend(std::iter::repeat_n(None, history_len));
         }
     }
 
-    Ok((all_xmp_tags, all_value_forms))
+    debug_assert_eq!(all_xmp_tags.len(), all_gps_sources.len());
+    Ok((all_xmp_tags, all_value_forms, all_gps_sources))
 }
 
 /// Whether this APP1 segment carries an Extended XMP chunk, rather than a
@@ -339,6 +357,45 @@ pub fn is_xmp_segment(segment: &Segment) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gps_sources_align_after_standard_history_and_extended_packet() {
+        let standard = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmlns:stEvt="http://ns.adobe.com/xap/1.0/sType/ResourceEvent#"><rdf:Description exif:GPSLatitude="43,30.123456N"><xmpMM:History><rdf:Seq><rdf:li rdf:parseType="Resource"><stEvt:action>saved</stEvt:action></rdf:li></rdf:Seq></xmpMM:History></rdf:Description></rdf:RDF>"#;
+        let extended = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:Description exif:GPSDestLongitude="16,26.3012136W"/></rdf:RDF>"#;
+        let mut main_segment = XMP_IDENTIFIER.to_vec();
+        main_segment.extend_from_slice(standard);
+        let mut extension_segment = XMP_EXTENSION_IDENTIFIER.to_vec();
+        extension_segment.extend_from_slice(b"0123456789abcdef0123456789abcdef");
+        extension_segment.extend_from_slice(&(extended.len() as u32).to_be_bytes());
+        extension_segment.extend_from_slice(&0u32.to_be_bytes());
+        extension_segment.extend_from_slice(extended);
+        let segments = [
+            Segment::new(0xFFE1, 0, &main_segment),
+            Segment::new(0xFFE1, 0, &extension_segment),
+        ];
+        let (entries, _, sources) = extract_xmp_from_segments_with_source_forms(&segments).unwrap();
+        assert_eq!(entries.len(), sources.len());
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.key == "XMP-xmpMM:History1Action")
+        );
+        let gps: Vec<_> = entries
+            .iter()
+            .zip(&sources)
+            .filter(|(entry, _)| {
+                entry.tag == "XMP-exif:GPSLatitude" || entry.tag == "XMP-exif:GPSDestLongitude"
+            })
+            .map(|(entry, source)| (entry.tag.as_str(), source.as_deref()))
+            .collect();
+        assert_eq!(
+            gps,
+            [
+                ("XMP-exif:GPSLatitude", Some("43,30.123456N")),
+                ("XMP-exif:GPSDestLongitude", Some("16,26.3012136W")),
+            ]
+        );
+    }
 
     #[test]
     fn test_xmp_identifier_constant() {

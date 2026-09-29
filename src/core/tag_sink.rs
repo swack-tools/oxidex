@@ -35,8 +35,8 @@
 use super::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use super::tag_value::TagValue;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default)]
 pub struct TagSink {
@@ -47,6 +47,9 @@ pub struct TagSink {
     /// for losers and tombstones too: a canonical source identity is not
     /// necessarily the key under which compatibility output exposes a row.
     recorded_keys: Vec<String>,
+    /// Positions grouped by literal key, for bounded replay when a selected
+    /// assignment is changed back to a read row.
+    key_indices: HashMap<String, Vec<usize>>,
     /// Tombstone flags, parallel to `occurrences`: `tombstoned[i]` is true
     /// once [`TagSink::remove`] has retired occurrence `i`. See that method
     /// and [`TagSink::occurrences`] for why removal marks rather than
@@ -60,9 +63,16 @@ pub struct TagSink {
     /// unlike a positional boundary that copies, clears and in-place
     /// mutations could desynchronise.
     assigned: Vec<bool>,
+    /// Whether a physical row may participate in winner selection. Removing
+    /// a key ends its current epoch without hiding old losers from `-a`.
+    winner_eligible: Vec<bool>,
     /// Winner projection: lookup key -> index into `occurrences` of the
     /// occurrence that currently wins that key.
     winners: HashMap<String, usize>,
+    /// First record index eligible after the most recent `remove` of a key.
+    /// Earlier losers remain in the occurrence log, but cannot win a reopened
+    /// key when read provenance is finalized.
+    removal_cutoffs: HashMap<String, usize>,
 }
 
 /// Two sinks are equal when they hold the same occurrences under the same
@@ -83,9 +93,12 @@ impl TagSink {
         Self {
             occurrences: Vec::new(),
             recorded_keys: Vec::new(),
+            key_indices: HashMap::new(),
             tombstoned: Vec::new(),
             assigned: Vec::new(),
+            winner_eligible: Vec::new(),
             winners: HashMap::new(),
+            removal_cutoffs: HashMap::new(),
         }
     }
 
@@ -93,9 +106,12 @@ impl TagSink {
         Self {
             occurrences: Vec::with_capacity(capacity),
             recorded_keys: Vec::with_capacity(capacity),
+            key_indices: HashMap::with_capacity(capacity),
             tombstoned: Vec::with_capacity(capacity),
             assigned: Vec::with_capacity(capacity),
+            winner_eligible: Vec::with_capacity(capacity),
             winners: HashMap::with_capacity(capacity),
+            removal_cutoffs: HashMap::new(),
         }
     }
 
@@ -152,34 +168,101 @@ impl TagSink {
     /// occurrence recorded so far; the narrower case is left for whichever
     /// later step first needs it.
     pub fn record(&mut self, key: String, occurrence: TagOccurrence) {
+        self.record_with_eligibility(key, occurrence, true);
+    }
+
+    /// Records a physical row while retaining whether it may win. A row
+    /// carried from an earlier removed epoch remains visible to `-a`, but
+    /// cannot affect this sink's winner projection.
+    pub(crate) fn record_with_eligibility(
+        &mut self,
+        key: String,
+        occurrence: TagOccurrence,
+        winner_eligible: bool,
+    ) {
         let idx = self.occurrences.len();
-        let new_priority = occurrence.priority;
-        let new_instance = occurrence.instance;
         self.occurrences.push(occurrence);
         self.recorded_keys.push(key.clone());
+        self.key_indices.entry(key.clone()).or_default().push(idx);
         self.tombstoned.push(false);
         self.assigned.push(false);
+        self.winner_eligible.push(winner_eligible);
+        if !winner_eligible {
+            return;
+        }
         match self.winners.entry(key) {
-            Entry::Occupied(mut e) => {
-                let existing_idx = *e.get();
-                let existing = &self.occurrences[existing_idx];
-                // ExifTool.pm:9541-9551.
-                let effective_old_priority = if existing.priority == 0 {
-                    1
-                } else {
-                    existing.priority
-                };
-                // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`.
-                let instance_ok =
-                    new_instance == Instance::default() || new_instance == existing.instance;
-                if new_priority >= effective_old_priority && instance_ok {
-                    e.insert(idx);
+            Entry::Occupied(mut entry) => {
+                if Self::selects_new(&self.occurrences, &self.assigned, *entry.get(), idx) {
+                    entry.insert(idx);
                 }
             }
-            Entry::Vacant(e) => {
-                e.insert(idx);
+            Entry::Vacant(entry) => {
+                entry.insert(idx);
             }
         }
+    }
+
+    /// Explicit assignments win over source rows; among source rows keep
+    /// ExifTool's unchanged priority/instance rule. Replay uses this same
+    /// comparison after read-finalization clears provisional assignments.
+    fn selects_new(
+        occurrences: &[TagOccurrence],
+        assigned: &[bool],
+        old: usize,
+        new: usize,
+    ) -> bool {
+        if assigned[new] {
+            return true;
+        }
+        if assigned[old] {
+            return false;
+        }
+        let existing = &occurrences[old];
+        let incoming = &occurrences[new];
+        let effective_old_priority = if existing.priority == 0 {
+            1
+        } else {
+            existing.priority
+        };
+        let instance_ok =
+            incoming.instance == Instance::default() || incoming.instance == existing.instance;
+        incoming.priority >= effective_old_priority && instance_ok
+    }
+
+    /// Rebuild one key after its selected assignment loses that status.
+    /// This is only called for an actual true-to-false transition, not for
+    /// each read occurrence replayed through a merge.
+    fn replay_key(&mut self, key: &str) {
+        if !self.winners.contains_key(key) {
+            return;
+        }
+        let mut selected = None;
+        if let Some(indices) = self.key_indices.get(key) {
+            for &idx in indices {
+                if !self.is_winner_eligible(idx) {
+                    continue;
+                }
+                if selected.is_none_or(|old| {
+                    Self::selects_new(&self.occurrences, &self.assigned, old, idx)
+                }) {
+                    selected = Some(idx);
+                }
+            }
+        }
+        if let Some(idx) = selected {
+            self.winners.insert(key.to_owned(), idx);
+        }
+    }
+
+    fn is_winner_eligible(&self, idx: usize) -> bool {
+        !self.tombstoned[idx]
+            && self.winner_eligible[idx]
+            && idx
+                >= self
+                    .removal_cutoffs
+                    .get(&self.recorded_keys[idx])
+                    .copied()
+                    .unwrap_or(0)
     }
 
     pub fn get(&self, key: &str) -> Option<&TagValue> {
@@ -317,6 +400,8 @@ impl TagSink {
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
         let idx = self.winners.remove(key)?;
         self.tombstoned[idx] = true;
+        self.removal_cutoffs
+            .insert(key.to_owned(), self.occurrences.len());
         Some(self.occurrences[idx].raw.clone())
     }
 
@@ -341,28 +426,68 @@ impl TagSink {
     pub fn clear(&mut self) {
         self.occurrences.clear();
         self.recorded_keys.clear();
+        self.key_indices.clear();
         self.tombstoned.clear();
         self.assigned.clear();
+        self.winner_eligible.clear();
         self.winners.clear();
+        self.removal_cutoffs.clear();
     }
 
     /// Marks occurrence `idx` as a caller's assignment (see `assigned`).
     pub(crate) fn mark_assigned(&mut self, idx: usize) {
-        if let Some(flag) = self.assigned.get_mut(idx) {
+        if self.is_winner_eligible(idx)
+            && let Some(flag) = self.assigned.get_mut(idx)
+        {
             *flag = true;
+            self.winners.insert(self.recorded_keys[idx].clone(), idx);
         }
     }
 
     /// Sets occurrence `idx`'s provenance (see `assigned`).
     pub(crate) fn set_assigned(&mut self, idx: usize, assigned: bool) {
-        if let Some(flag) = self.assigned.get_mut(idx) {
-            *flag = assigned;
+        let Some(flag) = self.assigned.get_mut(idx) else {
+            return;
+        };
+        if *flag == assigned {
+            return;
+        }
+        *flag = assigned;
+        if assigned {
+            if self.is_winner_eligible(idx) {
+                self.winners.insert(self.recorded_keys[idx].clone(), idx);
+            }
+        } else {
+            let key = self.recorded_keys[idx].clone();
+            if self.winners.get(&key) == Some(&idx) {
+                self.replay_key(&key);
+            }
         }
     }
 
-    /// Marks every occurrence recorded so far as read from the file.
+    /// Clears provisional reader assignments and restores native source
+    /// arbitration once, within each key's current removal epoch.
     pub(crate) fn mark_all_read(&mut self) {
         self.assigned.iter_mut().for_each(|flag| *flag = false);
+        let eligible: HashSet<_> = self.winners.keys().cloned().collect();
+        let mut replayed = HashMap::with_capacity(eligible.len());
+        for idx in 0..self.occurrences.len() {
+            let key = &self.recorded_keys[idx];
+            if !self.is_winner_eligible(idx) || !eligible.contains(key) {
+                continue;
+            }
+            match replayed.entry(key.clone()) {
+                Entry::Occupied(mut entry) => {
+                    if Self::selects_new(&self.occurrences, &self.assigned, *entry.get(), idx) {
+                        entry.insert(idx);
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(idx);
+                }
+            }
+        }
+        self.winners = replayed;
     }
 
     /// Whether the winning occurrence for `key` is a caller's assignment.
@@ -519,7 +644,7 @@ impl TagSink {
     pub(crate) fn into_keyed_occurrences(self) -> Vec<(String, TagOccurrence)> {
         self.into_keyed_occurrences_with_provenance()
             .into_iter()
-            .map(|(key, occurrence, _)| (key, occurrence))
+            .map(|(key, occurrence, _, _)| (key, occurrence))
             .collect()
     }
 
@@ -527,12 +652,14 @@ impl TagSink {
     /// (see `assigned`), for a copy that must carry it.
     pub(crate) fn into_keyed_occurrences_with_provenance(
         self,
-    ) -> Vec<(String, TagOccurrence, bool)> {
+    ) -> Vec<(String, TagOccurrence, bool, bool)> {
         let TagSink {
             occurrences,
             recorded_keys,
             tombstoned,
             assigned,
+            winner_eligible,
+            removal_cutoffs,
             ..
         } = self;
         recorded_keys
@@ -540,9 +667,18 @@ impl TagSink {
             .zip(occurrences)
             .zip(tombstoned)
             .zip(assigned)
-            .filter_map(|(((key, occurrence), retired), assigned)| {
-                (!retired).then_some((key, occurrence, assigned))
-            })
+            .zip(winner_eligible)
+            .enumerate()
+            .filter_map(
+                |(idx, ((((key, occurrence), retired), assigned), eligible))| {
+                    (!retired).then_some((
+                        key.clone(),
+                        occurrence,
+                        assigned,
+                        eligible && idx >= removal_cutoffs.get(&key).copied().unwrap_or(0),
+                    ))
+                },
+            )
             .collect()
     }
 
@@ -557,6 +693,26 @@ impl TagSink {
             .enumerate()
             .filter(|(idx, _)| self.is_active(*idx))
             .map(|(idx, (key, occurrence))| (key.as_str(), occurrence, self.is_assigned_at(idx)))
+    }
+
+    /// The physical stream plus per-row winner eligibility for projections
+    /// that replay rows under normalized keys.
+    pub(crate) fn keyed_occurrences_with_selection(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, bool, bool)> {
+        self.recorded_keys
+            .iter()
+            .zip(&self.occurrences)
+            .enumerate()
+            .filter(|(idx, _)| self.is_active(*idx))
+            .map(|(idx, (key, occurrence))| {
+                (
+                    key.as_str(),
+                    occurrence,
+                    self.is_assigned_at(idx),
+                    self.is_winner_eligible(idx),
+                )
+            })
     }
 
     /// Re-records `occurrence` into this sink under its own
@@ -585,9 +741,10 @@ impl TagSink {
         &mut self,
         key: String,
         mut occurrence: TagOccurrence,
+        winner_eligible: bool,
     ) {
         occurrence.order = self.next_order();
-        self.record(key, occurrence);
+        self.record_with_eligibility(key, occurrence, winner_eligible);
     }
 }
 
@@ -877,6 +1034,54 @@ mod tests {
         let survivors = sink.into_occurrences();
         assert_eq!(survivors.len(), 1);
         assert_eq!(survivors[0].raw, TagValue::new_string("kept"));
+    }
+
+    #[test]
+    fn explicit_assignment_wins_until_read_finalization() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut sink = TagSink::new();
+        sink.record(key.into(), occ("first", 0, 0));
+        sink.record(key.into(), occ("second", 0, 1));
+        assert_eq!(sink.get(key), Some(&TagValue::new_string("first")));
+        sink.mark_assigned(1);
+        assert_eq!(sink.get(key), Some(&TagValue::new_string("second")));
+        assert!(sink.winner_is_assigned(key));
+        sink.record(key.into(), occ("higher read", 9, 2));
+        assert_eq!(sink.get(key), Some(&TagValue::new_string("second")));
+        sink.mark_all_read();
+        assert_eq!(sink.get(key), Some(&TagValue::new_string("higher read")));
+        assert!(!sink.winner_is_assigned(key));
+        assert_eq!(sink.occurrences().count(), 3);
+    }
+
+    #[test]
+    fn removal_cutoff_limits_replay_to_reopened_rows() {
+        let key = "XMP-exif:GPSLatitude";
+        let mut sink = TagSink::new();
+        sink.record(key.into(), occ("removed winner", 10, 0));
+        sink.record(key.into(), occ("old loser", 5, 1));
+        sink.remove(key);
+        sink.record(key.into(), occ("new first zero", 0, 2));
+        sink.record(key.into(), occ("new second zero", 0, 3));
+        sink.record(key.into(), occ("new normal", 1, 4));
+        sink.mark_assigned(3);
+        assert_eq!(
+            sink.get(key),
+            Some(&TagValue::new_string("new second zero"))
+        );
+        sink.mark_all_read();
+        assert_eq!(sink.get(key), Some(&TagValue::new_string("new normal")));
+        sink.remove(key);
+        sink.mark_all_read();
+        assert_eq!(
+            sink.get(key),
+            None,
+            "read finalization cannot reopen a deleted key"
+        );
+        let cloned = sink.clone();
+        assert_eq!(cloned.removal_cutoffs, sink.removal_cutoffs);
+        sink.clear();
+        assert!(sink.removal_cutoffs.is_empty());
     }
 
     #[test]

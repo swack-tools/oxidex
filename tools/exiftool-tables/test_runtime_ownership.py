@@ -91,15 +91,16 @@ class RuntimeOwnershipTests(unittest.TestCase):
             inventory["category_totals"],
             {
                 # Kodak::Main TimeCreated/DateTimeStamp moved from the hand
-                # `kodak.rs::main_occurrences` to the generated table walk.
-                "generated": 565,
+                # `kodak.rs::main_occurrences` to the generated table walk;
+                # Nikon::LensData0204 adds two generated ownership rows.
+                "generated": 569,
                 "not-applicable": 29,
                 "refused": 18,
                 "residual": 62,
                 "walker-owned": 0,
             },
         )
-        self.assertEqual(len(inventory["rows"]), 674)
+        self.assertEqual(len(inventory["rows"]), 678)
         self.assertEqual(inventory["rows"], sorted(inventory["rows"], key=lambda r: (r["module"], r["table"], r["field"]["kind"], r["field"]["value"], r["owner"])))
         self.assertIn('("Exif", "Main")', (self.root / "src/exiftool_tables/enabled_ifd.rs").read_text())
 

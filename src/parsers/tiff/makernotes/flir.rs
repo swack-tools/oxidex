@@ -34,12 +34,20 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence};
+use crate::exiftool_tables::ifd_engine::process_exif;
+use crate::exiftool_tables::{IfdDir, find_ifd_table};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_string};
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{
+    IfdParserConfig, parse_ifd_entries, resolve_makernote_byte_order,
+};
+use super::shared::table_ifd::print_rational;
 
 // Import registry module
 use super::registries::flir_registry;
@@ -313,6 +321,111 @@ impl FlirParser {
     pub fn new() -> Self {
         FlirParser
     }
+
+    /// Parse the FLIR MakerNote IFD.  Its entry offsets count from the
+    /// enclosing TIFF header, not from the MakerNote value.  The directory
+    /// itself remains in `directory_data`, while `value_data` is the TIFF
+    /// context that resolves those offsets.
+    fn parse_ifd(
+        &self,
+        directory_data: &[u8],
+        value_data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+        generated_main: bool,
+    ) -> Result<(), String> {
+        let config = IfdParserConfig {
+            signature: Some(FLIR_SIGNATURE),
+            signature_offset: 4,
+            max_entries: 200,
+        };
+        // MakerNotes.pm declares ByteOrder Unknown for this IFD. Its entry
+        // count, not the enclosing TIFF header, selects the directory order.
+        let byte_order = resolve_makernote_byte_order(directory_data, &config, byte_order);
+
+        let registry = flir_registry();
+        parse_ifd_entries(directory_data, byte_order, &config, |entry, _| {
+            // FLIR.pm Main: tags 1 and 2 are rational64s, while tag 3 is
+            // rational64u with PrintConv sprintf("%.2f", $val). Do not
+            // route these through the old SHORT-only registry path.
+            match entry.tag_id {
+                0x0001..=0x0006 if generated_main => {}
+                0x0001 | 0x0002 if entry.field_type == 5 && entry.value_count == 1 => {
+                    let offset = entry.value_offset as usize;
+                    let Some(bytes) = offset
+                        .checked_add(8)
+                        .and_then(|end| value_data.get(offset..end))
+                    else {
+                        return;
+                    };
+                    let reader = crate::io::EndianReader::new(bytes, byte_order.to_io_byte_order());
+                    let (Some(numerator), Some(denominator)) = (reader.i32_at(0), reader.i32_at(4))
+                    else {
+                        return;
+                    };
+                    let name = if entry.tag_id == 0x0001 {
+                        "ImageTemperatureMax"
+                    } else {
+                        "ImageTemperatureMin"
+                    };
+                    tags.insert(
+                        format!("MakerNotes:{name}"),
+                        print_rational(i64::from(numerator), i64::from(denominator)),
+                    );
+                }
+                0x0003 if entry.field_type == 5 && entry.value_count == 1 => {
+                    let offset = entry.value_offset as usize;
+                    let Some(bytes) = offset
+                        .checked_add(8)
+                        .and_then(|end| value_data.get(offset..end))
+                    else {
+                        return;
+                    };
+                    let reader = crate::io::EndianReader::new(bytes, byte_order.to_io_byte_order());
+                    let (Some(numerator), Some(denominator)) = (reader.u32_at(0), reader.u32_at(4))
+                    else {
+                        return;
+                    };
+                    if denominator != 0 {
+                        tags.insert(
+                            "MakerNotes:Emissivity".to_string(),
+                            format!("{:.2}", f64::from(numerator) / f64::from(denominator)),
+                        );
+                    }
+                }
+                _ if matches!(
+                    entry.tag_id,
+                    FLIR_MODEL
+                        | FLIR_SERIAL
+                        | FLIR_FIRMWARE
+                        | FLIR_LENS_MODEL
+                        | FLIR_CALIBRATION_DATE
+                ) =>
+                {
+                    if let Some(s) = extract_string(entry, value_data, byte_order) {
+                        let tag_name = match entry.tag_id {
+                            FLIR_MODEL => "Model",
+                            FLIR_SERIAL => "SerialNumber",
+                            FLIR_FIRMWARE => "FirmwareVersion",
+                            FLIR_LENS_MODEL => "LensModel",
+                            FLIR_CALIBRATION_DATE => "CalibrationDate",
+                            _ => return,
+                        };
+                        tags.insert(format!("FLIR:{tag_name}"), s);
+                    }
+                }
+                _ => {
+                    if let Some(array) = extract_i16_array(entry, value_data, byte_order)
+                        && let Some(&val) = array.first()
+                        && let Some(tag_name) = registry.get_tag_name(entry.tag_id)
+                    {
+                        let formatted_value = registry.decode_i16(entry.tag_id, val);
+                        tags.insert(format!("FLIR:{tag_name}"), formatted_value);
+                    }
+                }
+            }
+        })
+    }
 }
 
 impl MakerNoteParser for FlirParser {
@@ -337,55 +450,161 @@ impl MakerNoteParser for FlirParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        // Configure IFD parser for FLIR MakerNote format
+        self.parse_ifd(data, data, byte_order, tags, false)
+    }
+
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.parse_ifd(ctx.payload(), ctx.tiff(), byte_order, tags, false)
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        let table =
+            find_ifd_table("FLIR", "Main").filter(|table| table.enabled() && ctx.is_located());
         let config = IfdParserConfig {
             signature: Some(FLIR_SIGNATURE),
             signature_offset: 4,
             max_entries: 200,
         };
-
-        // Create registry on-demand
-        let registry = flir_registry();
-
-        // Use shared IFD parser to eliminate boilerplate
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            // Handle string tags
-            if matches!(
-                entry.tag_id,
-                FLIR_MODEL | FLIR_SERIAL | FLIR_FIRMWARE | FLIR_LENS_MODEL | FLIR_CALIBRATION_DATE
-            ) {
-                if let Some(s) = extract_string(entry, parse_data, byte_order) {
-                    let tag_name = match entry.tag_id {
-                        FLIR_MODEL => "Model",
-                        FLIR_SERIAL => "SerialNumber",
-                        FLIR_FIRMWARE => "FirmwareVersion",
-                        FLIR_LENS_MODEL => "LensModel",
-                        FLIR_CALIBRATION_DATE => "CalibrationDate",
-                        _ => return,
-                    };
-                    tags.insert(format!("FLIR:{}", tag_name), s);
-                }
-            } else {
-                // Try to extract as i16 array
-                if let Some(array) = extract_i16_array(entry, parse_data, byte_order)
-                    && let Some(&val) = array.first()
-                {
-                    // Registry lookup: get tag name and decode value
-                    if let Some(tag_name) = registry.get_tag_name(entry.tag_id) {
-                        let formatted_value = registry.decode_i16(entry.tag_id, val);
-                        tags.insert(format!("FLIR:{}", tag_name), formatted_value);
-                    }
-                }
+        let byte_order = resolve_makernote_byte_order(ctx.payload(), &config, byte_order);
+        if let Some(table) = table {
+            let start = ctx
+                .payload_tiff_offset()
+                .and_then(|offset| usize::try_from(offset).ok())
+                .and_then(|offset| {
+                    offset.checked_add(usize::from(ctx.payload().starts_with(FLIR_SIGNATURE)) * 4)
+                })
+                .ok_or_else(|| "FLIR IFD offset overflow".to_string())?;
+            let mut emitted = Vec::new();
+            process_exif(
+                table,
+                IfdDir {
+                    data: ctx.tiff(),
+                    data_domain: ctx.tiff_base(),
+                    ifd_start: start,
+                    base: Some(0),
+                    byte_order: byte_order.to_io_byte_order(),
+                    group1: Some("FLIR"),
+                },
+                session,
+                cond_ctx,
+                &mut emitted,
+            );
+            for tag in emitted {
+                let key = format!("{}:{}", tag.group1, tag.name);
+                let printed = tag.value.clone();
+                occurrences.push((
+                    key,
+                    TagOccurrence {
+                        id: tag.source_id,
+                        name: intern(tag.name),
+                        group0: intern(tag.group0),
+                        group1: intern(tag.group1),
+                        group2: (!tag.group2.is_empty()).then(|| intern(tag.group2)),
+                        instance: Instance::default(),
+                        raw: printed.clone(),
+                        value: Some(tag.value_conv.unwrap_or_else(|| tag.value.clone())),
+                        print: Some(printed),
+                        stored: Some(tag.stored),
+                        priority: u8::from(!(tag.low_priority || tag.avoid)),
+                        is_list: tag.is_list,
+                        order: 0,
+                        origin: Provenance {
+                            module: Some(tag.module),
+                            table: Some(tag.table),
+                            byte_range: None,
+                        },
+                    },
+                ));
             }
-        })?;
-
-        Ok(())
+        }
+        // The hand registry retains only residual fields when the generated
+        // FLIR::Main table owns its physical IFD entries.
+        self.parse_ifd(ctx.payload(), ctx.tiff(), byte_order, tags, table.is_some())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_main_resolves_makernote_order_from_its_own_ifd() {
+        // MakerNoteFLIR declares ByteOrder Unknown. The physical directory
+        // may have the opposite order from the enclosing TIFF header.
+        for (enclosing, maker) in [
+            (ByteOrder::BigEndian, ByteOrder::LittleEndian),
+            (ByteOrder::LittleEndian, ByteOrder::BigEndian),
+        ] {
+            let mut tiff = vec![0u8; 136];
+            tiff[..4].copy_from_slice(match enclosing {
+                ByteOrder::BigEndian => b"MM\0*",
+                ByteOrder::LittleEndian => b"II*\0",
+            });
+            let write16 = |bytes: &mut [u8], value: u16| {
+                bytes.copy_from_slice(&match maker {
+                    ByteOrder::BigEndian => value.to_be_bytes(),
+                    ByteOrder::LittleEndian => value.to_le_bytes(),
+                });
+            };
+            let write32 = |bytes: &mut [u8], value: u32| {
+                bytes.copy_from_slice(&match maker {
+                    ByteOrder::BigEndian => value.to_be_bytes(),
+                    ByteOrder::LittleEndian => value.to_le_bytes(),
+                });
+            };
+            write16(&mut tiff[64..66], 1);
+            write16(&mut tiff[66..68], 3); // Emissivity
+            write16(&mut tiff[68..70], 5); // TIFF RATIONAL
+            write32(&mut tiff[70..74], 1);
+            write32(&mut tiff[74..78], 128); // TIFF-relative value
+            write32(&mut tiff[128..132], 80);
+            write32(&mut tiff[132..136], 100);
+            let ctx = MakerNoteContext::in_tiff(&tiff, 64, 18, 0);
+            let mut members = HashMap::new();
+            let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+            let mut tags = HashMap::new();
+            let mut rows = Vec::new();
+            FlirParser::new()
+                .parse_with_context_and_values_and_session_and_occurrences(
+                    &ctx,
+                    enclosing,
+                    None,
+                    &mut crate::exiftool_tables::session::Session::new(),
+                    &mut cond_ctx,
+                    &mut tags,
+                    &mut HashMap::new(),
+                    &mut rows,
+                )
+                .unwrap();
+            let (_, emissivity) = rows
+                .iter()
+                .find(|(key, _)| key == "FLIR:Emissivity")
+                .expect("generated FLIR Main owns the physical Emissivity");
+            assert_eq!(
+                emissivity
+                    .project(crate::core::tag_occurrence::ValueChannel::Stored)
+                    .as_ref(),
+                &crate::core::TagValue::new_rational(80, 100),
+            );
+            assert!(!tags.contains_key("MakerNotes:Emissivity"));
+        }
+    }
 
     #[test]
     fn test_flir_parser_creation() {

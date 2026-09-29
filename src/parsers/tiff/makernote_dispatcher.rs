@@ -184,6 +184,11 @@ fn parser_for_make_prefix(
     if make.starts_with("panasonic") {
         return Some(Box::new(panasonic::PanasonicParser) as Box<dyn MakerNoteParser>);
     }
+    // MakerNotes.pm::MakerNoteFLIR claims both prefixes before Make-exact
+    // fallback. FLIR Systems AB appears on the pinned FLIR.jpg fixture.
+    if make.starts_with("flir systems") || make.starts_with("teledyne flir") {
+        return Some(Box::new(flir::FlirParser) as Box<dyn MakerNoteParser>);
+    }
     // `make` reaches here already lowercased, so this is ExifTool's
     // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
     // "RICOH IMAGING COMPANY, LTD." Pentax bodies satisfy too.

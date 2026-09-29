@@ -456,6 +456,18 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires pinned combined-samples/JVC.jpg"]
+    fn jvc_fixture_reports_cpu_versions() {
+        let path = crate::test_support::pinned_combined_fixture_path("JVC.jpg")
+            .expect("pinned combined-samples/JVC.jpg is required");
+        let metadata = crate::core::operations::read_metadata(&path).expect("JVC fixture parses");
+        assert_eq!(
+            metadata.get_string("JVC:CPUVersions"),
+            Some("CPU1 2.00, 0, CPU2 0496, 0")
+        );
+    }
+
+    #[test]
     fn signed_jvc_ifd_uses_its_own_byte_order() {
         // MakerNotes.pm:237-243 declares Start +4 and ByteOrder Unknown.
         // Exif.pm:6886-6893 swaps the inherited order when the IFD entry

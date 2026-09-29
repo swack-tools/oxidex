@@ -373,7 +373,13 @@ impl<'a> CopyBuilder<'a> {
             };
 
             if should_copy {
-                let value = if crate::writers::xp_strings::is_xp_tag_key(tag_name)
+                let value = if crate::core::formatters::xmp_gps::is_xmp_exif_coordinate(tag_name)
+                    && !self.source.map.is_assigned(tag_name)
+                {
+                    occurrence
+                        .project(crate::core::tag_occurrence::ValueChannel::Stored)
+                        .into_owned()
+                } else if crate::writers::xp_strings::is_xp_tag_key(tag_name)
                     && !self.source.map.is_assigned(tag_name)
                 {
                     let stored = occurrence

@@ -126,7 +126,7 @@ validated on `serde` (200):
 
 - **`oxidex`: taken, not ours.** It is 0.0.1, created 2025-08-12, owned by
   crates.io user `qodeninja`, repository `github.com/oxidex-rs/oxidex`,
-  described as a "reserved name stub". `cargo publish` of the root crate
+  described as a reserved name stub. `cargo publish` of the root crate
   fails on ownership.
 - **`oxidex-tags`, `-core`, `-camera`, `-media`, `-image`, `-document`,
   `-specialty`, `-shared`: free.** None exists (404 on the crate and its
@@ -211,7 +211,7 @@ reaching the facade and the domain crates' switch to exporting
 `oxidex_tags_core` 2.x types), and it doesn't look at data, which is where
 the removed tables are. Those two are why the rest move to 2.0.0-beta.1
 too. Table and definition counts come from the `*_tags.yaml` sources at
-`v1.2.1` and at the tip: 32,683 tag definitions before, 16,684 now.
+`v1.2.1` and at the tip: 32,683 tag definitions before, 16,683 now.
 
 Inter-crate requirements pin the tag crates exactly (`=2.0.0-beta.1`), so
 a later beta of one tag crate can't be mixed with this beta of another.

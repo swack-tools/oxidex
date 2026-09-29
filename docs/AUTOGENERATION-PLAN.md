@@ -36,7 +36,11 @@ failure. Native read-only tags need no write path; native writable tags need a
 separately verified one. A corpus is a test population, not a way to exclude
 unexercised behaviour.
 
-## Where we are now (measured)
+## Historical measured snapshot
+
+The read and write counts below are historical observations at `7a9c7576`,
+not measurements of the final beta candidate. Each row names its own source
+and instrument; newer results require an exact-candidate receipt.
 
 | Axis | Measured | Instrument, commit |
 | --- | --- | --- |

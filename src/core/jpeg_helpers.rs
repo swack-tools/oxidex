@@ -191,6 +191,12 @@ pub(crate) fn process_exif_segments_with_options(
     diagnostics: &mut DiagnosticSink,
 ) {
     let mut session = Session::new();
+    session
+        .set_member(
+            "FILE_TYPE",
+            crate::exiftool_tables::session::MemberVal::Str("JPEG".into()),
+        )
+        .expect("FILE_TYPE is a declared string member");
     let mut members = std::collections::HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
 
@@ -639,20 +645,21 @@ pub fn process_xmp_segments(
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) {
-    match crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments_with_value_forms(segments) {
-        Ok((xmp_tags, value_forms)) => {
+    match crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments_with_source_forms(segments) {
+        Ok((xmp_tags, value_forms, gps_sources)) => {
             // Add all XMP tags to metadata
-            for entry in &xmp_tags {
+            for (entry, source) in xmp_tags.iter().zip(&gps_sources) {
                 // A List keeps its entries apart -- ExifTool reports
                 // dc:subject as a list, not one joined string. A scalar
                 // stays the property's text: XMP is a text format and
                 // ExifTool prints the characters back verbatim
                 // (crs:ProcessVersion "11.0" is "11.0", not 11, and
                 // Device:Camera's "0.321765" keeps all six digits).
-                crate::parsers::xmp::rdf_parser::insert_xmp_entry(
+                crate::parsers::xmp::rdf_parser::insert_xmp_entry_with_source(
                     metadata,
                     entry,
                     entry.tag_value(true),
+                    source.as_deref(),
                 );
             }
             // The ValueConv text of any property whose print formatting
