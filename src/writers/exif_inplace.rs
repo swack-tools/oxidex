@@ -407,6 +407,10 @@ pub fn shift_jpeg_exif_dates(
     spec: &ShiftSpec,
 ) -> Result<usize> {
     let mut file_bytes = std::fs::read(path)?;
+    // Check the bytes this call will modify, not a second path lookup that
+    // can observe a different inode. Prove an absent target across every
+    // APP1 before allowing the unchanged case.
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_date_shift(&file_bytes, targets)?;
 
     // Find the EXIF APP1 segment. The TIFF structure starts after
     // marker (2) + length field (2) + "Exif\0\0" (6).
