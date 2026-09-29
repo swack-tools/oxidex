@@ -18,7 +18,8 @@ use crate::core::tag_occurrence::{Instance, Provenance, TagOccurrence, intern};
 use crate::core::{TagId, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::ifd_engine::{
-    declared_non_apple_makernote_value, non_apple_makernote_type_size,
+    EntryWarningBudget, FormatAdmission, MakerNoteLocation, declared_non_apple_makernote_value,
+    non_apple_makernote_location, non_apple_makernote_type_size,
 };
 use crate::exiftool_tables::session::Session;
 use crate::exiftool_tables::{Ctx, DecodedValue};
@@ -1103,7 +1104,15 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         // No enclosing block, so a Leica9 payload's TIFF-relative value offsets
         // stay unresolvable and the two tags that need them are skipped rather
         // than guessed. `parse_with_context` is the entry point that has them.
-        self.parse_payload(data, byte_order, None, tags, &mut HashMap::new(), None)
+        self.parse_payload(
+            data,
+            byte_order,
+            None,
+            None,
+            tags,
+            &mut HashMap::new(),
+            None,
+        )
     }
 
     /// Leica9's value offsets need the selected source's base: the MakerNote
@@ -1128,7 +1137,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         &self,
         ctx: &MakerNoteContext<'_>,
         byte_order: ByteOrder,
-        _model: Option<&str>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
@@ -1136,6 +1145,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
             ctx.payload(),
             byte_order,
             Some(ctx),
+            model,
             tags,
             value_forms,
             None,
@@ -1147,7 +1157,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         &self,
         ctx: &MakerNoteContext<'_>,
         byte_order: ByteOrder,
-        _model: Option<&str>,
+        model: Option<&str>,
         _session: &mut Session,
         _cond_ctx: &mut Ctx<'_>,
         tags: &mut HashMap<String, String>,
@@ -1158,6 +1168,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
             ctx.payload(),
             byte_order,
             Some(ctx),
+            model,
             tags,
             value_forms,
             Some(occurrences),
@@ -1176,6 +1187,7 @@ impl LeicaMakerNoteParser {
         data: &[u8],
         byte_order: ByteOrder,
         ctx: Option<&MakerNoteContext<'_>>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
         mut occurrences: Option<&mut Vec<(String, TagOccurrence)>>,
@@ -1335,7 +1347,13 @@ impl LeicaMakerNoteParser {
         })();
 
         // Parse each IFD entry
+        let mut warning_budget = EntryWarningBudget::default();
         for i in 0..entry_count {
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
+                && warning_budget.exhausted()
+            {
+                break;
+            }
             let entry_offset = 2 + (i as usize * 12);
             let entry_data = &ifd_data[entry_offset..entry_offset + 12];
             let entry_reader = EndianReader::new(entry_data, byte_order.to_io_byte_order());
@@ -1355,6 +1373,46 @@ impl LeicaMakerNoteParser {
             let format = entry_reader.u16_at(2).unwrap_or(0);
             let component_count = entry_reader.u32_at(4).unwrap_or(0);
             let value_offset = entry_reader.u32_at(8).unwrap_or(0);
+
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8) {
+                match warning_budget.admit(
+                    usize::from(i),
+                    format,
+                    non_apple_makernote_type_size(format),
+                    model.is_some_and(|model| model.starts_with("ILCE")),
+                ) {
+                    FormatAdmission::Accepted(_) => {}
+                    FormatAdmission::Skip => continue,
+                    FormatAdmission::Stop => break,
+                }
+                let directory_start = entry_directory.as_ref().map_or(offset, |range| range.start);
+                let Some(directory_end) = directory_start.checked_add(required_size) else {
+                    break;
+                };
+                let Some(value_field_pos) = directory_start
+                    .checked_add(entry_offset)
+                    .and_then(|pos| pos.checked_add(8))
+                else {
+                    break;
+                };
+                match non_apple_makernote_location(
+                    format,
+                    component_count,
+                    value_offset,
+                    value_field_pos,
+                    values.map_or(data, |values| values.block),
+                    directory_start,
+                    directory_end,
+                    values.and_then(|values| i64::try_from(values.base).ok()),
+                ) {
+                    MakerNoteLocation::Readable => {}
+                    MakerNoteLocation::Warned => {
+                        warning_budget.warned();
+                        continue;
+                    }
+                    MakerNoteLocation::Unavailable => continue,
+                }
+            }
 
             // Create IfdEntry for this tag
             let entry = IfdEntry {
