@@ -1266,6 +1266,25 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut makernote_tags,
                             &mut value_forms,
                         )
+                    } else if make.trim().eq_ignore_ascii_case("leica camera ag")
+                        && crate::parsers::tiff::makernotes::leica::is_leica_makernote(mn_data)
+                        && let Some((payload_offset, payload_len)) = makernote_location
+                    {
+                        let ctx = MakerNoteContext::in_tiff(data, payload_offset, payload_len, 0);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
+                        )
                     } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
                         && is_olympus_make(make)
                         && is_olympus_structured_makernote(mn_data)
@@ -3408,10 +3427,9 @@ fn located_selected_external_ifd_entry(
         byte_order,
     )?);
     let entries_len = entry_count.checked_mul(12)?;
-    let directory_end = directory_start
-        .checked_add(2)?
-        .checked_add(entries_len)?
-        .checked_add(4)?;
+    // Exif.pm's overlap boundary ends at the entry array. The next-IFD
+    // link may overlap an external value and is not part of this test.
+    let directory_end = directory_start.checked_add(2)?.checked_add(entries_len)?;
     if directory_end > tiff.len() {
         return None;
     }
@@ -3533,6 +3551,24 @@ mod located_makernote_tests {
                 None,
                 "the first duplicate must never be rebound as the selected value"
             );
+        }
+    }
+
+    #[test]
+    fn physical_lookup_allows_values_at_the_entry_array_end() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            // Exif.pm's dirEnd excludes the optional next-IFD link.
+            // The next four bytes may therefore belong to the value.
+            for offset in 22..=26 {
+                let payload = b"LEICA\0\x08\0";
+                let mut tiff = directory(order, &[(0x927c, 7, 8, offset)], 40);
+                tiff[offset as usize..offset as usize + payload.len()].copy_from_slice(payload);
+                assert_eq!(
+                    located_selected_external_ifd_entry(&tiff, 8, order, 0x927c, payload),
+                    Some((offset as usize, payload.len())),
+                    "value at {offset} must not overlap the entry array"
+                );
+            }
         }
     }
 

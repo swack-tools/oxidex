@@ -448,6 +448,150 @@ fn accepted_type(code: u16, in_maker_notes: bool, ctx: &cond::Ctx) -> Option<Ent
     if accepted { entry_type(code) } else { None }
 }
 
+/// The ProcessExif per-directory format and warning gate (Exif.pm:6455-6478).
+#[derive(Default)]
+pub(crate) struct EntryWarningBudget(u32);
+
+pub(crate) enum FormatAdmission<T> {
+    Accepted(T),
+    Skip,
+    Stop,
+}
+
+impl EntryWarningBudget {
+    pub(crate) fn exhausted(&self) -> bool {
+        self.0 > 10
+    }
+
+    pub(crate) fn warned(&mut self) {
+        self.0 += 1;
+    }
+
+    pub(crate) fn admit<T>(
+        &mut self,
+        index: usize,
+        code: u16,
+        accepted: Option<T>,
+        model_is_ilce: bool,
+    ) -> FormatAdmission<T> {
+        match accepted {
+            Some(ty) => FormatAdmission::Accepted(ty),
+            None => {
+                // Zero padding is rejected but does not consume the warning
+                // budget unless ExifTool validation is enabled.
+                if code != 0 {
+                    self.warned();
+                }
+                if index == 0 && !model_is_ilce {
+                    FormatAdmission::Stop
+                } else {
+                    FormatAdmission::Skip
+                }
+            }
+        }
+    }
+}
+
+/// Physical ProcessExif admission for a non-Apple MakerNote entry. The Leica
+/// hand path supplies its verified payload/TIFF coordinates and uses the
+/// overlap rule, which permits values elsewhere in the enclosing TIFF.
+pub(crate) enum MakerNoteLocation {
+    Readable,
+    Warned,
+    Unavailable,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn non_apple_makernote_location(
+    code: u16,
+    count: u32,
+    value_offset: u32,
+    value_field_pos: usize,
+    data: &[u8],
+    directory_start: usize,
+    directory_end: usize,
+    base: Option<i64>,
+) -> MakerNoteLocation {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    let Some(ty) = non_apple_makernote_entry_type(code, &ctx) else {
+        return MakerNoteLocation::Unavailable;
+    };
+    let dir = IfdDir {
+        data,
+        data_domain: 0,
+        ifd_start: directory_start,
+        base,
+        byte_order: ByteOrder::Little,
+        group1: None,
+    };
+    let entry = IfdEntry {
+        tag_id: 0,
+        field_type: code,
+        count,
+        value_offset,
+        value_field_pos,
+    };
+    let rule = DirectoryRule::Overlap {
+        dir_start: directory_start,
+        dir_end: directory_end,
+    };
+    match locate(&dir, &entry, ty, rule) {
+        Ok(_) => MakerNoteLocation::Readable,
+        Err(Refusal::Warned) => MakerNoteLocation::Warned,
+        Err(Refusal::Silent) => MakerNoteLocation::Unavailable,
+    }
+}
+
+/// Decode an already bounded non-Apple MakerNote field through the same
+/// `ProcessExif` type admission and `ReadValue` plan as the IFD walker.
+/// The caller remains responsible for locating the entry's physical bytes.
+pub(crate) fn declared_non_apple_makernote_value(
+    code: u16,
+    count: u32,
+    bytes: &[u8],
+    order: ByteOrder,
+) -> Option<(DecodedValue, TagValue)> {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    let ty = non_apple_makernote_entry_type(code, &ctx)?;
+    let size = u64::from(count).checked_mul(u64::try_from(ty.size).ok()?)?;
+    if size > 0x7fff_ffff || usize::try_from(size).ok()? != bytes.len() {
+        return None;
+    }
+    let located = Located {
+        value_pos: 0,
+        bytes,
+        ty,
+    };
+    let plan = read_plan(&located, None)?;
+    // Exif.pm:6763-6773 refuses excessive non-string arrays for this row.
+    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+        return None;
+    }
+    let decoded = decode_plan(&located, plan, order)?;
+    let stored = stored_plan(&located, plan, order, &decoded);
+    Some((decoded, stored))
+}
+
+/// Exif.pm's physical type size under the same non-Apple MakerNote rule.
+pub(crate) fn non_apple_makernote_type_size(code: u16) -> Option<usize> {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    non_apple_makernote_entry_type(code, &ctx).map(|ty| ty.size)
+}
+
+// Exif.pm 11.78 accepts only its declared 1..13 formats. The 129 UTF8
+// exception entered ProcessExif by 12.64. Keep this projection tied to the
+// source version of the generated IFD tables, without changing the walker.
+fn non_apple_makernote_entry_type(code: u16, ctx: &cond::Ctx) -> Option<EntryType> {
+    match super::IFD_EXIFTOOL_VERSION {
+        "11.78" if (1..=13).contains(&code) => entry_type(code),
+        "12.64" | "13.59" => accepted_type(code, true, ctx),
+        _ => None,
+    }
+}
+
 /// A member's original byte representation where one exists.
 ///
 /// `ProcessBinaryData` RawConv can seed the shared map with a Perl byte
@@ -556,6 +700,13 @@ fn locate<'d>(
             bytes,
             ty,
         });
+    }
+    // Exif.pm:6539 rejects a stored pointer into the TIFF header even when
+    // the enclosing TIFF base is unavailable. The refusal spends the same
+    // warning budget as a located suspicious pointer; other unknown
+    // out-of-line pointers remain silent until a base is known.
+    if matches!(rule, DirectoryRule::Overlap { .. }) && entry.value_offset < 8 {
+        return Err(Refusal::Warned);
     }
     // Exif.pm:6510, 6546: an offset, corrected into `data`.
     let Some(base) = dir.base else {
@@ -1093,36 +1244,37 @@ fn walk_scoped(
     // file's Session under the current directory scope.
     let generated = conv::decoder(table);
 
-    let mut warn_count = 0u32;
+    let mut warning_budget = EntryWarningBudget::default();
     for (index, entry) in entries.iter().enumerate() {
         // Exif.pm:6455-6457.
-        if warn_count > 10 {
+        if warning_budget.exhausted() {
             refuse_rest(&mut decoded, index);
             return Some(());
         }
         // Exif.pm:6463-6478.
-        let Some(ty) = accepted_type(entry.field_type, in_maker_notes, ctx) else {
-            // Exif.pm:6470-6473: "warn unless the IFD was just padded with
-            // zeros" -- a zero code does not spend the warning budget.
-            if entry.field_type != 0 {
-                warn_count += 1;
-            }
-            // Exif.pm:6474-6477: "assume corrupted IFD if this is our first
-            // entry (except Sony ILCE which have an empty first entry)".
-            if index == 0 && !model_is_ilce(ctx) {
+        let ty = match warning_budget.admit(
+            index,
+            entry.field_type,
+            accepted_type(entry.field_type, in_maker_notes, ctx),
+            model_is_ilce(ctx),
+        ) {
+            FormatAdmission::Accepted(ty) => ty,
+            FormatAdmission::Stop => {
                 refuse_rest(&mut decoded, index);
                 return Some(());
             }
-            if let Some(reads) = decoded.as_deref_mut() {
-                reads.entries[index] = EntryRead::Refused;
+            FormatAdmission::Skip => {
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads.entries[index] = EntryRead::Refused;
+                }
+                continue;
             }
-            continue;
         };
         // Exif.pm:6502-6680.
         let located = match locate(&dir, entry, ty, rule) {
             Ok(located) => located,
             Err(Refusal::Warned) => {
-                warn_count += 1;
+                warning_budget.warned();
                 if let Some(reads) = decoded.as_deref_mut() {
                     reads.entries[index] = EntryRead::Refused;
                 }
@@ -3355,6 +3507,23 @@ mod tests {
     }
 
     // -- K-O: Exif.pm:6539/6549, ExifTool's rules for non-MakerNotes tables ------
+
+    #[test]
+    fn detached_non_apple_location_warns_for_header_pointer_only() {
+        let data = [0u8; 64];
+        assert!(matches!(
+            non_apple_makernote_location(5, 3, 0, 18, &data, 8, 22, None),
+            MakerNoteLocation::Warned
+        ));
+        assert!(matches!(
+            non_apple_makernote_location(5, 3, 8, 18, &data, 8, 22, None),
+            MakerNoteLocation::Unavailable
+        ));
+        assert!(matches!(
+            non_apple_makernote_location(1, 3, 0, 18, &data, 8, 22, None),
+            MakerNoteLocation::Readable
+        ));
+    }
 
     /// [`STRINGS`]' tags in a table whose family-0 group is `EXIF`, as
     /// `Exif::Main`'s is: the overlap rule applies, not the floor.
