@@ -44,6 +44,8 @@ fn tested_source() -> TestedSource {
 }
 
 use super::nikon_capture_data;
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
@@ -650,6 +652,7 @@ impl MakerNoteParser for NikonParser {
             tags,
             value_forms,
             preview_ifd_base,
+            None,
         )
     }
 
@@ -661,7 +664,36 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_with_preview_ifd_base(data, byte_order, model, tags, value_forms, None)
+        self.parse_with_preview_ifd_base(data, byte_order, model, tags, value_forms, None, None)
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut crate::exiftool_tables::session::Session,
+        _cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        if !ctx.payload().starts_with(b"Nikon\0") {
+            return self.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms);
+        }
+        let preview_ifd_base = ctx
+            .is_located()
+            .then(|| ctx.payload_base().checked_add(10))
+            .flatten();
+        self.parse_with_preview_ifd_base(
+            ctx.window(),
+            byte_order,
+            model,
+            tags,
+            value_forms,
+            preview_ifd_base,
+            Some(occurrences),
+        )
     }
 }
 
@@ -674,6 +706,7 @@ impl NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
         preview_ifd_base: Option<u64>,
+        mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -973,19 +1006,121 @@ impl NikonParser {
                 // tables.
                 NIKON_LENS_DATA => {
                     if let Some(bytes) = bytes_of(entry) {
-                        lens_data::parse_lens_data_with_values(
+                        // Parse each physical 0x0098 value into an entry-local map.
+                        // A later generated entry may own its own four fields,
+                        // but must never erase an earlier encrypted fallback.
+                        let mut entry_tags = HashMap::new();
+                        let mut entry_value_forms = HashMap::new();
+                        let plaintext = lens_data::parse_lens_data_with_occurrences(
                             &bytes,
-                            tags,
-                            &mut parsed_value_forms,
+                            &mut entry_tags,
+                            &mut entry_value_forms,
                         );
-                        encrypted::parse_lens_data(
+                        let generated = encrypted::parse_lens_data_with_occurrences(
                             &bytes,
                             entry.value_count as usize,
                             keys,
                             order,
                             &mut ctx,
-                            tags,
+                            &mut entry_tags,
                         );
+                        entry_value_forms.extend(ctx.take_value_forms());
+                        let hand_overlap = if generated.owned {
+                            Vec::new()
+                        } else {
+                            generated.hand_overlap
+                        };
+                        if let Some(rows) = structured_rows.as_deref_mut() {
+                            for field in plaintext.into_iter().chain(hand_overlap) {
+                                let key = format!("Nikon:{}", field.name);
+                                rows.push((
+                                    key.clone(),
+                                    TagOccurrence {
+                                        id: oxidex_tags::TagId::Numeric(field.offset as u16),
+                                        name: intern(field.name),
+                                        group0: intern("MakerNotes"),
+                                        group1: intern("Nikon"),
+                                        group2: Some(intern("Camera")),
+                                        instance: Instance::default(),
+                                        raw: TagValue::String(field.print.clone()),
+                                        value: Some(
+                                            field.value.map(TagValue::Float).unwrap_or_else(|| {
+                                                TagValue::Integer(i64::from(field.raw))
+                                            }),
+                                        ),
+                                        print: Some(TagValue::String(field.print)),
+                                        stored: Some(TagValue::Integer(i64::from(field.raw))),
+                                        priority: 1,
+                                        is_list: false,
+                                        order: 0,
+                                        origin: Provenance {
+                                            module: Some("Nikon"),
+                                            table: Some(field.table),
+                                            byte_range: None,
+                                        },
+                                    },
+                                ));
+                                entry_tags.remove(&key);
+                                entry_value_forms.remove(&key);
+                            }
+                            if generated.owned {
+                                // Attribution silence still owns this 0204 entry.
+                                // Drop its flat hand copies, never copies from a
+                                // separate LensData entry or standalone Main tag.
+                                for name in [
+                                    "ExitPupilPosition",
+                                    "AFAperture",
+                                    "FocusPosition",
+                                    "LensFStops",
+                                ] {
+                                    let key = format!("Nikon:{name}");
+                                    entry_tags.remove(&key);
+                                    entry_value_forms.remove(&key);
+                                }
+                            }
+                        }
+                        tags.extend(entry_tags);
+                        parsed_value_forms.extend(entry_value_forms);
+                        for tag in generated.rows {
+                            // The source-derived table has more fields than
+                            // this route has independently credited. Keep
+                            // the hand reader for every other name.
+                            if !matches!(
+                                tag.name,
+                                "ExitPupilPosition" | "AFAperture" | "FocusPosition" | "LensFStops"
+                            ) {
+                                continue;
+                            }
+                            let key = format!("Nikon:{}", tag.name);
+                            if let Some(rows) = structured_rows.as_deref_mut() {
+                                let value =
+                                    tag.value_conv.clone().unwrap_or_else(|| tag.value.clone());
+                                rows.push((
+                                    key.clone(),
+                                    TagOccurrence {
+                                        id: tag.source_id,
+                                        name: intern(tag.name),
+                                        group0: intern(tag.group0),
+                                        group1: intern(tag.group1),
+                                        group2: (!tag.group2.is_empty())
+                                            .then(|| intern(tag.group2)),
+                                        instance: Instance::default(),
+                                        raw: tag.value.clone(),
+                                        value: Some(value),
+                                        print: Some(tag.value),
+                                        stored: Some(tag.stored),
+                                        priority: u8::from(!(tag.low_priority || tag.avoid)),
+                                        is_list: tag.is_list,
+                                        order: 0,
+                                        origin: Provenance {
+                                            module: Some(tag.module),
+                                            table: Some(tag.table),
+                                            byte_range: None,
+                                        },
+                                    },
+                                ));
+                            }
+                        }
                     }
                 }
 
@@ -1304,7 +1439,39 @@ impl NikonParser {
                     if let Some(bytes) = bytes_of(entry)
                         && let Some(value) = nikon_unsigned_ratio(&bytes)
                     {
-                        tags.insert("Nikon:LensFStops".to_string(), format!("{:.2}", value));
+                        let printed = format!("{:.2}", value);
+                        if let Some(rows) = structured_rows.as_deref_mut() {
+                            // This standalone Main 0x008b entry is a separate
+                            // physical occurrence from encrypted LensData
+                            // 0x0098's field 13. Keep its IFD order and
+                            // provenance even when generated ownership later
+                            // removes the hand LensData map value.
+                            rows.push((
+                                "Nikon:LensFStops".to_string(),
+                                TagOccurrence {
+                                    id: oxidex_tags::TagId::Numeric(NIKON_LENS_FSTOPS),
+                                    name: intern("LensFStops"),
+                                    group0: intern("MakerNotes"),
+                                    group1: intern("Nikon"),
+                                    group2: Some(intern("Camera")),
+                                    instance: Instance::default(),
+                                    raw: TagValue::new_string(&printed),
+                                    value: Some(TagValue::Float(value)),
+                                    print: Some(TagValue::new_string(&printed)),
+                                    stored: Some(TagValue::Binary(bytes.to_vec())),
+                                    priority: 1,
+                                    is_list: false,
+                                    order: 0,
+                                    origin: Provenance {
+                                        module: Some("Nikon"),
+                                        table: Some("Main"),
+                                        byte_range: None,
+                                    },
+                                },
+                            ));
+                        } else {
+                            tags.insert("Nikon:LensFStops".to_string(), printed);
+                        }
                     }
                 }
 
@@ -1925,6 +2092,28 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base(
         tags,
         value_forms,
         Some(preview_ifd_base),
+        None,
+    )
+}
+
+/// The occurrence-aware RAW path for the same public preview-base parse.
+pub fn parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
+    data: &[u8],
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    preview_ifd_base: u64,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+    occurrences: &mut Vec<(String, TagOccurrence)>,
+) -> std::result::Result<(), String> {
+    NikonParser.parse_with_preview_ifd_base(
+        data,
+        byte_order,
+        model,
+        tags,
+        value_forms,
+        Some(preview_ifd_base),
+        Some(occurrences),
     )
 }
 
@@ -2224,6 +2413,28 @@ mod tests {
         assert_eq!(tags.get("Nikon:PreviewImageStart").unwrap(), "4218");
         // The length half is not an offset and is reported unchanged.
         assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+    }
+
+    #[test]
+    fn preview_base_is_preserved_when_collecting_structured_occurrences() {
+        let tiff = nikon_type3_block(100, 1024);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut occurrences = Vec::new();
+        parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
+            &tiff[100..],
+            ByteOrder::LittleEndian,
+            None,
+            110,
+            &mut tags,
+            &mut value_forms,
+            &mut occurrences,
+        )
+        .expect("parse preview IFD with occurrence channel");
+
+        assert_eq!(tags.get("Nikon:PreviewImageStart").unwrap(), "4206");
+        assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+        assert!(occurrences.is_empty());
     }
 
     /// A detached context knows no file position, so there is no base to add

@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use super::binary_data::{Ctx, Dm};
 use super::value_reader::{ascii_value, nikon_aperture, nikon_focal_length};
 
 /// Byte offsets within an unencrypted `LensData` block.
@@ -84,6 +85,99 @@ pub fn parse_lens_data(data: &[u8], tags: &mut HashMap<String, String>) {
     parse_lens_data_with_values(data, tags, &mut HashMap::new());
 }
 
+/// Fields shared with the generated encrypted layouts. Plaintext layouts are
+/// hand owned, but need physical occurrences when another tag has the same
+/// name (notably Main 0x008b versus LensData 0x0098).
+pub(super) struct PlaintextOverlap {
+    pub name: &'static str,
+    pub offset: usize,
+    pub raw: u8,
+    pub value: Option<f64>,
+    pub print: String,
+    pub table: &'static str,
+}
+
+/// The four fields shared by plaintext and encrypted Nikon LensData tables.
+/// The encrypted caller passes only bytes after successful source-key decryption.
+fn overlap_fields(
+    data: &[u8],
+    table: &'static str,
+    exit_pupil: Option<usize>,
+    af_aperture: Option<usize>,
+    focus_position: Option<usize>,
+    lens_fstops: usize,
+) -> Vec<PlaintextOverlap> {
+    let mut fields = Vec::new();
+    if let Some((offset, raw)) = exit_pupil.and_then(|at| data.get(at).copied().map(|b| (at, b))) {
+        let value = if raw == 0 {
+            0.0
+        } else {
+            2048.0 / f64::from(raw)
+        };
+        fields.push(PlaintextOverlap {
+            name: "ExitPupilPosition",
+            offset,
+            raw,
+            value: Some(value),
+            print: format!("{value:.1} mm"),
+            table,
+        });
+    }
+    if let Some((offset, raw)) = af_aperture.and_then(|at| data.get(at).copied().map(|b| (at, b))) {
+        let value = nikon_aperture(raw);
+        fields.push(PlaintextOverlap {
+            name: "AFAperture",
+            offset,
+            raw,
+            value: Some(value),
+            print: format!("{value:.1}"),
+            table,
+        });
+    }
+    if let Some((offset, raw)) =
+        focus_position.and_then(|at| data.get(at).copied().map(|b| (at, b)))
+    {
+        fields.push(PlaintextOverlap {
+            name: "FocusPosition",
+            offset,
+            raw,
+            value: None,
+            print: format!("0x{raw:02x}"),
+            table,
+        });
+    }
+    if let Some(&raw) = data.get(lens_fstops) {
+        let value = f64::from(raw) / 12.0;
+        fields.push(PlaintextOverlap {
+            name: "LensFStops",
+            offset: lens_fstops,
+            raw,
+            value: Some(value),
+            print: format!("{value:.2}"),
+            table,
+        });
+    }
+    fields
+}
+
+/// Source-backed hand fields from decrypted LensData01/LensData0204 and
+/// the conditionally present old-data fields of LensData0800. Other encrypted
+/// versions have different tables and are not guessed.
+pub(super) fn encrypted_overlap_fields(
+    data: &[u8],
+    table: &'static str,
+    ctx: &Ctx,
+) -> Vec<PlaintextOverlap> {
+    match table {
+        "LensData0201" => overlap_fields(data, "LensData01", Some(4), Some(5), Some(8), 12),
+        "LensData0204" => overlap_fields(data, "LensData0204", Some(4), Some(5), Some(8), 13),
+        "LensData0800" if ctx.member_truthy(Dm::OldLensData) => {
+            overlap_fields(data, "LensData0800", Some(4), Some(5), None, 14)
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Parse plaintext LensData while retaining ValueConv forms separately from
 /// their rounded PrintConv strings.
 pub fn parse_lens_data_with_values(
@@ -91,41 +185,42 @@ pub fn parse_lens_data_with_values(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) {
+    parse_lens_data_with_occurrences(data, tags, value_forms);
+}
+
+/// Return source-backed overlap fields for the structured MakerNote bridge.
+pub(super) fn parse_lens_data_with_occurrences(
+    data: &[u8],
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> Vec<PlaintextOverlap> {
     if data.len() < 4 {
-        return;
+        return Vec::new();
     }
     let version = ascii_value(&data[..4]);
     if version.is_empty() {
-        return;
+        return Vec::new();
     }
     tags.insert("Nikon:LensDataVersion".to_string(), version.clone());
 
-    let layout = match version.as_str() {
-        "0100" => &LAYOUT_00,
-        "0101" => &LAYOUT_01,
+    let (layout, table) = match version.as_str() {
+        "0100" => (&LAYOUT_00, "LensData00"),
+        "0101" => (&LAYOUT_01, "LensData01"),
         // 020x and later are encrypted; only the version string is plaintext.
-        _ => return,
+        _ => return Vec::new(),
     };
 
     let at = |offset: usize| data.get(offset).copied();
-
-    if let Some(raw) = layout.exit_pupil_position.and_then(at) {
-        // ValueConv: $val ? 2048 / $val : $val
-        let value = if raw == 0 { 0.0 } else { 2048.0 / raw as f64 };
-        tags.insert(
-            "Nikon:ExitPupilPosition".to_string(),
-            format!("{:.1} mm", value),
-        );
-    }
-    if let Some(raw) = layout.af_aperture.and_then(at) {
-        tags.insert(
-            "Nikon:AFAperture".to_string(),
-            format!("{:.1}", nikon_aperture(raw)),
-        );
-    }
-    if let Some(raw) = layout.focus_position.and_then(at) {
-        // Upper nibble = far focus range, lower nibble = near focus range.
-        tags.insert("Nikon:FocusPosition".to_string(), format!("0x{:02x}", raw));
+    let overlap = overlap_fields(
+        data,
+        table,
+        layout.exit_pupil_position,
+        layout.af_aperture,
+        layout.focus_position,
+        layout.lens_fstops,
+    );
+    for field in &overlap {
+        tags.insert(format!("Nikon:{}", field.name), field.print.clone());
     }
     if let Some(raw) = layout.focus_distance.and_then(at) {
         // ValueConv: 0.01 * 10**($val/40), in metres.
@@ -146,12 +241,6 @@ pub fn parse_lens_data_with_values(
     }
     if let Some(raw) = at(layout.lens_id_number) {
         tags.insert("Nikon:LensIDNumber".to_string(), raw.to_string());
-    }
-    if let Some(raw) = at(layout.lens_fstops) {
-        tags.insert(
-            "Nikon:LensFStops".to_string(),
-            format!("{:.2}", raw as f64 / 12.0),
-        );
     }
     if let Some(raw) = at(layout.min_focal_length) {
         tags.insert(
@@ -186,6 +275,7 @@ pub fn parse_lens_data_with_values(
             format!("{:.1}", nikon_aperture(raw)),
         );
     }
+    overlap
 }
 
 #[cfg(test)]

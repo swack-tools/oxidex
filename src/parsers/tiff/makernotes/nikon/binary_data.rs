@@ -564,6 +564,11 @@ impl Ctx {
         self.members.get(&dm)
     }
 
+    /// Reuse the interpreter's exact Perl truth test for source-table guards.
+    pub(super) fn member_truthy(&self, dm: Dm) -> bool {
+        self.truthy(dm)
+    }
+
     pub fn set_value_form(&mut self, key: String, value: String) {
         self.value_forms.insert(key, value);
     }

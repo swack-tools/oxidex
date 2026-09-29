@@ -1258,13 +1258,14 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         "nikon" | "nikon corporation"
                     ) && let Some(preview_ifd_base) = makernote_preview_ifd_base
                     {
-                        crate::parsers::tiff::makernotes::nikon::parse_nikon_makernotes_with_preview_ifd_base(
+                        crate::parsers::tiff::makernotes::nikon::parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
                             mn_data,
                             byte_order,
                             camera_model.as_deref(),
                             preview_ifd_base,
                             &mut makernote_tags,
                             &mut value_forms,
+                            &mut structured_occurrences,
                         )
                     } else if make.trim().eq_ignore_ascii_case("leica camera ag")
                         && crate::parsers::tiff::makernotes::leica::is_leica_makernote(mn_data)

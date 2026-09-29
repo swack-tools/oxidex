@@ -185,7 +185,12 @@
     }
   ],
   "encrypted_walker": {
-    "status": "none",
-    "reason": "No decrypted buffer reaches one of the four generated walkers at the inventory base. Nikon (src/parsers/tiff/makernotes/nikon/encrypted.rs) and Sony (src/parsers/tiff/makernotes/sony/enciphered.rs) decrypt into hand-written readers. A fixture for this case would have to invent a carrier, so the contract test pins the absence instead."
+    "status": "parsed-narrow",
+    "source_table": "Nikon::LensData0204",
+    "encrypted_carrier": "Nikon::Main 0x0098",
+    "real_carrier_fixture": "combined-samples/Nikon/NikonD810.jpg",
+    "production_route": "Nikon encrypted::parse_lens_data selects the 0204 root, derives SerialNumber/ShutterCount keys, decrypts from byte 4, then passes plaintext to engine::process_binary_data and pipeline::execute",
+    "generated_occurrence_fields": ["ExitPupilPosition", "AFAperture", "FocusPosition", "LensFStops"],
+    "residual": "Other Nikon::LensData0204 fields remain with the hand reader; Sony enciphered blocks and other Nikon encrypted tables are not credited here."
   }
 }
