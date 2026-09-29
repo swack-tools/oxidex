@@ -1940,11 +1940,11 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                 return Computed::new(printed, printed);
             }
             let rounded = (value * 1e6 + 0.5).trunc();
-            if !rounded.is_finite() {
-                return None;
-            }
             // Perl may promote int() to an NV for a large result, then
             // stringifies both the raw ratio and rounded result at 15 digits.
+            // The printed rounding expression may overflow even when the
+            // raw ratio is finite; ExifTool then prints Inf but retains the
+            // finite numeric value.
             // Rust's integer cast would saturate and its shortest f64 text
             // can expose digits Perl would not print.
             let value = crate::core::formatters::numeric_precision::perl_number(value);
@@ -2747,6 +2747,15 @@ mod tests {
             c("BlueBalance", &inputs).as_deref(),
             Some("3105965049.56534")
         );
+    }
+
+    #[test]
+    fn white_balance_finite_double_keeps_value_when_print_rounding_overflows() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("1e+308 1 1");
+        let red = compute("Exif", "RedBalance", &inputs, None).unwrap();
+        assert_eq!(red.value, "1e+308");
+        assert_eq!(red.print, "Inf");
     }
 
     #[test]
