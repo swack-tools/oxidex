@@ -51,6 +51,7 @@ use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use chrono::{NaiveDate, TimeZone, Timelike, Utc};
+use std::borrow::Cow;
 
 include!("generated_scene_type_inverse.rs");
 
@@ -188,6 +189,9 @@ pub(crate) fn declared_alias(tag_name: &str) -> Option<&'static str> {
         "FlashpixVersion" => Some("EXIF:FlashpixVersion"),
         "CompressedBitsPerPixel" => Some("EXIF:CompressedBitsPerPixel"),
         "SubjectDistance" => Some("EXIF:SubjectDistance"),
+        "FocalLength" => Some("EXIF:FocalLength"),
+        "FocalLengthIn35mmFormat" => Some("EXIF:FocalLengthIn35mmFormat"),
+        "AmbientTemperature" => Some("EXIF:AmbientTemperature"),
         "RelatedSoundFile" => Some("EXIF:RelatedSoundFile"),
         "SubjectDistanceRange" => Some("EXIF:SubjectDistanceRange"),
         "ComponentsConfiguration" => Some("EXIF:ComponentsConfiguration"),
@@ -237,7 +241,39 @@ pub(crate) fn parse_cli_tag_value_with_mode(
     raw: &str,
     raw_mode: bool,
 ) -> Result<TagValue> {
+    let (tag_name, raw_mode) = match tag_name.strip_suffix('#') {
+        Some(stripped)
+            if stripped
+                .rsplit(':')
+                .next()
+                .and_then(unit_suffix_tag)
+                .is_some() =>
+        {
+            (stripped, true)
+        }
+        _ => (tag_name, raw_mode),
+    };
     let declared_tag_name = declared_alias(tag_name).unwrap_or(tag_name);
+    // Codex review finding on PR #963 (comment 4112327521, P2): ExifTool tag
+    // and group names are case-insensitive, but `get_tag_descriptor` (and
+    // this file's own leaf matches below) key on exact case. Without this,
+    // `-ExifIFD:focallength=50 mm` or `-exififd:FocalLength=50 mm` failed
+    // `get_tag_descriptor`'s lookup entirely, fell back to `TagValue::String`
+    // here, and were only refused later -- with a misleading "Type mismatch"
+    // -- once the writer's own (separately case-insensitive) tag resolution
+    // found the real Rational descriptor. Canonicalizing both the group and
+    // the leaf here, for exactly the four tags this fix covers, makes the
+    // rest of this function (and `get_tag_descriptor`) see the same spelling
+    // it would for the canonical form. Confirmed against the oracle: both
+    // spellings above behave exactly like `-ExifIFD:FocalLength=50 mm`.
+    let declared_tag_name_owned;
+    let declared_tag_name = match canonicalize_unit_suffix_tag_name(declared_tag_name) {
+        Some(canonical) => {
+            declared_tag_name_owned = canonical;
+            declared_tag_name_owned.as_str()
+        }
+        None => declared_tag_name,
+    };
 
     let leaf = declared_tag_name.rsplit(':').next();
 
@@ -1026,6 +1062,35 @@ pub(crate) fn parse_cli_tag_value_with_mode(
             _ => raw,
         }
     };
+    // Exif.pm 13.59 0x920a/0xa405/0x9400 append a literal unit to a plain
+    // numeric PrintConv (` mm`, ` mm`, an optional-space `C`) that
+    // PrintConvInv strips again before the value reaches CheckValue -- see
+    // `strip_printconv_unit_suffix` for the exact citations. Raw mode (a
+    // trailing `#` on one of these four tag names, recognised above) skips
+    // this exactly as it skips every other PrintConvInv: the caller already
+    // supplied the bare stored number.
+    //
+    // The leaf lookup goes through `unit_suffix_tag` rather than a direct
+    // string match: ExifTool tag and group names are case-insensitive, so
+    // `-ExifIFD:focallength=50 mm` and `-exififd:FocalLength=50 mm` must
+    // take this same path (confirmed against the oracle) even though
+    // `declared_tag_name`'s own casing here is whatever the caller typed.
+    let stripped_unit_owned;
+    let raw = if raw_mode {
+        raw
+    } else {
+        match declared_tag_name
+            .rsplit(':')
+            .next()
+            .and_then(unit_suffix_tag)
+        {
+            Some(leaf @ ("FocalLength" | "FocalLengthIn35mmFormat" | "AmbientTemperature")) => {
+                stripped_unit_owned = strip_printconv_unit_suffix(leaf, raw);
+                stripped_unit_owned.as_ref()
+            }
+            _ => raw,
+        }
+    };
     let raw = match declared_tag_name.rsplit(':').next() {
         // Saturation (Exif.pm 0xa409) is ConvertParameter too, same as
         // Contrast above -- `raw_mode` skips it, taking the raw code
@@ -1241,6 +1306,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
                             | "CalibrationIlluminant1"
                             | "CalibrationIlluminant2"
                             | "CalibrationIlluminant3"
+                            | "FocalLengthIn35mmFormat"
                     )
                 )
                 && exif_or_gps_module_for(declared_tag_name).is_some() =>
@@ -1269,6 +1335,28 @@ pub(crate) fn parse_cli_tag_value_with_mode(
                 )),
                 None => Ok(TagValue::Integer(parse_integer(tag_name, raw)?)),
             }
+        }
+        // Codex review finding on PR #963 (comment 4112327507): Exif.pm
+        // 13.59 0xa405 declares FocalLengthIn35mmFormat `int16u`. Stripping
+        // its ` mm` suffix let a value outside 0..=65535 reach the generic
+        // integer parser below, which has no notion of the tag's own width
+        // -- confirmed against the oracle: `-ExifIFD:FocalLengthIn35mmFormat=70000
+        // mm` and `=-1 mm` both refuse (`Value above/below int16u
+        // maximum/minimum`) before the value is ever stored.
+        Some(ValueType::Integer)
+            if declared_tag_name
+                .rsplit(':')
+                .next()
+                .is_some_and(|leaf| leaf.eq_ignore_ascii_case("FocalLengthIn35mmFormat")) =>
+        {
+            let value = parse_integer(tag_name, raw)?;
+            if !(0..=u16::MAX as i64).contains(&value) {
+                return Err(invalid(
+                    tag_name,
+                    "FocalLengthIn35mmFormat does not fit unsigned 16-bit (int16u)",
+                ));
+            }
+            Ok(TagValue::new_integer(value))
         }
         Some(ValueType::Integer) => Ok(TagValue::Integer(parse_integer(tag_name, raw)?)),
         Some(ValueType::Float) => Ok(TagValue::Float(parse_float(tag_name, raw)?)),
@@ -1300,7 +1388,7 @@ pub(crate) fn parse_cli_tag_value_with_mode(
         {
             parse_shutter_speed_value(tag_name, raw)
         }
-        Some(ValueType::Rational) => parse_rational(declared_tag_name, raw),
+        Some(ValueType::Rational) => parse_rational(declared_tag_name, raw, raw_mode),
         // A raw PDF date skips the display-date inverse too (Codex
         // pre-review of PR #959, round 5): pinned 13.59 turns
         // `-PDF:CreateDate#=2020-01-02T03:04:05` into
@@ -1401,6 +1489,102 @@ fn gps_date_stamp_adjusts_to_utc(raw: &str) -> bool {
         && digits(&mut at)
         && sep(&mut at, b":")
         && digits(&mut at)
+}
+
+/// Case-insensitively matches `leaf` against one of the four Exif.pm tags
+/// this fix's `PrintConvInv` covers, returning the canonically-cased name
+/// used elsewhere in this file (`strip_printconv_unit_suffix`'s match arms,
+/// `parse_rational`'s `SubjectDistance` branch) -- ExifTool tag and group
+/// names are case-insensitive (confirmed against the oracle:
+/// `-ExifIFD:focallength=`, `-exififd:FocalLength=`, `-SUBJECTDISTANCE=`
+/// all behave exactly like the canonical spelling), so an exact-case `match`
+/// on the leaf alone silently missed every non-canonical spelling.
+fn unit_suffix_tag(leaf: &str) -> Option<&'static str> {
+    const TAGS: [&str; 4] = [
+        "FocalLength",
+        "FocalLengthIn35mmFormat",
+        "SubjectDistance",
+        "AmbientTemperature",
+    ];
+    TAGS.into_iter().find(|tag| leaf.eq_ignore_ascii_case(tag))
+}
+
+/// If `tag_name`'s leaf (after the last `:`) case-insensitively names one of
+/// the four tags [`unit_suffix_tag`] covers, returns the same tag with the
+/// leaf canonically cased and, when the group prefix itself case-
+/// insensitively names a group this file already keys on, that canonicalized
+/// too -- so a lookup keyed on exact case (`get_tag_descriptor`, this file's
+/// own `declared_tag_name.rsplit(':').next()` matches) sees the same
+/// spelling it would for the canonical form. A bare name becomes
+/// `EXIF:<Leaf>`, the key the registry holds. `None` when the leaf does not
+/// match, or the tag has a group prefix this list does not recognise (kept
+/// unchanged rather than guessed -- a group this function does not know is
+/// left for the caller's existing case-sensitive handling, unaffected by
+/// this fix, exactly as before).
+fn canonicalize_unit_suffix_tag_name(tag_name: &str) -> Option<String> {
+    const KNOWN_GROUPS: [&str; 6] = ["EXIF", "ExifIFD", "GPS", "IFD0", "IFD1", "InteropIFD"];
+    let (group, leaf) = match tag_name.rsplit_once(':') {
+        Some((group, leaf)) => (Some(group), leaf),
+        None => (None, tag_name),
+    };
+    let canonical_leaf = unit_suffix_tag(leaf)?;
+    match group {
+        // A bare name resolves to the `EXIF:` descriptor, exactly as the
+        // exact-case alias table above maps `FocalLength` to
+        // `EXIF:FocalLength`: the registry holds no bare key, so returning
+        // the bare canonical leaf left `-focallength=50 mm` untyped and the
+        // writer refused it as a String/Rational mismatch, where the pinned
+        // oracle writes it (local Codex pre-review of PR #963).
+        None => Some(format!("EXIF:{canonical_leaf}")),
+        Some(group) => {
+            let canonical_group = KNOWN_GROUPS
+                .into_iter()
+                .find(|candidate| group.eq_ignore_ascii_case(candidate))?;
+            Some(format!("{canonical_group}:{canonical_leaf}"))
+        }
+    }
+}
+
+/// Reproduces the PrintConvInv these three EXIF tags declare for stripping
+/// the literal unit their PrintConv appends, so a print-converted CLI value
+/// (as `-j` or the default text output would print it) round-trips back
+/// into a write. Byte-for-byte from the pinned Exif.pm (13.59):
+///
+/// | Tag | PrintConv | PrintConvInv | Exif.pm |
+/// |---|---|---|---|
+/// | FocalLength (0x920a) | `sprintf("%.1f mm",$val)` | `$val=~s/\s*mm$//;$val` | :2425-2426 |
+/// | FocalLengthIn35mmFormat (0xa405) | `"$val mm"` | `$val=~s/\s*mm$//;$val` | :2896-2897 |
+/// | AmbientTemperature (0x9400) | `"$val C"` | `$val=~s/ ?C//; $val` | :2590-2591 |
+///
+/// `leaf` must be one of the three names above; the caller (`parse_cli_tag_value`)
+/// only reaches this for those. `SubjectDistance` (0x9206, ` m`) has the same
+/// shape but is handled inline in `parse_rational`, where its stripped value
+/// already needs to reach the ApertureValue/fraction/`inf`/`undef` cases that
+/// follow it.
+fn strip_printconv_unit_suffix<'a>(leaf: &str, raw: &'a str) -> Cow<'a, str> {
+    match leaf {
+        "FocalLength" | "FocalLengthIn35mmFormat" => {
+            Cow::Borrowed(raw.strip_suffix("mm").map(str::trim_end).unwrap_or(raw))
+        }
+        "AmbientTemperature" => match raw.find('C') {
+            // `s/ ?C//` carries neither a `$` anchor nor `/g`: only the
+            // first "C" is removed, together with a single preceding space
+            // if there is one. PrintConv always places the unit last
+            // ("20 C"), so this only diverges from an end-anchored strip
+            // when the caller's own value already contains an unrelated
+            // "C" earlier -- in which case pinned ExifTool strips that
+            // occurrence too, not the trailing unit, and this matches it.
+            Some(index) => {
+                let before = raw[..index].strip_suffix(' ').unwrap_or(&raw[..index]);
+                let mut owned = String::with_capacity(raw.len().saturating_sub(1));
+                owned.push_str(before);
+                owned.push_str(&raw[index + 1..]);
+                Cow::Owned(owned)
+            }
+            None => Cow::Borrowed(raw),
+        },
+        _ => Cow::Borrowed(raw),
+    }
 }
 
 fn invert_subsec_time(value: &str) -> Option<&str> {
@@ -2267,8 +2451,9 @@ fn parse_float(tag_name: &str, raw: &str) -> Result<f64> {
 
 /// `CheckValue`'s `rational` branch (`Writer.pl:6888-6903`) followed by
 /// `Rationalize` (`Writer.pl:5200-5228`).
-fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
-    if tag_name.rsplit(':').next() == Some("CompressedBitsPerPixel") {
+fn parse_rational(tag_name: &str, raw: &str, raw_mode: bool) -> Result<TagValue> {
+    let leaf = tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name);
+    if leaf == "CompressedBitsPerPixel" {
         let negative_fraction = as_fraction(raw).is_some_and(|(numerator, _)| numerator < 0);
         let negative_float = as_float_text(raw)
             .and_then(|text| text.parse::<f64>().ok())
@@ -2279,18 +2464,22 @@ fn parse_rational(tag_name: &str, raw: &str) -> Result<TagValue> {
     }
     // Exif.pm 13.59 0x9206 PrintConvInv removes the optional whitespace and
     // trailing metres suffix from SubjectDistance before rationalizing it.
-    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "SubjectDistance" {
+    // Raw mode (`-SubjectDistance#=`) bypasses this, exactly like the other
+    // three unit-appending tags handled in `parse_cli_tag_value`. The
+    // comparison is case-insensitive for the same reason `unit_suffix_tag`
+    // is: ExifTool's own tag/group names are (confirmed against the oracle,
+    // PR #963 comment 4112327521).
+    let raw = if !raw_mode && leaf.eq_ignore_ascii_case("SubjectDistance") {
         raw.strip_suffix('m').map(str::trim_end).unwrap_or(raw)
     } else {
         raw
     };
-    // Exif.pm 13.59 0x920a FocalLength: PrintConvInv => '$val=~s/\s*mm$//;$val',
-    // so the printed `34.0 mm` is accepted as well as `34`.
-    let raw = if tag_name.rsplit_once(':').map_or(tag_name, |(_, name)| name) == "FocalLength" {
-        raw.strip_suffix("mm").map(str::trim_end).unwrap_or(raw)
-    } else {
-        raw
-    };
+    // Exif.pm 13.59 declares FocalLength (0x920a) and SubjectDistance
+    // (0x9206) `rational64u`, so they take CheckValue's unsigned branch and
+    // `SetRational64u`'s wider `Rationalize` cap (see `parse_rational64u`).
+    if leaf.eq_ignore_ascii_case("FocalLength") || leaf.eq_ignore_ascii_case("SubjectDistance") {
+        return parse_rational64u(tag_name, raw);
+    }
     // Exif.pm 13.59 0x9202 ApertureValue and 0x9205 MaxApertureValue store
     // APEX but accept the displayed F-number: ValueConvInv => '$val>0 ?
     // 2*log($val)/log(2) : 0' on both. Apply this before the generic
@@ -2403,6 +2592,62 @@ fn rational_is_signed(tag_name: &str) -> bool {
                 })
             })
         })
+}
+
+fn parse_rational64u(tag_name: &str, raw: &str) -> Result<TagValue> {
+    const RATIONAL64U_MAX: i64 = 0xffff_ffff;
+    let unrepresentable = || {
+        invalid(
+            tag_name,
+            format!(
+                "'{raw}' needs an unsigned 32-bit rational component (rational64u) \
+                 above {}, which cannot be written exactly",
+                i32::MAX
+            ),
+        )
+    };
+    // Writer.pl:5223-5224 -- 'inf' is 1/0 and 'undef' is 0/0.
+    if raw == "inf" {
+        return Ok(TagValue::Rational {
+            numerator: 1,
+            denominator: 0,
+        });
+    }
+    if raw == "undef" {
+        return Ok(TagValue::Rational {
+            numerator: 0,
+            denominator: 0,
+        });
+    }
+    // Writer.pl:6914-6916 -- a negative `N/D` is refused for a `u` format;
+    // otherwise `Rationalize` returns the pair unchanged (:5225).
+    if let Some((numerator, denominator)) = as_fraction(raw) {
+        if numerator < 0 {
+            return Err(invalid(tag_name, "Must be an unsigned rational"));
+        }
+        let numerator = i32::try_from(numerator).map_err(|_| unrepresentable())?;
+        let denominator = i32::try_from(denominator).map_err(|_| unrepresentable())?;
+        return Ok(TagValue::Rational {
+            numerator,
+            denominator,
+        });
+    }
+    let text =
+        as_float_text(raw).ok_or_else(|| invalid(tag_name, "Not a floating point number"))?;
+    let value: f64 = text
+        .parse()
+        .map_err(|_| invalid(tag_name, "Not a floating point number"))?;
+    // Writer.pl:6921-6923.
+    if value < 0.0 {
+        return Err(invalid(tag_name, "Must be a positive number"));
+    }
+    let (numerator, denominator) = rationalize(value, RATIONAL64U_MAX);
+    let numerator = i32::try_from(numerator).map_err(|_| unrepresentable())?;
+    let denominator = i32::try_from(denominator).map_err(|_| unrepresentable())?;
+    Ok(TagValue::Rational {
+        numerator,
+        denominator,
+    })
 }
 
 fn exact_decimal_fraction(raw: &str) -> Option<(i32, i32)> {
@@ -3750,6 +3995,74 @@ mod tests {
                 denominator: 2,
             }
         );
+    }
+
+    /// Local Codex pre-review of PR #963: a bare name in any letter case must
+    /// resolve to the tag's declared type, as the exact-case spelling does.
+    #[test]
+    fn bare_mixed_case_unit_suffix_tags_resolve_their_declared_types() {
+        let rational = |numerator, denominator| TagValue::Rational {
+            numerator,
+            denominator,
+        };
+        assert_eq!(parse("focallength", "50 mm").unwrap(), rational(50, 1));
+        assert_eq!(parse("FOCALLENGTH#", "50").unwrap(), rational(50, 1));
+        assert_eq!(parse("subjectdistance", "3.5 m").unwrap(), rational(7, 2));
+        assert_eq!(
+            parse("ambienttemperature", "20 C").unwrap(),
+            rational(20, 1)
+        );
+        assert_eq!(
+            parse("focallengthin35mmformat", "75 mm").unwrap(),
+            TagValue::Integer(75)
+        );
+    }
+
+    /// PR #963 comment 4112779672: rational64u values are rationalized with
+    /// SetRational64u's 0xffffffff cap, and a result `TagValue::Rational`
+    /// cannot hold is refused instead of clamped to the signed cap.
+    #[test]
+    fn rational64u_tags_refuse_instead_of_clamping() {
+        for (tag, raw) in [
+            ("ExifIFD:FocalLength", "3000000000"),
+            ("ExifIFD:FocalLength", "3000000000 mm"),
+            ("ExifIFD:FocalLength", "2147483648"),
+            ("ExifIFD:FocalLength", "0.0000000003"),
+            ("ExifIFD:FocalLength", "3000000000/1"),
+            ("ExifIFD:SubjectDistance", "3000000000 m"),
+        ] {
+            let error = parse(tag, raw).unwrap_err().to_string();
+            assert!(error.contains("rational64u"), "{tag}={raw}: {error}");
+        }
+        assert_eq!(
+            parse("ExifIFD:FocalLength", "2147483647").unwrap(),
+            TagValue::Rational {
+                numerator: i32::MAX,
+                denominator: 1,
+            }
+        );
+        assert_eq!(
+            parse("ExifIFD:FocalLength", "1.23456789012345").unwrap(),
+            TagValue::Rational {
+                numerator: 100,
+                denominator: 81,
+            }
+        );
+        for (tag, raw, reason) in [
+            (
+                "ExifIFD:FocalLength",
+                "-1/2",
+                "Must be an unsigned rational",
+            ),
+            (
+                "ExifIFD:SubjectDistance",
+                "-1 m",
+                "Must be a positive number",
+            ),
+        ] {
+            let error = parse(tag, raw).unwrap_err().to_string();
+            assert!(error.contains(reason), "{tag}={raw}: {error}");
+        }
     }
 
     #[test]

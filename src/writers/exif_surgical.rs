@@ -24,6 +24,7 @@ use crate::tag_db::tag_registry::{
     declared_ieee_field_type, get_tag_descriptor, has_reliable_value_type,
 };
 use crate::writers::ifd_chain::{ChainValue, IfdChain, scan_chain};
+use std::cell::Cell;
 
 /// EXIF identifier at the start of an EXIF APP1 segment
 const EXIF_IDENTIFIER: &[u8] = b"Exif\0\0";
@@ -84,7 +85,7 @@ pub(crate) const NAMED_POINTER_TAGS: &[u16] = &[0x5028];
 /// 0x0201/0x0202 preview pair, SamsungRawPointers, ImageOffset,
 /// AlphaOffset) and ThumbnailStripOffsets/ByteCounts. IFD1's thumbnail
 /// pair is structural and checked on its own (the thumbnail check).
-const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
+pub(crate) const OFFSET_LENGTH_PAIRS: &[(u16, u16)] = &[
     (0x0111, 0x0117),
     (0x0120, 0x0121),
     (0x0144, 0x0145),
@@ -264,6 +265,28 @@ pub(crate) fn group_has_content(
     }
 }
 
+/// Whether `scan` walked a directory the group-wide removal `group`
+/// deletes, empty or not: pinned ExifTool 13.59 deletes an empty GPS IFD
+/// or ExifIFD with its IFD0 pointer (Writer.jpg + a MIE whose EXIF's IFD0
+/// points at an empty GPS IFD: `-GPS:All=` 357 -> 335 bytes; an empty
+/// ExifIFD and `-ExifIFD:All=` the same), which [`group_has_content`],
+/// counting entries, does not see.
+pub(crate) fn group_directory_walked(group: GroupRemoval, scan: &ExifScan) -> bool {
+    let walked = |ifds: &[IfdKind]| {
+        scan.raw_entry_counts
+            .iter()
+            .any(|(ifd, _)| ifds.contains(ifd))
+    };
+    match group {
+        GroupRemoval::Carrier => true,
+        GroupRemoval::ExifIfd => walked(&[IfdKind::ExifIfd, IfdKind::Interop]),
+        GroupRemoval::Gps => walked(&[IfdKind::Gps]),
+        GroupRemoval::Ifd1 => walked(&[IfdKind::Ifd1]),
+        GroupRemoval::Interop => walked(&[IfdKind::Interop]),
+        GroupRemoval::MakerNotes => false,
+    }
+}
+
 /// The EXIF rows a write sets: the planned rows of `desired` whose value is
 /// not `original_map`'s. After a carrier- or group-wide removal these, and
 /// only these, are written back (delete first, then set).
@@ -378,6 +401,20 @@ const PANASONIC_JPG_FROM_RAW: u16 = 0x002e;
 /// IFD0 0xc634 DNGPrivateData, whose Adobe `MakN` record carries a maker
 /// note ExifTool files under MakerNotes.
 const DNG_PRIVATE_DATA: u16 = 0xc634;
+
+/// Whether `entry` is an IFD0 `DNGPrivateData` with an Adobe `MakN` record:
+/// a maker note ExifTool files under MakerNotes (`MakerNotes:All` deletes
+/// it).
+fn is_dng_makernote(entry: &RawEntry) -> bool {
+    entry.ifd == IfdKind::Ifd0
+        && entry.tag_id == DNG_PRIVATE_DATA
+        && crate::parsers::raw::metadata::dng_adobe_makernote_count(&entry.value).unwrap_or(1) > 0
+}
+
+/// Whether `scan` carries a `DNGPrivateData` maker note ([`is_dng_makernote`]).
+pub(crate) fn has_dng_makernote(scan: &ExifScan) -> bool {
+    scan.entries.iter().any(is_dng_makernote)
+}
 
 /// Resolves the group-wide `<group>:All` removals of a write to a
 /// TIFF-structured file (`file_bytes`, read by the reader into `baseline`)
@@ -1219,6 +1256,7 @@ pub(crate) fn tag_value_to_field_for_key(
         ));
     }
     let hint = match key.rsplit(':').next() {
+        Some(leaf) if leaf.eq_ignore_ascii_case("AmbientTemperature") => Some(10),
         Some("ShutterSpeedValue" | "BrightnessValue") => Some(10),
         Some("GPSVersionID") => Some(1),
         _ => hint,
@@ -2142,6 +2180,33 @@ fn plan_exif_write_inner(
     // delete still follows IFD0 (`$isNextIFD`, WriteExif.pl 13.59:2072-2089).
     let ifd0_at_rewrite = Ifd0AtRewrite::of(&plan);
 
+    // An ExifIFD this write creates gets WriteExif's mandatory entries
+    // (WriteExif.pl 13.59:714-719; `exif_ifd_creation`), as the TIFF
+    // writer's does: without them pinned ExifTool's `-validate` reports
+    // "Missing required JPEG ExifIFD tag 0x9000 ExifVersion" (and 0x9101,
+    // 0xa001) on a JPEG it would have written complete.
+    if !plan.exif_ifd.is_empty() && !scan.entries.iter().any(|e| e.ifd == IfdKind::ExifIfd) {
+        let set: Vec<u16> = plan.exif_ifd.iter().map(|entry| entry.tag_id).collect();
+        for edit in
+            crate::writers::exif_ifd_creation::created_exif_ifd_entries(scan.byte_order, &set)?
+        {
+            if let crate::writers::tiff_surgical::entry_edits::EntryMutation::Set {
+                field_type,
+                count,
+                bytes,
+            } = edit.mutation
+            {
+                plan.exif_ifd.push(OutEntry {
+                    tag_id: edit.tag_id,
+                    field_type,
+                    count,
+                    value: bytes,
+                    native_endian: false,
+                });
+            }
+        }
+    }
+
     // Group-wide removals: drop the named directories wholesale (the
     // serializer omits an empty directory and its pointer) -- but for the
     // entries this same write sets there: delete first, then set, as pinned
@@ -2530,6 +2595,11 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). Unwalked directories are recorded separately below; a zero
     /// count proves absence only when their uncertainty flags are clear.
     pub tag_bearing: usize,
+    /// Physical note entries this block files under MakerNotes, including
+    /// previews. The source fallback values filed under EXIF are excluded.
+    /// Unlike `tag_bearing`, this is a group-clear decision, not a bare-name
+    /// write-candidate count.
+    pub makernotes_group_entries: usize,
     /// A pinned MakerNotes::Main root proven from the physical value and
     /// camera data when exactly one tag-bearing note exists.
     pub identified_single_root: Option<&'static str>,
@@ -2560,6 +2630,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        makernotes_group_entries: usize::MAX,
         identified_single_root: None,
         ifd1_tag_bearing: usize::MAX,
         surviving_exif_ifd_clear: usize::MAX,
@@ -2593,6 +2664,20 @@ impl MakerNoteCensus {
 /// entries rather than walking. Offset pairs locate data, not another IFD,
 /// so they do not by themselves make the note census incomplete.
 const UNWALKED_EXIF_DIRECTORIES: &[u16] = &[0x014a, 0x0190, 0x8290, 0x888a, 0xc51b, 0xc6f5, 0xfe00];
+
+/// A source-declared EXIF child that this scanner did not walk. A group-wide
+/// MIE deletion cannot prove GPS, ExifIFD or Interop absence beyond one of
+/// these edges. The maker-note census uses its narrower note-bearing variant
+/// below (GPSInfo itself cannot hold a MakerNote).
+pub(crate) fn has_unwalked_exif_directory(ifd: IfdKind, tag_id: u16) -> bool {
+    if ifd == IfdKind::Gps {
+        return false;
+    }
+    UNWALKED_EXIF_DIRECTORIES.contains(&tag_id)
+        || (tag_id == EXIF_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == GPS_IFD_POINTER && ifd != IfdKind::Ifd0)
+        || (tag_id == INTEROP_POINTER && ifd != IfdKind::ExifIfd)
+}
 
 /// An Exif::Main edge outside the scanner's supported placement can hide a
 /// MakerNote in a child directory. ExifOffset and InteropOffset are modelled
@@ -2710,7 +2795,7 @@ fn subifds_proven_note_free(tiff: &[u8], order: ByteOrder, edge: &RawEntry) -> b
 /// Check the five directories `scan_entries_with_magics` intends to walk.
 /// That scanner skips corrupt entries to preserve reader behavior; the
 /// safety census cannot turn such a skip into a proof of absence.
-fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
+pub(crate) fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
     #[derive(Default)]
     struct Links {
         exif: Option<usize>,
@@ -2823,12 +2908,39 @@ fn census_walk_is_complete(tiff: &[u8], order: ByteOrder) -> bool {
 /// Counts the EXIF blocks `blocks` and their maker-note entries
 /// ([`MakerNoteCensus`]).
 pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCensus {
+    makernote_census_inner(blocks, magics, None)
+}
+
+/// Census with an aggregate limit on bytes copied by TIFF scans. A failed
+/// scan cannot prove a note absent, so exhaustion returns UNKNOWN.
+pub(crate) fn makernote_census_budgeted(
+    blocks: &[&[u8]],
+    magics: &[u16],
+    budget: &Cell<usize>,
+) -> MakerNoteCensus {
+    if budget.get() == 0 {
+        return MakerNoteCensus::UNKNOWN;
+    }
+    makernote_census_inner(blocks, magics, Some(budget))
+}
+
+fn makernote_census_inner(
+    blocks: &[&[u8]],
+    magics: &[u16],
+    budget: Option<&Cell<usize>>,
+) -> MakerNoteCensus {
     let mut census = MakerNoteCensus {
         blocks: blocks.len(),
         ..MakerNoteCensus::default()
     };
     for block in blocks {
-        let Ok(scan) = scan_entries_with_magics(block, magics) else {
+        if budget.is_some_and(|remaining| remaining.get() == 0) {
+            return MakerNoteCensus::UNKNOWN;
+        }
+        let Ok(scan) = scan_entries_with_magics_inner(block, magics, budget) else {
+            if budget.is_some() {
+                return MakerNoteCensus::UNKNOWN;
+            }
             census.uncertain_outside_ifd1 = true;
             census.uncertain_survivor_outside_ifd1 = true;
             continue;
@@ -2893,17 +3005,35 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
         for entry in &scan.entries {
             if is_makernote_entry(entry.ifd, entry.tag_id) {
                 census.notes += 1;
+                if entry.ifd != IfdKind::ExifIfd
+                    || !crate::core::tiff_helpers::makernote_is_exif_fallback(
+                        &entry.value,
+                        &make,
+                        &model,
+                    )
+                {
+                    census.makernotes_group_entries += 1;
+                }
                 if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
                     &entry.value,
                     &make,
                     &model,
                 ) {
-                    census.identified_single_root = if census.tag_bearing == 0
-                        && crate::core::tiff_helpers::selected_headerless_nikon_note(
-                            &entry.value,
-                            &make,
-                            &model,
-                        ) {
+                    // MakerNotes::Main selects the two signature-bearing
+                    // Nikon entries before the camera-make fallback. These
+                    // are different physical names even though all three
+                    // decode into the Nikon family-1 group.
+                    census.identified_single_root = if census.tag_bearing != 0 {
+                        None
+                    } else if entry.value.starts_with(b"Nikon\0\x02") {
+                        Some("MakerNoteNikon")
+                    } else if entry.value.starts_with(b"Nikon\0\x01") {
+                        Some("MakerNoteNikon2")
+                    } else if crate::core::tiff_helpers::selected_headerless_nikon_note(
+                        &entry.value,
+                        &make,
+                        &model,
+                    ) {
                         Some("MakerNoteNikon3")
                     } else {
                         None
@@ -2927,6 +3057,7 @@ pub(crate) fn makernote_census(blocks: &[&[u8]], magics: &[u16]) -> MakerNoteCen
                     continue;
                 };
                 census.notes += notes;
+                census.makernotes_group_entries += notes;
                 if notes > 0 {
                     census.identified_single_root = None;
                 }
@@ -2993,6 +3124,39 @@ fn dng_private_makernote_count(data: &[u8]) -> Option<usize> {
 /// [`scan_exif_entries`] accepting the header magics `magics` -- for a
 /// TIFF-structured file, the set its writer walks (42, and 85 for RW2).
 pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<ExifScan> {
+    scan_entries_with_magics_inner(tiff, magics, None)
+}
+
+/// Scan with a shared limit on copied value, thumbnail and chain data bytes.
+pub(crate) fn scan_entries_with_magics_budgeted(
+    tiff: &[u8],
+    magics: &[u16],
+    budget: &Cell<usize>,
+) -> Result<ExifScan> {
+    if budget.get() == 0 {
+        return Err(ExifToolError::parse_error(
+            "EXIF scan allocation budget exhausted",
+        ));
+    }
+    scan_entries_with_magics_inner(tiff, magics, Some(budget))
+}
+
+pub(crate) fn charge_scan_copy(budget: Option<&Cell<usize>>, bytes: usize) -> Result<()> {
+    if let Some(budget) = budget {
+        let remaining = budget
+            .get()
+            .checked_sub(bytes)
+            .ok_or_else(|| ExifToolError::parse_error("EXIF scan allocation budget exhausted"))?;
+        budget.set(remaining);
+    }
+    Ok(())
+}
+
+fn scan_entries_with_magics_inner(
+    tiff: &[u8],
+    magics: &[u16],
+    budget: Option<&Cell<usize>>,
+) -> Result<ExifScan> {
     if tiff.len() < 8 {
         return Err(ExifToolError::parse_error("EXIF TIFF structure too small"));
     }
@@ -3021,27 +3185,64 @@ pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<Ex
     };
 
     let ifd0_offset = read_u32(&tiff[4..8], byte_order) as usize;
-    let ifd0 = walk_ifd(tiff, ifd0_offset, byte_order, IfdKind::Ifd0, &mut scan);
+    let ifd0 = walk_ifd(
+        tiff,
+        ifd0_offset,
+        byte_order,
+        IfdKind::Ifd0,
+        &mut scan,
+        budget,
+    )?;
 
     if let Some(exif_off) = ifd0.exif_pointer {
-        let exif = walk_ifd(tiff, exif_off, byte_order, IfdKind::ExifIfd, &mut scan);
+        let exif = walk_ifd(
+            tiff,
+            exif_off,
+            byte_order,
+            IfdKind::ExifIfd,
+            &mut scan,
+            budget,
+        )?;
         if let Some(interop_off) = exif.interop_pointer {
-            walk_ifd(tiff, interop_off, byte_order, IfdKind::Interop, &mut scan);
+            walk_ifd(
+                tiff,
+                interop_off,
+                byte_order,
+                IfdKind::Interop,
+                &mut scan,
+                budget,
+            )?;
         }
     }
     if let Some(gps_off) = ifd0.gps_pointer {
-        walk_ifd(tiff, gps_off, byte_order, IfdKind::Gps, &mut scan);
+        walk_ifd(tiff, gps_off, byte_order, IfdKind::Gps, &mut scan, budget)?;
     }
     if let Some(ifd1_off) = ifd0.next_ifd {
-        let ifd1 = walk_ifd(tiff, ifd1_off, byte_order, IfdKind::Ifd1, &mut scan);
+        let ifd1 = walk_ifd(tiff, ifd1_off, byte_order, IfdKind::Ifd1, &mut scan, budget)?;
         scan.ifd1_next = ifd1
             .next_ifd
-            .map(|first| scan_chain(tiff, byte_order, first, &[ifd0_offset, ifd1_off]));
+            .map(|first| match budget {
+                Some(budget) => crate::writers::ifd_chain::scan_chain_budgeted(
+                    tiff,
+                    byte_order,
+                    first,
+                    &[ifd0_offset, ifd1_off],
+                    budget,
+                ),
+                None => Ok(scan_chain(
+                    tiff,
+                    byte_order,
+                    first,
+                    &[ifd0_offset, ifd1_off],
+                )),
+            })
+            .transpose()?;
         if let (Some(t_off), Some(t_len)) = (ifd1.thumb_offset, ifd1.thumb_length)
             && t_off
                 .checked_add(t_len)
                 .is_some_and(|end| end <= tiff.len())
         {
+            charge_scan_copy(budget, t_len)?;
             scan.thumbnail = Some(tiff[t_off..t_off + t_len].to_vec());
         }
     }
@@ -3085,11 +3286,12 @@ fn walk_ifd(
     byte_order: ByteOrder,
     which: IfdKind,
     scan: &mut ExifScan,
-) -> WalkResult {
+    budget: Option<&Cell<usize>>,
+) -> Result<WalkResult> {
     let mut result = WalkResult::default();
     let entries_start = match offset.checked_add(2) {
         Some(end) if end <= tiff.len() => end,
-        _ => return result, // corrupt IFD offset: skip this IFD gracefully
+        _ => return Ok(result), // corrupt IFD offset: skip this IFD gracefully
     };
     let entry_count = read_u16(&tiff[offset..entries_start], byte_order) as usize;
     scan.raw_entry_counts.push((which, entry_count));
@@ -3098,7 +3300,7 @@ fn walk_ifd(
         let entry_start = entries_start + i * 12;
         let entry_end = entry_start + 12;
         if entry_end > tiff.len() {
-            return result; // truncated IFD: keep what we have
+            return Ok(result); // truncated IFD: keep what we have
         }
         let entry = &tiff[entry_start..entry_end];
         let tag_id = read_u16(&entry[0..2], byte_order);
@@ -3140,14 +3342,16 @@ fn walk_ifd(
             Some(s) => s,
             None => continue,
         };
-        let value = if size <= 4 {
-            entry[8..8 + size].to_vec()
+        let value_bytes = if size <= 4 {
+            &entry[8..8 + size]
         } else {
             match value_or_offset.checked_add(size) {
-                Some(end) if end <= tiff.len() => tiff[value_or_offset..end].to_vec(),
+                Some(end) if end <= tiff.len() => &tiff[value_or_offset..end],
                 _ => continue, // out-of-bounds value: skip entry, never guess
             }
         };
+        charge_scan_copy(budget, value_bytes.len())?;
+        let value = value_bytes.to_vec();
 
         // The first MakerNote is the one kept: `serialize_exif` keeps the
         // first of duplicate tag ids, and ExifTool decodes the first
@@ -3178,7 +3382,7 @@ fn walk_ifd(
             result.next_ifd = Some(next);
         }
     }
-    result
+    Ok(result)
 }
 
 /// Emits v in the plan's byte order.
@@ -3990,6 +4194,12 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_rewrite(
+        file_bytes,
+        &original_map,
+        desired,
+        removed,
+    )?;
     // A created IFD0 takes its resolution from a JFIF APP0 segment read
     // before the EXIF one (WriteExif.pl 13.59:705-711): the segments ahead
     // of the existing EXIF APP1, or the leading APP0 run a new one follows.
@@ -4280,6 +4490,22 @@ fn exif_family_removals_proven_absent(tiff: &[u8], scan: &ExifScan, removed: &[S
     true
 }
 
+/// The single named-removal case of `exif_request_is_no_op` after its caller
+/// has already scanned the MIE EXIF block with an allocation budget. Its
+/// baseline and desired maps are empty, the key is grouped, and no group or
+/// carrier clear is involved. Reusing `scan` avoids two unbudgeted scans of
+/// the same payload during an absence proof.
+pub(crate) fn exif_named_removal_is_no_op_in_scan(tiff: &[u8], scan: &ExifScan, key: &str) -> bool {
+    if !key.contains(':') || group_removal(key).is_some() {
+        return false;
+    }
+    let removed = [key.to_string()];
+    let empty = MetadataMap::new();
+    !removes_carrier(&removed)
+        && removals_name_nothing(scan, &empty, &removed, false)
+        && exif_family_removals_proven_absent(tiff, scan, &removed)
+}
+
 /// Whether a write changes nothing in the block (see
 /// [`exif_request_is_no_op`]): the payload is then returned unchanged.
 fn is_no_op(
@@ -4394,6 +4620,19 @@ pub(crate) fn exif_request_is_no_op(
                         .iter()
                         .filter_map(|key| group_removal(key))
                         .all(|group| {
+                            // The read map combines every JPEG APP1. Its
+                            // unknown-note row cannot classify another
+                            // block's note. Use each block's physical census
+                            // and selected source fallback instead.
+                            if group == GroupRemoval::MakerNotes && group_blocks.len() > 1 {
+                                let census = makernote_census(&[*block], magics);
+                                if census.makernotes_group_entries > 0
+                                    || census.uncertain_outside_ifd1
+                                    || census.uncertain_ifd1
+                                {
+                                    return false;
+                                }
+                            }
                             if group_has_content(group, &scan, baseline) {
                                 return false;
                             }
@@ -6214,6 +6453,100 @@ mod tests {
             .iter()
             .find(|e| e.ifd == ifd && e.tag_id == tag)
             .unwrap()
+    }
+
+    #[test]
+    fn budgeted_scan_limits_repeated_references_before_cloning() {
+        const VALUE_SIZE: usize = 256 * 1024;
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let shared_value = |count: u16| {
+            let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+            tiff.extend_from_slice(&count.to_le_bytes());
+            let value_at = 8 + 2 + usize::from(count) * 12 + 4;
+            for i in 0..count {
+                tiff.extend_from_slice(&(0x8000 + i).to_le_bytes());
+                tiff.extend_from_slice(&7u16.to_le_bytes());
+                tiff.extend_from_slice(&(VALUE_SIZE as u32).to_le_bytes());
+                tiff.extend_from_slice(&(value_at as u32).to_le_bytes());
+            }
+            tiff.extend_from_slice(&0u32.to_le_bytes());
+            tiff.resize(value_at + VALUE_SIZE, 0xa5);
+            tiff
+        };
+        let small = shared_value(8);
+        let budget = Cell::new(LIMIT);
+        let scan = scan_entries_with_magics_budgeted(&small, &[42], &budget).unwrap();
+        assert_eq!(scan.entries.len(), 8);
+        assert_eq!(budget.get(), LIMIT - 8 * VALUE_SIZE);
+
+        let budget = Cell::new(LIMIT);
+        assert!(scan_entries_with_magics_budgeted(&shared_value(128), &[42], &budget).is_err());
+        assert_eq!(budget.get(), 0);
+        assert_eq!(
+            makernote_census_budgeted(&[&small], &[42], &budget),
+            MakerNoteCensus::UNKNOWN
+        );
+        assert!(
+            scan_entries_with_magics_budgeted(b"II\x2a\0\x08\0\0\0\0\0\0\0\0\0", &[42], &budget)
+                .is_err()
+        );
+
+        let budget = Cell::new(12 * VALUE_SIZE);
+        scan_entries_with_magics_budgeted(&small, &[42], &budget).unwrap();
+        assert!(scan_entries_with_magics_budgeted(&small, &[42], &budget).is_err());
+        assert_eq!(budget.get(), 0);
+        assert_eq!(
+            makernote_census_budgeted(&[&small, &small], &[42], &Cell::new(12 * VALUE_SIZE)),
+            MakerNoteCensus::UNKNOWN
+        );
+    }
+
+    #[test]
+    fn budgeted_scan_charges_thumbnail_and_ifd2_owned_value() {
+        let mut tiff = build_full_tiff(ByteOrder::LittleEndian);
+        let entry_bytes: usize = scan_entries_with_magics(&tiff, &[42])
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.value.len())
+            .sum();
+        let budget = Cell::new(entry_bytes + 5);
+        assert!(scan_entries_with_magics_budgeted(&tiff, &[42], &budget).is_err());
+        assert_eq!(budget.get(), 5);
+
+        // IFD1's next pointer at 214 reaches an IFD2 with an out-of-line value.
+        tiff[214..218].copy_from_slice(&226u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x8001u16.to_le_bytes());
+        tiff.extend_from_slice(&7u16.to_le_bytes());
+        tiff.extend_from_slice(&6u32.to_le_bytes());
+        tiff.extend_from_slice(&244u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(b"ABCDEF");
+        let budget = Cell::new(entry_bytes + 6 + 5);
+        assert!(scan_entries_with_magics_budgeted(&tiff, &[42], &budget).is_err());
+        assert_eq!(budget.get(), 5);
+        let budget = Cell::new(entry_bytes + 6 + 6);
+        let scan = scan_entries_with_magics_budgeted(&tiff, &[42], &budget).unwrap();
+        assert_eq!(scan.ifd1_next.as_ref().unwrap().dirs.len(), 1);
+        assert_eq!(budget.get(), 0);
+
+        // The offset/length pair's owned data uses the same allowance.
+        let mut with_data = build_full_tiff(ByteOrder::LittleEndian);
+        with_data[214..218].copy_from_slice(&226u32.to_le_bytes());
+        with_data.extend_from_slice(&2u16.to_le_bytes());
+        for (tag, value) in [(0x0201u16, 256u32), (0x0202, 6)] {
+            with_data.extend_from_slice(&tag.to_le_bytes());
+            with_data.extend_from_slice(&4u16.to_le_bytes());
+            with_data.extend_from_slice(&1u32.to_le_bytes());
+            with_data.extend_from_slice(&value.to_le_bytes());
+        }
+        with_data.extend_from_slice(&0u32.to_le_bytes());
+        with_data.resize(256, 0);
+        with_data.extend_from_slice(b"ABCDEF");
+        let budget = Cell::new(entry_bytes + 6 + 5);
+        assert!(scan_entries_with_magics_budgeted(&with_data, &[42], &budget).is_err());
+        assert_eq!(budget.get(), 5);
     }
 
     #[test]
