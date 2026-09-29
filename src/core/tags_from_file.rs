@@ -465,6 +465,7 @@ pub(crate) fn copy_tags(
     retain: impl Fn(&str) -> bool,
     final_make_override: Option<Option<String>>,
     siblings: &[String],
+    copied_values: &mut Vec<(String, TagValue)>,
 ) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
@@ -797,6 +798,11 @@ pub(crate) fn copy_tags(
                 report.outcome = outcome;
                 report.copied = proven;
                 report.copied_destinations = writes.iter().map(|(key, _, _)| key.clone()).collect();
+                copied_values.extend(
+                    writes
+                        .iter()
+                        .map(|(key, value, _)| (key.clone(), value.clone())),
+                );
                 break;
             }
             Err(ExifToolError::TagsNotWritten { tags })
