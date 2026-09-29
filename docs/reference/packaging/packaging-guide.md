@@ -6,16 +6,15 @@ local package helpers. It is intentionally explicit about what the
 
 ## Beta distribution policy
 
-The current beta release automation publishes signed GitHub release assets
-only: platform binaries, the macOS DMG, checksums, and independent release
-provenance. Debian/RPM, Homebrew, and crates.io packages are not published
-by the current beta release automation. Do not upload a locally generated package to a beta release or
-describe it as an official distribution channel.
-
-The supported beta installation path is the signed asset on the
-[GitHub Releases page](https://github.com/swack-tools/oxidex/releases). Rust
-users who need the library can use the signed Git tag as a Git dependency or
-build from a checkout. The root crate remains intentionally unpublished.
+The `2.0.0-beta.1` signed tag and binary assets are pending. Until the
+authorized release exists, build from source on the development branch or an
+explicitly chosen development commit. After authorization, the beta release
+automation publishes signed GitHub assets: platform binaries, the macOS DMG,
+checksums, and independent release provenance. Debian/RPM, Homebrew, and
+crates.io packages are not published by the current beta release automation.
+Do not upload a locally generated package to a beta release or describe it as
+an official distribution channel. The no-crates.io policy covers the root
+crate and every tag crate.
 
 ## Optional local experiments
 
