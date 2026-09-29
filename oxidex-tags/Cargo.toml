@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["OxiDex Contributors"]
 description = "Tag database for OxiDex metadata extraction library"
 license = "GPL-3.0"
+publish = false
 
 [lib]
 name = "oxidex_tags"

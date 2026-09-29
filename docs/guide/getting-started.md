@@ -25,7 +25,7 @@ cargo install --path .
 
 `rust-toolchain.toml` pins the Rust toolchain (1.97.1), and rustup installs
 it on first build. The crate uses edition 2024. A release build compiles the
-six `oxidex-tags-*` crates and the generated tables, so the first build takes
+eight `oxidex-tags-*` crates and the generated tables, so the first build takes
 a while.
 
 Optional Cargo features:
@@ -36,9 +36,8 @@ Optional Cargo features:
 | `exiftool-comparison` | the ExifTool comparison tests (development only) |
 
 ::: danger Do not run `cargo install oxidex`
-The `oxidex` name on crates.io belongs to an unrelated, reserved stub crate
-(version 0.0.1). OxiDex is not published on crates.io. Install from source
-or from a GitHub release.
+This beta is not published on crates.io, so that command does not install this
+project. Build from source until the signed tag and assets are published.
 :::
 
 ## Prebuilt binaries
