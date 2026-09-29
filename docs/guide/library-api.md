@@ -48,13 +48,15 @@ under `File:`, such as `File:FileType` and `File:MIMEType`. A lookup by bare
 name, or by the family 0 group (`EXIF:Make`), finds nothing. To see which
 keys a file produces, run `oxidex -j file`.
 
-`get`, `get_string` and the other typed getters read the map's stored
-`TagValue`. That is not necessarily the value the CLI prints: for example,
-`JVC:CPUVersions` can be stored as `Binary` (so `get_string` returns `None`),
-while its ValueConv form is a displayable string. The CLI uses ValueConv for
-`--no-print-conv` and PrintConv for ordinary output. To inspect either form
-from the library, use `project_occurrences` with
-`oxidex::core::tag_occurrence::ValueChannel::ValueConv` or `PrintConv`;
+`get`, `get_string` and the other typed getters read the winning occurrence's
+legacy `raw` compatibility value (`TagSink::get`), not necessarily its
+`Stored` channel or what the CLI prints. For example, `JVC:CPUVersions` can
+have a `Binary` raw value (so `get_string` returns `None`) while its ValueConv
+form is a displayable string. `Stored` preserves the file's typed value when
+the parser supplies one; `ValueConv` supplies the CLI's `--no-print-conv`
+value, and `PrintConv` supplies ordinary output. To inspect these forms from
+the library, use `project_occurrences` with
+`oxidex::core::tag_occurrence::ValueChannel::{Stored, ValueConv, PrintConv}`;
 this iterates occurrences, including duplicate keys. `MetadataMap` accessors:
 
 | Method | Returns |

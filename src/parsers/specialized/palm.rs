@@ -46,7 +46,10 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/Palm.pm`
 
-use crate::core::{FileReader, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{
+    FileReader, MetadataMap, SHIM_DEFAULT_PRIORITY, TagOccurrence, TagValue,
+};
 use crate::exiftool_tables::{
     Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
@@ -196,15 +199,16 @@ fn read_mobi_header(
                     && let Some(raw) = access.raw().as_integer()
                     && let Some(printed) = decoded.emit()
                 {
-                    metadata.insert_occurrence_with_forms(
-                        format!("{}:{name}", table.group0),
-                        printed,
-                        TagValue::Integer(raw),
-                        Some(TagValue::Integer(raw)),
-                        SHIM_DEFAULT_PRIORITY,
-                        table.group1,
-                        Instance::default(),
-                    );
+                    // Keep the public MOBI key while preserving the table's
+                    // physical Palm/MOBI groups and all three value forms.
+                    let physical_key = format!("{}:{name}", table.group0);
+                    let mut occurrence = TagOccurrence::from_insert_shim(&physical_key, printed, 0);
+                    occurrence.priority = SHIM_DEFAULT_PRIORITY;
+                    occurrence.group1 = intern(table.group1);
+                    occurrence.value = Some(TagValue::Integer(raw));
+                    occurrence.print = Some(occurrence.raw.clone());
+                    occurrence.stored = Some(TagValue::Integer(raw));
+                    metadata.record_occurrence(key, occurrence);
                 }
             }
             "CodePage" => {

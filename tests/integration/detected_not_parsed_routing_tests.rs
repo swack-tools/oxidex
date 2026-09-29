@@ -118,11 +118,18 @@ fn mobi_fixture_matches_pinned_oracle() {
     assert_eq!(m.get_string("MOBI:Compression"), Some("PalmDOC"));
     // `PrintConv => \&ConvertFileSize` (Palm.pm:123) is transcribed as an
     // exact generated expression; the parser preserves its raw value too.
-    assert_eq!(m.get_string("Palm:UncompressedTextLength"), Some("172 kB"));
+    assert_eq!(m.get_string("MOBI:UncompressedTextLength"), Some("172 kB"));
+    assert_eq!(m.get("Palm:UncompressedTextLength"), None);
     assert_eq!(
         m.without_print_conv()
-            .get_integer("Palm:UncompressedTextLength"),
+            .get_integer("MOBI:UncompressedTextLength"),
         Some(171_966)
+    );
+    assert_eq!(
+        m.project_occurrences(ValueChannel::Stored)
+            .filter(|(key, _, _)| *key == "MOBI:UncompressedTextLength")
+            .count(),
+        1
     );
     for (channel, expected) in [
         (ValueChannel::Stored, TagValue::Integer(171_966)),
@@ -131,7 +138,7 @@ fn mobi_fixture_matches_pinned_oracle() {
     ] {
         let (_, occurrence, projected) = m
             .project_occurrences(channel)
-            .find(|(key, _, _)| *key == "Palm:UncompressedTextLength")
+            .find(|(key, _, _)| *key == "MOBI:UncompressedTextLength")
             .expect("MOBI length occurrence");
         assert_eq!(occurrence.group0.as_ref(), "Palm");
         assert_eq!(occurrence.group1.as_ref(), "MOBI");
