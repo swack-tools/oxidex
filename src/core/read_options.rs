@@ -150,6 +150,17 @@ impl ReadOptions {
         self.extended || self.is_requested(short_name)
     }
 
+    /// Whether a literal key is visible to a wildcard or full-listing read.
+    /// Plainly requested names also remain reachable in the extended namespace.
+    pub fn shows_key(&self, key: &str) -> bool {
+        if self.extended {
+            return true;
+        }
+        let short_name = key.rsplit_once(':').map_or(key, |(_, name)| name);
+        self.is_requested(short_name)
+            || !(is_hex_fallback_name(short_name) || is_zip_forensic_entry_key(key))
+    }
+
     /// Strips OxiDex's own diagnostic/forensic-only tags from a full,
     /// unfiltered listing unless `extended()` opted in: `lookup_tag_name`'s
     /// bare-hex fallback for a tag id with no name in the generated

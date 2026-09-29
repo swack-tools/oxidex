@@ -1,0 +1,48 @@
+JPEGs carrying two EXIF APP1 records, synthesized from pinned ExifTool 13.59
+samples (no file in the 13.59 combined-samples corpus has this shape: 0 of
+4096 JPEGs, by a structural APP1 count and by the oracle's per-block
+File:ExifByteOrder rows).
+
+multi-app1-nikon-lsi1.jpg
+  sha256 ebe704e398651ad273d47c921286cd368599c57e43493bb9f3c9579a9c628958
+  t/images/Nikon.jpg (sha256 26e9f266...) with combined-samples
+  Nikon/NikonLS-50.jpg's (sha256 b2f088c7...) EXIF APP1 inserted directly
+  after Nikon.jpg's own EXIF APP1.
+
+multi-app1-lsi1-nikon.jpg
+  sha256 f55bf193d337905877d70d73712830410de010bd4d3eb6008dc49f837f2cf4a9
+  The reverse: NikonLS-50.jpg with Nikon.jpg's EXIF APP1 inserted after its
+  own.
+
+multi-app1-canon-nikon.jpg
+  sha256 4e32eaf72455ef35fbd1cbb7624c7851a8d0db05c3e70a3e21282cdbbe4b87b6
+  t/images/Canon.jpg (sha256 98c29028...) with Nikon.jpg's EXIF APP1 inserted
+  after its own. The reader decodes Canon.jpg's maker note (Canon:Quality),
+  which pins a bare maker-note name (`-Quality=Normal`): ExifTool writes it
+  into both blocks' maker notes.
+
+multi-app1-nikon-djixt2.jpg
+  sha256 6f986478c623ced775183bea78ae64541c4f5860096f0c7f5ed105e6384f76b2
+  Nikon.jpg with combined-samples DJI/DJI_XT2.jpg's (sha256 885f988b...)
+  EXIF APP1 inserted after its own. DJI_XT2.jpg's ExifIFD 0x02bc
+  ApplicationNotes has no row in the default read, which pins a C-ABI
+  removal of an entry the handle's map does not hold: ExifTool deletes it
+  (`-ExifIFD:ApplicationNotes=`: "1 image files updated").
+
+multi-app1-leicatl2-nikon.jpg
+  sha256 2dcef9b37bd522d9df4f795dce19aee231ac7d395c8bd73b6962cf03ed87378a
+  combined-samples Leica/LeicaTL2.jpg (sha256 1294844d...), whose EXIF chain
+  reaches IFD2, with Nikon.jpg's EXIF APP1 inserted after its own. The
+  sample is truncated: its IFD2 JpgFromRaw lies past the end of the file, so
+  ExifTool refuses every EXIF write to it ("Error reading JpgFromRaw data in
+  IFD2") and leaves IFD2 itself unwritten (`-IFD2:XResolution=300`: "1 image
+  files unchanged").
+
+Rebuild: python3 make_fixtures.py <pinned 13.59 cache dir>.
+tests/jpeg_multi_exif_app1.rs re-derives every one from the pinned sources
+when they are present and requires the committed bytes to match.
+
+Nikon.jpg and Canon.jpg are from the ExifTool distribution's test images,
+NikonLS-50.jpg, DJI_XT2.jpg and LeicaTL2.jpg from the ExifTool sample
+collection; all are
+used here as in the other pinned-fixture tests of this repository.

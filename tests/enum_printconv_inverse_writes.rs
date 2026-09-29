@@ -1,71 +1,19 @@
-//! CLI parity: writing a tag's print-converted (human-readable) label for an
-//! enum tag, the way pinned ExifTool 13.59's inverse PrintConv does.
+//! CLI parity for enum labels and raw numeric values, checked against the
+//! selected native ExifTool release and its Canon.jpg fixture.
 //!
-//! Before the fix, `oxidex "-Orientation=Rotate 90 CW"` failed with
-//! `Invalid value for tag 'IFD0:Orientation': Type mismatch: expected
-//! Integer but got String` -- the bare tag name had no entry in
-//! `value_parser::parse_cli_tag_value`'s declared-type alias table, so its
-//! registry type was never resolved and the label reached the writer as a
-//! plain `String`. `-IFD0:ResolutionUnit=inches` failed too, with `Not an
-//! integer`: the type resolved, but nothing inverted the label at all.
-//! `-MeteringMode=Spot` fails for an unrelated, pre-existing reason (a bare
-//! name collides with a Canon MakerNote tag of the same name -- see the note
-//! on `metering_mode_label_write_matches_oracle` below); `-ExifIFD:
-//! MeteringMode=Spot` already worked, because `MeteringMode`'s label set was
-//! one of a handful hand-transcribed directly into `value_parser.rs`.
+//! The inverse uses the transcribed EXIF and GPS IFD tables. It follows
+//! ReverseLookup: exact, case-insensitive exact, prefix, then substring.
+//! Exact duplicates select the first key in Perl string order; ambiguous
+//! partial matches are refused. Every accepted label is checked through
+//! both writers and both raw readbacks.
 //!
-//! `-ExposureProgram=Manual` and `-Flash="Off, Did not fire"` already
-//! worked (hand-transcribed tables), but neither tolerated a
-//! case-insensitively-spelled label, and neither degraded gracefully on
-//! encountering a tag with no hand-written table at all (`Orientation`,
-//! `ResolutionUnit`, `ExposureMode`, `Compression`, `YCbCrPositioning`).
-//!
-//! The fix (`value_parser::invert_enum_printconv`) inverts a label against
-//! the transcribed `("Exif", "Main")` / `("GPS", "Main")` IFD tag tables
-//! (`exiftool_tables::find_ifd_table`, `docs/TRANSCRIPTION.md`) instead of a
-//! hand-maintained list: exact match first, then case-insensitive, and only
-//! when exactly one table entry matches either way -- a straight port of
-//! ExifTool's own `ReverseLookup` (`Writer.pl:3609-3665`), minus the tie
-//! break it applies to an exact-but-duplicate match (see the `Compression`
-//! `"JPEG"` case below). `Orientation`, `ResolutionUnit`, `ExposureMode`,
-//! `Compression` and `YCbCrPositioning` gained write support for free; the
-//! previously-hand-transcribed `ExposureProgram`, `WhiteBalance`,
-//! `SceneCaptureType` and `MeteringMode` now route through the same
-//! mechanism and additionally accept a case-insensitive spelling.
-//!
-//! Every reference value below was produced by the pinned oracle
-//! (`perl5.38.2 -I.../13.59/exiftool/lib .../13.59/exiftool/exiftool`,
-//! `-ver` 13.59 and the `OOXML.docx` capability probe `DOCX` both asserted)
-//! against `t/images/Canon.jpg`.
-//!
-//! # Correction: numeric input does NOT stay accepted
-//!
-//! This fix's original brief said a plain numeric value should keep being
-//! accepted for these tags. Checked directly against the oracle, that was
-//! wrong: `-Orientation=6` (no `-n`, no `#`) is `Warning: Can't convert
-//! IFD0:Orientation (not in PrintConv)` / `Nothing to do.`, file untouched --
-//! ExifTool's `ReverseLookup` never falls back to a raw code for a hash
-//! `PrintConv` with no `OTHER`. `value_parser::parse_cli_tag_value_with_mode`
-//! now requires a label match for these tags unconditionally (`raw_mode`
-//! aside); a bare numeric string only succeeds when it happens to also
-//! satisfy the exact/case-insensitive label match (not the case for a plain
-//! digit string against any tag in this file's scope). `#` and
-//! `--no-print-conv` (oxidex's spelling of ExifTool's `-n`; oxidex's own
-//! `-n` is dry-run) still take the raw value directly, unconditionally.
-//!
-//! ExifTool's real `ReverseLookup` has two more fallback tiers this port
-//! does not implement (case-insensitive prefix, then case-insensitive
-//! substring) -- ambiguity at either tier still refuses, but a *unique*
-//! substring match does not. `-CalibrationIlluminant1=0` is refused here but
-//! written as `23` (`D50`) by the oracle, because `"0"` is a substring of
-//! `"D50"` and no other label; the same happens for `LightSource` (same
-//! table) and for `-Orientation=1`/`-Compression=1` colliding with `"Rotate
-//! 180"`/`"CCITT 1D"`. This is a disclosed, deliberate simplification
-//! consistent with this fix's stated two-tier algorithm (exact, then
-//! case-insensitive) and `AGENTS.md`'s "never approximate a conversion" --
-//! refusing is safer than guessing which of several possible substring
-//! matches a caller meant. `breadth_measure.py`'s numeric-bare sweep still
-//! reports these as `mismatched` rather than silently dropping them.
+//! A numeric string is a label unless the caller supplies `#` or disables
+//! PrintConv. For example, `-Orientation=6` is refused, while
+//! `-Orientation=1` uniquely matches `Rotate 180`. The rejected numeric
+//! cases below also check that their explicit raw forms preserve the code.
+//! Command-level status differences for grouped WhiteBalance and Compression
+//! are recorded beside those assertions; unchanged bytes alone do not prove
+//! equivalent command behavior.
 
 #[path = "common/fixtures.rs"]
 mod fixtures;
@@ -137,7 +85,7 @@ fn oracle_read_n(oracle: &exiftool_oracle::Oracle, path: &Path, tag: &str) -> St
 /// asserts: oxidex accepted the write, oxidex's own read-back reports
 /// `expected_code`, and the pinned oracle -- writing the same `-{tag}=
 /// {label}` onto its own fresh copy -- agrees on `expected_code` too. Both
-/// tools are given the identical, fully-group-qualified `tag` spelling, so a
+/// tools are given the identical, explicitly grouped `tag` spelling, so a
 /// pre-existing, unrelated ambiguity in oxidex's bare-name write routing
 /// (see `metering_mode_label_write_matches_oracle`) cannot mask a result
 /// here.
@@ -205,7 +153,8 @@ fn assert_numeric_input_policy_matches_oracle(
 ) {
     let dir = tempfile::tempdir().unwrap();
 
-    // Bare: refused, file untouched, oracle's own wording.
+    // The selected EXIF row refuses this numeric label. Partial matches
+    // have a different reason from labels missing from the table.
     let bare_path = copy_into(&dir, base, "bare.jpg");
     let before = std::fs::read(&bare_path).unwrap();
     let arg = format!("-{tag}={code}");
@@ -220,9 +169,13 @@ fn assert_numeric_input_policy_matches_oracle(
         "a refused bare-numeric write must leave the file untouched"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let reason = match tag {
+        "IFD0:Compression" | "IFD0:GrayResponseUnit" => "matches more than one PrintConv",
+        _ => "not in PrintConv",
+    };
     assert!(
-        stderr.contains(&format!("Can't convert {tag} (not in PrintConv)")),
-        "expected the oracle's own wording in stderr, got: {stderr}"
+        stderr.contains(&format!("Can't convert {tag} ({reason})")),
+        "expected the selected EXIF row's conversion reason, got: {stderr}"
     );
 
     let et_bare_path = copy_into(&dir, base, "bare_et.jpg");
@@ -235,9 +188,19 @@ fn assert_numeric_input_policy_matches_oracle(
     // The oracle's own exit code/wording for this varies by tag (confirmed:
     // `Orientation` is `Nothing to do.`, exit 1; a `Priority => 0` tag like
     // `WhiteBalance` sharing a MakerNote duplicate is `0 image files
-    // updated` / `1 image files unchanged`, exit 0) -- the file being
-    // untouched is the invariant this asserts, not the exact wire format.
-    let _ = et_out;
+    // updated` / `1 image files unchanged`, exit 0; `Compression=2` is
+    // also unchanged with no warning). Those two command-level status
+    // differences predate the candidate conversion repair. Every other
+    // case must agree on the conversion reason as well as preserved bytes.
+    if !matches!(tag, "ExifIFD:WhiteBalance" | "IFD0:Compression") {
+        assert!(!et_out.status.success());
+        assert!(
+            String::from_utf8_lossy(&et_out.stderr)
+                .contains(&format!("Can't convert {tag} ({reason})")),
+            "native conversion reason for {arg}: {}",
+            String::from_utf8_lossy(&et_out.stderr)
+        );
+    }
     assert_eq!(
         std::fs::read(&et_bare_path).unwrap(),
         et_before,
@@ -490,7 +453,7 @@ fn ycbcr_positioning_matches_oracle() {
 /// Found by the breadth measurement, not the original repro: `-GrayResponseUnit=<label>`
 /// silently stored the wrong code, rather than failing loudly. Exif.pm
 /// 13.59 0x0122 declares this int16u tag's `PrintConv` as a plain hash
-/// whose OWN labels ("0.1", "0.001", "0.0001", "1e-05", "1e-06") are digit
+/// whose labels (`0.1`, `0.001`, `0.0001`, `1e-05`, `1e-06`) are digit
 /// strings. Before this fix, `GrayResponseUnit` had no entry in the
 /// `declared_tag_name` leaf dispatch, so its label reached the generic
 /// integer parser directly; `IsFloat` accepted "0.1"/"0.001"/"0.0001" and
@@ -626,37 +589,19 @@ fn compression_unambiguous_labels_match_oracle() {
 
 /// `Compression`'s `%compression` hash (Exif.pm 13.59) names two codes
 /// `"JPEG"`: `7` (the modern code) and `99` (a legacy alias, `#16`). Exact
-/// match here finds both, so per this fix's stated rule -- "only when
-/// exactly one table entry matches" -- oxidex refuses rather than guess.
-///
-/// The pinned oracle does not refuse: `ReverseLookup`'s exact-match tier
-/// does not re-check `$matches > 1` when the pattern already anchors both
-/// ends (`Writer.pl:3634-3637`), so it falls through to `sort keys %$conv`
-/// and takes the first key whose value matches -- `"7"` sorts before `"99"`
-/// as a string, so ExifTool writes `7`. This is a deliberate, disclosed
-/// divergence (`AGENTS.md`: never approximate a conversion; a duplicate
-/// label is a genuine ambiguity, not a transcription gap), not a
-/// transcription bug: oxidex reports it as a refusal (a loud "rejected"),
-/// never as a silently wrong code (a "mismatched").
+/// match here finds both. `ReverseLookup` permits exact duplicates and
+/// selects the first string-sorted key: `"7"` precedes `"99"`. Check both
+/// writers and both raw readbacks so a successful no-op cannot pass.
 #[test]
-fn compression_jpeg_is_ambiguous_and_refused() {
+fn compression_jpeg_exact_duplicates_match_native_key_order() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
     let Some(base) = canon_jpg() else {
         eprintln!("skipping: Canon.jpg not resolved from the pinned t/images corpus");
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
-    let path = copy_into(&dir, &base, "compression_jpeg.jpg");
-    let before = std::fs::read(&path).unwrap();
-    let out = oxidex(&["-IFD0:Compression=JPEG", path.to_str().unwrap()]);
-    assert!(
-        !out.status.success(),
-        "oxidex should refuse an ambiguous Compression label, not guess"
-    );
-    let after = std::fs::read(&path).unwrap();
-    assert_eq!(
-        before, after,
-        "a refused write must leave the file untouched"
-    );
+    assert_label_write_matches_oracle(oracle, &base, "IFD0:Compression", "JPEG", 7);
 }
 
 #[test]
@@ -738,10 +683,9 @@ fn numeric_input_is_refused_bare_and_accepted_raw_for_every_required_tag() {
         ("ExifIFD:WhiteBalance", 0),
         ("ExifIFD:ExposureMode", 0),
         ("ExifIFD:SceneCaptureType", 0),
-        ("IFD0:Compression", 2), // 1 is excluded: see the module doc on
-        // ExifTool's substring-fallback tier -- "1" as a search string
-        // happens to match "CCITT 1D" (code 2) as a substring, which this
-        // port's exact/case-insensitive-only algorithm does not replicate.
+        // "2" has multiple partial matches; "1" would uniquely select
+        // "CCITT 1D" and therefore belongs to the label acceptance cases.
+        ("IFD0:Compression", 2),
         ("IFD0:YCbCrPositioning", 1),
         ("IFD0:GrayResponseUnit", 1),
         ("ExifIFD:SceneType", 1),
@@ -1142,7 +1086,7 @@ fn hand_written_enum_arms_reject_unmatched_garbage_like_the_oracle() {
         // 43c8dda8 -- not merely a non-numeric garbage string -- because
         // `ColorSpace` is excluded from the generic enum-inversion dispatch
         // and, with no catch-all of its own, fell through to the plain
-        // integer parser, which happily parses "1". The oracle refuses it
+        // integer parser, which parses `1`. The oracle refuses it
         // outright: `PrintConv` has no `OTHER`, so a raw code without `#`/
         // `-n` is never accepted, matching this tag's whole `Orientation`-
         // family. `garbage` is included too, to cover the non-numeric case.

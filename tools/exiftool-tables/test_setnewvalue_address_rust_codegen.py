@@ -51,6 +51,23 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn("noallowlist", rust)
         self.assertIn("= None", rust)
 
+    def test_candidate_printconv_is_bound_to_native_lookup_identity(self):
+        from setnewvalue_addressing import compile_addressing
+        addressing, _ = compile_addressing(source())
+        native = observations(addressing.rows)
+        candidate = next(item for query in native["queries"].values()
+                         for item in query["candidates"])
+        candidate["candidate_writable"] = True
+        candidate["print_conv"] = {"kind": "plain_hash", "labels": ["Six", "Unknown (7)"]}
+        rust, report = generate(source(), native, bootstrap_ownership_ledger=True)
+        self.assertTrue(report["emitted"])
+        self.assertIn('candidate_writable: true', rust)
+        self.assertIn('StaticCandidatePrintConv::PlainHash(&["Six", "Unknown (7)"])', rust)
+        candidate["print_conv"] = {"kind": "plain_hash", "labels": ["Six", 7]}
+        _, report = generate(source(), native, bootstrap_ownership_ledger=True)
+        self.assertFalse(report["emitted"])
+        self.assertIn("labels are malformed", report["reason"])
+
     def test_source_template_failure_still_emits_current_owned_names(self):
         document = source()
         document["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"

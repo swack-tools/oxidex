@@ -399,15 +399,74 @@ const LONG_OPTIONS: &[&str] = &[
     "detector",
 ];
 
-/// Whether `arg` is ExifTool's `--TAG` / `--GROUP:TAG` exclusion: two dashes
-/// and a name that is none of oxidex's long options (with or without an
-/// `=VALUE`).
-fn is_tag_exclusion_arg(arg: &str) -> bool {
-    let Some(body) = arg.strip_prefix("--") else {
-        return false;
+/// ExifTool options whose `--` spelling negates the option rather than
+/// excluding a tag (13.59, `exiftool`:874, :896, :1262, :1294, :1350:
+/// `/^(-?)(a|duplicates)$/i`, `/^(-?)b(inary)?$/i`, `/^(-)?sort$/i`,
+/// `/^(-)?struct$/i`, `/^(-?)(wext|tagoutext)$/i`). OxiDex implements none
+/// of the negations, so it refuses them by name instead of reading
+/// `--a` as "exclude the tag named `a`".
+const NEGATED_EXIFTOOL_OPTIONS: &[&str] = &[
+    "a",
+    "duplicates",
+    "b",
+    "binary",
+    "sort",
+    "struct",
+    "wext",
+    "tagoutext",
+];
+
+/// Classifies a `--NAME` argument: `Ok(Some(name))` for ExifTool's `--TAG`
+/// exclusion, `Ok(None)` for one of OxiDex's own long options (or anything
+/// carrying `=`, which stays with lexopt as before), and an error for a
+/// negated ExifTool option OxiDex does not implement.
+///
+/// Before this, every `--TAG` reached lexopt as an unknown long option,
+/// whose error path pushed it -- and every argument after it, raw -- into
+/// the tag list: `specific_tags` then stripped the dashes and *requested*
+/// the tag the user asked to exclude (`-EXIF:all --ISO` printed ISO alone),
+/// and an option after it (`--ISO -a`) became a request for a tag named `a`.
+fn exclusion_name(arg: &str) -> Result<Option<&str>, lexopt::Error> {
+    let Some(name) = arg.strip_prefix("--") else {
+        return Ok(None);
     };
-    let name = body.split_once('=').map_or(body, |(name, _)| name);
-    !name.is_empty() && !body.contains('=') && !LONG_OPTIONS.contains(&name)
+    if name.is_empty() || name.contains('=') || LONG_OPTIONS.contains(&name) {
+        return Ok(None);
+    }
+    if NEGATED_EXIFTOOL_OPTIONS
+        .iter()
+        .any(|option| option.eq_ignore_ascii_case(name))
+    {
+        return Err(format!(
+            "unsupported option {arg}: OxiDex does not implement ExifTool's negated -{name} option"
+        )
+        .into());
+    }
+    Ok(Some(name))
+}
+
+/// `s/\ball\b/*/ig`: every case-insensitive `all` that is a whole Perl
+/// word (bounded by anything but `[A-Za-z0-9_]`) becomes `*`.
+fn star_for_all_words(tag: &str) -> String {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let chars: Vec<char> = tag.chars().collect();
+    let mut out = String::with_capacity(tag.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let word = chars.get(i..i + 3).is_some_and(|w| {
+            w.iter().collect::<String>().eq_ignore_ascii_case("all")
+                && (i == 0 || !is_word(chars[i - 1]))
+                && chars.get(i + 3).is_none_or(|&c| !is_word(c))
+        });
+        if word {
+            out.push('*');
+            i += 3;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 fn lexopt_arg_requires_next_value(arg: &str) -> bool {
@@ -493,8 +552,24 @@ impl CliArgs {
 
         let mut options_ended = false;
         let mut literal_paths = Vec::new();
+        let mut next_arg_is_exclusion = false;
+        let mut exclusion_seen = false;
+        let mut x_exclusion_seen = false;
 
         for raw_arg in raw_args {
+            if next_arg_is_exclusion {
+                next_arg_is_exclusion = false;
+                let tag = raw_arg.into_string().map_err(|tag| {
+                    lexopt::Error::from(format!(
+                        "the tag name after -x must be valid UTF-8, got {tag:?}"
+                    ))
+                })?;
+                if tag.contains('=') {
+                    return Err(format!("invalid tag name for -x: {tag:?}").into());
+                }
+                tag_modifications.push(format!("--{}", star_for_all_words(&tag)).into());
+                continue;
+            }
             if next_arg_is_lexopt_value {
                 lexopt_args.push(raw_arg);
                 next_arg_is_lexopt_value = false;
@@ -572,7 +647,14 @@ impl CliArgs {
             // Handed to lexopt it was an unknown option, which ends lexopt's
             // parsing, so a later `--readonly` or `--backup` was taken as one
             // more exclusion and silently ignored (PR #957 review, Codex).
-            if is_tag_exclusion_arg(&arg) {
+            if arg == "-x" || arg.eq_ignore_ascii_case("-exclude") {
+                next_arg_is_exclusion = true;
+                exclusion_seen = true;
+                x_exclusion_seen = true;
+                continue;
+            }
+            if exclusion_name(&arg)?.is_some() {
+                exclusion_seen = true;
                 tag_modifications.push(arg.into());
                 continue;
             }
@@ -595,6 +677,10 @@ impl CliArgs {
                 // Regular argument - pass to lexopt
                 lexopt_args.push(arg.into());
             }
+        }
+
+        if next_arg_is_exclusion {
+            return Err("Expecting tag name for -x option".into());
         }
 
         // Create parser from filtered arguments
@@ -767,7 +853,7 @@ impl CliArgs {
             }
         }
 
-        Ok(CliArgs {
+        let parsed = CliArgs {
             detector,
             json,
             csv,
@@ -787,7 +873,19 @@ impl CliArgs {
             strict,
             args,
             literal_paths,
-        })
+        };
+        if exclusion_seen && parsed.filename_pattern().is_some() {
+            return Err("tag exclusions in rename mode are not supported".into());
+        }
+        // CopySelectors consumes raw --TAG tokens in argument order. Keep
+        // that established copy/write path intact; only the newly accepted
+        // -x/-exclude spelling lacks a proven copy/write translation.
+        if x_exclusion_seen && (parsed.tags_from_file.is_some() || parsed.has_assignment_option()) {
+            return Err("-x/-exclude in copy or write mode is not supported".into());
+        }
+        crate::cli::tag_resolution::TagSelection::from_args(&parsed)
+            .map_err(lexopt::Error::from)?;
+        Ok(parsed)
     }
 
     /// The arguments that can be options, tags or modifications: all of
@@ -1033,8 +1131,7 @@ impl CliArgs {
         }
 
         // Don't apply in write mode (has tag modifications with '=')
-        let has_modifications = self.args.iter().any(|arg| os_bytes(arg).contains(&b'='));
-        if has_modifications {
+        if self.has_assignment_option() {
             return None;
         }
 
@@ -1043,9 +1140,10 @@ impl CliArgs {
         // Process every option argument (never a file path, see `option_args`).
         // One that is not UTF-8 is a path or a modification (`parse`).
         for arg in self.option_args().iter().filter_map(|arg| arg.to_str()) {
-            // Tag extraction: starts with '-', does NOT contain '='
-            if arg.starts_with('-') && !arg.contains('=') {
-                let tag_name = arg.trim_start_matches('-').to_string();
+            // Tag extraction: starts with '-', does NOT contain '='. A `--TAG`
+            // is an exclusion (`excluded_tags`), never a request.
+            if arg.starts_with('-') && !arg.starts_with("--") && !arg.contains('=') {
+                let tag_name = arg[1..].to_string();
                 tag_names.push(tag_name);
             }
         }
@@ -1055,6 +1153,36 @@ impl CliArgs {
         } else {
             Some(tag_names)
         }
+    }
+
+    /// Whether any option argument is a `-TAG=VALUE`-shaped write (or date
+    /// shift). Only option arguments count: an `=` in a file name
+    /// (`photo=1.jpg`) never turned a read into a write, and must not switch
+    /// off its `-TAG` requests or `--TAG` exclusions either.
+    fn has_assignment_option(&self) -> bool {
+        self.option_args().iter().any(|arg| {
+            let bytes = os_bytes(arg);
+            bytes.starts_with(b"-") && bytes.contains(&b'=')
+        })
+    }
+
+    /// ExifTool's tag exclusions (`--TAG`, `-x TAG`, `-exclude TAG`), without
+    /// their dashes, in argument order. Empty in write and copy mode, as
+    /// [`CliArgs::specific_tags`] is.
+    ///
+    /// - `oxidex -EXIF:all --ISO photo.jpg` -> `["ISO"]`
+    /// - `oxidex -all --File:all photo.jpg` -> `["File:all"]`
+    pub fn excluded_tags(&self) -> Vec<String> {
+        if self.tags_from_file.is_some() || self.has_assignment_option() {
+            return Vec::new();
+        }
+        self.option_args()
+            .iter()
+            .filter_map(|arg| arg.to_str())
+            .filter_map(|arg| arg.strip_prefix("--"))
+            .filter(|name| !name.is_empty() && !name.contains('='))
+            .map(str::to_string)
+            .collect()
     }
 
     /// Checks if the user wants to clear all metadata (`-all=` syntax).
@@ -1700,5 +1828,70 @@ mod tests {
             CliArgs::parse_date_shift("-ExifIFD:DateTimeOriginal=2024:02:03 04:05:06"),
             None
         );
+    }
+
+    #[test]
+    fn copy_double_dash_exclusions_keep_ordered_raw_selectors() {
+        let args = CliArgs::parse_from(
+            [
+                "-TagsFromFile",
+                "source.jpg",
+                "-IFD0:Artist",
+                "--IFD0:Artist",
+                "-IFD0:Artist",
+                "destination.jpg",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            args.copy_tag_filters(),
+            Some(vec![
+                "IFD0:Artist".to_string(),
+                "-IFD0:Artist".to_string(),
+                "IFD0:Artist".to_string(),
+            ])
+        );
+        assert_eq!(args.specific_tags(), None);
+        assert!(args.excluded_tags().is_empty());
+
+        for spelling in ["-x", "-exclude"] {
+            let error = CliArgs::parse_from(
+                [
+                    "-TagsFromFile",
+                    "source.jpg",
+                    spelling,
+                    "IFD0:Artist",
+                    "destination.jpg",
+                ]
+                .map(OsString::from),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("-x/-exclude in copy or write mode"),
+                "{error}"
+            );
+        }
+    }
+
+    /// `-TAG#=` is a raw write, never a date shift: pinned 13.59 writes
+    /// `-DateTimeOriginal#=2020:01:02 03:04:05` and `-ModifyDate#=...`,
+    /// which the shift path refused as an unknown tag `DateTimeOriginal#`.
+    #[test]
+    fn a_raw_date_assignment_is_a_normal_tag_write() {
+        for arg in [
+            "-DateTimeOriginal#=2020:01:02 03:04:05",
+            "-ModifyDate#=2020:01:02 03:04:05",
+            "-ExifIFD:DateTimeOriginal#=2020:01:02 03:04:05",
+        ] {
+            assert_eq!(CliArgs::parse_date_shift(arg), None, "{arg}");
+        }
+        // #957: an absolute assignment is never a shift either.
+        assert_eq!(
+            CliArgs::parse_date_shift("-ModifyDate=2020:01:02 03:04:05"),
+            None
+        );
+        assert!(CliArgs::parse_date_shift("-ModifyDate+=1:0:0 0:0:0").is_some());
     }
 }

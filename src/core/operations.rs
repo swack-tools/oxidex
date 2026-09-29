@@ -39,6 +39,7 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
+use crate::writers::exif_surgical::RequestDeletions;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
@@ -1032,6 +1033,16 @@ pub(crate) fn write_metadata_counted(
     metadata: &MetadataMap,
     mutations: &[String],
 ) -> Result<(WriteOutcome, usize)> {
+    write_metadata_counted_among(path, metadata, mutations, &[])
+}
+
+/// Count copied assignments while protecting earlier proven CLI destinations.
+pub(crate) fn write_metadata_counted_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    mutations: &[String],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize)> {
     use crate::core::write_transaction::{TagChange, changes_between};
     use crate::writers::write_request::group_deletion;
     // Infer the request and plan it against the same handle that is copied.
@@ -1050,7 +1061,7 @@ pub(crate) fn write_metadata_counted(
     let read = metadata.read_from_identity(identity) || unverifiable;
     let mut changes = changes_between(&baseline, metadata, read);
     if read {
-        removals_in_call_order(metadata, mutations, &mut changes);
+        removals_in_call_order(&reader, &baseline, metadata, mutations, &mut changes);
     }
     if mutations.is_empty() && changes.iter().any(|change| change.value().is_none()) {
         // A plain map has no call order: a present assignment replaces an
@@ -1118,8 +1129,9 @@ pub(crate) fn write_metadata_counted(
     ordered.sort_by_key(|(at, _)| *at);
     let changes: Vec<TagChange> = ordered.into_iter().map(|(_, change)| change).collect();
     drop(reader);
-    let receipt =
-        crate::core::write_transaction::apply_tag_changes_on_opened(path, &changes, original)?;
+    let receipt = crate::core::write_transaction::apply_tag_changes_on_opened_among(
+        path, &changes, original, siblings,
+    )?;
     Ok(finish_metadata_write(
         metadata,
         read,
@@ -1169,17 +1181,25 @@ fn finish_metadata_write(
 ///   a log (`write_metadata`) has no order to go by, and a set of the field
 ///   under one spelling replaces a removal of the other.
 fn removals_in_call_order(
+    reader: &MMapReader,
+    baseline: &MetadataMap,
     metadata: &MetadataMap,
     mutations: &[String],
     changes: &mut Vec<crate::core::write_transaction::TagChange>,
 ) {
     use crate::core::write_transaction::TagChange;
+    let physical = |key: &str| {
+        resolve_write_key_for_with_reader(key, baseline, reader)
+            .map(|(field, _)| field)
+            .unwrap_or_else(|_| key.to_string())
+    };
     for (index, call) in mutations.iter().enumerate() {
         let later = &mutations[index + 1..];
         if crate::writers::write_request::group_deletion(call).is_some()
             || later.iter().any(|next| next.eq_ignore_ascii_case(call))
             // The last call on the key left it in the map: a set.
             || metadata.contains_key(call)
+            || later.iter().any(|next| physical(next).eq_ignore_ascii_case(&physical(call)))
             // Rows describing the file are never deleted by name.
             || call.split_once(':').is_some_and(|(group, _)| {
                 ["File", "System", "Composite", "ExifTool"]
@@ -1240,7 +1260,8 @@ pub(crate) fn write_metadata_with_removals(
 /// this transaction, the XP strings' direct write -- all ask). A value that
 /// differs from the file's is a set whatever its provenance (a carried row
 /// never differs); an assigned key whose value equals the file's is a set
-/// too, which the values alone cannot show. When such a same-value set falls under
+/// too, which the values alone cannot show. When a same-value set, or a
+/// surviving explicit directory assignment after a family-name delete, falls under
 /// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
 /// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
 /// ExifTool's order -- the removals, then the sets -- as two passes on a
@@ -1252,22 +1273,57 @@ pub(crate) fn write_metadata_transaction(
     metadata: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_metadata_transaction_among(path, metadata, removed, &[])
+}
+
+/// Apply cross-directory replacement with the surviving resolved sibling sets.
+pub(crate) fn write_metadata_transaction_among(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    siblings: &[String],
+) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes(
+        path, &baseline, metadata, removed, &assigned,
+    )?;
     crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
+    let expanded = crate::writers::exif_cross_delete::with_cross_deletions(
+        path, &baseline, metadata, removed, &assigned, siblings,
+    )?;
+    let (metadata, removed) = match &expanded {
+        Some((desired, removed)) => (desired, removed.as_slice()),
+        None => (metadata, removed),
+    };
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
-    // Same-value sets a removal covers: the only ones the map cannot tell
-    // from carried rows, and the only ones that need the two passes.
+    // Sets a removal covers: same-value assignments need provenance to be
+    // distinguished from carried rows, and family-name deletion followed by
+    // an explicit directory assignment needs the same atomic two passes.
     let resets: Vec<(String, TagValue)> = assigned
         .iter()
         .filter_map(|key| {
             let value = metadata.get(key)?.clone();
             let key = canonical(key);
-            (baseline.get(key.as_str()) == Some(&value)
-                && removals.iter().any(|removal| {
-                    crate::writers::exif_surgical::removal_covers(removal, &key, &baseline)
-                }))
+            (removals.iter().any(|removal| {
+                let family_covers = removal.strip_prefix("EXIF:").is_some_and(|leaf| {
+                    [
+                        "FocalLength",
+                        "FocalLengthIn35mmFormat",
+                        "SubjectDistance",
+                        "AmbientTemperature",
+                    ]
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(leaf))
+                        && key.split_once(':').is_some_and(|(group, name)| {
+                            matches!(group, "IFD0" | "ExifIFD") && name.eq_ignore_ascii_case(leaf)
+                        })
+                });
+                family_covers
+                    || (baseline.get(key.as_str()) == Some(&value)
+                        && crate::writers::exif_surgical::removal_covers(removal, &key, &baseline))
+            }))
             .then_some((key, value))
         })
         .collect();
@@ -1290,7 +1346,7 @@ pub(crate) fn write_metadata_transaction(
         .tempfile_in(dir)
         .map_err(ExifToolError::from)?;
     std::fs::copy(path, staged.path()).map_err(ExifToolError::from)?;
-    // Pass 1: the removals, with the same-value sets they cover left out.
+    // Pass 1: the removals, with covered assignments left out.
     let mut first = metadata.clone();
     for (key, _) in &resets {
         first.remove(key);
@@ -1767,27 +1823,134 @@ pub(crate) fn resolve_write_address(
     baseline: &MetadataMap,
 ) -> Result<String> {
     let (key, addressed) = resolve_write_key_for(path, tag_name, baseline)?;
+    // An address lookup does not know whether a set or a deletion will
+    // follow, so it refuses only where both are refused: where a MIE
+    // trailer's EXIF copy holds the tag (or may). A set is refused wherever
+    // ExifTool reads a MIE trailer at all -- the write itself decides that
+    // (`core::write_transaction::plan_changes`).
+    ensure_no_mie_copy_for(path, tag_name, &key, baseline, true)?;
     addressed?;
     Ok(key)
+}
+
+/// Refuses the request `tag_name`, resolved to `key`, where pinned 13.59
+/// would also edit the EXIF copy a MIE trailer of the file at `path` carries
+/// (`write_request::ensure_no_mie_copy`), which oxidex does not write.
+/// `removal` says whether the request is a deletion, which 13.59 applies
+/// to fewer copies than a set.
+///
+/// A transaction asks the same question of the requests left after its
+/// same-field reduction, on one census of the file ([`mie_census`], taken
+/// once by `core::write_transaction::plan_changes`): a set a later
+/// deletion of the field overrides is never ExifTool's to write (13.59:
+/// `-IFD0:XPTitle=x -IFD0:XPTitle=` on t/images/ExifTool.jpg is
+/// `unchanged`, `-IFD0:Artist=x -IFD0:Artist=` deletes the main Artist and
+/// leaves the MIE trailer's 90 bytes as they were). ExifTool reads a MIE
+/// trailer after a JPEG or a TIFF-structured file (DNG, CR2), not after a
+/// PNG's IEND.
+pub(crate) fn ensure_no_mie_copy_for(
+    path: &Path,
+    tag_name: &str,
+    key: &str,
+    baseline: &MetadataMap,
+    removal: bool,
+) -> Result<()> {
+    let reader = MMapReader::new(path)?;
+    let mie = mie_census_with_reader(&reader)?;
+    crate::writers::write_request::ensure_no_mie_copy(
+        tag_name.strip_suffix('#').unwrap_or(tag_name),
+        key,
+        baseline,
+        removal,
+        &mie,
+    )
+}
+
+/// The MIE census of the file at `path` (`write_request::MieCensus`), for
+/// [`ensure_no_mie_copy_for`] and a write transaction, which takes it once
+/// for all of its requests: the MIE trailers of a JPEG (whose trailer chain
+/// ends at the byte after its EOI) or a TIFF-structured file; any other
+/// file is no trailer carrier to ExifTool. A `.mie` document is not either:
+/// oxidex writes no MIE file at all, and its writer's refusal answers for
+/// it.
+pub(crate) fn mie_census_with_reader<'a>(
+    reader: &'a MMapReader,
+) -> Result<crate::writers::write_request::MieCensus<'a>> {
+    use crate::writers::write_request::MieCensus;
+    let format = detect_format(reader)?;
+    if matches!(format, FileFormat::MIE) {
+        return Ok(MieCensus::NoTrailer);
+    }
+    let jpeg = matches!(format, FileFormat::JPEG);
+    if !jpeg && !is_surgical_tiff_target(format, reader) {
+        return Ok(MieCensus::NotATrailerCarrier);
+    }
+    let file = reader.read(0, reader.size() as usize)?;
+    let trailer_start = if jpeg {
+        // The writer's scan boundary also accepts EOI before SOS. MIE is
+        // read only after ProcessJPEG traverses an actual SOS to its EOI.
+        let trailer_start = crate::parsers::vivo::jpeg_sos_header_end(file)
+            .and_then(|after_header| crate::parsers::vivo::jpeg_trailer_start(file, after_header));
+        let Some(trailer_start) = trailer_start else {
+            return Ok(MieCensus::NoTrailer);
+        };
+        Some(trailer_start)
+    } else {
+        None
+    };
+    Ok(MieCensus::of_trailers(file, trailer_start))
 }
 
 /// [`resolve_write_address`] in two parts: the resolved key (or the error
 /// resolving it), and whether the format's writer addresses that key. A
 /// removal asks whether it is a no-op between the two (`remove_tag`): a
 /// deletion that names nothing succeeds untouched even where the writer
-/// could not have written the key.
+/// could not have written the key. Whether a MIE trailer's EXIF copy also
+/// takes the request is asked separately ([`ensure_no_mie_copy_for`]).
 pub(crate) fn resolve_write_key_for(
     path: &Path,
     tag_name: &str,
     baseline: &MetadataMap,
 ) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request(path, tag_name, baseline, RequestDeletions::default())
+}
+
+/// [`resolve_write_key_for`] for one request of a transaction whose other
+/// requests delete what `deletions` says (planned `-MakerNotes:All=`,
+/// `-ExifIFD:All=` or `-EXIF:All=` deletions,
+/// `core::write_transaction::GroupDeletions::for_set_at`). Pinned 13.59
+/// then edits no deleted copy of a bare name: on t/images/Canon.jpg
+/// `-MakerNotes:All= -WhiteBalance#=1` and `-WhiteBalance#=1
+/// -MakerNotes:All=` both leave `[ExifIFD] WhiteBalance` 1 and no maker
+/// note (which deletions count for which set is `for_set_at`'s: on a raw
+/// file only the second order leaves the note unedited).
+pub(crate) fn resolve_write_key_in_request(
+    path: &Path,
+    tag_name: &str,
+    baseline: &MetadataMap,
+    deletions: RequestDeletions,
+) -> Result<(String, Result<()>)> {
     let reader = MMapReader::new(path)?;
-    resolve_write_key_for_with_reader(tag_name, baseline, &reader)
+    resolve_write_key_in_request_with_reader(tag_name, baseline, deletions, &reader)
 }
 
 pub(crate) fn resolve_write_key_for_with_reader(
     tag_name: &str,
     baseline: &MetadataMap,
+    reader: &MMapReader,
+) -> Result<(String, Result<()>)> {
+    resolve_write_key_in_request_with_reader(
+        tag_name,
+        baseline,
+        RequestDeletions::default(),
+        reader,
+    )
+}
+
+pub(crate) fn resolve_write_key_in_request_with_reader(
+    tag_name: &str,
+    baseline: &MetadataMap,
+    deletions: RequestDeletions,
     reader: &MMapReader,
 ) -> Result<(String, Result<()>)> {
     use crate::writers::write_request::{
@@ -1803,6 +1966,11 @@ pub(crate) fn resolve_write_key_for_with_reader(
     // (`write_request::canonical_request_tag`): the hand-kept spellings below
     // are matched exactly, so `-exposuretime=1/30` missed `ExposureTime` and
     // was refused as a write ExifTool also applies elsewhere.
+    // A trailing `#` (ExifTool's "this value is raw") names the same tag:
+    // the CLI strips it before typing the value (`cli::write_transaction::
+    // apply_sets`), and a library or C ABI caller's typed value is raw
+    // already, so `ColorSpace#` resolves exactly as `ColorSpace`.
+    let tag_name = tag_name.strip_suffix('#').unwrap_or(tag_name);
     let respelled = crate::writers::write_request::canonical_request_tag(tag_name);
     let respelled = if respelled.contains(':') {
         crate::writers::exif_surgical::canonical_write_key(&respelled, baseline)
@@ -1852,6 +2020,12 @@ pub(crate) fn resolve_write_key_for_with_reader(
     } else {
         tag_name
     };
+    // Whether the file's EXIF carries a maker note, scanned only when a name
+    // with a maker-note candidate asks (`write_request::makernote_may_hold`).
+    let makernote_block = || crate::writers::exif_surgical::MakerNoteCensus {
+        deletions,
+        ..file_makernote_census(reader, format, surgical)
+    };
     let canonical = canonical_write_tag_name(tag_name);
     let key = if canonical != tag_name {
         // The hand-kept spellings keep their addresses, under the same checks
@@ -1860,13 +2034,19 @@ pub(crate) fn resolve_write_key_for_with_reader(
         // ExifTool's `PNG:Software`), and never half of a write ExifTool also
         // applies to another group (`XMP-tiff:Software`).
         if (!exif_ifd0_target && !surgical) || (png && png_prefers_text(tag_name)) {
-            return Err(resolve_write_key(tag_name, exif_ifd0_target, png, baseline)
-                .err()
-                .unwrap_or_else(|| {
-                    ExifToolError::tag_not_written(tag_name, "name its group explicitly")
-                }));
+            return Err(resolve_write_key(
+                tag_name,
+                exif_ifd0_target,
+                png,
+                baseline,
+                &makernote_block,
+            )
+            .err()
+            .unwrap_or_else(|| {
+                ExifToolError::tag_not_written(tag_name, "name its group explicitly")
+            }));
         }
-        ensure_not_also_updated(tag_name, canonical, baseline)?;
+        ensure_not_also_updated(tag_name, canonical, baseline, &makernote_block)?;
         canonical.to_string()
     } else if !tag_name.contains(':')
         && surgical
@@ -1882,8 +2062,13 @@ pub(crate) fn resolve_write_key_for_with_reader(
         // `EXIF:<name>` is the family, not a directory: the tag's own IFD.
         resolved
     } else {
-        resolve_write_key(tag_name, exif_ifd0_target, png, baseline)?
+        resolve_write_key(tag_name, exif_ifd0_target, png, baseline, &makernote_block)?
     };
+    crate::writers::write_request::ensure_makernote_entry_not_named(
+        tag_name,
+        &key,
+        &makernote_block,
+    )?;
     // `PNG:XMP` is oxidex's own key for the raw-packet route
     // (`png_writer::XMP_PACKET_KEY`), which pinned 13.59 also refuses by name
     // -- except when the file's `PNG:XMP` names an ordinary text chunk whose
@@ -1905,14 +2090,77 @@ pub(crate) fn resolve_write_key_for_with_reader(
     Ok((key, addressed))
 }
 
+/// The file's EXIF blocks and the ones carrying a maker note that may hold
+/// tags (`exif_surgical::makernote_census`): the JPEG's APP1 EXIF blocks, a
+/// PNG's `eXIf`, or a TIFF-structured file itself. Unprovable -- a file
+/// that cannot be read or split into blocks -- is
+/// [`MakerNoteCensus::UNKNOWN`](crate::writers::exif_surgical::MakerNoteCensus::UNKNOWN).
+fn file_makernote_census(
+    reader: &MMapReader,
+    format: FileFormat,
+    surgical: bool,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::{
+        EXIF_BLOCK_MAGICS, MakerNoteCensus, jpeg_exif_payloads, makernote_census,
+    };
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let payloads = if surgical {
+        return makernote_census(
+            &[file_bytes],
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        );
+    } else {
+        match format {
+            FileFormat::JPEG => jpeg_exif_payloads(file_bytes).ok(),
+            // `None` is a raw EXIF profile, not an empty set of eXIf
+            // chunks. The maker-note census cannot prove what it holds.
+            FileFormat::PNG => crate::writers::png_writer::png_exif_payloads(reader)
+                .ok()
+                .flatten(),
+            _ => return MakerNoteCensus::default(),
+        }
+    };
+    let Some(payloads) = payloads else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+    let mut census = makernote_census(&blocks, EXIF_BLOCK_MAGICS);
+    if matches!(format, FileFormat::JPEG) {
+        census.ciff = match crate::writers::exif_surgical::jpeg_has_ciff(file_bytes) {
+            Ok(present) => present,
+            Err(_) => return MakerNoteCensus::UNKNOWN,
+        };
+    }
+    census
+}
+
+/// Physical census for the CLI's file-phase candidate conversion proof. A
+/// failed read is unknown, never evidence that a maker-note candidate is
+/// absent. This uses the same scanner as bare write resolution.
+pub(crate) fn conversion_makernote_census(
+    path: &Path,
+) -> crate::writers::exif_surgical::MakerNoteCensus {
+    use crate::writers::exif_surgical::MakerNoteCensus;
+    let Ok(reader) = MMapReader::new(path) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    let Ok(format) = detect_format(&reader) else {
+        return MakerNoteCensus::UNKNOWN;
+    };
+    file_makernote_census(&reader, format, is_surgical_tiff_target(format, &reader))
+}
+
 /// Whether deleting `key` from the file at `path` changes nothing: the map
 /// does not hold it (under any spelling) and -- for an EXIF carrier -- no
 /// entry of any EXIF block is named by it (`exif_surgical::
 /// exif_request_is_no_op`, #943's up-front no-op decision, which also sees
-/// entries the reader surfaces no row for). A PDF Info field or a PNG text
-/// tag the map lacks names nothing. Pinned ExifTool 13.59 answers such a
-/// deletion `0 image files updated` / `1 image files unchanged`, bytes
-/// untouched.
+/// entries the reader surfaces no row for). A named maker-note vendor uses
+/// the physical root census instead, after the transaction checks MIE's
+/// EXIF copy. A PDF Info field or a PNG text tag the map lacks names nothing.
+/// Pinned ExifTool 13.59 answers such a deletion `0 image files updated` /
+/// `1 image files unchanged`, bytes untouched.
 pub(crate) fn removal_is_no_op_with_reader(
     key: &str,
     metadata: &MetadataMap,
@@ -1929,6 +2177,29 @@ pub(crate) fn removal_is_no_op_with_reader(
     // spells differently (the reader keys `XMP-dc:Title` as `XMP:Title`) is
     // never judged absent from the map alone.
     let group = key.split_once(':').map_or("", |(group, _)| group);
+    // A named maker-note vendor may have no writable address in our EXIF
+    // writer, but a deletion is still ExifTool's unchanged when the main
+    // file cannot hold that vendor's tag. The transaction has already
+    // checked MIE's copy before asking this no-op question. Use the physical
+    // note census, never just decoded rows: an unidentified note may carry
+    // a tag the reader did not surface.
+    if !group.eq_ignore_ascii_case("MakerNotes")
+        && crate::writers::exif_surgical::is_makernote_group(group)
+    {
+        let name = key.rsplit_once(':').map_or(key, |(_, name)| name);
+        let name = name.strip_suffix('#').unwrap_or(name);
+        let format = detect_format(reader)?;
+        let surgical = is_surgical_tiff_target(format, reader);
+        if !surgical && !matches!(format, FileFormat::JPEG | FileFormat::PNG) {
+            return Ok(false);
+        }
+        return Ok(!crate::writers::write_request::makernote_group_may_hold(
+            name,
+            group,
+            metadata,
+            &|| file_makernote_census(reader, format, surgical),
+        ));
+    }
     // The directory chain past IFD1 (`IFD2:`, ... -- #954's
     // `exif_surgical::chain_key_dir`) is scanned entry by entry too: a
     // removal naming nothing it holds is a no-op beside a real edit.
@@ -1936,17 +2207,42 @@ pub(crate) fn removal_is_no_op_with_reader(
         group,
         "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD" | "EXIF" | "MakerNotes"
     ) || crate::writers::exif_surgical::chain_key_dir(key).is_some();
-    if !exif_group && group != "PDF" && group != "PNG" {
-        return Ok(false);
-    }
+
     let removed = [key.to_string()];
     let format = detect_format(reader)?;
+    // A maker-note tag is never judged absent from the map alone: the
+    // reader does not surface every row ExifTool reads (pinned 13.59 deletes
+    // `[Nikon] WhiteBalance` from t/images/Nikon.jpg on
+    // `-MakerNotes:WhiteBalance=`, a row oxidex's reader lacks), so a
+    // deletion the file's maker note may name is not a no-op
+    // (`write_request::makernote_may_hold`) -- and the writer, which cannot
+    // edit a maker note, refuses it. The maker-note blob's own names
+    // (`MakerNotes:MakerNoteCanon`) keep the block scan below.
+    if group == "MakerNotes" {
+        let name = key.split_once(':').map_or(key, |(_, name)| name);
+        let name = name.strip_suffix('#').unwrap_or(name);
+        let surgical = is_surgical_tiff_target(format, reader);
+        if !name.eq_ignore_ascii_case("all")
+            && !name.starts_with("MakerNote")
+            && crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
+                file_makernote_census(reader, format, surgical)
+            })
+            .is_some()
+        {
+            return Ok(false);
+        }
+    }
     let file_bytes = reader.read(0, reader.size() as usize)?;
     // A PNG with a bad chunk CRC is refused before any no-op decision, as the
     // PNG writer refuses it (#947, `png_writer::check_chunk_crcs`): pinned
     // 13.59 checks every CRC before it learns nothing changed.
     if matches!(format, FileFormat::PNG) {
         crate::writers::png_writer::refuse_bad_chunk_crcs(reader)?;
+    }
+    if !exif_group && group != "PDF" && group != "PNG" {
+        // The shared group-deletion proof also proves a named deletion
+        // absent when the file holds none of that whole supported family.
+        return Ok(group_is_empty(group, metadata));
     }
     // A single-tag removal acts on every block alike (only a group-wide
     // `<group>:All` distinguishes #943's `group_blocks`); `embedded` marks a
@@ -2013,6 +2309,21 @@ pub(crate) fn removal_is_no_op_with_reader(
 pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
     let metadata = read_metadata(path)?;
     resolve_write_address(path, tag_name, &metadata)
+}
+
+/// [`resolve_write_tag`] for one set of a request whose other requests
+/// delete what `deletions` says (`core::write_transaction::GroupDeletions::
+/// for_set_at`), against the file's `metadata` (read once for the whole
+/// request): the address the transaction writes it at.
+pub(crate) fn resolve_write_tag_in_request(
+    path: &Path,
+    tag_name: &str,
+    metadata: &MetadataMap,
+    deletions: RequestDeletions,
+) -> Result<String> {
+    let (key, addressed) = resolve_write_key_in_request(path, tag_name, metadata, deletions)?;
+    addressed?;
+    Ok(key)
 }
 
 /// Whether `tag_name` names an EXIF-family group in a PDF: ExifTool keeps no
@@ -2084,12 +2395,26 @@ pub(crate) fn plan_group_deletion_with_reader(
     group: &str,
     baseline: &MetadataMap,
     reader: &MMapReader,
+    mie: &crate::writers::write_request::MieCensus<'_>,
 ) -> Result<Option<String>> {
     let key = format!("{group}:All");
     let format = detect_format(reader)?;
     if crate::writers::exif_surgical::group_removal(&key).is_some() {
-        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG)
-            || is_surgical_tiff_target(format, reader);
+        let surgical = is_surgical_tiff_target(format, reader);
+        let expanded = matches!(format, FileFormat::JPEG | FileFormat::PNG) || surgical;
+        // Pinned 13.59 applies an EXIF group deletion to a MIE trailer's own
+        // EXIF directory too, where that holds the group (`-EXIF:All=`
+        // shrinks the 188-byte trailer an `-IFD0:Artist=x` leaves on
+        // t/images/ExifTool.jpg back to 90 bytes), which oxidex does not
+        // write (`write_request::ensure_no_mie_copy`; `mie` is the file's
+        // census, [`mie_census`], taken once by the caller).
+        crate::writers::write_request::ensure_no_mie_copy(
+            tag_name,
+            &key,
+            &MetadataMap::new(),
+            true,
+            mie,
+        )?;
         if expanded {
             return Ok(Some(key));
         }
@@ -2108,6 +2433,79 @@ pub(crate) fn plan_group_deletion_with_reader(
              cannot prove it holds no {group} tags; delete the tags by name"
         ),
     ))
+}
+
+/// Whether deleting the bare (ungrouped) `name` from the file at `path`,
+/// read into `metadata`, changes nothing: every group pinned 13.59 would
+/// delete it from is one whose absence is provable
+/// ([`candidates_are_provable`](crate::writers::write_request::candidates_are_provable)),
+/// the map holds no row of that name, no maker note may hold it
+/// (`write_request::makernote_may_hold`), and no entry of any EXIF block
+/// is named by it ([`removal_is_no_op_with_reader`] on `EXIF:<name>`, which scans every
+/// block). 13.59 on t/images/Nikon.jpg with Canon.jpg's EXIF APP1 added:
+/// `-CalibrationIlluminant1=` and `-Artist=` are `1 image files
+/// unchanged`, which the several-EXIF-blocks refusal used to refuse.
+pub(crate) fn bare_removal_is_no_op_with_reader(
+    name: &str,
+    metadata: &MetadataMap,
+    reader: &MMapReader,
+) -> bool {
+    let name = name.strip_suffix('#').unwrap_or(name);
+    if name.contains(':') || !crate::writers::write_request::candidates_are_provable(name, metadata)
+    {
+        return false;
+    }
+    let named = |key: &str| {
+        key.rsplit_once(':')
+            .map_or(key, |(_, row)| row)
+            .eq_ignore_ascii_case(name)
+    };
+    if metadata.keys().any(|key| named(key)) {
+        return false;
+    }
+    let Ok(format) = detect_format(reader) else {
+        return false;
+    };
+    let surgical = is_surgical_tiff_target(format, reader);
+    if crate::writers::write_request::makernote_may_hold(name, metadata, &|| {
+        file_makernote_census(reader, format, surgical)
+    })
+    .is_some()
+    {
+        return false;
+    }
+    removal_is_no_op_with_reader(&format!("EXIF:{name}"), metadata, reader).unwrap_or(false)
+}
+
+/// Whether the group-wide removal `key` that [`plan_group_deletion_with_reader`] planned
+/// for the file at `path` really removes its group when written, as the
+/// format's writer resolves it -- for judging what a request's other
+/// requests may still find there (`core::write_transaction::
+/// GroupDeletions`). A TIFF-structured file's removals go through
+/// [`resolve_tiff_group_removals`](crate::writers::exif_surgical::resolve_tiff_group_removals),
+/// which drops `IFD0:All` on every TIFF and the ExifIFD/MakerNotes
+/// removals on a raw type (pinned 13.59: "Can't delete ... from NEF", file
+/// unchanged) and refuses the rest: none of those leaves the maker note
+/// gone. `-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef: 13.59
+/// writes `[ExifIFD]` and `[Nikon] WhiteBalance` 1. Unprovable (the file
+/// cannot be read) is `false`: nothing is taken as deleted.
+pub(crate) fn group_removal_takes_effect_with_reader(
+    key: &str,
+    baseline: &MetadataMap,
+    reader: &MMapReader,
+) -> bool {
+    let Ok(format) = detect_format(reader) else {
+        return false;
+    };
+    if !is_surgical_tiff_target(format, reader) {
+        return true;
+    }
+    let Ok(file_bytes) = reader.read(0, reader.size() as usize) else {
+        return false;
+    };
+    let removed = [key.to_string()];
+    crate::writers::exif_surgical::resolve_tiff_group_removals(file_bytes, baseline, &removed)
+        .is_ok_and(|kept| kept.iter().any(|kept| kept == key))
 }
 
 /// Whether the reader's map proves the file holds nothing in `group`.
@@ -2251,6 +2649,18 @@ pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<Wr
             tag_name, new_value,
         )],
     )
+}
+
+/// Set all resolved EXIF dates through the shared request transaction.
+pub(crate) fn set_exif_dates(path: &Path, keys: &[&str], raw: &str) -> Result<()> {
+    let changes: Result<Vec<_>> = keys
+        .iter()
+        .map(|key| {
+            crate::cli::value_parser::parse_cli_tag_value(key, raw)
+                .map(|value| crate::core::write_transaction::TagChange::set(*key, value))
+        })
+        .collect();
+    crate::core::write_transaction::apply_tag_changes(path, &changes?).map(|_| ())
 }
 
 /// Removes a metadata tag from a file.
@@ -2417,6 +2827,9 @@ pub struct CopyReport {
     /// from a PDF, are one copy), on the filtered and the copy-all path
     /// alike.
     pub copied: usize,
+    /// Destination addresses proven by this copy. The CLI uses these as
+    /// sibling sets while applying later requests in the same command.
+    pub(crate) copied_destinations: Vec<String>,
     /// Tags the copy set: the source tags (one per name) and named tags
     /// pinned ExifTool 13.59 has a writable destination for anywhere --
     /// its tags "set from" the source. When it is zero the copy found
@@ -2479,7 +2892,7 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_report_retaining(src, dest, tags, |_| true, None)
+    copy_metadata_report_retaining(src, dest, tags, |_| true, None, &[], &mut Vec::new())
 }
 
 /// Resolves and validates the copy, retaining only destination sets that
@@ -2492,6 +2905,8 @@ pub(crate) fn copy_metadata_report_retaining(
     // The final Make supplied by CLI requests after this copy. `Some(None)`
     // means a later request deletes Make; `None` means use this copy's result.
     final_make_override: Option<Option<String>>,
+    siblings: &[String],
+    copied_values: &mut Vec<(String, TagValue)>,
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
     // The public Option is semantic: CLI's bare -TagsFromFile maps its empty
@@ -2507,6 +2922,8 @@ pub(crate) fn copy_metadata_report_retaining(
         &selectors,
         retain,
         final_make_override,
+        siblings,
+        copied_values,
     )
 }
 
@@ -3223,6 +3640,88 @@ pub(crate) fn parse_casio_cam_metadata(reader: &dyn FileReader) -> Result<Metada
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn mie_census_requires_a_successful_jpeg_sos_to_eoi_walk() {
+        let Some(writer) = crate::test_support::pinned_t_images_fixture_path("Writer.jpg") else {
+            return;
+        };
+        let file = std::fs::read(writer).unwrap();
+        let sos = file
+            .windows(2)
+            .position(|bytes| bytes == [0xff, 0xda])
+            .unwrap();
+        // A complete, valid MIE trailer without EXIF would refuse a set if
+        // inventoried. ProcessJPEG never reaches it without an SOS and EOI.
+        let mut mie =
+            b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\0\0~\0\x04\0zmie~\0\0\x06".to_vec();
+        let total = mie.len() as u32 + 6;
+        mie.extend_from_slice(&total.to_be_bytes());
+        mie.extend_from_slice(&[0x10, 4]);
+        let dir = tempfile::tempdir().unwrap();
+        for (name, carrier) in [
+            ("eoi-before-sos", [&file[..sos], &[0xff, 0xd9]].concat()),
+            (
+                "fake-sos-inside-app1",
+                b"\xff\xd8\xff\xe1\0\x06\xff\xda\0\x02\xff\xd9".to_vec(),
+            ),
+            (
+                "sos-without-eoi",
+                file[..sos + 4 + usize::from(u16::from_be_bytes([file[sos + 2], file[sos + 3]]))
+                    - 2]
+                    .to_vec(),
+            ),
+        ] {
+            let path = dir.path().join(format!("{name}.jpg"));
+            std::fs::write(&path, [carrier, mie.clone()].concat()).unwrap();
+            assert!(
+                matches!(
+                    mie_census_with_reader(&MMapReader::new(&path).unwrap()).unwrap(),
+                    crate::writers::write_request::MieCensus::NoTrailer
+                ),
+                "{name} has no readable JPEG trailer"
+            );
+        }
+    }
+
+    /// Codex pre-review of 1fdcc215: the public address lookup refuses only
+    /// what a set and a deletion both refuse -- a MIE trailer without EXIF
+    /// (t/images/ExifTool.jpg) leaves `IFD0:Software` resolvable, as
+    /// `remove_tag` may delete it; a MIE copy holding the tag refuses it.
+    #[test]
+    fn resolve_write_tag_refuses_only_a_mie_copy_holding_the_tag() {
+        let (Some(exiftool), Some(writer), Some(canon)) = (
+            crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg"),
+            crate::test_support::pinned_t_images_fixture_path("Writer.jpg"),
+            crate::test_support::pinned_t_images_fixture_path("Canon.jpg"),
+        ) else {
+            return;
+        };
+        assert_eq!(
+            resolve_write_tag(&exiftool, "IFD0:Software").unwrap(),
+            "IFD0:Software"
+        );
+        // Writer.jpg + a MIE trailer holding Canon.jpg's EXIF (IFD0 Make).
+        let canon = std::fs::read(&canon).unwrap();
+        let at = canon.windows(2).position(|w| w == [0xFF, 0xE1]).unwrap();
+        let length = usize::from(u16::from_be_bytes([canon[at + 2], canon[at + 3]]));
+        let tiff = &canon[at + 10..at + 2 + length];
+        let mut mie = b"~\x10\x04\xfe0MIE\0\0\0\0~\x10\x04\0Meta~\0\x04\xfeEXIF".to_vec();
+        mie.extend_from_slice(&(tiff.len() as u32).to_be_bytes());
+        mie.extend_from_slice(tiff);
+        mie.extend_from_slice(b"~\0\0\0~\0\x04\0zmie~\0\0\x06");
+        let total = mie.len() as u32 + 6;
+        mie.extend_from_slice(&total.to_be_bytes());
+        mie.extend_from_slice(&[0x10, 4]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mie-exif.jpg");
+        std::fs::write(&path, [std::fs::read(&writer).unwrap(), mie].concat()).unwrap();
+        assert!(resolve_write_tag(&path, "IFD0:Make").is_err());
+        assert_eq!(
+            resolve_write_tag(&path, "IFD0:Artist").unwrap(),
+            "IFD0:Artist"
+        );
+    }
 
     /// A map as it reaches `normalize_identity_tags`: the `File:` group as the
     /// generated tables left it, plus whatever the parser inserted ungrouped.

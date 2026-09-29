@@ -544,21 +544,41 @@ fn bare_xp_tags_write_ifd0_bytes_identical_to_the_oracle() {
             let out = write(&file, &[&format!("-{tag}={text}")]);
             assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
             assert_eq!(sha(&file), before, "{name} {tag}");
-            // A bare deletion removes it from the JPEG. The in-place TIFF
-            // writer cannot shrink an IFD (pre-existing, grouped spellings
-            // too): it must refuse loudly and leave the file alone.
+            // Pinned ExifTool 13.59 removes the IFD0 row from both carriers.
+            // Keep a native copy so the same raw absence is proven on each.
+            let native = oxidex::exiftool_oracle::graded().map(|oracle| {
+                let native = dir.path().join(format!("native-{name}"));
+                fs::copy(&file, &native).unwrap();
+                let native_out = oracle
+                    .command()
+                    .arg("-overwrite_original")
+                    .arg(format!("-{tag}="))
+                    .arg(&native)
+                    .output()
+                    .unwrap();
+                assert!(native_out.status.success(), "{name} {tag}: {native_out:?}");
+                assert_eq!(stdout(&native_out), "    1 image files updated\n");
+                native
+            });
             let out = write(&file, &[&format!("-{tag}=")]);
-            if name.ends_with(".jpg") {
-                assert_eq!(out.status.code(), Some(0), "{name} {tag}: {}", stderr(&out));
-                assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
-                assert_eq!(read_back(&file, &format!("IFD0:{tag}")), "", "{name} {tag}");
-            } else {
-                assert_eq!(out.status.code(), Some(1), "{name} {tag}");
+            assert_eq!(out.status.code(), Some(0), "{name} {tag}: {}", stderr(&out));
+            assert_eq!(stdout(&out), "    1 image files updated\n", "{name} {tag}");
+            assert_eq!(read_back(&file, &format!("IFD0:{tag}")), "", "{name} {tag}");
+            for path in std::iter::once(&file).chain(native.as_ref()) {
+                let bytes = fs::read(path).unwrap();
+                let tiff = match bytes.windows(6).position(|w| w == b"Exif\0\0") {
+                    Some(at) if name.ends_with(".jpg") => &bytes[at + 6..],
+                    _ => &bytes[..],
+                };
                 assert!(
-                    !stdout(&out).contains("image files updated"),
-                    "{name} {tag}"
+                    scan_exif_entries(tiff)
+                        .unwrap()
+                        .entries
+                        .into_iter()
+                        .all(|entry| entry.ifd != IfdKind::Ifd0 || entry.tag_id != id),
+                    "{name} {tag}: IFD0 entry survived in {}",
+                    path.display()
                 );
-                assert_eq!(sha(&file), before, "{name} {tag}");
             }
         }
     }

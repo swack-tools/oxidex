@@ -70,7 +70,11 @@ pub(crate) fn process_ciff_app0_segments(segments: &[Segment<'_>], metadata: &mu
         decode_ciff_container(data, &mut decoded);
         for (key, occurrence) in decoded.all_occurrences() {
             let name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
-            metadata.insert_renamed_occurrence(format!("{CIFF_GROUP}:{name}"), occurrence);
+            // ProcessCRW's APP0 caller forces family 1 to CIFF even for
+            // Canon subtable rows that carry their own MakerNote family.
+            let mut rehomed = occurrence.clone();
+            rehomed.group1 = crate::core::tag_occurrence::intern(CIFF_GROUP);
+            metadata.insert_renamed_occurrence(format!("{CIFF_GROUP}:{name}"), &rehomed);
         }
     }
 }
@@ -197,6 +201,10 @@ mod tests {
         assert_eq!(metadata.get_string("CIFF:Make"), Some("Canon"));
         assert_eq!(metadata.get_string("CIFF:FocalPlaneXSize"), Some("5.05 mm"));
         assert_eq!(metadata.get_string("CIFF:FocalPlaneYSize"), Some("3.71 mm"));
+        // ExifTool.pm:7734 sets SET_GROUP1=CIFF for this APP0 container,
+        // including records decoded from Canon::FocalLength.
+        let x = metadata.occurrences_for("CIFF:FocalPlaneXSize")[0];
+        assert_eq!(&*x.group1, "CIFF");
     }
 
     /// The unrounded `ValueConv` form rides along, because

@@ -742,7 +742,25 @@ pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
             continue;
         };
         if let Some(TagValue::String(text)) = decoded.emit() {
-            metadata.insert(format!("Casio:{name}"), TagValue::new_string(text));
+            let Ok(source_id) = u16::try_from(decoded.field.index) else {
+                continue;
+            };
+            let key = format!("{}:{name}", table.group1);
+            let mut row =
+                crate::core::TagOccurrence::from_insert_shim(&key, TagValue::new_string(text), 0);
+            row.id = oxidex_tags::TagId::Numeric(source_id);
+            row.group0 = crate::core::tag_occurrence::intern(
+                decoded.field.groups.g0.unwrap_or(table.group0),
+            );
+            row.group1 = crate::core::tag_occurrence::intern(
+                decoded.field.groups.g1.unwrap_or(table.group1),
+            );
+            row.group2 = Some(crate::core::tag_occurrence::intern(
+                decoded.field.groups.g2.unwrap_or(table.group2),
+            ));
+            row.origin.module = Some(table.module);
+            row.origin.table = Some(table.table);
+            metadata.record_occurrence(key, row);
         }
     }
 }
@@ -750,6 +768,34 @@ pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qvci_generated_rows_keep_source_identity() {
+        let mut payload = vec![0u8; 133];
+        payload[..5].copy_from_slice(b"QVCI\0");
+        payload[98..105].copy_from_slice(b"KX-778\0");
+        payload[114..123].copy_from_slice(b"98082901\0");
+        payload[124..133].copy_from_slice(b"98000829\0");
+        let mut metadata = MetadataMap::new();
+        parse_casio_qvci_segment(&payload, &mut metadata);
+        for (name, source_id, value) in [
+            ("ModelType", 0x62, "KX-778"),
+            ("ManufactureIndex", 0x72, "98082901"),
+            ("ManufactureCode", 0x7c, "98000829"),
+        ] {
+            let key = format!("Casio:{name}");
+            let rows = metadata.occurrences_for(&key);
+            assert_eq!(rows.len(), 1, "{name}");
+            let row = rows[0];
+            assert_eq!(row.id, oxidex_tags::TagId::Numeric(source_id));
+            assert_eq!(row.raw.as_string(), Some(value));
+            assert_eq!(&*row.group0, "MakerNotes");
+            assert_eq!(&*row.group1, "Casio");
+            assert_eq!(row.group2.as_deref(), Some("Camera"));
+            assert_eq!(row.origin.module, Some("Casio"));
+            assert_eq!(row.origin.table, Some("QVCI"));
+        }
+    }
 
     /// ExifTool.jpg's APP0 `AVI1` record: pinned 13.59 prints
     /// `"AVI1:InterleavedField": "Not Interleaved"`, and with `-n` the stored
