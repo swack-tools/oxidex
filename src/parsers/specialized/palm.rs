@@ -47,9 +47,7 @@
 //! - ExifTool source: `lib/Image/ExifTool/Palm.pm`
 
 use crate::core::tag_occurrence::intern;
-use crate::core::{
-    FileReader, MetadataMap, SHIM_DEFAULT_PRIORITY, TagOccurrence, TagValue,
-};
+use crate::core::{FileReader, MetadataMap, SHIM_DEFAULT_PRIORITY, TagOccurrence, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
