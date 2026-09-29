@@ -67,6 +67,29 @@ SLOTS = ("ValueConv", "PrintConv", "RawConv")
 
 # `exprs.compile_composite`'s `@val` placeholders -- see `main()`.
 _COMPOSITE_PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
+_FILE_SIZE_CALL = "oxidex::exiftool_tables::exprs::convert_file_size("
+_FILE_SIZE_PINNED_CALL = "oxidex::exiftool_tables::exprs::convert_file_size_for_pinned_source"
+
+
+def checked_file_size_source(version, et_lib, by_expr):
+    """Bind temporary oracle calls to the checked native body before codegen.
+
+    The generated Rust version stamp can still name the previous release at
+    this stage. The native version is capability-probed by the caller; its
+    ConvertFileSize body must also match the reviewed source pin.
+    """
+    if not any("convert_file_size(" in code for _, code in by_expr.values()):
+        return None
+    import helper_oracle  # Only needed for expressions reaching this helper.
+    pins = json.loads(helper_oracle.SOURCE_PINS.read_text(encoding="utf-8"))
+    expected = pins.get(version, {}).get("helpers", {}).get(
+        "Image::ExifTool::ConvertFileSize")
+    _, actual = helper_oracle.folded(et_lib, "Image/ExifTool.pm", "ConvertFileSize")
+    if not expected or actual != expected:
+        raise SystemExit("ConvertFileSize native body is absent or differs from "
+                         f"reviewed {version} source pin: expected={expected} actual={actual}")
+    print(f"ConvertFileSize checked source sha256 {actual}")
+    return actual
 
 
 # --- census (same walk as expr_coverage.py / expr_census.py) --------------
@@ -700,7 +723,7 @@ def render_probe(domain, probe):
     return rust_bytes_literal(probe)
 
 
-def build_rust_harness(jobs, by_expr):
+def build_rust_harness(jobs, by_expr, file_size_source=None):
     body = []
     for job_id, domain, raw, probe in jobs:
         rust_type, rust_code = by_expr[raw]
@@ -713,6 +736,13 @@ def build_rust_harness(jobs, by_expr):
         # binary), where `crate::` means itself -- rewrite the path rather
         # than change the text under test.
         code = code.replace("crate::exiftool_tables::exprs::", "oxidex::exiftool_tables::exprs::")
+        if "convert_file_size(" in code:
+            if not file_size_source or not re.fullmatch(r"[0-9a-f]{64}", file_size_source):
+                raise SystemExit("ConvertFileSize harness call lacks a checked source digest")
+            if _FILE_SIZE_CALL not in code:
+                raise SystemExit("unrecognized ConvertFileSize harness call")
+            code = code.replace(_FILE_SIZE_CALL,
+                                f'{_FILE_SIZE_PINNED_CALL}("{file_size_source}", ')
         # Mirror codegen.py's gen_expr_enum exactly, including its perl_num
         # wrapping for bare numeric results -- the harness exists to test
         # what ships, not a simplified stand-in for it.
@@ -770,8 +800,8 @@ def cargo_harness_path(stdout):
     return candidates[0]
 
 
-def run_rust(jobs, by_expr, timeout, build_timeout=1800):
-    src = build_rust_harness(jobs, by_expr)
+def run_rust(jobs, by_expr, timeout, build_timeout=1800, file_size_source=None):
+    src = build_rust_harness(jobs, by_expr, file_size_source)
     HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Never overwrite or delete a harness owned by another invocation.
     stream = HARNESS_PATH.open("x", encoding="utf-8")
@@ -905,6 +935,8 @@ def main():
             by_expr[e] = (rty, code)
             domain_of[e] = domain
 
+    file_size_source = checked_file_size_source(version, args.et_lib, by_expr)
+
     jobs = []
     for e in sorted(by_expr):
         for probe in probes_for(domain_of[e], e, counts_by_expr.get(e)):
@@ -926,7 +958,8 @@ def main():
     print("running Perl oracle ...")
     perl_out = run_perl(args.perl, perl_script, args.timeout, {f"J{j[0]}" for j in jobs})
 
-    rust_out = run_rust(jobs, by_expr, args.timeout, args.build_timeout)
+    rust_out = run_rust(jobs, by_expr, args.timeout, args.build_timeout,
+                        file_size_source=file_size_source)
 
     per_expr = {}  # raw_expr -> [pass, fail, skip]
     fail_examples = []
@@ -1027,6 +1060,8 @@ def main():
                 "rust": "cargo build --locked --jobs 2 --bin expr_oracle_harness; execute reported artifact",
                 "build_timeout_seconds": args.build_timeout,
                 "probe_timeout_seconds": args.timeout,
+                **({"convert_file_size_source_sha256": file_size_source}
+                   if file_size_source else {}),
                 # Both sides ran under this zone (see ORACLE_ENV); a ledger
                 # that does not say so cannot be reproduced on another host.
                 "tz": ORACLE_TZ,
