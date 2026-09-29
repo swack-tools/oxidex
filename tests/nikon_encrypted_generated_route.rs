@@ -20,6 +20,31 @@ use std::io::Write;
 /// next-directory pointer is cleared because its thumbnail was removed.
 const D810_EXIF: &[u8] = include_bytes!("fixtures/nikon/d810-exif.nef");
 
+#[test]
+fn preview_ifd_base_public_api_keeps_six_arguments() {
+    let mut decoder_context =
+        oxidex::parsers::tiff::makernotes::nikon::binary_data::Ctx::new(None, None);
+    let mut decoder_tags = HashMap::new();
+    let (): () = oxidex::parsers::tiff::makernotes::nikon::encrypted::parse_lens_data(
+        &[],
+        0,
+        None,
+        ByteOrder::LittleEndian,
+        &mut decoder_context,
+        &mut decoder_tags,
+    );
+    let mut tags = HashMap::new();
+    let mut value_forms = HashMap::new();
+    let _ = oxidex::parsers::tiff::makernotes::nikon::parse_nikon_makernotes_with_preview_ifd_base(
+        &[],
+        ByteOrder::LittleEndian,
+        None,
+        0,
+        &mut tags,
+        &mut value_forms,
+    );
+}
+
 fn d810_carrier(extension: &str) -> tempfile::NamedTempFile {
     d810_carrier_from(D810_EXIF, extension)
 }
@@ -191,6 +216,138 @@ fn d810_mixed_plaintext_and_encrypted(version: &[u8; 4], plaintext_last: bool) -
         }
     }
     exif
+}
+
+fn d810_mixed_encrypted(version: &[u8; 4], older_last: bool) -> Vec<u8> {
+    let mut exif = D810_EXIF.to_vec();
+    let nikon = exif
+        .windows(10)
+        .position(|bytes| bytes == b"Nikon\0\x02\x11\0\0")
+        .unwrap();
+    let tiff = nikon + 10;
+    let ifd = tiff + u32::from_le_bytes(exif[tiff + 4..tiff + 8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(exif[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entry = |id: u16, data: &[u8]| {
+        (0..count)
+            .map(|i| ifd + 2 + i * 12)
+            .find(|&at| u16::from_le_bytes(data[at..at + 2].try_into().unwrap()) == id)
+            .unwrap()
+    };
+    let earlier = entry(0x0097, &exif);
+    let later = entry(0x0098, &exif);
+    let source =
+        tiff + u32::from_le_bytes(exif[later + 8..later + 12].try_into().unwrap()) as usize;
+    let spare =
+        tiff + u32::from_le_bytes(exif[earlier + 8..earlier + 12].try_into().unwrap()) as usize;
+    let encrypted = exif[source..source + 33].to_vec();
+    assert_eq!(&encrypted[..4], b"0204");
+    exif[spare..spare + 33].copy_from_slice(&encrypted);
+    exif[spare..spare + 4].copy_from_slice(version);
+    exif[earlier..earlier + 2].copy_from_slice(&0x0098u16.to_le_bytes());
+    exif[earlier + 4..earlier + 8].copy_from_slice(&33u32.to_le_bytes());
+    if older_last {
+        for byte in 0..12 {
+            exif.swap(earlier + byte, later + byte);
+        }
+    }
+    exif
+}
+
+#[test]
+fn older_encrypted_lens_data_and_generated_0204_keep_both_physical_owners() {
+    for version in [b"0201", b"0202", b"0203"] {
+        for older_last in [false, true] {
+            let exif = d810_mixed_encrypted(version, older_last);
+            let carrier = d810_carrier_from(&exif, ".nef");
+            let metadata = read_metadata(carrier.path()).unwrap();
+            for (name, older_id, older_print, new_id, new_print) in [
+                ("ExitPupilPosition", 4, "97.5 mm", 4, "97.5 mm"),
+                ("AFAperture", 5, "2.8", 5, "2.8"),
+                ("FocusPosition", 8, "0x04", 8, "0x04"),
+                ("LensFStops", 12, "12.25", 13, "6.00"),
+            ] {
+                let key = format!("Nikon:{name}");
+                let rows: Vec<_> = metadata
+                    .project_occurrences(ValueChannel::PrintConv)
+                    .filter(|(candidate, _, _)| *candidate == key)
+                    .collect();
+                let lens_rows: Vec<_> = rows
+                    .iter()
+                    .filter(|(_, row, _)| {
+                        matches!(row.origin.table, Some("LensData01" | "LensData0204"))
+                    })
+                    .collect();
+                assert_eq!(lens_rows.len(), 2, "{version:?} {older_last} {name}");
+                let (first_table, first_id, first_print, second_table, second_id, second_print) =
+                    if older_last {
+                        (
+                            "LensData0204",
+                            new_id,
+                            new_print,
+                            "LensData01",
+                            older_id,
+                            older_print,
+                        )
+                    } else {
+                        (
+                            "LensData01",
+                            older_id,
+                            older_print,
+                            "LensData0204",
+                            new_id,
+                            new_print,
+                        )
+                    };
+                for (slot, table, id, printed) in [
+                    (&lens_rows[0], first_table, first_id, first_print),
+                    (&lens_rows[1], second_table, second_id, second_print),
+                ] {
+                    assert_eq!(slot.1.origin.table, Some(table));
+                    assert_eq!(slot.1.id, TagId::Numeric(id));
+                    assert_eq!(slot.2.as_ref(), &TagValue::String(printed.to_owned()));
+                    assert!(slot.1.stored.is_some());
+                    assert!(slot.1.value.is_some());
+                }
+                assert_eq!(rows.len(), 2 + usize::from(name == "LensFStops"));
+            }
+        }
+    }
+}
+
+#[test]
+fn conditional_0800_old_lens_data_survives_generated_0204() {
+    for version in [b"0800", b"0801", b"0802"] {
+        for older_last in [false, true] {
+            let exif = d810_mixed_encrypted(version, older_last);
+            let carrier = d810_carrier_from(&exif, ".nef");
+            let metadata = read_metadata(carrier.path()).unwrap();
+            for (name, old_id, old_print) in [
+                ("ExitPupilPosition", 4, "97.5 mm"),
+                ("AFAperture", 5, "2.8"),
+                ("LensFStops", 14, "4.58"),
+            ] {
+                let key = format!("Nikon:{name}");
+                let rows: Vec<_> = metadata
+                    .project_occurrences(ValueChannel::PrintConv)
+                    .filter(|(candidate, row, _)| {
+                        *candidate == key && row.origin.table == Some("LensData0800")
+                    })
+                    .collect();
+                assert_eq!(rows.len(), 1, "{version:?} {older_last} {name}");
+                assert_eq!(rows[0].1.id, TagId::Numeric(old_id));
+                assert_eq!(rows[0].2.as_ref(), &TagValue::String(old_print.to_owned()));
+                assert!(rows[0].1.stored.is_some());
+                assert!(rows[0].1.value.is_some());
+            }
+            let focus: Vec<_> = metadata
+                .project_occurrences(ValueChannel::PrintConv)
+                .filter(|(key, row, _)| {
+                    *key == "Nikon:FocusPosition" && row.origin.table == Some("LensData0800")
+                })
+                .collect();
+            assert!(focus.is_empty(), "0800 has no hand FocusPosition row");
+        }
+    }
 }
 
 #[test]
@@ -546,6 +703,77 @@ fn encrypted_field_respects_cli_request_and_numeric_projection() {
     let numeric = run(true);
     assert!(numeric.contains("97.5238095238095"));
     assert!(!numeric.contains("AFAperture"));
+}
+
+#[test]
+fn generated_0204_silence_preserves_separate_0201_hand_occurrences() {
+    let silenced = std::env::var("OXIDEX_GENSHARE_SILENCE")
+        .ok()
+        .is_some_and(|tokens| tokens.split(',').any(|token| token == "engine"));
+    for older_last in [false, true] {
+        let exif = d810_mixed_encrypted(b"0201", older_last);
+        let marker = b"Nikon\0\x02\x11\0\0";
+        let offset = exif
+            .windows(marker.len())
+            .position(|bytes| bytes == marker)
+            .unwrap();
+        let context = MakerNoteContext::detached(&exif[offset..]);
+        let mut session = Session::new();
+        let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+        let mut condition = Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut rows = Vec::new();
+        NikonParser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &context,
+                ByteOrder::LittleEndian,
+                Some("NIKON D810"),
+                &mut session,
+                &mut condition,
+                &mut tags,
+                &mut value_forms,
+                &mut rows,
+            )
+            .unwrap();
+        for name in [
+            "ExitPupilPosition",
+            "AFAperture",
+            "FocusPosition",
+            "LensFStops",
+        ] {
+            let key = format!("Nikon:{name}");
+            let older: Vec<_> = rows
+                .iter()
+                .filter(|(candidate, row)| {
+                    candidate == &key && row.origin.table == Some("LensData01")
+                })
+                .collect();
+            let generated: Vec<_> = rows
+                .iter()
+                .filter(|(candidate, row)| {
+                    candidate == &key && row.origin.table == Some("LensData0204")
+                })
+                .collect();
+            assert_eq!(older.len(), 1, "{name} older_last={older_last}");
+            assert_eq!(
+                generated.len(),
+                usize::from(!silenced),
+                "{name} older_last={older_last}"
+            );
+        }
+    }
+    if !silenced {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "generated_0204_silence_preserves_separate_0201_hand_occurrences",
+            ])
+            .env("OXIDEX_GENSHARE_SILENCE", "engine")
+            .status()
+            .unwrap();
+        assert!(status.success(), "engine knockout failed: {status}");
+    }
 }
 
 #[test]

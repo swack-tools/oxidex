@@ -233,6 +233,7 @@ use super::binary_data::{Ctx, Root, process, select_root};
 use super::encrypted_tables::{
     COLOR_BALANCE_ROOTS, LENS_DATA_ROOTS, SHOT_INFO_ROOTS, XLAT0, XLAT1,
 };
+use super::lens_data::{self, PlaintextOverlap};
 use crate::exiftool_tables::{self, Dir, Emitted};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -287,15 +288,29 @@ pub fn parse_lens_data(
     order: ByteOrder,
     ctx: &mut Ctx,
     out: &mut HashMap<String, String>,
+) {
+    parse_encrypted(LENS_DATA_ROOTS, value, entry_count, keys, order, ctx, out);
+}
+
+/// The occurrence-aware route used by the Nikon MakerNote parser. The public
+/// hand decoder above keeps its established six-argument, unit-return API.
+pub(super) fn parse_lens_data_with_occurrences(
+    value: &[u8],
+    entry_count: usize,
+    keys: Option<Keys>,
+    order: ByteOrder,
+    ctx: &mut Ctx,
+    out: &mut HashMap<String, String>,
 ) -> GeneratedLensData {
     parse_encrypted(LENS_DATA_ROOTS, value, entry_count, keys, order, ctx, out)
 }
 
 /// The selected generated route owns its credited fields even when its
 /// outward rows are silenced for attribution measurement.
-pub struct GeneratedLensData {
+pub(super) struct GeneratedLensData {
     pub owned: bool,
     pub rows: Vec<Emitted>,
+    pub hand_overlap: Vec<PlaintextOverlap>,
 }
 
 /// Select the sub-directory variant, decrypt, and walk the resulting table.
@@ -311,6 +326,7 @@ fn parse_encrypted(
     let unavailable = || GeneratedLensData {
         owned: false,
         rows: Vec::new(),
+        hand_overlap: Vec::new(),
     };
     let Some(root) = select_root(roots, value, entry_count) else {
         return unavailable();
@@ -340,24 +356,41 @@ fn parse_encrypted(
     let big = enc.byte_order.unwrap_or(order == ByteOrder::BigEndian);
     let dir_len = data.len() - dir_start;
     process(enc.table, &data, dir_start, dir_len, big, ctx, out, 0);
+    let hand_overlap = lens_data::encrypted_overlap_fields(&data[dir_start..], root.name, ctx);
 
     // Nikon.pm's LensData0204 is a ProcessBinaryData table. Keep the source
     // selector, serial/shutter key acquisition and decryption above; only the
     // field walk changes. The hand interpreter remains available for fields
     // that have not yet been independently credited to the generated walk.
     if root.name != "LensData0204" {
-        return unavailable();
+        return GeneratedLensData {
+            owned: false,
+            rows: Vec::new(),
+            hand_overlap,
+        };
     }
     let Some(table) = exiftool_tables::find_table("Nikon", "LensData0204") else {
-        return unavailable();
+        return GeneratedLensData {
+            owned: false,
+            rows: Vec::new(),
+            hand_overlap,
+        };
     };
     if !exiftool_tables::is_enabled(table) {
-        return unavailable();
+        return GeneratedLensData {
+            owned: false,
+            rows: Vec::new(),
+            hand_overlap,
+        };
     }
     // The last credited field is byte 13. A partial encrypted block is not
     // enough to transfer ownership from the established hand reader.
     if dir_len < 14 {
-        return unavailable();
+        return GeneratedLensData {
+            owned: false,
+            rows: Vec::new(),
+            hand_overlap,
+        };
     }
     let mut members = HashMap::new();
     if let Some(model) = ctx.model.as_deref() {
@@ -386,6 +419,7 @@ fn parse_encrypted(
     GeneratedLensData {
         owned: true,
         rows: emitted,
+        hand_overlap,
     }
 }
 
@@ -452,7 +486,7 @@ mod dispatch_tests {
     fn generated_lens_rows(data: &[u8], keys: Option<Keys>) -> GeneratedLensData {
         let mut ctx = Ctx::new(Some("NIKON D810"), None);
         let mut out = HashMap::new();
-        parse_lens_data(
+        parse_lens_data_with_occurrences(
             data,
             data.len(),
             keys,

@@ -861,7 +861,6 @@ impl NikonParser {
         });
         let mut ctx = binary_data::Ctx::new(model, None);
         let mut parsed_value_forms = HashMap::new();
-        let mut generated_lens_owned = false;
 
         // Parse IFD entries starting at the IFD location
         // Pass the full 'data' buffer so that offset calculations work correctly
@@ -1007,18 +1006,32 @@ impl NikonParser {
                 // tables.
                 NIKON_LENS_DATA => {
                     if let Some(bytes) = bytes_of(entry) {
+                        // Parse each physical 0x0098 value into an entry-local map.
+                        // A later generated entry may own its own four fields,
+                        // but must never erase an earlier encrypted fallback.
+                        let mut entry_tags = HashMap::new();
+                        let mut entry_value_forms = HashMap::new();
                         let plaintext = lens_data::parse_lens_data_with_occurrences(
                             &bytes,
-                            tags,
-                            &mut parsed_value_forms,
+                            &mut entry_tags,
+                            &mut entry_value_forms,
                         );
+                        let generated = encrypted::parse_lens_data_with_occurrences(
+                            &bytes,
+                            entry.value_count as usize,
+                            keys,
+                            order,
+                            &mut ctx,
+                            &mut entry_tags,
+                        );
+                        entry_value_forms.extend(ctx.take_value_forms());
+                        let hand_overlap = if generated.owned {
+                            Vec::new()
+                        } else {
+                            generated.hand_overlap
+                        };
                         if let Some(rows) = structured_rows.as_deref_mut() {
-                            // These hand-owned plaintext fields share names
-                            // with encrypted generated fields and standalone
-                            // Main entries. Keep the 0x0098 physical position,
-                            // field ID and full ValueConv before removing the
-                            // flat-map fallback that bridges append later.
-                            for field in plaintext {
+                            for field in plaintext.into_iter().chain(hand_overlap) {
                                 let key = format!("Nikon:{}", field.name);
                                 rows.push((
                                     key.clone(),
@@ -1047,19 +1060,27 @@ impl NikonParser {
                                         },
                                     },
                                 ));
-                                tags.remove(&key);
-                                parsed_value_forms.remove(&key);
+                                entry_tags.remove(&key);
+                                entry_value_forms.remove(&key);
+                            }
+                            if generated.owned {
+                                // Attribution silence still owns this 0204 entry.
+                                // Drop its flat hand copies, never copies from a
+                                // separate LensData entry or standalone Main tag.
+                                for name in [
+                                    "ExitPupilPosition",
+                                    "AFAperture",
+                                    "FocusPosition",
+                                    "LensFStops",
+                                ] {
+                                    let key = format!("Nikon:{name}");
+                                    entry_tags.remove(&key);
+                                    entry_value_forms.remove(&key);
+                                }
                             }
                         }
-                        let generated = encrypted::parse_lens_data(
-                            &bytes,
-                            entry.value_count as usize,
-                            keys,
-                            order,
-                            &mut ctx,
-                            tags,
-                        );
-                        generated_lens_owned |= generated.owned && structured_rows.is_some();
+                        tags.extend(entry_tags);
+                        parsed_value_forms.extend(entry_value_forms);
                         for tag in generated.rows {
                             // The source-derived table has more fields than
                             // this route has independently credited. Keep
@@ -1933,22 +1954,6 @@ impl NikonParser {
         // (see `binary_data::Pc::is_deferred`).
         ctx.finish_deferred(tags);
         parsed_value_forms.extend(ctx.take_value_forms());
-        if generated_lens_owned {
-            // Ownership is established by the selected source table, valid
-            // key and complete carrier, independent of outward Emitted rows.
-            // In particular, the `engine` attribution knockout must not
-            // expose the hand reader's copies of these four fields.
-            for name in [
-                "ExitPupilPosition",
-                "AFAperture",
-                "FocusPosition",
-                "LensFStops",
-            ] {
-                let key = format!("Nikon:{name}");
-                tags.remove(&key);
-                parsed_value_forms.remove(&key);
-            }
-        }
         value_forms.extend(parsed_value_forms);
 
         Ok(())
@@ -2071,9 +2076,28 @@ pub fn parse_nikon_makernotes(
 }
 
 /// Parses Nikon MakerNotes while converting PreviewIFD's relative image start
-/// to the absolute file offset ExifTool reports, while retaining generated
-/// occurrences for the RAW reader's ownership channel.
+/// to the absolute file offset ExifTool reports.
 pub fn parse_nikon_makernotes_with_preview_ifd_base(
+    data: &[u8],
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    preview_ifd_base: u64,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> std::result::Result<(), String> {
+    NikonParser.parse_with_preview_ifd_base(
+        data,
+        byte_order,
+        model,
+        tags,
+        value_forms,
+        Some(preview_ifd_base),
+        None,
+    )
+}
+
+/// The occurrence-aware RAW path for the same public preview-base parse.
+pub fn parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
     data: &[u8],
     byte_order: ByteOrder,
     model: Option<&str>,
@@ -2397,7 +2421,7 @@ mod tests {
         let mut tags = HashMap::new();
         let mut value_forms = HashMap::new();
         let mut occurrences = Vec::new();
-        parse_nikon_makernotes_with_preview_ifd_base(
+        parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
             &tiff[100..],
             ByteOrder::LittleEndian,
             None,
