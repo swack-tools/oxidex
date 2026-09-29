@@ -2450,11 +2450,14 @@ mod tests {
             data.extend_from_slice(&den.to_le_bytes());
         }
         let decode = |field_type, count, block: &[u8]| {
+            // Out-of-line values begin after the eight-byte TIFF header.
+            let mut stored = vec![0; 8];
+            stored.extend_from_slice(block);
             let entry = IfdEntry {
                 tag_id: 0x0413,
                 field_type,
                 value_count: count,
-                value_offset: 0,
+                value_offset: 8,
             };
             let mut entry_bytes = [0u8; 12];
             entry_bytes[2..4].copy_from_slice(&field_type.to_le_bytes());
@@ -2462,7 +2465,10 @@ mod tests {
             leica5_wb_rgb_levels(
                 &entry,
                 &entry_bytes,
-                Some(LeicaValues { block, base: 0 }),
+                Some(LeicaValues {
+                    block: &stored,
+                    base: 0,
+                }),
                 ByteOrder::LittleEndian,
                 0..0,
             )
@@ -2488,9 +2494,9 @@ mod tests {
             tag_id: 0x0413,
             field_type: 5,
             value_count: 3,
-            value_offset: 0,
+            value_offset: 8,
         };
-        let mut data = Vec::new();
+        let mut data = vec![0; 8];
         for (num, den) in [(0u32, 0u32), (512, 0), (256, 354)] {
             data.extend_from_slice(&num.to_le_bytes());
             data.extend_from_slice(&den.to_le_bytes());
