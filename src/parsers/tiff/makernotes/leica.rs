@@ -1467,8 +1467,17 @@ impl LeicaMakerNoteParser {
                             },
                         ));
                     } else {
-                        tags.insert("Leica:WB_RGBLevels".to_string(), raw_text.replace('\0', ""));
-                        value_forms.insert("Leica:WB_RGBLevels".to_string(), raw_text);
+                        // `%Panasonic::Leica5` has PRIORITY => 0: the first
+                        // emitted value wins, including an empty count-0
+                        // value. Keep the flat print/value maps in step with
+                        // the occurrence sink's priority selection. A
+                        // refused entry never reaches this point and does
+                        // not reserve the key for a later valid one.
+                        const KEY: &str = "Leica:WB_RGBLevels";
+                        if priority != 0 || !tags.contains_key(KEY) {
+                            tags.insert(KEY.to_string(), raw_text.replace('\0', ""));
+                            value_forms.insert(KEY.to_string(), raw_text);
+                        }
                     }
                 }
                 continue;
@@ -2311,6 +2320,132 @@ mod tests {
         assert_eq!(
             tags.get("Leica:SerialNumber").map(String::as_str),
             Some("123456")
+        );
+    }
+
+    #[test]
+    fn detached_leica_wb_duplicate_maps_keep_first_emitted_priority_zero_value() {
+        let first = (1u16, 3u32, 0x010402u32); // BYTE[3]: 2 4 1
+        let second = (1u16, 3u32, 0x040404u32); // BYTE[3]: 4 4 4
+        let empty = (1u16, 0u32, 0u32);
+        let refused = (5u16, 3u32, 0u32); // RATIONAL[3] into header
+        for layout in [0x06u8, 0x08] {
+            for (name, left, right, expected) in [
+                ("valid then valid", first, second, "2 4 1"),
+                ("empty then valid", empty, second, ""),
+                ("refused then valid", refused, second, "4 4 4"),
+                ("valid then refused", first, refused, "2 4 1"),
+                ("empty then refused", empty, refused, ""),
+            ] {
+                let mut data = vec![0u8; 38];
+                data[..8].copy_from_slice(&[b'L', b'E', b'I', b'C', b'A', 0, layout, 0]);
+                data[8..10].copy_from_slice(&2u16.to_le_bytes());
+                for (index, (kind, count, value)) in [left, right].into_iter().enumerate() {
+                    let at = 10 + index * 12;
+                    data[at..at + 2].copy_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+                    data[at + 2..at + 4].copy_from_slice(&kind.to_le_bytes());
+                    data[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+                    data[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+                }
+                let mut direct = HashMap::new();
+                LeicaMakerNoteParser
+                    .parse(&data, ByteOrder::LittleEndian, &mut direct)
+                    .unwrap();
+                assert_eq!(
+                    direct.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, direct"
+                );
+
+                let mut printed = HashMap::new();
+                let mut forms = HashMap::new();
+                let ctx = MakerNoteContext::detached(&data);
+                LeicaMakerNoteParser
+                    .parse_with_context_and_values(
+                        &ctx,
+                        ByteOrder::LittleEndian,
+                        None,
+                        &mut printed,
+                        &mut forms,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    printed.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, print"
+                );
+                assert_eq!(
+                    forms.get("Leica:WB_RGBLevels").map(String::as_str),
+                    Some(expected),
+                    "layout {layout}, {name}, value"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_leica_wb_header_pointers_spend_directory_warning_budget() {
+        for layout in [0x06u8, 0x08] {
+            for bad_count in [10usize, 11] {
+                let count = bad_count + 1;
+                let mut data = vec![0u8; 8 + 2 + count * 12 + 4];
+                data[..8].copy_from_slice(&[b'L', b'E', b'I', b'C', b'A', 0, layout, 0]);
+                data[8..10].copy_from_slice(&(count as u16).to_le_bytes());
+                for index in 0..count {
+                    let at = 10 + index * 12;
+                    data[at..at + 2].copy_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+                    let (kind, n, pointer) = if index == bad_count {
+                        (1u16, 3u32, 0x010402u32)
+                    } else {
+                        (5u16, 3u32, 0u32)
+                    };
+                    data[at + 2..at + 4].copy_from_slice(&kind.to_le_bytes());
+                    data[at + 4..at + 8].copy_from_slice(&n.to_le_bytes());
+                    data[at + 8..at + 12].copy_from_slice(&pointer.to_le_bytes());
+                }
+                let mut tags = HashMap::new();
+                LeicaMakerNoteParser
+                    .parse(&data, ByteOrder::LittleEndian, &mut tags)
+                    .unwrap();
+                assert_eq!(
+                    tags.get("Leica:WB_RGBLevels").map(String::as_str),
+                    (bad_count == 10).then_some("2 4 1"),
+                    "layout {layout}, bad pointers {bad_count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_leica_wb_keeps_preexisting_map_winner_and_value_form() {
+        let mut data = b"LEICA\0\x08\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&leica5::WB_RGB_LEVELS.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&0x010402u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let mut printed =
+            HashMap::from([("Leica:WB_RGBLevels".to_string(), "prior print".to_string())]);
+        let mut forms =
+            HashMap::from([("Leica:WB_RGBLevels".to_string(), "prior value".to_string())]);
+        let ctx = MakerNoteContext::detached(&data);
+        LeicaMakerNoteParser
+            .parse_with_context_and_values(
+                &ctx,
+                ByteOrder::LittleEndian,
+                None,
+                &mut printed,
+                &mut forms,
+            )
+            .unwrap();
+        assert_eq!(
+            printed.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("prior print")
+        );
+        assert_eq!(
+            forms.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("prior value")
         );
     }
 
