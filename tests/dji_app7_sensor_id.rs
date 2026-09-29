@@ -1,7 +1,8 @@
 #[path = "common/fixtures.rs"]
 mod fixtures;
 
-use oxidex::core::{TagValue, operations::read_metadata};
+use oxidex::core::{TagValue, operations::read_metadata, tag_occurrence::ValueChannel};
+use sha2::{Digest, Sha256};
 
 /// ExifTool 13.59 selects DJI::Info for APP7 `DJI-DBG\0` and exposes the
 /// bracketed `sensor_id` record unchanged.
@@ -51,8 +52,42 @@ fn dji_mavic2_app7_attitude_records_match_exiftool() {
 fn dji_mavic2_app7_ae_debug_info_is_binary() {
     let path = fixtures::required_combined_fixture_path("DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg");
     let metadata = read_metadata(&path).expect("DJI Mavic 2 Enterprise Advanced parses");
-    assert!(matches!(
-        metadata.get("DJI:AEDebugInfo"),
-        Some(TagValue::Binary(bytes)) if bytes.len() == 256
-    ));
+    for (key, len, native_sha256) in [
+        (
+            "DJI:AEDebugInfo",
+            256,
+            "5341e6b2646979a70e57653007a1f310169421ec9bdd9f1a5648f75ade005af1",
+        ),
+        (
+            "DJI:AEHistogramInfo",
+            4096,
+            "ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7",
+        ),
+    ] {
+        let Some(TagValue::Binary(bytes)) = metadata.get(key) else {
+            panic!("{key} must retain binary bytes");
+        };
+        assert_eq!(bytes.len(), len, "{key}");
+        assert_eq!(hex::encode(Sha256::digest(bytes)), native_sha256, "{key}");
+
+        for channel in [
+            ValueChannel::Stored,
+            ValueChannel::ValueConv,
+            ValueChannel::PrintConv,
+        ] {
+            let rows: Vec<_> = metadata
+                .project_occurrences(channel)
+                .filter(|(lookup, _, _)| *lookup == key)
+                .collect();
+            assert_eq!(rows.len(), 1, "{key} {channel:?} occurrence count");
+            let (_, row, value) = &rows[0];
+            assert_eq!(row.group0.as_ref(), "MakerNotes");
+            assert_eq!(row.group1.as_ref(), "DJI");
+            assert_eq!(
+                value.as_ref(),
+                &TagValue::Binary(bytes.clone()),
+                "{key} {channel:?}"
+            );
+        }
+    }
 }
