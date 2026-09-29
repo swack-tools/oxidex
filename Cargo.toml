@@ -199,6 +199,7 @@ opt-level = 1
 strip = false
 
 [profile.dev]
+debug = false
 opt-level = 0
 # Increase codegen-units to reduce per-unit memory usage
 # Default is 256, but we use 16 for better compile times while still reducing memory
