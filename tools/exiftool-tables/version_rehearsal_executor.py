@@ -29,6 +29,7 @@ from typing import Any, Callable, Mapping
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
 import version_rehearsal_native_oracle as native_oracle
+import version_rehearsal_clean_snapshot as clean_snapshot
 import artifacts
 
 SCHEMA = 1
@@ -506,6 +507,46 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
             or __import__("re").fullmatch(r"[0-9a-f]{64}", manifest["sha256"]) is None
             or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True):
         raise Refused("test result lacks a verified fixture corpus held unchanged across the run")
+
+
+def _require_read_measurement_snapshot(result: Mapping[str, Any], generation: Mapping[str, Any],
+                                       checkout: Path, target: Path, source_commit: str,
+                                       source_tree: Mapping[str, Any]) -> None:
+    before = generation.get("clean_source_before")
+    before_paths = before.get("artifact_paths") if isinstance(before, dict) else None
+    if (not isinstance(before_paths, list) or not before_paths
+            or any(not isinstance(name, str) or not name for name in before_paths)
+            or len(set(before_paths)) != len(before_paths)):
+        raise Refused("read result lacks the original generated artifact path scope")
+    sanctioned = set(before_paths) | {item.path for item in artifacts.inventory(checkout)}
+    sanctioned.add(".exiftool-version")
+    proof = result.get("measurement_snapshot")
+    if not isinstance(proof, dict):
+        raise Refused("read result lacks signed clean measurement snapshot proof")
+    try:
+        clean_snapshot.validate(proof, checkout, target, source_commit,
+                                source_tree["sha256"], sanctioned)
+    except (clean_snapshot.Refused, KeyError) as error:
+        raise Refused(f"read measurement snapshot replay refused: {error}") from error
+    report = result.get("conformance_report")
+    if (not isinstance(report, dict) or not isinstance(report.get("path"), str)
+            or not isinstance(report.get("sha256"), str)):
+        raise Refused("read result lacks conformance report proof")
+    path = _regular(Path(report["path"]), "conformance report")
+    if _sha_file(path) != report["sha256"]:
+        raise Refused("conformance report changed after read measurement")
+    data = _read(path)
+    measurement = data.get("instrument", {})
+    repo = measurement.get("repo", {}) if isinstance(measurement, dict) else {}
+    binary = measurement.get("binary", {}) if isinstance(measurement, dict) else {}
+    result_binary = result.get("binary", {})
+    if (not isinstance(repo, dict) or repo.get("root") != proof["path"]
+            or repo.get("commit") != proof["commit"] or repo.get("tree") != proof["tree"]
+            or repo.get("dirty") is not False or repo.get("dirty_files") != []
+            or repo.get("dirty_overridden") is not False
+            or not isinstance(binary, dict) or binary.get("path") != result_binary.get("path")
+            or binary.get("sha256") != result_binary.get("sha256")):
+        raise Refused("conformance report is not bound to the signed source and build binary")
 
 
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
@@ -2265,6 +2306,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                                checkout, config["execution_source_commit"], after_source, target, native, perl)
         if stage == "read":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
+            generation_report = _read(run_dir / journal["releases"][release]["reports"]["generate"]["path"])
+            _require_read_measurement_snapshot(result, generation_report, checkout, target,
+                                               config["execution_source_commit"], after_source)
             if result.get("binary") != build_report.get("binary"):
                 raise Refused("read result did not use the proven build binary")
             fixture_binding = config["read_fixture_bindings"][release]

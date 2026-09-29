@@ -676,6 +676,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                 release="11.78", source_commit="a" * 40, perl=Path(sys.executable).resolve(),
                 read_manifest=read_manifest, write_manifest=manifest,
                 native_cases=[{"name": "case"}], lease=root / "lease", target=root / "target",
+                verified_input_bundle=root / "bundle",
             )
             normalized = qualification.executor._config(config, ["11.78", "12.64"])
             self.assertEqual(normalized["execution_releases"], ["11.78"])
@@ -743,7 +744,7 @@ class SideAndRecoveryTests(unittest.TestCase):
         config = qualification._side_config(
             release=release, source_commit=plan["repository_commit"], perl=Path(sys.executable).resolve(),
             read_manifest=read_manifest, write_manifest=write_manifest, native_cases=[{"name": "case"}],
-            lease=lease_path, target=root / "target",
+            lease=lease_path, target=root / "target", verified_input_bundle=root / "bundle",
         )
         qualification.executor.initialize_run(
             run_dir, capture, catalog, plan, resolution, materialization, config,
@@ -982,6 +983,11 @@ class LeaseTests(unittest.TestCase):
 
 class WrapperCallTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Wrapper orchestration tests synthesize side receipts without Git
+        # checkouts; real committed snapshot replay is tested separately.
+        committed_replay = patch.object(qualification, "_replay_committed_read_snapshot")
+        committed_replay.start()
+        self.addCleanup(committed_replay.stop)
         # Owned-child and retained-lock state is process-wide by design; a
         # child one test leaves unproven must not fail an unrelated release.
         for name, value in (("_OWNED", qualification.executor._OwnedChildren()),

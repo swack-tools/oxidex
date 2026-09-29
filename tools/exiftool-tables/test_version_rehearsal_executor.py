@@ -112,6 +112,10 @@ def _isolate_process_ownership(case: unittest.TestCase) -> None:
 class ExecutorTests(unittest.TestCase):
     def setUp(self):
         _isolate_process_ownership(self)
+        # Fake stage commands do not create Git repositories. The signed
+        # snapshot verifier is exercised with real Git in its own test suite.
+        snapshot_replay = patch.object(executor, "_require_read_measurement_snapshot")
+        snapshot_replay.start(); self.addCleanup(snapshot_replay.stop)
         temporary, capture, catalog, plan, resolution, materialization, cache, sources, _ = fixture.make_state()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

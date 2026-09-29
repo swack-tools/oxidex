@@ -120,6 +120,15 @@ class AdapterTests(unittest.TestCase):
         for item in artifacts.ARTIFACTS:
             path = self.checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(fixture_text(item))
         self.target = self.root / "target"; self.target.mkdir(); self.reports = self.root / "reports"; self.reports.mkdir()
+        # The adapter fixture is a synthetic checkout. A separate real-Git
+        # suite exercises signed snapshot creation and byte-for-byte replay.
+        snapshot_proof = {"schema": 1, "path": str(self.target / "measurement-source"),
+                          "commit": "c" * 40, "tree": "d" * 40}
+        self.snapshot_proof = snapshot_proof
+        snapshot_create = patch.object(adapter.clean_snapshot, "create", return_value=snapshot_proof)
+        snapshot_validate = patch.object(adapter.clean_snapshot, "validate", return_value=self.checkout)
+        snapshot_create.start(); self.addCleanup(snapshot_create.stop)
+        snapshot_validate.start(); self.addCleanup(snapshot_validate.stop)
         self.native = self.root / "native"; (self.native / "lib/Image/ExifTool").mkdir(parents=True)
         (self.native / "lib/Image/ExifTool.pm").write_text("$VERSION = '11.78';\n")
         (self.native / "lib/Image/ExifTool/Writer.pl").write_text("package Image::ExifTool; 1;\n")
@@ -291,7 +300,17 @@ class AdapterTests(unittest.TestCase):
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             corpus = Path(argv[2]); fixture = next(corpus.iterdir())
-            output.write_text(json.dumps({"per_format": {"JPEG": {"files": 1, "matched": 2, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0}}, "per_file": {str(fixture): {"format": "JPEG"}}}))
+            executable = Path(argv[argv.index("--oxidex") + 1])
+            output.write_text(json.dumps({
+                "instrument": {"tool": "conformance.py", "repo": {
+                    "root": self.snapshot_proof["path"], "commit": self.snapshot_proof["commit"],
+                    "tree": self.snapshot_proof["tree"], "dirty": False,
+                    "dirty_files": [], "dirty_overridden": False},
+                    "binary": {"path": str(executable.resolve()), "sha256": adapter._sha(executable),
+                               "size": executable.stat().st_size}},
+                "per_format": {"JPEG": {"files": 1, "matched": 2, "value_diff": 0,
+                                          "missing": 0, "renames": 0, "extra": 0}},
+                "per_file": {str(fixture): {"format": "JPEG"}}}))
             return subprocess.CompletedProcess(argv, 0, "compared", "")
         raise AssertionError(argv)
 
@@ -375,6 +394,43 @@ class AdapterTests(unittest.TestCase):
         })
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
+        compared = next(row for row in self.seen if row[0][0] == sys.executable
+                        and "conformance.py" in row[0][1])
+        self.assertNotIn("OXIDEX_ALLOW_DIRTY_TREE", compared[1])
+
+    def test_read_refuses_a_conformance_receipt_from_a_different_clean_source(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+
+        def changed_source(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable:
+                output = Path(argv[argv.index("--json-out") + 1])
+                data = json.loads(output.read_text())
+                data["instrument"]["repo"]["commit"] = "f" * 40
+                output.write_text(json.dumps(data))
+            return result
+
+        with self.assertRaisesRegex(adapter.Refused, "signed clean generated snapshot"):
+            adapter.read(self.args("read"), run=changed_source)
+
+    def test_read_refuses_a_conformance_receipt_from_a_different_binary(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+
+        def changed_binary(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable:
+                output = Path(argv[argv.index("--json-out") + 1])
+                data = json.loads(output.read_text())
+                data["instrument"]["binary"]["sha256"] = "f" * 64
+                output.write_text(json.dumps(data))
+            return result
+
+        with self.assertRaisesRegex(adapter.Refused, "authenticated build binary"):
+            adapter.read(self.args("read"), run=changed_binary)
 
     def test_release_test_suite_runs_in_isolated_target_and_counts_strictly(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

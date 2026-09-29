@@ -492,7 +492,7 @@ def _commands() -> dict[str, Any]:
 
 def _side_config(*, release: str, source_commit: str, perl: Path, read_manifest: Path,
                  write_manifest: Path, native_cases: list[Any], lease: Path,
-                 target: Path) -> dict[str, Any]:
+                 target: Path, verified_input_bundle: Path) -> dict[str, Any]:
     return {
         "schema": executor.SCHEMA,
         "commands": _commands(),
@@ -504,6 +504,7 @@ def _side_config(*, release: str, source_commit: str, perl: Path, read_manifest:
         "read_fixture_manifests": {release: str(read_manifest)},
         "write_fixture_manifests": {release: str(write_manifest)},
         "target_directories": {release: str(target)},
+        "verified_input_bundle": str(verified_input_bundle),
     }
 
 
@@ -1084,6 +1085,89 @@ def _receipt_manifest(*, owner_receipt: Path, heartbeat_receipt: Path,
     }
 
 
+def _replay_committed_read_snapshot(row: Mapping[str, Any], side: str, root: Path) -> None:
+    entry = row.get(side)
+    if not isinstance(entry, dict) or not isinstance(entry.get("release"), str):
+        raise Refused("committed transition side lacks release identity")
+    release = entry["release"]
+    run_dir = root / row["id"] / side
+    journal_path = run_dir / "execution-status.json"
+    if entry.get("execution_journal_sha256") != _sha_file(_regular_receipt(journal_path)):
+        raise Refused("committed transition execution journal changed")
+    journal = _read_object(journal_path, "committed execution journal")
+    config = _read_object(run_dir / "inputs" / "config.json", "committed execution config")
+    instrument_row = entry.get("instrument")
+    if (journal.get("config_sha256") != rehearsal.sha256_json(config)
+            or not isinstance(instrument_row, dict)
+            or config.get("execution_source_commit") != instrument_row.get("source_commit")):
+        raise Refused("committed transition config differs from read source identity")
+    bundle_path = config.get("verified_input_bundle")
+    if not isinstance(bundle_path, str):
+        raise Refused("committed transition lacks its verified input bundle")
+    locations = _read_object(Path(bundle_path) / "locations.json", "verified input locations")
+    if (locations.get("kind") != "oxidex_version_transition_input_locations"
+            or not isinstance(locations.get("archive_cache"), str)
+            or not isinstance(locations.get("source_root"), str)):
+        raise Refused("committed transition input locations are malformed")
+    try:
+        executor._verify_inputs(run_dir, Path(locations["archive_cache"]),
+                                Path(locations["source_root"]))
+    except executor.Refused as error:
+        raise Refused(f"committed transition materialized native source changed: {error}") from error
+    targets = config.get("target_directories")
+    if not isinstance(targets, dict) or not isinstance(targets.get(release), str):
+        raise Refused("committed transition lacks owned measurement target")
+    checkout = run_dir / "checkouts" / executor._safe_name(release)
+    generation = _report_for(run_dir, journal, release, "generate")
+    build = _report_for(run_dir, journal, release, "build")
+    read = _report_for(run_dir, journal, release, "read")
+    native_report = _report_for(run_dir, journal, release, "native")
+    if entry.get("read_report_sha256") != rehearsal.sha256_json(read):
+        raise Refused("committed transition read report changed")
+    try:
+        source_tree = executor._source_tree(checkout)
+        target = Path(targets[release])
+        native_identity = read.get("native_identity")
+        if (not isinstance(native_identity, dict)
+                or instrument_row.get("native_identity") != native_identity
+                or build.get("native_identity") != native_identity
+                or native_report.get("probe_sha256") != read.get("native_probe_sha256")
+                or instrument_row.get("native_probe_sha256") != read.get("native_probe_sha256")):
+            raise executor.Refused("read, build and side native identities differ")
+        native_source = native_identity.get("source")
+        native_lib = native_identity.get("lib")
+        native_perl = native_identity.get("perl")
+        if (not isinstance(native_source, dict) or not isinstance(native_lib, dict)
+                or not isinstance(native_perl, dict)
+                or any(not isinstance(part.get("path"), str)
+                       for part in (native_source, native_lib, native_perl))):
+            raise executor.Refused("committed native identity is malformed")
+        native_tuple = (Path(native_source["path"]), Path(native_lib["path"]),
+                        Path(native_source["path"]) / "exiftool")
+        perl_path = native_perl["path"]
+        fixture_row = read.get("fixtures")
+        if (not isinstance(fixture_row, dict)
+                or instrument_row.get("read_fixture_manifest") != fixture_row.get("manifest")
+                or instrument_row.get("read_fixture_manifest_sha256") != fixture_row.get("manifest_sha256")
+                or instrument_row.get("read_fixture_count") != len(fixture_row.get("entries", []))):
+            raise executor.Refused("committed fixture scope differs from side receipt")
+        for stage_result in (build, read):
+            executor._require_source_proof(stage_result, checkout, config["execution_source_commit"], source_tree)
+            executor._require_generated_artifacts(stage_result, checkout)
+            executor._require_binary_proof(stage_result, target)
+            executor._require_native_identity(stage_result, release, native_tuple, perl_path)
+        if read.get("binary") != build.get("binary"):
+            raise executor.Refused("read and build binary identities differ")
+        if instrument_row.get("binary") != read.get("binary"):
+            raise executor.Refused("side receipt binary differs from authenticated read")
+        executor._require_fixture_proof(read)
+        executor._require_read_measurement_snapshot(
+            read, generation, checkout, target,
+            config["execution_source_commit"], source_tree)
+    except (executor.Refused, KeyError) as error:
+        raise Refused(f"committed transition read measurement replay refused: {error}") from error
+
+
 def load_committed_result(final_path: Path) -> dict[str, Any]:
     """Accept qualification only through its final marker and exact pending inputs."""
     final = _read_object(final_path, "qualification result")
@@ -1166,6 +1250,8 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
                 or row.get("caller_restored") is not True
                 or row.get("promotion") != "forbidden"):
             raise Refused("qualification row receipt is not pending or differs from final")
+        for side in SIDES:
+            _replay_committed_read_snapshot(row, side, root)
     return final
 
 
@@ -1243,6 +1329,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         release=release, source_commit=source_commit, perl=perl,
                         read_manifest=read_manifest, write_manifest=write_manifest,
                         native_cases=native_cases, lease=lease_path, target=side_target,
+                        verified_input_bundle=Path(identity["bundle"]),
                     )
                     executor.initialize_run(
                         side_run, documents["capture"], documents["catalog"], documents["plan"],
