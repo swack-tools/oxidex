@@ -370,6 +370,15 @@ struct Planned<'a> {
     filter: Option<&'a str>,
 }
 
+/// This physical EXIF maker-note inference may use decoded MakerNotes rows
+/// only when they came from an EXIF maker-note table. CanonRaw.pm:50/ProcessCanonRaw and
+/// KyoceraRaw.pm:27/ProcessRAW describe standalone RAW file directories;
+/// neither is an `ExifIFD:MakerNote<vendor>` source block.
+fn has_physical_exif_maker_note(occurrence: &TagOccurrence) -> bool {
+    family0_label(occurrence) == "MakerNotes"
+        && !matches!(family1_label(occurrence), "CanonRaw" | "KyoceraRaw")
+}
+
 /// A selection of the physical `ExifIFD:MakerNote<Make>` source block copies
 /// it whole. Pinned 13.59 selects the block with `all`, `EXIF:all`, or
 /// `ExifIFD:all`, but not `Canon:all` or `MakerNotes:all`, even though its
@@ -396,7 +405,7 @@ fn maker_note_rows<'a>(
     }
     let rows: Vec<(String, &TagOccurrence)> = source
         .keyed_occurrences()
-        .filter(|(_, occurrence)| family0_label(occurrence) == "MakerNotes")
+        .filter(|(_, occurrence)| has_physical_exif_maker_note(occurrence))
         .map(|(_, occurrence)| (family1_label(occurrence).to_string(), occurrence))
         .collect();
     let Some((group1, _)) = rows.first() else {
@@ -583,7 +592,7 @@ pub(crate) fn copy_tags(
             }
             let Some((_, occurrence)) =
                 source_metadata.keyed_occurrences().find(|(_, occurrence)| {
-                    family0_label(occurrence) == "MakerNotes"
+                    has_physical_exif_maker_note(occurrence)
                         && format!("MakerNote{}", family1_label(occurrence))
                             .eq_ignore_ascii_case(source_name)
                 })

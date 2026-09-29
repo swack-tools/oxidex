@@ -174,7 +174,13 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
     // is still the file's rows, and a caller's assignment stays one.
     for (key, occurrence, assigned) in map.keyed_occurrences_with_provenance() {
         let normalized_key = normalize_tag_family(key);
-        if occurrence.origin.module.is_some() && occurrence.origin.table.is_some() {
+        // An unchanged public key needs no identity reconstruction. In
+        // particular, a MakerNote row recorded under a `DJI:` lookup key
+        // already has true family 0 `MakerNotes`; rebuilding it from the
+        // literal key would silently turn that group back into `DJI`.
+        if normalized_key == key
+            || (occurrence.origin.module.is_some() && occurrence.origin.table.is_some())
+        {
             normalized.record_occurrence(normalized_key, occurrence.clone());
         } else {
             normalized.insert_renamed_occurrence(normalized_key, occurrence);
@@ -193,6 +199,28 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
 mod tests {
     use super::*;
     use crate::core::{MetadataMap, TagValue};
+
+    #[test]
+    fn unchanged_key_preserves_true_makernote_family() {
+        let mut map = MetadataMap::new();
+        let mut row = crate::core::TagOccurrence::from_insert_shim(
+            "DJI:SensorID",
+            TagValue::new_string("sensor"),
+            0,
+        );
+        row.group0 = crate::core::tag_occurrence::intern("MakerNotes");
+        row.group1 = crate::core::tag_occurrence::intern("DJI");
+        map.record_occurrence("DJI:SensorID".to_string(), row);
+
+        let normalized = normalize_metadata_map(&map);
+        let carried = normalized
+            .occurrences_for("DJI:SensorID")
+            .into_iter()
+            .next()
+            .expect("normalization kept the row");
+        assert_eq!(&*carried.group0, "MakerNotes");
+        assert_eq!(&*carried.group1, "DJI");
+    }
 
     #[test]
     fn test_exififd_unchanged() {

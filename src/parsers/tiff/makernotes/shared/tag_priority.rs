@@ -163,7 +163,7 @@ pub(crate) fn record_makernote_tag(
     tag_value: crate::core::TagValue,
 ) {
     if let Some(base) = strip_duplicate_marker(&tag_name) {
-        metadata.insert_occurrence(base, tag_value, 0, "", crate::core::Instance::default());
+        record_dispatched_row(metadata, base, tag_value, None, 0, "");
         return;
     }
     if let Some(group1) = priority_zero_duplicate_group1(&tag_name) {
@@ -190,20 +190,96 @@ pub(crate) fn record_makernote_tag(
         // NEF/RW2 RAW containers, when Step 22's full-corpus conformance run
         // first exercised this arbitration end to end -- see the
         // `ExposureTime` example this function's own regression test pins.
-        metadata.insert_occurrence(
-            tag_name,
-            tag_value,
-            0,
-            group1,
-            crate::core::Instance::default(),
-        );
+        record_dispatched_row(metadata, &tag_name, tag_value, None, 0, group1);
         return;
     }
     if let Some(group1) = nikon_subdirectory_group1(&tag_name) {
-        metadata.insert_with_group1(tag_name, tag_value, group1);
+        record_dispatched_row(
+            metadata,
+            &tag_name,
+            tag_value,
+            None,
+            crate::core::SHIM_DEFAULT_PRIORITY,
+            group1,
+        );
         return;
     }
-    metadata.insert(tag_name, tag_value);
+    record_dispatched_row(
+        metadata,
+        &tag_name,
+        tag_value,
+        None,
+        crate::core::SHIM_DEFAULT_PRIORITY,
+        "",
+    );
+}
+
+/// The dispatcher knows these rows came from a MakerNote table. Preserve that
+/// source identity here, where it is known, rather than classifying every
+/// `DJI:` (or other vendor) key globally: DJI also names QuickTime tables.
+fn record_dispatched_row(
+    metadata: &mut crate::core::MetadataMap,
+    key: &str,
+    display: crate::core::TagValue,
+    value: Option<crate::core::TagValue>,
+    priority: u8,
+    group1_override: &str,
+) {
+    let mut row = crate::core::TagOccurrence::from_insert_shim(key, display, 0);
+    row.priority = priority;
+    if let Some(value) = value {
+        row.print = Some(row.raw.clone());
+        row.value = Some(value);
+    }
+    let key_group = key.split_once(':').map_or("", |(group, _)| group);
+    if crate::writers::exif_surgical::is_makernote_group(key_group) {
+        row.group0 = crate::core::tag_occurrence::intern("MakerNotes");
+        row.group1 = crate::core::tag_occurrence::intern(if group1_override.is_empty() {
+            key_group
+        } else {
+            group1_override
+        });
+    } else if !group1_override.is_empty() {
+        row.group1 = crate::core::tag_occurrence::intern(group1_override);
+    }
+    metadata.record_occurrence(key.to_string(), row);
+}
+
+#[cfg(test)]
+mod dispatched_group_tests {
+    use super::*;
+
+    #[test]
+    fn maker_dispatch_records_true_family_without_reclassifying_other_dji_rows() {
+        let mut metadata = crate::core::MetadataMap::new();
+        record_makernote_tag(
+            &mut metadata,
+            "DJI:Pitch".to_string(),
+            crate::core::TagValue::new_string("10"),
+        );
+        let dispatched = metadata
+            .occurrences_for("DJI:Pitch")
+            .into_iter()
+            .next()
+            .expect("dispatched DJI row");
+        assert_eq!(&*dispatched.group0, "MakerNotes");
+        assert_eq!(&*dispatched.group1, "DJI");
+        assert!(crate::cli::tag_resolution::occurrence_matches_qualifier(
+            dispatched,
+            "MakerNotes"
+        ));
+
+        metadata.insert("DJI:TrackLabel", crate::core::TagValue::new_string("x"));
+        let unrelated = metadata
+            .occurrences_for("DJI:TrackLabel")
+            .into_iter()
+            .next()
+            .expect("ordinary DJI row");
+        assert!(!crate::cli::tag_resolution::occurrence_matches_qualifier(
+            unrelated,
+            "MakerNotes"
+        ));
+    }
 }
 
 /// The family-1 group of a `Nikon:`-keyed tag decoded from a Nikon
@@ -239,14 +315,7 @@ pub(crate) fn record_makernote_tag_with_value(
     } else {
         (tag_name.as_str(), crate::core::SHIM_DEFAULT_PRIORITY, "")
     };
-    metadata.insert_occurrence_with_raw(
-        key,
-        display,
-        value,
-        priority,
-        group1,
-        crate::core::Instance::default(),
-    );
+    record_dispatched_row(metadata, key, display, Some(value), priority, group1);
 }
 
 /// MakerNote tags ExifTool itself declares `Priority => 0` for, mapped to
