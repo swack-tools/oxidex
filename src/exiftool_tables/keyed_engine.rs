@@ -2,8 +2,9 @@
 //!
 //! CanonRaw ProcessCanonRaw reads CIFF10 entries, not a fixed-offset
 //! ProcessBinaryData record. This module owns only CIFF10 layout, then hands
-//! raw values to the shared decoder, conversion and rendering path. It has no
-//! parser caller or enabled production table.
+//! raw values to the shared decoder, conversion and rendering path. CanonRaw
+//! admits one source-checked firmware row from a hand-discovered CIFF entry;
+//! the full generated Main table remains blocked.
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;

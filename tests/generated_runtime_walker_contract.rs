@@ -170,7 +170,7 @@ fn inventory_records_real_keyed_route() {
     assert_eq!(
         keyed["production_callers"],
         serde_json::json!([
-            "src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF heap, CanonFirmwareVersion 0x080b)"
+            "src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF hand-discovered bounded entry, CanonFirmwareVersion 0x080b)"
         ])
     );
     assert!(

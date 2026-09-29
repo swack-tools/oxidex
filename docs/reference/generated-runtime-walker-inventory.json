@@ -123,7 +123,7 @@
       "target_conversion_path": "pipeline::execute",
       "attribution_token": "Keyed",
       "enabled_tables": "CanonRaw::Main 0x080b-only source-checked projection on CRW/CIFF; whole Main Gate A remains blocked. Gate B is supplied by the carrier sink",
-      "production_callers": ["src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF heap, CanonFirmwareVersion 0x080b)"],
+      "production_callers": ["src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF hand-discovered bounded entry, CanonFirmwareVersion 0x080b)"],
       "real_carrier_fixture": "t/images/CanonRaw.crw (CanonRaw:CanonFirmwareVersion, source CIFF key 0x080b)",
       "detected_versus_parsed": "parsed: CanonRaw::Main key 0x080b only; other Main entries remain hand-owned",
       "adapter_policy": {

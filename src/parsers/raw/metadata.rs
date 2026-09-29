@@ -7982,6 +7982,7 @@ fn read_ciff_u32(data: &[u8], offset: usize, order: TableByteOrder) -> Option<u3
 /// enclosing directory's `Name`, which one `Condition` in the table keys off.
 struct CiffEntry<'a> {
     id: u16,
+    raw_tag: u16,
     tag_type: u16,
     dir_name: &'static str,
     value: &'a [u8],
@@ -8171,6 +8172,7 @@ fn walk_ciff_directory<'a>(
 
         out.push(CiffEntry {
             id,
+            raw_tag: tag,
             tag_type,
             dir_name,
             value,
@@ -8804,30 +8806,59 @@ impl KeyedEmissionSink for CanonFirmwareKeyedSink {
     }
 }
 
-/// Return one generated occurrence from the actual CIFF heap. The singleton
-/// condition keeps its position aligned with the hand directory walk; a file
-/// with repeated firmware records stays entirely on the existing path.
-fn canon_firmware_from_keyed_heap(
-    heap: &[u8],
-    order: TableByteOrder,
-    occurrences: usize,
-) -> Option<Option<Emitted>> {
-    if occurrences != 1 {
+/// Decode the one firmware record already found by the hand CIFF reader.
+/// Rebuild only its bounded CIFF10 entry so the generated keyed reader still
+/// selects the source row and runs the shared conversion/emission pipeline.
+/// The remaining heap may contain arbitrarily deep or aliased subdirectories;
+/// it is unrelated to this scalar and must not be walked a second time.
+/// Repeated records and values over the keyed reader's scalar limit retain
+/// the hand reader's ownership and behavior.
+fn canon_firmware_from_keyed_entry(entry: &CiffEntry<'_>) -> Option<Option<Emitted>> {
+    if entry.id != 0x080b
+        || entry.raw_tag & 0x3fff != entry.id
+        || entry.value.len() > 512
+        || (entry.raw_tag & 0x4000 != 0 && entry.value.len() != 8)
+    {
         return None;
     }
     let table = canon_firmware_keyed_table()?;
+    let inline = entry.raw_tag & 0x4000 != 0;
+    let mut projected = Vec::with_capacity(entry.value.len() + 16);
+    if !inline {
+        projected.extend_from_slice(entry.value);
+    }
+    let directory_offset = u32::try_from(projected.len()).ok()?;
+    let write_u16 = |value: u16| match entry.order {
+        TableByteOrder::Little => value.to_le_bytes(),
+        TableByteOrder::Big => value.to_be_bytes(),
+    };
+    let write_u32 = |value: u32| match entry.order {
+        TableByteOrder::Little => value.to_le_bytes(),
+        TableByteOrder::Big => value.to_be_bytes(),
+    };
+    projected.extend_from_slice(&write_u16(1));
+    projected.extend_from_slice(&write_u16(entry.raw_tag));
+    if inline {
+        // The eight bytes following the tag are the value itself.
+        projected.extend_from_slice(entry.value);
+    } else {
+        projected.extend_from_slice(&write_u32(u32::try_from(entry.value.len()).ok()?));
+        projected.extend_from_slice(&write_u32(0));
+    }
+    projected.extend_from_slice(&write_u32(directory_offset));
     let mut members = std::collections::HashMap::new();
     let mut ctx = Ctx::new(&mut members);
     let mut sink = CanonFirmwareKeyedSink::default();
     let block = KeyedBlock::new(
-        heap,
-        order,
+        &projected,
+        entry.order,
         KeyedScope {
             group1_override: Some("CanonRaw"),
         },
     );
     let result = process_keyed_directory(table, block, &mut ctx, &mut sink);
-    if result.emitted != 1
+    if result.entries_seen != 1
+        || result.emitted != 1
         || result.gate_a_blocked != 0
         || result.gate_b_blocked != 0
         || result.malformed_directory != 0
@@ -8912,11 +8943,13 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
         }
     }
 
-    let mut firmware_from_keyed = canon_firmware_from_keyed_heap(
-        &data[heap_start..],
-        order,
-        entries.iter().filter(|entry| entry.id == 0x080b).count(),
-    );
+    let mut firmware_entries = entries.iter().filter(|entry| entry.id == 0x080b);
+    let mut firmware_from_keyed =
+        if let (Some(entry), None) = (firmware_entries.next(), firmware_entries.next()) {
+            canon_firmware_from_keyed_entry(entry)
+        } else {
+            None
+        };
     let mut canon_records: Vec<(u16, &[u8])> = Vec::new();
     for entry in &entries {
         match entry.id {
@@ -12695,33 +12728,114 @@ mod rational_array_tests {
     }
 
     #[test]
-    fn keyed_firmware_projection_refuses_truncated_repeated_and_unknown_records() {
-        let file = build_ciff(&[(0x080b, b"Firmware Version 1.1.1\0".to_vec())]);
-        let heap = &file[14..];
-        let row = canon_firmware_from_keyed_heap(heap, TableByteOrder::Little, 1)
+    fn keyed_firmware_projection_has_a_bounded_single_entry() {
+        let value = b"Firmware Version 1.1.1\0";
+        let entry = CiffEntry {
+            id: 0x080b,
+            raw_tag: 0x080b,
+            tag_type: 0x08,
+            dir_name: "CRW",
+            value,
+            order: TableByteOrder::Little,
+        };
+        let row = canon_firmware_from_keyed_entry(&entry)
             .expect("one generated source occurrence")
             .expect("keyed output row");
         assert_eq!(row.name, "CanonFirmwareVersion");
         assert_eq!(row.group1, "CanonRaw");
         assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(0x080b));
         assert_eq!(row.value.as_string(), Some("Firmware Version 1.1.1"));
+        // The projection never retains or searches the surrounding heap.
+        // Exactly one entry reaches the keyed engine, even for a 512-byte
+        // value; larger values use the existing hand path without a copy.
+        let boundary = vec![b'A'; 512];
+        let boundary_entry = CiffEntry {
+            value: &boundary,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&boundary_entry).is_some());
+        let over = vec![b'A'; 513];
+        let over_entry = CiffEntry {
+            value: &over,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&over_entry).is_none());
+        let unknown = CiffEntry {
+            id: 0x08fe,
+            raw_tag: 0x08fe,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&unknown).is_none());
+        let mismatched = CiffEntry {
+            raw_tag: 0x080c,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&mismatched).is_none());
+    }
+
+    #[test]
+    fn keyed_firmware_uses_discovered_child_and_preserves_duplicate_hand_ownership() {
+        let directory = tempfile::tempdir().expect("temporary CRW directory");
+        let public = |name: &str, file: &[u8]| {
+            let mut carrier = file[..14].to_vec();
+            carrier[2..6].copy_from_slice(&26u32.to_le_bytes());
+            carrier.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            carrier.extend_from_slice(&file[14..]);
+            let path = directory.path().join(name);
+            std::fs::write(&path, carrier).expect("write public CRW carrier");
+            crate::core::operations::read_metadata(&path).expect("public CRW read")
+        };
+        let child = build_ciff(&[(0x080b, b"Child firmware\0".to_vec())]);
+        let one = build_ciff(&[
+            (0x2804, child[14..].to_vec()),
+            (0x0810, b"Owner\0".to_vec()),
+        ]);
+        let metadata = public("child.crw", &one);
+        let key = "CanonRaw:CanonFirmwareVersion";
+        assert_eq!(metadata.get_string(key), Some("Child firmware"));
+        let rows: Vec<_> = metadata
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.origin.table, Some("Main"));
+        assert_eq!(metadata.get_string("CanonRaw:OwnerName"), Some("Owner"));
+
+        let twice = build_ciff(&[
+            (0x080b, b"First\0".to_vec()),
+            (0x080b, b"Second\0".to_vec()),
+        ]);
+        let metadata = public("duplicate.crw", &twice);
+        assert_eq!(metadata.get_string(key), Some("Second"));
         assert!(
-            canon_firmware_from_keyed_heap(&heap[..heap.len() - 1], TableByteOrder::Little, 1)
-                .is_none()
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .all(|(name, row, _)| name != key || row.origin.table != Some("Main"))
         );
-        assert!(canon_firmware_from_keyed_heap(heap, TableByteOrder::Little, 2).is_none());
-        let unknown = build_ciff(&[(0x08fe, b"unknown\0".to_vec())]);
+
+        // Two directory edges to the same child are two hand-discovered
+        // occurrences. The generated projection must not claim either one.
+        let block = child[14..].to_vec();
+        let mut alias = build_ciff(&[(0x2804, block.clone()), (0x2804, block)]);
+        let root = read_ciff_u32(&alias, alias.len() - 4, TableByteOrder::Little)
+            .expect("root directory offset") as usize;
+        let second_pointer = 14 + root + 2 + 10 + 6;
+        alias[second_pointer..second_pointer + 4].copy_from_slice(&0u32.to_le_bytes());
+        let metadata = public("alias.crw", &alias);
+        assert_eq!(metadata.get_string(key), Some("Child firmware"));
         assert!(
-            canon_firmware_from_keyed_heap(&unknown[14..], TableByteOrder::Little, 1).is_none()
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .all(|(name, row, _)| name != key || row.origin.table != Some("Main"))
         );
     }
 
     #[test]
     fn keyed_firmware_route_accepts_root_record_with_deep_valid_ciff_chain() {
         // One root firmware record reaches the public keyed route. The hand
-        // reader stops after depth 16; the keyed reader still sees every
-        // structurally valid directory. Build the chain in linear space so
-        // the test itself does not copy every nested prefix repeatedly.
+        // reader stops after depth 16; the generated projection reads only
+        // that record, independent of this otherwise valid child chain.
+        // Build the chain in linear space so the test itself stays bounded.
         const DEPTH: usize = 2_048;
         let firmware = b"Firmware Version 1.1.1\0";
         let root_offset = firmware.len();
