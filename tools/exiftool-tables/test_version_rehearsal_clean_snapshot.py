@@ -191,19 +191,32 @@ class CleanSnapshotTests(unittest.TestCase):
                       "generated_artifacts": [], "binary": binary_row,
                       "native_identity": native_identity}
         native_probe = {"probe_sha256": "b" * 64}
-        fixture = self.root / "fixture.jpg"
+        fixture = self.root / "t" / "images" / "fixture.jpg"
+        fixture.parent.mkdir(parents=True)
         fixture.write_bytes(b"fixture")
         staged = self.target / "fixture.jpg"
         staged.write_bytes(fixture.read_bytes())
         fixture_sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
         fixture_manifest = self.root / "fixture-manifest.json"
-        fixture_manifest.write_text("fixture manifest")
-        read = {"measurement_snapshot": proof, "conformance_report": {
+        fixture_manifest.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+            "fixtures": [{"path": str(fixture), "sha256": fixture_sha,
+                          "bytes": fixture.stat().st_size}],
+        }))
+        original = {"read_manifest": str(fixture_manifest),
+                    "read_binding": executor._fixture_binding(
+                        str(fixture_manifest),
+                        kind="oxidex_version_rehearsal_fixture_manifest", jpeg_only=False)}
+        union = qualification._freeze_read_union(original, original)
+        read_union = qualification._materialize_read_union(union, original, original,
+                                                            self.root / "row")
+        read = {"state": "measured", "acceptance": "pending_pair_policy",
+                "measurement_snapshot": proof, "conformance_report": {
             "path": str(conformance), "sha256": hashlib.sha256(conformance.read_bytes()).hexdigest()},
             **source_row,
             "native_probe_sha256": native_probe["probe_sha256"],
-            "fixtures": {"manifest": str(fixture_manifest),
-                         "manifest_sha256": hashlib.sha256(fixture_manifest.read_bytes()).hexdigest(),
+            "fixtures": {"manifest": read_union["manifest"]["path"],
+                         "manifest_sha256": read_union["manifest"]["sha256"],
                          "entries": [{"source": str(fixture), "sha256": fixture_sha,
                                       "bytes": fixture.stat().st_size, "corpus_path": str(staged),
                                       "corpus_sha256": fixture_sha, "corpus_bytes": staged.stat().st_size}]}}
@@ -235,7 +248,11 @@ class CleanSnapshotTests(unittest.TestCase):
             native_path.write_text(json.dumps(native_probe))
             read_path.write_text(json.dumps(read))
             journal = {"config_sha256": qualification.rehearsal.sha256_json(config),
-                       "releases": {"13.59": {"reports": {
+                       "phase": "complete",
+                       "scope": {"read_acceptance": "pending_pair_policy",
+                                 "write_acceptance": "passed_per_release"},
+                       "releases": {"13.59": {"state": "measured_pending_pair_policy",
+                                                "stages": {"read": "measured"}, "reports": {
                            "generate": {"path": "reports/generate.json",
                                         "sha256": qualification.rehearsal.sha256_json(generation)},
                            "build": {"path": "reports/build.json",
@@ -243,14 +260,16 @@ class CleanSnapshotTests(unittest.TestCase):
                            "native": {"path": "reports/native.json",
                                       "sha256": qualification.rehearsal.sha256_json(native_probe)},
                            "read": {"path": "reports/read.json",
-                                    "sha256": qualification.rehearsal.sha256_json(read)}}}}}
+                                    "sha256": qualification.rehearsal.sha256_json(read),
+                                    "acceptance": "pending_pair_policy"}}}}}
             journal_path.write_text(json.dumps(journal))
-            return {"id": "row", "before": {"release": "13.59",
+            return {"id": "row", "read_union": read_union,
+                    "before": {"release": "13.59",
                     "instrument": {"source_commit": self.parent, "native_identity": native_identity,
                                    "binary": binary_row,
                                    "native_probe_sha256": native_probe["probe_sha256"],
-                                   "read_fixture_manifest": str(fixture_manifest),
-                                   "read_fixture_manifest_sha256": hashlib.sha256(fixture_manifest.read_bytes()).hexdigest(),
+                    "read_fixture_manifest": read_union["manifest"]["path"],
+                    "read_fixture_manifest_sha256": read_union["manifest"]["sha256"],
                                    "read_fixture_count": 1},
                     "read_report_sha256": qualification.rehearsal.sha256_json(read),
                     "execution_journal_sha256": qualification._sha_file(journal_path)}}
@@ -268,11 +287,16 @@ class CleanSnapshotTests(unittest.TestCase):
             return ()
 
         with (patch.object(executor.artifacts, "inventory", return_value=[]),
-              patch.object(executor, "_verify_inputs", side_effect=verify_materialization)):
+              patch.object(executor, "_verify_inputs", side_effect=verify_materialization),
+              patch.object(executor, "_require_read_counts") as read_counts,
+              patch.object(executor, "_require_read_raw_maps") as raw_maps):
             reread = qualification._report_for(run_dir, json.loads(journal_path.read_text()),
                                                "13.59", "read")
             self.assertEqual(reread["measurement_snapshot"], proof)
             qualification._replay_committed_read_snapshot(row, "before", self.root)
+            read_counts.assert_called_once_with(read)
+            self.assertEqual(raw_maps.call_args.args[0], read)
+            self.assertEqual(raw_maps.call_args.args[1], read_path)
             native_module.write_text("tampered native module")
             with self.assertRaisesRegex(qualification.Refused, "materialized native source changed"):
                 qualification._replay_committed_read_snapshot(row, "before", self.root)
