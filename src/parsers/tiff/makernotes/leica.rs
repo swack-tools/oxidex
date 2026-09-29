@@ -14,7 +14,12 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::core::tag_occurrence::{Instance, Provenance, TagOccurrence, intern};
+use crate::core::{TagId, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::runtime::to_stored_tag_value;
+use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Ctx, DecodedValue};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use nom::{
@@ -29,7 +34,7 @@ use super::lens_data::leica as leica_lenses;
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
-use super::shared::table_ifd::fmt_g15;
+use super::shared::table_ifd::{fmt_g15, print_rational};
 use crate::const_decoder;
 
 // ===== Leica MakerNote Tag IDs =====
@@ -140,6 +145,9 @@ mod leica5 {
     /// The only source of `Leica:FocusDistance` on a Leica5/Leica8 body, and
     /// therefore of `Composite:FOV`'s distance term and `Composite:DOF`.
     pub(super) const FOCUS_INFO: u16 = 0x040A;
+    /// Panasonic::Leica5 0x0413 is present in the selected 13.59 table as
+    /// `WB_RGBLevels`, writable rational64u with a declared count of three.
+    pub(super) const WB_RGB_LEVELS: u16 = 0x0413;
 }
 
 /// `%Panasonic::Leica6` (Panasonic.pm:2111), used by the S2 and M (Typ 240)
@@ -525,6 +533,140 @@ fn subdir_bytes<'a>(
         return entry_bytes.get(8..8 + len);
     }
     values?.read(entry.value_offset, len)
+}
+
+/// Resolve a WB value only when it does not overlap the IFD that declares it.
+/// Both display and typed channels must use this same physical check.
+fn leica5_wb_bytes<'a>(
+    entry: &IfdEntry,
+    entry_bytes: &'a [u8],
+    values: Option<LeicaValues<'a>>,
+    directory: std::ops::Range<usize>,
+) -> Option<&'a [u8]> {
+    let len = usize::try_from(entry.value_count)
+        .ok()?
+        .checked_mul(tiff_type_size(entry.field_type)?)?;
+    if len > 4 {
+        let values = values?;
+        let start = values
+            .base
+            .checked_add(usize::try_from(entry.value_offset).ok()?)?;
+        if super::makernote_context::value_overlaps_directory(
+            start,
+            len,
+            directory.start,
+            directory.end,
+        ) {
+            return None;
+        }
+    }
+    subdir_bytes(entry, entry_bytes, values)
+}
+
+/// Decode the actual TIFF field type and count for Leica5/Leica8 0x0413.
+/// The source declares rational64u[3] for writing, but ExifTool reads the
+/// recorded field type and count: a short[3] prints three integers, while a
+/// rational64u[2] prints two quotients and cannot feed a balance composite.
+fn leica5_wb_rgb_levels(
+    entry: &IfdEntry,
+    entry_bytes: &[u8],
+    values: Option<LeicaValues<'_>>,
+    byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
+) -> Option<String> {
+    if !matches!(entry.field_type, 3 | 5) {
+        return None;
+    }
+    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    let count = usize::try_from(entry.value_count).ok()?;
+    let mut parts = Vec::new();
+    for index in 0..count {
+        let part = match entry.field_type {
+            3 => reader.u16_at(index.checked_mul(2)?)?.to_string(),
+            5 => {
+                let start = index.checked_mul(8)?;
+                print_rational(
+                    i64::from(reader.u32_at(start)?),
+                    i64::from(reader.u32_at(start + 4)?),
+                )
+            }
+            _ => unreachable!("field type checked above"),
+        };
+        parts.push(part);
+    }
+    Some(parts.join(" "))
+}
+
+fn leica5_wb_admitted() -> bool {
+    crate::exiftool_tables::find_ifd_table("Panasonic", "Leica5")
+        .and_then(|table| table.tag(leica5::WB_RGB_LEVELS))
+        .is_some_and(|tag| {
+            tag.name == "WB_RGBLevels"
+                && tag.writable == Some("rational64u")
+                && tag.count == Some(3)
+        })
+}
+
+fn leica5_wb_stored(
+    entry: &IfdEntry,
+    entry_bytes: &[u8],
+    values: Option<LeicaValues<'_>>,
+    byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
+) -> Option<TagValue> {
+    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
+    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
+    let values = (0..usize::try_from(entry.value_count).ok()?)
+        .map(|index| match entry.field_type {
+            3 => Some(DecodedValue::Integer(i64::from(
+                reader.u16_at(index.checked_mul(2)?)?,
+            ))),
+            5 => {
+                let start = index.checked_mul(8)?;
+                Some(DecodedValue::UnsignedRational(
+                    reader.u32_at(start)?,
+                    reader.u32_at(start + 4)?,
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(to_stored_tag_value(
+        &DecodedValue::Array(values),
+        byte_order.to_io_byte_order(),
+    ))
+}
+
+fn leica5_wb_byte_range(
+    ctx: &MakerNoteContext<'_>,
+    layout: LeicaLayout,
+    entry: &IfdEntry,
+    entry_offset: usize,
+) -> Option<std::ops::Range<u64>> {
+    if !ctx.is_located() {
+        return None;
+    }
+    let len = usize::try_from(entry.value_count)
+        .ok()?
+        .checked_mul(tiff_type_size(entry.field_type)?)?;
+    let start = if len <= 4 {
+        ctx.payload_base().checked_add(
+            u64::try_from(
+                layout
+                    .ifd_offset()
+                    .checked_add(entry_offset)?
+                    .checked_add(8)?,
+            )
+            .ok()?,
+        )?
+    } else if layout == LeicaLayout::Leica5 {
+        ctx.payload_base()
+            .checked_add(u64::from(entry.value_offset))?
+    } else {
+        ctx.tiff_base().checked_add(u64::from(entry.value_offset))?
+    };
+    Some(start..start.checked_add(u64::try_from(len).ok()?)?)
 }
 
 /// `%PanasonicRaw::panasonicWhiteBalance` (PanasonicRaw.pm:51-67), the
@@ -999,7 +1141,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         // No enclosing block, so a Leica9 payload's TIFF-relative value offsets
         // stay unresolvable and the two tags that need them are skipped rather
         // than guessed. `parse_with_context` is the entry point that has them.
-        self.parse_payload(data, byte_order, None, tags, &mut HashMap::new())
+        self.parse_payload(data, byte_order, None, tags, &mut HashMap::new(), None)
     }
 
     /// Leica9's value offsets need the selected source's base: the MakerNote
@@ -1028,15 +1170,45 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_payload(ctx.payload(), byte_order, Some(ctx), tags, value_forms)
+        self.parse_payload(
+            ctx.payload(),
+            byte_order,
+            Some(ctx),
+            tags,
+            value_forms,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        self.parse_payload(
+            ctx.payload(),
+            byte_order,
+            Some(ctx),
+            tags,
+            value_forms,
+            Some(occurrences),
+        )
     }
 }
 
 impl LeicaMakerNoteParser {
     /// Routes a payload to the decoder for its layout.
     ///
-    /// `ctx` is the enclosing TIFF block when the caller knows it; only Leica9
-    /// needs it, and only for its two rational exposure measurements.
+    /// `ctx` is the enclosing TIFF block when the caller knows it. Leica3,
+    /// Leica8 and Leica9 use TIFF-relative offsets; Leica5 can reach values
+    /// beyond the MakerNote's declared extent through its located window.
     fn parse_payload(
         &self,
         data: &[u8],
@@ -1044,6 +1216,7 @@ impl LeicaMakerNoteParser {
         ctx: Option<&MakerNoteContext<'_>>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
+        mut occurrences: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         // Validate minimum data length
         if data.len() < 8 {
@@ -1187,6 +1360,18 @@ impl LeicaMakerNoteParser {
             ));
         }
 
+        // Leica5 offsets index a payload-relative window; Leica8 offsets
+        // index the enclosing TIFF. Keep the declaring IFD in that same
+        // coordinate space before following a WB value pointer.
+        let wb_directory = (|| {
+            let start = if layout == LeicaLayout::Leica8 {
+                ctx?.payload_offset().checked_add(offset)?
+            } else {
+                offset
+            };
+            Some(start..start.checked_add(required_size)?)
+        })();
+
         // Parse each IFD entry
         for i in 0..entry_count {
             let entry_offset = 2 + (i as usize * 12);
@@ -1216,6 +1401,55 @@ impl LeicaMakerNoteParser {
                 value_count: component_count,
                 value_offset,
             };
+
+            if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
+                && tag_id == leica5::WB_RGB_LEVELS
+            {
+                if leica5_wb_admitted()
+                    && let Some(directory) = wb_directory.clone()
+                    && let Some(printed) = leica5_wb_rgb_levels(
+                        &entry,
+                        entry_data,
+                        values,
+                        byte_order,
+                        directory.clone(),
+                    )
+                {
+                    if let Some(rows) = occurrences.as_mut()
+                        && let Some(stored) =
+                            leica5_wb_stored(&entry, entry_data, values, byte_order, directory)
+                    {
+                        rows.push((
+                            "Leica:WB_RGBLevels".to_string(),
+                            TagOccurrence {
+                                id: TagId::Numeric(leica5::WB_RGB_LEVELS),
+                                name: intern("WB_RGBLevels"),
+                                group0: intern("MakerNotes"),
+                                group1: intern("Leica"),
+                                group2: Some(intern("Camera")),
+                                instance: Instance::default(),
+                                raw: TagValue::String(printed.clone()),
+                                value: Some(TagValue::String(printed.clone())),
+                                print: Some(TagValue::String(printed)),
+                                stored: Some(stored),
+                                priority: 1,
+                                is_list: false,
+                                order: 0,
+                                origin: Provenance {
+                                    module: Some("Panasonic"),
+                                    table: Some("Leica5"),
+                                    byte_range: ctx.and_then(|ctx| {
+                                        leica5_wb_byte_range(ctx, layout, &entry, entry_offset)
+                                    }),
+                                },
+                            },
+                        ));
+                    } else if occurrences.is_none() {
+                        tags.insert("Leica:WB_RGBLevels".to_string(), printed);
+                    }
+                }
+                continue;
+            }
 
             // Each layout points at its own ExifTool table, and the same
             // numeric id means different things in different tables, so
@@ -2157,6 +2391,105 @@ mod tests {
         assert_eq!(
             tags.get("Leica:FocalLength").map(String::as_str),
             Some("50.0 mm")
+        );
+    }
+
+    // `LeicaX1.jpg`'s real Leica5 0x0413 is rational64u[3], stored at the
+    // payload-relative offset 22. ExifTool 13.59 prints these three values
+    // as 0.5182186235 1 0.7231638418; the decoder must reach the existing
+    // RedBalance/BlueBalance composites through the ordinary tag pipeline.
+    #[test]
+    fn leica5_wb_rgb_levels_reads_real_x1_rationals() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"LEICA\0\x06\0");
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&0x0413u16.to_le_bytes());
+        payload.extend_from_slice(&5u16.to_le_bytes());
+        payload.extend_from_slice(&3u32.to_le_bytes());
+        payload.extend_from_slice(&22u32.to_le_bytes());
+        for (num, den) in [(256u32, 494u32), (512, 512), (256, 354)] {
+            payload.extend_from_slice(&num.to_le_bytes());
+            payload.extend_from_slice(&den.to_le_bytes());
+        }
+        let mut tags = HashMap::new();
+        LeicaMakerNoteParser
+            .parse(&payload, ByteOrder::LittleEndian, &mut tags)
+            .expect("Leica5 MakerNote parses");
+        assert_eq!(
+            tags.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some("0.5182186235 1 0.7231638418")
+        );
+    }
+
+    #[test]
+    fn leica5_wb_rgb_levels_respects_actual_type_count_and_bounds() {
+        let mut data = Vec::new();
+        for (num, den) in [(256u32, 494u32), (512, 512), (256, 354), (90, 45)] {
+            data.extend_from_slice(&num.to_le_bytes());
+            data.extend_from_slice(&den.to_le_bytes());
+        }
+        let decode = |field_type, count, block: &[u8]| {
+            let entry = IfdEntry {
+                tag_id: 0x0413,
+                field_type,
+                value_count: count,
+                value_offset: 0,
+            };
+            let mut entry_bytes = [0u8; 12];
+            entry_bytes[2..4].copy_from_slice(&field_type.to_le_bytes());
+            entry_bytes[4..8].copy_from_slice(&count.to_le_bytes());
+            leica5_wb_rgb_levels(
+                &entry,
+                &entry_bytes,
+                Some(LeicaValues { block, base: 0 }),
+                ByteOrder::LittleEndian,
+                0..0,
+            )
+        };
+        // Mutations of LeicaX1.jpg under the pinned 13.59 oracle: Count=2
+        // prints only two quotients, Count=4 includes the next rational, and
+        // a TIFF SHORT[3] reads its actual three short values.
+        assert_eq!(decode(5, 2, &data).as_deref(), Some("0.5182186235 1"));
+        assert_eq!(
+            decode(5, 4, &data).as_deref(),
+            Some("0.5182186235 1 0.7231638418 2")
+        );
+        assert_eq!(decode(3, 3, &data).as_deref(), Some("256 0 494"));
+        assert_eq!(decode(5, 4, &data[..24]), None);
+        assert_eq!(decode(5, u32::MAX, &data), None);
+        assert_eq!(decode(3, 0, &data), None);
+        assert_eq!(decode(7, 3, &data), None);
+    }
+
+    #[test]
+    fn leica5_wb_rgb_levels_matches_native_zero_denominator_forms() {
+        let entry = IfdEntry {
+            tag_id: 0x0413,
+            field_type: 5,
+            value_count: 3,
+            value_offset: 0,
+        };
+        let mut data = Vec::new();
+        for (num, den) in [(0u32, 0u32), (512, 0), (256, 354)] {
+            data.extend_from_slice(&num.to_le_bytes());
+            data.extend_from_slice(&den.to_le_bytes());
+        }
+        let mut entry_bytes = [0u8; 12];
+        entry_bytes[2..4].copy_from_slice(&5u16.to_le_bytes());
+        entry_bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(
+            leica5_wb_rgb_levels(
+                &entry,
+                &entry_bytes,
+                Some(LeicaValues {
+                    block: &data,
+                    base: 0
+                }),
+                ByteOrder::LittleEndian,
+                0..0,
+            )
+            .as_deref(),
+            Some("undef inf 0.7231638418")
         );
     }
 

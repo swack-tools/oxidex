@@ -181,30 +181,24 @@ fn inventory_records_real_keyed_route() {
     assert!(production("src/parsers/raw/metadata.rs").contains("process_keyed_directory("));
 }
 
-/// No decrypted buffer reaches a generated walker: the encrypted carriers
-/// feed hand readers. Pin that absence instead of inventing a fixture.
+/// Nikon::LensData0204 reaches the generated binary walker after source-keyed
+/// decryption. The required real-carrier value and occurrence proof lives in
+/// `nikon_encrypted_generated_route.rs`.
 #[test]
-fn no_encrypted_carrier_reaches_a_generated_walker() {
+fn encrypted_nikon_carrier_reaches_generated_binary_walker() {
     let inventory = inventory();
-    assert_eq!(inventory["encrypted_walker"]["status"], "none");
-    for relative in [
-        "src/parsers/tiff/makernotes/nikon/encrypted.rs",
-        "src/parsers/tiff/makernotes/sony/enciphered.rs",
-    ] {
-        let text = source(relative);
-        for entry in [
-            "process_binary_data",
-            "process_exif",
-            "process_keyed_directory",
-            "process_serial_directory",
-            "pipeline::execute",
-        ] {
-            assert!(
-                !text.contains(entry),
-                "{relative} now reaches {entry}: record the encrypted walker"
-            );
-        }
-    }
+    assert_eq!(inventory["encrypted_walker"]["status"], "parsed-narrow");
+    assert_eq!(
+        inventory["encrypted_walker"]["source_table"],
+        "Nikon::LensData0204"
+    );
+    // This module has its cipher-vector test module before the dispatch code,
+    // so the generic `production()` splitter would stop too early.
+    let nikon = source("src/parsers/tiff/makernotes/nikon/encrypted.rs");
+    assert!(nikon.contains("process_binary_data("));
+    assert!(nikon.contains("is_enabled(table)"));
+    let sony = production("src/parsers/tiff/makernotes/sony/enciphered.rs");
+    assert!(!sony.contains("process_binary_data("));
 }
 
 // ---------------------------------------------------------------------------
