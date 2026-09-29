@@ -692,8 +692,8 @@ def render_markdown(s: dict) -> str:
 
     w("---")
     w("title: Autogeneration status")
-    w("description: Where OxiDex stands on ExifTool tag parity and autogeneration, "
-      "rendered from committed measurements.")
+    w("description: Historical ExifTool parity and autogeneration measurements "
+      "from committed snapshots.")
     w("outline: [2, 3]")
     w("---")
     w("")
@@ -706,12 +706,12 @@ def render_markdown(s: dict) -> str:
     w("")
     w("# Autogeneration status")
     w("")
-    w(f"How much of ExifTool {et} OxiDex reads and writes correctly, and how much of "
-      "that comes from code generated from ExifTool's own tables rather than typed in "
-      "by hand. This page is generated from committed measurement files. It "
-      "measures nothing itself, and no number on it was typed by hand. Each figure "
-      "names the instrument that produced it and the commit it was measured at. CI "
-      "re-renders the page and fails if any source changed without a refresh.")
+    w(f"These are historical measurements of ExifTool {et} read and write parity "
+      "and source-generation progress, not an exact-candidate release receipt. "
+      "This page is generated from committed measurement files and measures "
+      "nothing itself. The sections below name each measurement's instrument "
+      "and source commit. CI re-renders the page and fails if a source changes "
+      "without a refresh.")
     w("")
     w("Where these numbers are going, and the rules for what counts as progress: "
       "[Autogeneration plan](/AUTOGENERATION-PLAN) "
@@ -720,19 +720,28 @@ def render_markdown(s: dict) -> str:
     w("")
     w("## At a glance")
     w("")
+    w(f"The read observations below were measured at {commit_link(rd['commit'])}; "
+      f"write observations at {commit_link(wr['commit'])}; expression coverage at "
+      f"{commit_link(se['commit'])}; generated share at "
+      f"{commit_link(gs['commit'])}. Other meters are committed source "
+      "inventories. None is a current release-candidate measurement.")
+    w("")
     share_pct = float(gs["share"].rstrip("%"))
     w(meters(
         meter("Read parity: catalog entries proven", rd["observed_matched_read"],
-              cat["catalog_entries"], f"observed_matched_read / ExifTool {et} catalog entries"),
+              cat["catalog_entries"],
+              f"observed_matched_read at {rd['commit'][:8]} / ExifTool {et} catalog entries"),
         meter("Of what ExifTool reads in the corpus", rd["credited_catalog_entries"],
               rd["native_catalog_entries"],
               "credited catalog entries / entries ExifTool reads in the corpus"),
         meter("Write parity: writable entries proven", wr["observed_matched_write"],
-              wr["writable"], "observed_matched_write / writable catalog entries"),
+              wr["writable"],
+              f"observed_matched_write at {wr['commit'][:8]} / writable catalog entries"),
         meter("Catalog entries with a generated reader (strict)", rdr["strict"],
               rdr["catalog_entries"], "unconditional generated declarations / catalog entries"),
-        meter("Expression uses today's translators accept", today_b["uses"],
-              se["frame_b"]["uses_total"], "exprs.py and conds.py, every expression in the dump"),
+        meter("Expression uses baseline translators accept", today_b["uses"],
+              se["frame_b"]["uses_total"],
+              f"exprs.py and conds.py at {se['commit'][:8]}, every expression in the dump"),
         meter("Reachable with Session + ported helpers", after_b["uses"],
               se["frame_b"]["uses_total"],
               f"with the {se['measured_with_ports']} v2 helper ports, same denominator"),
@@ -747,8 +756,8 @@ def render_markdown(s: dict) -> str:
     # -- 1. catalog --------------------------------------------------------
     w("## Catalog size")
     w("")
-    w("Three different counts describe \"how many tags\". They measure different "
-      "things and should not be compared with each other.")
+    w("Three counts describe tag totals. They measure different things and "
+      "should not be compared with each other.")
     w("")
     w(table(["What", "Count ", "What it counts", "Source"], [
         [f"ExifTool {et} catalog entries", f"**{n(cat['catalog_entries'])}**",
@@ -843,8 +852,9 @@ def render_markdown(s: dict) -> str:
     w("")
     w("### Reader declarations")
     w("")
-    w(f"How each of the {n(rdr['catalog_entries'])} catalog entries is implemented on the "
-      f"read side today. Source: {join_src} `counts.reader_implementation`. The "
+    w(f"How the committed source inventory classifies each of the "
+      f"{n(rdr['catalog_entries'])} catalog entries. Source: "
+      f"{join_src} `counts.reader_implementation`. The "
       "proven-reads column counts `observed_matched_read` entries in each state, from "
       f"{obs_src}.")
     w("")
@@ -873,7 +883,8 @@ def render_markdown(s: dict) -> str:
     w("ExifTool's tables embed Perl expressions (`Condition`, `RawConv`, `ValueConv`, "
       "`PrintConv` and their inverses). A *use* is one table field that references one. "
       "These are dependency ceilings measured over the pinned dump, not evaluations. "
-      "The *today* rung is what the committed translators accept. The last rung is what "
+      "The *translator baseline* rung is what the measured translators accepted. "
+      "The last rung is what "
       "the v2 `Session`, its member map and the helper ports reach.")
     w("")
     w(f"Instrument: `session_helper_coverage.py` at {commit_link(se['commit'])} "
@@ -884,7 +895,7 @@ def render_markdown(s: dict) -> str:
                     ("frame_b", "B: every expression"),
                     ("frame_m", "M: `Exif::Main`, all slots"),
                     ("frame_mr", "Mr: `Exif::Main`, read side")]
-    w(table(["Frame", "Uses ", "Today ", "Parseable ", "Session + helpers "], [
+    w(table(["Frame", "Uses ", "Translator baseline ", "Parseable ", "Session + helpers "], [
         [label, n(se[key]["uses_total"]),
          se[key]["rungs"]["today"]["uses_pct"],
          se[key]["rungs"]["parseable"]["uses_pct"],
@@ -896,7 +907,7 @@ def render_markdown(s: dict) -> str:
     w(f"From the coverage spike (`run_spike.py` at {commit_link(sp['commit'])}, "
       f"{src(COVERAGE, 'COVERAGE.md')}): a grammar alone parses "
       f"{fb['parseable']['uses_pct']} of all uses, but an interpreter with no helpers "
-      f"evaluates only {fa['pure']['uses_pct']} of Frame A, less than today's "
+      f"evaluates only {fa['pure']['uses_pct']} of Frame A, less than the baseline's "
       f"{fa['today']['uses_pct']}. The work is in the helpers and the session. With all "
       f"session keys and the top 25 helpers, Frame B reaches {fb['top25']['uses_pct']}.")
     w("")
