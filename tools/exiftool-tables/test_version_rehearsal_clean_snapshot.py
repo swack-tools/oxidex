@@ -5,6 +5,7 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,85 @@ class CleanSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
             snapshot.validate(proof, self.owned, self.target, self.parent, digest,
                               {"generated.txt", ".exiftool-version"})
+
+    def test_authorized_key_file_swap_refuses_saved_snapshot_proof(self) -> None:
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        active = self.root / "active-key"
+        shutil.copyfile(self.key, active)
+        active.chmod(0o600)
+        shutil.copyfile(self.key.with_suffix(".pub"), active.with_suffix(".pub"))
+        self.allowed_signers.write_text(
+            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
+            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n"
+        )
+        git(self.owned, "config", "--local", "gpg.format", "ssh")
+        git(self.owned, "config", "--local", "user.signingkey", "../active-key")
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        proof = self.create()
+        digest = snapshot.source_tree_sha256(self.owned)
+        self.assertEqual(proof["signing_key_public_path"], str(active.with_suffix(".pub").resolve()))
+        self.assertEqual(proof["signing_key_sha256"],
+                         hashlib.sha256(active.with_suffix(".pub").read_bytes()).hexdigest())
+        shutil.copyfile(other, active)
+        active.chmod(0o600)
+        shutil.copyfile(other.with_suffix(".pub"), active.with_suffix(".pub"))
+        with self.assertRaisesRegex(snapshot.Refused, "SSH trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                              {"generated.txt", ".exiftool-version"})
+
+    def test_literal_ssh_key_identity_uses_public_bytes(self) -> None:
+        git(self.owned, "config", "--local", "gpg.format", "ssh")
+        literal = self.key.with_suffix(".pub").read_text().strip()
+        git(self.owned, "config", "--local", "user.signingkey", "key::" + literal)
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        identity = snapshot._signature_trust(self.owned)
+        self.assertEqual(identity[2:5], ("literal", None, hashlib.sha256(literal.encode()).hexdigest()))
+
+    def test_public_key_file_without_pub_suffix_uses_its_bytes(self) -> None:
+        public = self.root / "signing-public-arbitrary-name"
+        shutil.copyfile(self.key.with_suffix(".pub"), public)
+        git(self.owned, "config", "--local", "gpg.format", "ssh")
+        git(self.owned, "config", "--local", "user.signingkey", "../signing-public-arbitrary-name")
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        identity = snapshot._signature_trust(self.owned)
+        self.assertEqual(identity[2:5],
+                         ("file", str(public.resolve()), hashlib.sha256(public.read_bytes()).hexdigest()))
+        agent = subprocess.check_output(["ssh-agent", "-s"], text=True)
+        socket = re.search(r"SSH_AUTH_SOCK=([^;]+);", agent)
+        pid = re.search(r"SSH_AGENT_PID=([0-9]+);", agent)
+        self.assertIsNotNone(socket)
+        self.assertIsNotNone(pid)
+        agent_env = {"SSH_AUTH_SOCK": socket.group(1), "SSH_AGENT_PID": pid.group(1)}
+        try:
+            with patch.dict(os.environ, agent_env):
+                subprocess.run(["ssh-add", str(self.key)], check=True, capture_output=True)
+                proof = self.create()
+                self.assertEqual(proof["signing_key_public_path"], str(public.resolve()))
+        finally:
+            subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
+                           check=True, capture_output=True)
+
+    def test_swapped_private_key_with_stale_public_sidecar_refuses(self) -> None:
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        active = self.root / "active-key"
+        shutil.copyfile(self.key, active)
+        active.chmod(0o600)
+        shutil.copyfile(self.key.with_suffix(".pub"), active.with_suffix(".pub"))
+        self.allowed_signers.write_text(
+            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
+            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n"
+        )
+        git(self.owned, "config", "--local", "gpg.format", "ssh")
+        git(self.owned, "config", "--local", "user.signingkey", "../active-key")
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        shutil.copyfile(other, active)
+        active.chmod(0o600)
+        with self.assertRaisesRegex(snapshot.Refused, "doesn't match private"):
+            self.create()
 
     def test_unexpected_untracked_and_symlink_inputs_refuse(self) -> None:
         (self.owned / "unexpected.txt").write_text("unsafe")
