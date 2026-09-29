@@ -1528,6 +1528,76 @@ fn raw_exif_profile(kind: &[u8; 4], tiff: &[u8]) -> ([u8; 4], Vec<u8>) {
     (*kind, data)
 }
 
+/// A raw EXIF profile can carry a maker-note candidate even though the eXIf
+/// chunk census is empty. Pinned 13.59 writes Nikon Type-3 ColorSpace as well
+/// as the sibling PNG text tag; this writer must refuse the combined request
+/// atomically until it can edit that maker note.
+#[test]
+fn raw_profile_makernote_keeps_bare_conversion_atomic() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    let row = |tag: u16, field_type: u16, count: u32, value: u32| {
+        [
+            tag.to_le_bytes().as_slice(),
+            field_type.to_le_bytes().as_slice(),
+            count.to_le_bytes().as_slice(),
+            value.to_le_bytes().as_slice(),
+        ]
+        .concat()
+    };
+    let note = [
+        b"Nikon\0\x02\x10\0\0".as_slice(),
+        b"II*\0\x08\0\0\0",
+        &1_u16.to_le_bytes(),
+        &row(0x001e, 3, 1, 1),
+        &0_u32.to_le_bytes(),
+    ]
+    .concat();
+    let tiff = [
+        b"II*\0\x08\0\0\0".as_slice(),
+        &2_u16.to_le_bytes(),
+        &row(0x010f, 2, 6, 38),
+        &row(0x8769, 4, 1, 44),
+        &0_u32.to_le_bytes(),
+        b"NIKON\0",
+        &1_u16.to_le_bytes(),
+        &row(0x927c, 7, note.len() as u32, 62),
+        &0_u32.to_le_bytes(),
+        &note,
+    ]
+    .concat();
+    let (kind, profile) = raw_exif_profile(b"tEXt", &tiff);
+    let original = png(&[(&kind, profile)], &[]);
+    let dir = tempfile::tempdir().unwrap();
+    let native = write(dir.path(), "native.png", &original);
+    let ours = write(dir.path(), "ours.png", &original);
+    let args = [
+        "-overwrite_original",
+        "-ColorSpace=BT.2100",
+        "-PNG:Comment=sibling",
+    ];
+    let native_write = oracle.command().args(args).arg(&native).output().unwrap();
+    assert!(native_write.status.success(), "{:?}", native_write);
+    let native_rows = oracle
+        .command()
+        .args(["-G1", "-s", "-ColorSpace", "-Comment"])
+        .arg(&native)
+        .output()
+        .unwrap();
+    let native_rows = String::from_utf8_lossy(&native_rows.stdout);
+    assert!(native_rows.contains("[Nikon]") && native_rows.contains("BT.2100"));
+    assert!(native_rows.contains("[PNG]") && native_rows.contains("sibling"));
+
+    let ours_write = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(args)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(!ours_write.status.success(), "{:?}", ours_write);
+    assert_eq!(std::fs::read(&ours).unwrap(), original);
+}
+
 /// Whether a request is a no-op is decided once, before any refusal: a
 /// removal that names nothing in any EXIF carrier -- an unmapped name, a
 /// registered tag the carrier does not hold, or anything in a carrier no
@@ -2674,7 +2744,8 @@ fn afcp_jpeg(order: Order) -> Vec<u8> {
 /// `jpeg_trailer::rebase_trailer_offsets` (tests/afcp_trailer_offsets.rs
 /// drives the CLI); this pins the library write path and `EXIF:All`, by
 /// `-validate` parity against the oracle's own edit (sweep2 found it on
-/// t/images AFCP.jpg and ExifTool.jpg). The CIFF strip of `MakerNotes:All`
+/// t/images AFCP.jpg and ExifTool.jpg; the latter now with its MIE trailer
+/// cut out, whose EXIF copy oxidex refuses to leave stale). The CIFF strip of `MakerNotes:All`
 /// goes through the same function (`makernotes_removal_drops_a_ciff_segment`).
 #[test]
 fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
@@ -2700,11 +2771,21 @@ fn an_afcp_trailer_is_re_based_when_the_file_changes_length() {
             &format!("{order:?} afcp.jpg"),
         );
     }
-    for name in ["AFCP.jpg", "ExifTool.jpg"] {
-        let Some(sample) = fixtures::pinned_t_images_fixture_path(name) else {
+    // t/images/ExifTool.jpg's MIE trailer takes a copy of every EXIF set in
+    // pinned 13.59, which oxidex refuses; the same file with that trailer cut
+    // out keeps its AFCP and every other trailer
+    // (`fixtures::exiftool_jpg_without_mie`).
+    let samples = [
+        (
+            "AFCP.jpg",
+            fixtures::pinned_t_images_fixture_path("AFCP.jpg").map(|p| std::fs::read(p).unwrap()),
+        ),
+        ("ExifTool-noMIE.jpg", fixtures::exiftool_jpg_without_mie()),
+    ];
+    for (name, original) in samples {
+        let Some(original) = original else {
             continue;
         };
-        let original = std::fs::read(&sample).unwrap();
         for (key, args) in [
             ("IFD0:Artist", format!("-IFD0:Artist={long}")),
             ("EXIF:All", "-EXIF:All=".to_string()),

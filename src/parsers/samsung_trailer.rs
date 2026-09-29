@@ -11,6 +11,17 @@ const SOUNDSHOT: u16 = 0x0100;
 /// IdentifyTrailer reads at most 64 bytes before the current end.
 const IDENTIFY_WINDOW: usize = 64;
 
+/// The keys of the Sound & Shot rows this reader emits (`Samsung::Trailer`
+/// 0x0100, family 0 `MakerNotes`, family 1 `Samsung`). Pinned 13.59 files
+/// them under the same groups as a Samsung EXIF maker note's rows, so the
+/// bare-name write resolver tells the two apart by these names, which no
+/// Samsung maker-note table defines (`write_request::makernote_may_hold`).
+pub(crate) const EMBEDDED_AUDIO_FILE_NAME: &str = "MakerNotes:EmbeddedAudioFileName";
+/// See [`EMBEDDED_AUDIO_FILE_NAME`].
+pub(crate) const EMBEDDED_AUDIO_FILE: &str = "MakerNotes:EmbeddedAudioFile";
+/// Every row key the Samsung trailer reader emits.
+pub(crate) const TRAILER_ROW_KEYS: &[&str] = &[EMBEDDED_AUDIO_FILE_NAME, EMBEDDED_AUDIO_FILE];
+
 fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
@@ -31,65 +42,127 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
 /// ExifTool sets it only for JPEG when reading; without it ProcessVivo returns
 /// 0 and the walk stops at a Vivo trailer.
 pub fn parse_trailer_chain(file: &[u8], jpeg_trailer_start: Option<usize>) -> MetadataMap {
-    // Older selected sources have no Trailer::Vivo table or IdentifyTrailer
-    // branch for its footer. They stop at that outer suffix, so an inner
-    // Samsung SEFT block must remain unreachable. The generated table is an
-    // availability marker only; its unrepresentable rows are not decoded here.
-    let vivo_declared = crate::exiftool_tables::find_ifd_table("Trailer", "Vivo").is_some();
     // Every row here is read from the file (`metadata_map::file_rows`):
     // a caller's later `insert`/`get_mut` is what counts as assigned.
     crate::core::metadata_map::file_rows(|| -> MetadataMap {
         let mut metadata = MetadataMap::new();
-        let mut end = file.len();
-        while end > 0 {
-            let window = &file[end.saturating_sub(IDENTIFY_WINDOW)..end];
-            let start = if is_unsized_trailer(window) {
-                None
-            } else if window.ends_with(b"cbipcbbl") {
-                photo_mechanic_start(file, end)
-            } else if window.starts_with(b"CANON OPTIONAL DATA\0") {
-                None
-            } else if let Some(start) = crate::parsers::mie::trailer_start_ending_at(file, end) {
-                Some(start)
-            } else if window.ends_with(b"\0\0QDIOBS") || window.ends_with(DIRECT_SEFT) {
-                let samsung = parse_samsung_trailer(file, end);
-                // `Samsung::Trailer` has `PRIORITY => 0`: the first one wins.
-                if !metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
-                    metadata.merge_winners_keeping_group1(&samsung.metadata);
-                }
-                samsung.data_pos
-            } else if vivo_declared && crate::parsers::vivo::has_footer_at(file, end) {
-                jpeg_trailer_start
-                    .and_then(|trailer_start| {
-                        crate::parsers::vivo::process_vivo(file, end, trailer_start)
-                    })
-                    .map(|vivo| {
-                        if let Some(json) = vivo.json
-                            && !metadata.contains_key("Trailer:JSONInfo")
-                        {
-                            metadata.insert_with_group1(
-                                "Trailer:JSONInfo",
-                                TagValue::new_string(json),
-                                "Vivo",
-                            );
-                        }
-                        vivo.start
-                    })
-            } else {
-                None
-            };
-            // `last unless $result > 0 and $dirLen`, then the JPEG-only stop once
-            // a trailer starts at or before TrailerStart.
-            let Some(start) = start.filter(|start| *start < end) else {
-                break;
-            };
-            if jpeg_trailer_start.is_some_and(|trailer_start| start <= trailer_start) {
-                break;
-            }
-            end = start;
-        }
+        walk_trailer_chain(file, jpeg_trailer_start, &mut metadata, &mut |_, _| {});
         metadata
     })
+}
+
+/// Where [`walk_trailer_chain`] stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChainEnd {
+    /// At bytes IdentifyTrailer names no trailer in, at a trailer's own
+    /// failure, or at TrailerStart: ExifTool's walk stops there too.
+    Done,
+    /// At the end (`.0`) of a trailer IdentifyTrailer names but this walk
+    /// cannot size (AFCP, FotoStation, CanonVRD, Insta360, NikonApp,
+    /// OnePlus), which ExifTool sizes and walks past: whatever lies before
+    /// it is unseen, not absent.
+    Unsized(usize),
+}
+
+/// The MIE trailers ProcessTrailers reaches in `file` (`(start, end)`,
+/// outermost first), and where the walk stopped ([`walk_trailer_chain`]).
+/// A MIE object anywhere else -- inside an APP segment, a maker note, image
+/// data -- is no trailer ExifTool reads or writes.
+pub(crate) fn mie_trailers_in_chain(
+    file: &[u8],
+    jpeg_trailer_start: Option<usize>,
+) -> (Vec<(usize, usize)>, ChainEnd) {
+    let mut trailers = Vec::new();
+    let end = walk_trailer_chain(
+        file,
+        jpeg_trailer_start,
+        &mut MetadataMap::new(),
+        &mut |start, end| trailers.push((start, end)),
+    );
+    (trailers, end)
+}
+
+/// ProcessTrailers' inward walk (see [`parse_trailer_chain`]): merges the
+/// Samsung and Vivo tags it reaches into `metadata`, hands each MIE trailer
+/// it reaches to `on_mie` as `(start, end)`, and says where it stopped.
+fn walk_trailer_chain(
+    file: &[u8],
+    jpeg_trailer_start: Option<usize>,
+    metadata: &mut MetadataMap,
+    on_mie: &mut dyn FnMut(usize, usize),
+) -> ChainEnd {
+    let mut end = file.len();
+    while end > 0 {
+        let window = &file[end.saturating_sub(IDENTIFY_WINDOW)..end];
+        let start = if is_unsized_trailer(window) {
+            return ChainEnd::Unsized(end);
+        } else if window.ends_with(b"cbipcbbl") {
+            photo_mechanic_start(file, end)
+        } else if window.starts_with(b"CANON OPTIONAL DATA\0") {
+            return ChainEnd::Unsized(end);
+        } else if let Some(start) = crate::parsers::mie::trailer_start_ending_at(file, end) {
+            on_mie(start, end);
+            Some(start)
+        } else if window.ends_with(b"\0\0QDIOBS") || window.ends_with(DIRECT_SEFT) {
+            let samsung = parse_samsung_trailer(file, end);
+            // `Samsung::Trailer` has `PRIORITY => 0`: the first one wins.
+            if !metadata.contains_key(EMBEDDED_AUDIO_FILE_NAME) {
+                metadata.merge_winners_keeping_group1(&samsung.metadata);
+            }
+            samsung.data_pos
+        } else if is_unsized_trailer_after_samsung(window) {
+            return ChainEnd::Unsized(end);
+        } else if crate::exiftool_tables::find_ifd_table("Trailer", "Vivo").is_some()
+            && crate::parsers::vivo::has_footer_at(file, end)
+        {
+            jpeg_trailer_start
+                .and_then(|trailer_start| {
+                    crate::parsers::vivo::process_vivo(file, end, trailer_start)
+                })
+                .map(|vivo| {
+                    if let Some(json) = vivo.json
+                        && !metadata.contains_key("Trailer:JSONInfo")
+                    {
+                        metadata.insert_with_group1(
+                            "Trailer:JSONInfo",
+                            TagValue::new_string(json),
+                            "Vivo",
+                        );
+                    }
+                    vivo.start
+                })
+        } else if is_oneplus_trailer(window) {
+            return ChainEnd::Unsized(end);
+        } else {
+            None
+        };
+        // `last unless $result > 0 and $dirLen`, then the JPEG-only stop once
+        // a trailer starts at or before TrailerStart.
+        let Some(start) = start.filter(|start| *start < end) else {
+            break;
+        };
+        if jpeg_trailer_start.is_some_and(|trailer_start| start <= trailer_start) {
+            break;
+        }
+        end = start;
+    }
+    ChainEnd::Done
+}
+
+/// IdentifyTrailer types checked between Samsung and Vivo whose length this
+/// walk does not model: Insta360 and NikonApp (ExifTool.pm:7013-7016).
+fn is_unsized_trailer_after_samsung(window: &[u8]) -> bool {
+    window.ends_with(b"8db42d694ccc418790edff439fe026bf")
+        || window.ends_with(b"\0\0\0\0\0\0/NIKON APP")
+}
+
+/// IdentifyTrailer's OnePlus type, checked after Vivo (`/jxrs...\0$/s`),
+/// whose length this walk does not model.
+fn is_oneplus_trailer(window: &[u8]) -> bool {
+    window.len() >= 8 && {
+        let at = window.len() - 8;
+        &window[at..at + 4] == b"jxrs" && window[at + 7] == 0
+    }
 }
 
 /// IdentifyTrailer types checked before PhotoMechanic whose length this walk
@@ -205,7 +278,7 @@ fn parse_samsung_from_block_end(file: &[u8], mut block_end: usize) -> Option<Sam
                 // `last if $len + 8 > $size` leaves only the entry loop.
                 break;
             };
-            if ty != SOUNDSHOT || metadata.contains_key("MakerNotes:EmbeddedAudioFileName") {
+            if ty != SOUNDSHOT || metadata.contains_key(EMBEDDED_AUDIO_FILE_NAME) {
                 continue;
             }
             // HandleTag receives the raw bytes.  Pinned ExifTool's public
@@ -214,12 +287,12 @@ fn parse_samsung_from_block_end(file: &[u8], mut block_end: usize) -> Option<Sam
             // faithful than preserving its public representation here.
             let name = String::from_utf8_lossy(&data[8..name_end]).replace('\u{fffd}', "?");
             metadata.insert_with_group1(
-                "MakerNotes:EmbeddedAudioFileName",
+                EMBEDDED_AUDIO_FILE_NAME,
                 TagValue::new_string(name.trim_end_matches('\0')),
                 "Samsung",
             );
             metadata.insert_with_group1(
-                "MakerNotes:EmbeddedAudioFile",
+                EMBEDDED_AUDIO_FILE,
                 TagValue::new_binary(data[name_end..].to_vec()),
                 "Samsung",
             );

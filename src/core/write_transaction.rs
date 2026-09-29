@@ -44,14 +44,16 @@
 use crate::core::FileReader;
 use crate::core::metadata_map::{MetadataMap, SourceIdentity, handle_identity};
 use crate::core::operations::{
-    exif_group_in_pdf_with_reader, field_spellings, plan_group_deletion_with_reader, read_metadata,
-    removal_is_no_op_with_reader, remove_field, resolve_write_key_for_with_reader,
-    write_metadata_transaction,
+    bare_removal_is_no_op_with_reader, exif_group_in_pdf_with_reader, field_spellings,
+    group_removal_takes_effect_with_reader, mie_census_with_reader,
+    plan_group_deletion_with_reader, read_metadata, removal_is_no_op_with_reader, remove_field,
+    resolve_write_key_for_with_reader, resolve_write_key_in_request_with_reader,
+    write_metadata_transaction_among,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
 use crate::io::MMapReader;
-use crate::writers::write_request::group_deletion;
+use crate::writers::write_request::{MieCensus, ensure_no_mie_copy, group_deletion};
 use std::fs;
 use std::path::Path;
 
@@ -151,6 +153,8 @@ pub(crate) struct AppliedWrite {
     pub(crate) outcome: WriteOutcome,
     pub(crate) sets: usize,
     pub(crate) caller_fields: Vec<(String, String)>,
+    /// Proven destinations with their original typed request values.
+    pub(crate) caller_values: Vec<(String, TagValue)>,
     pub(crate) original: Option<SourceIdentity>,
     pub(crate) written: Option<SourceIdentity>,
 }
@@ -162,13 +166,46 @@ pub(crate) fn apply_tag_changes_with_receipt(
     apply_with_planning_hook(path, changes, || {})
 }
 
+/// Return proven sets and their resolved destinations while protecting
+/// assignments made by other phases of the enclosing CLI command.
+/// Planning, no-op decisions and copying retain the same opened file.
+pub(crate) fn apply_tag_changes_counted_among(
+    path: &Path,
+    changes: &[TagChange],
+    siblings: &[String],
+) -> Result<(WriteOutcome, usize, Vec<String>, Vec<(String, TagValue)>)> {
+    let original = super::filesystem_metadata::open_destination(path)?;
+    let receipt = apply_on_opened_with_hook(path, changes, original, siblings, || {})?;
+    Ok((
+        receipt.outcome,
+        receipt.sets,
+        receipt
+            .caller_fields
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect(),
+        receipt.caller_values,
+    ))
+}
+
+/// Apply inferred copy assignments while protecting surviving CLI assignments
+/// made before the copy. Keep the same opened-file planning and proof path.
+pub(crate) fn apply_tag_changes_on_opened_among(
+    path: &Path,
+    changes: &[TagChange],
+    original: fs::File,
+    siblings: &[String],
+) -> Result<AppliedWrite> {
+    apply_on_opened_with_hook(path, changes, original, siblings, || {})
+}
+
 fn apply_with_planning_hook(
     path: &Path,
     changes: &[TagChange],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     let original = super::filesystem_metadata::open_destination(path)?;
-    apply_on_opened_with_hook(path, changes, original, after_plan)
+    apply_on_opened_with_hook(path, changes, original, &[], after_plan)
 }
 
 pub(crate) fn apply_tag_changes_on_opened(
@@ -176,13 +213,14 @@ pub(crate) fn apply_tag_changes_on_opened(
     changes: &[TagChange],
     original: fs::File,
 ) -> Result<AppliedWrite> {
-    apply_on_opened_with_hook(path, changes, original, || {})
+    apply_on_opened_with_hook(path, changes, original, &[], || {})
 }
 
 fn apply_on_opened_with_hook(
     path: &Path,
     changes: &[TagChange],
     original: fs::File,
+    siblings: &[String],
     after_plan: impl FnOnce(),
 ) -> Result<AppliedWrite> {
     // Every request is resolved, and every no-op decided, against the file
@@ -202,17 +240,19 @@ fn apply_on_opened_with_hook(
             outcome: WriteOutcome::Unchanged,
             sets: 0,
             caller_fields: Vec::new(),
+            caller_values: Vec::new(),
             original: original_identity,
             written: original_identity,
         });
     }
     let mut proven_sets = 0;
     let mut caller_fields = Vec::new();
+    let mut caller_values = Vec::new();
     let (outcome, written) = transact_opened_with(
         path,
         original,
         |scratch| {
-            (proven_sets, caller_fields) = execute_plan(scratch, &plan)?;
+            (proven_sets, caller_fields, caller_values) = execute_plan(scratch, &plan, siblings)?;
             Ok(())
         },
         || Ok(()),
@@ -222,6 +262,7 @@ fn apply_on_opened_with_hook(
         outcome,
         sets: proven_sets,
         caller_fields,
+        caller_values,
         original: original_identity,
         written,
     })
@@ -434,6 +475,99 @@ struct Pending<'a> {
     at: usize,
 }
 
+/// The group deletions of one request, each planned once: its position in
+/// the request, the `<group>:All` key [`plan_group_deletion_with_reader`] planned for it
+/// (`MakerNotes:*` is `MakerNotes:All`), and whether the format's writer
+/// really makes it ([`group_removal_takes_effect_with_reader`]).
+#[derive(Debug, Default)]
+pub(crate) struct GroupDeletions(Vec<(usize, String, bool)>);
+
+impl GroupDeletions {
+    /// Plans the group deletions among `deletions` -- each a request's
+    /// position and tag -- against the opened file. Only a deletion
+    /// [`plan_group_deletion_with_reader`] plans for real counts; one it proves a
+    /// no-op (a note ExifTool files under EXIF) removes nothing.
+    pub(crate) fn plan<'a>(
+        path: &Path,
+        deletions: impl IntoIterator<Item = (usize, &'a str)>,
+        mie: Option<&MieCensus<'_>>,
+    ) -> Self {
+        let Ok(reader) = MMapReader::new(path) else {
+            return Self::default();
+        };
+        let Ok(baseline) = read_metadata(path) else {
+            return Self::default();
+        };
+        let owned;
+        let mie = match mie {
+            Some(mie) => mie,
+            None => {
+                owned = mie_census_with_reader(&reader).ok();
+                let Some(mie) = owned.as_ref() else {
+                    return Self::default();
+                };
+                mie
+            }
+        };
+        Self::plan_with_reader(&baseline, &reader, deletions, mie)
+    }
+
+    fn plan_with_reader<'a>(
+        baseline: &MetadataMap,
+        reader: &MMapReader,
+        deletions: impl IntoIterator<Item = (usize, &'a str)>,
+        mie: &MieCensus<'_>,
+    ) -> Self {
+        Self(
+            deletions
+                .into_iter()
+                .filter_map(|(at, tag)| {
+                    let group = group_deletion(tag)?;
+                    let key = plan_group_deletion_with_reader(tag, group, baseline, reader, mie)
+                        .ok()??;
+                    let effective = group_removal_takes_effect_with_reader(&key, baseline, reader);
+                    Some((at, key, effective))
+                })
+                .collect(),
+        )
+    }
+
+    /// What they leave of the file for the bare name set at position `at`
+    /// ([`RequestDeletions`](crate::writers::exif_surgical::RequestDeletions)),
+    /// as pinned 13.59 applies a command line in order:
+    ///
+    /// - a deletion *before* the set deletes the group, and the set then
+    ///   writes every copy that remains -- so it counts only where the
+    ///   format's writer really makes it: a TIFF-structured file drops
+    ///   `IFD0:All`, and a raw type's ExifIFD/MakerNotes removals, as 13.59's
+    ///   no-ops, and its maker note survives to be edited
+    ///   (`-MakerNotes:All= -WhiteBalance#=1` on t/images/Nikon.nef writes
+    ///   `[Nikon]` and `[ExifIFD] WhiteBalance`);
+    /// - a deletion *after* the set cancels the set's new values in the
+    ///   groups it names, whether or not the deletion itself takes effect
+    ///   (`-WhiteBalance#=1 -MakerNotes:All=` on Nikon.nef writes `[ExifIFD]`
+    ///   alone and keeps the note; on Canon.jpg it also deletes the note).
+    /// What the deletions that take effect remove, wherever they sit in the
+    /// request: what is gone from the file once it is written.
+    fn effective(&self) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(_, _, effective)| *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
+
+    pub(crate) fn for_set_at(&self, at: usize) -> crate::writers::exif_surgical::RequestDeletions {
+        use crate::writers::exif_surgical::RequestDeletions;
+        self.0
+            .iter()
+            .filter(|(position, _, effective)| *position > at || *effective)
+            .map(|(_, key, _)| RequestDeletions::of(key))
+            .fold(RequestDeletions::default(), RequestDeletions::union)
+    }
+}
+
 /// Resolves every request against the file at `path`, in request order, and
 /// drops the no-ops: all refusals are collected into one
 /// [`ExifToolError::TagsNotWritten`]. Nothing is written.
@@ -459,6 +593,51 @@ fn plan_changes<'a>(
     )?;
     baseline.mark_read_complete();
     baseline.set_read_handle(original);
+    if crate::writers::jpeg_multi_exif::multiple_exif_app1_records_from_reader(reader).is_some() {
+        // Refuse all surviving EXIF requests together before address validation
+        // can obscure a multi-record JPEG's physical write boundary.
+        let mut effective: Vec<&TagChange> = Vec::new();
+        for change in changes {
+            if let Some(group) = group_deletion(change.tag()) {
+                if change.value().is_none() {
+                    effective.retain(|earlier| {
+                        group_deletion(earlier.tag()).is_some()
+                            || !(group_covers(group, earlier.tag())
+                                || resolve_write_key_for_with_reader(
+                                    earlier.tag(),
+                                    &baseline,
+                                    reader,
+                                )
+                                .is_ok_and(|(key, _)| group_covers(group, &key)))
+                    });
+                }
+            } else {
+                let field = resolve_write_key_for_with_reader(change.tag(), &baseline, reader)
+                    .map(|(key, _)| key)
+                    .unwrap_or_else(|_| change.tag().to_string());
+                effective.retain(|earlier| {
+                    group_deletion(earlier.tag()).is_some()
+                        || !resolve_write_key_for_with_reader(earlier.tag(), &baseline, reader)
+                            .map(|(key, _)| same_field(&key, &field))
+                            .unwrap_or_else(|_| same_field(earlier.tag(), change.tag()))
+                });
+            }
+            effective.push(change);
+        }
+        let assigned: Vec<String> = effective
+            .iter()
+            .filter(|c| c.value().is_some())
+            .map(|c| c.tag().to_string())
+            .collect();
+        let removed: Vec<String> = effective
+            .iter()
+            .filter(|c| c.value().is_none())
+            .map(|c| c.tag().to_string())
+            .collect();
+        crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes_from_reader(
+            reader, &baseline, &baseline, &removed, &assigned,
+        )?;
+    }
     // The file's bytes, for the Panasonic RAW no-op decisions below (#956's
     // `rw2_ifd0`, which answer `false` for any other file) -- read only for a
     // Panasonic RAW, never the whole of every file (PR #957 review, Codex).
@@ -468,12 +647,41 @@ fn plan_changes<'a>(
     } else {
         &[]
     };
+    let mie = mie_census_with_reader(reader)?;
     let mut refused: Vec<TagNotWritten> = Vec::new();
     // Refusals of one request, by its position: a later group deletion can
     // still cancel the request (see below), and its refusal with it.
     let mut request_refusals: Vec<(usize, &'a str, TagNotWritten)> = Vec::new();
     let mut groups: Vec<(usize, String)> = Vec::new();
     let mut pending: Vec<Pending<'a>> = Vec::new();
+    // What the request's group deletions remove, for the bare names it
+    // also sets (`GroupDeletions::for_set_at`).
+    let deletions = GroupDeletions::plan_with_reader(
+        &baseline,
+        reader,
+        changes
+            .iter()
+            .enumerate()
+            .filter(|(_, change)| change.value().is_none())
+            .map(|(at, change)| (at, change.tag())),
+        &mie,
+    );
+    let gone = deletions.effective();
+    // Resolve CIFF presence from its APP0 bytes only if a surviving request
+    // can address it. Decoded rows cannot prove that an APP0 is absent.
+    let mut ciff_presence = None;
+    let mut physical_ciff = || -> Result<bool> {
+        if let Some(present) = ciff_presence {
+            return Ok(present);
+        }
+        let present = if head.starts_with(&[0xff, 0xd8]) {
+            crate::writers::exif_surgical::jpeg_has_ciff(reader.read(0, reader.size() as usize)?)?
+        } else {
+            false
+        };
+        ciff_presence = Some(present);
+        Ok(present)
+    };
     for (at, change) in changes.iter().enumerate() {
         // `-GROUP:All=` is a group deletion, never a tag named `All`
         // (`write_request::group_deletion`): it only deletes.
@@ -503,7 +711,7 @@ fn plan_changes<'a>(
                     && !group_covers(group, &earlier.request.key)
             });
             request_refusals.retain(|(_, requested, _)| !group_covers(group, requested));
-            match plan_group_deletion_with_reader(change.tag(), group, &baseline, reader) {
+            match plan_group_deletion_with_reader(change.tag(), group, &baseline, reader, &mie) {
                 Ok(Some(key)) => groups.push((at, key)),
                 // Provably nothing of the group in the file.
                 Ok(None) => {}
@@ -552,16 +760,60 @@ fn plan_changes<'a>(
             }
             Err(other) => return Err(other),
         }
-        match resolve_write_key_for_with_reader(change.tag(), &baseline, reader) {
+        if change.value().is_some()
+            && let Err(error) = crate::writers::exif_cross_delete::date_set_keys(
+                &baseline,
+                change.tag(),
+                crate::core::operations::is_surgical_tiff_target(
+                    crate::parsers::detection::detect_format(reader)?,
+                    reader,
+                ),
+            )
+        {
+            request_refusals.push((
+                at,
+                change.tag(),
+                TagNotWritten::new(change.tag(), error.to_string()),
+            ));
+            continue;
+        }
+        // A maker-note request in a request whose group deletion takes the
+        // maker note away is a no-op: ExifTool never creates a maker-note
+        // tag, and a tag or entry of a note that is gone is nothing to
+        // delete. 13.59: `-MakerNotes:All= -MakerNotes:FocusMode=` on
+        // t/images/Nikon.jpg, `-MakerNotes:All= -ExifIFD:MakerNoteCanon=`
+        // (either order) and `-MakerNotes:All= -MakerNotes:WhiteBalance#=1`
+        // on Canon.jpg each delete the note and nothing else. Where the
+        // deletion does not take effect (a raw type) the note is edited.
+        if makernote_request_gone(change, gone, path, &mut physical_ciff)? {
+            continue;
+        }
+        match resolve_write_key_in_request_with_reader(
+            change.tag(),
+            &baseline,
+            deletions.for_set_at(at),
+            reader,
+        ) {
             Ok((key, addressed)) => pending.push(Pending {
                 request: Resolved {
                     requested: change.tag(),
-                    key,
+                    key: if change.value().is_none() {
+                        crate::writers::write_request::unit_suffix_family_key(change.tag())
+                            .unwrap_or(key)
+                    } else {
+                        key
+                    },
                     value: change.value(),
                 },
                 addressed,
                 at,
             }),
+            // A bare name whose deletion provably removes nothing is
+            // ExifTool's `unchanged`, whatever the resolver would refuse to
+            // write (`operations::bare_removal_is_no_op_with_reader`).
+            Err(ExifToolError::TagsNotWritten { .. })
+                if change.value().is_none()
+                    && bare_removal_is_no_op_with_reader(change.tag(), &baseline, reader) => {}
             Err(ExifToolError::TagsNotWritten { tags }) => {
                 request_refusals.extend(tags.into_iter().map(|tag| (at, change.tag(), tag)));
             }
@@ -573,13 +825,26 @@ fn plan_changes<'a>(
     refused.extend(request_refusals.into_iter().map(|(_, _, tag)| tag));
 
     // The last request for a field replaces every earlier one.
-    let replaced: Vec<bool> = (0..pending.len())
-        .map(|index| {
-            pending[index + 1..]
-                .iter()
-                .any(|later| same_field(&later.request.key, &pending[index].request.key))
-        })
-        .collect();
+    let replaced: Vec<bool> =
+        (0..pending.len())
+            .map(|index| {
+                pending[index + 1..].iter().any(|later| {
+                    same_field(&later.request.key, &pending[index].request.key)
+                        || (later.request.value.is_none()
+                            && crate::writers::write_request::unit_suffix_family_key(
+                                later.request.requested,
+                            )
+                            .is_some_and(|family| {
+                                pending[index].request.key.starts_with("ExifIFD:")
+                                    && family.split_once(':').is_some_and(|(_, leaf)| {
+                                        pending[index].request.key.split_once(':').is_some_and(
+                                            |(_, name)| name.eq_ignore_ascii_case(leaf),
+                                        )
+                                    })
+                            }))
+                })
+            })
+            .collect();
     let last: Vec<Pending<'a>> = pending
         .into_iter()
         .zip(replaced)
@@ -589,6 +854,28 @@ fn plan_changes<'a>(
     let mut fields: Vec<(usize, Resolved<'a>)> = Vec::new();
     let mut absent_deletions = Vec::new();
     for candidate in last {
+        // A request pinned 13.59 also applies to a MIE trailer's EXIF copy,
+        // which oxidex does not write, is refused -- asked only now, of the
+        // request that survived the same-field reduction (a set a later
+        // deletion overrides is never written), and before the no-op
+        // decision below, which sees the main EXIF alone (a deletion MIE's
+        // copy holds is no no-op). `write_request::ensure_no_mie_copy`, on
+        // the census taken once above.
+        let requested = candidate.request.requested;
+        match ensure_no_mie_copy(
+            requested.strip_suffix('#').unwrap_or(requested),
+            &candidate.request.key,
+            &baseline,
+            candidate.request.value.is_none(),
+            &mie,
+        ) {
+            Ok(()) => {}
+            Err(ExifToolError::TagsNotWritten { tags }) => {
+                refused.extend(tags);
+                continue;
+            }
+            Err(other) => return Err(other),
+        }
         // #945 / #943: a deletion that names nothing -- no row under any
         // spelling, and no entry of any EXIF block (`exif_surgical::
         // exif_request_is_no_op`) -- is a no-op, decided before the writer's
@@ -643,6 +930,68 @@ fn plan_changes<'a>(
         steps: steps.into_iter().map(|(_, step)| step).collect(),
         absent_deletions,
     })
+}
+
+/// Whether `change` names only the maker note, which the request's effective
+/// group deletions (`gone`) remove from the file at `baseline`: a tag of a
+/// maker-note group (`MakerNotes:FocusMode`, `Canon:WhiteBalance`), set or
+/// deleted, or the deletion of a maker-note entry (`ExifIFD:MakerNoteCanon`,
+/// `MakerNotes:MakerNoteCanon`). A JPEG's CIFF segment is a maker note too,
+/// which only `MakerNotes:All` removes: while one survives, nothing is gone.
+fn makernote_request_gone(
+    change: &TagChange,
+    gone: crate::writers::exif_surgical::RequestDeletions,
+    path: &Path,
+    physical_ciff: &mut impl FnMut() -> Result<bool>,
+) -> Result<bool> {
+    use crate::writers::generated_makernote_groups::MAKERNOTE_ROOTS;
+    if !gone.makernotes {
+        return Ok(false);
+    }
+    let Some((group, name)) = change.tag().split_once(':') else {
+        return Ok(false);
+    };
+    let name = name.strip_suffix('#').unwrap_or(name);
+    let entry = MAKERNOTE_ROOTS
+        .iter()
+        .any(|root| root.entry != "CIFF" && root.entry.eq_ignore_ascii_case(name));
+    let makernote_group = group.eq_ignore_ascii_case("MakerNotes")
+        || crate::writers::exif_surgical::is_makernote_group(group);
+    let named = if entry {
+        change.value().is_none()
+            && (makernote_group
+                || group.eq_ignore_ascii_case("ExifIFD")
+                || group.eq_ignore_ascii_case("EXIF"))
+    } else {
+        makernote_group
+    };
+    if !named {
+        return Ok(false);
+    }
+    // ExifIFD:All leaves a direct IFD0 note in the JPEG/TIFF carrier. A
+    // grouped setter can still reach it even if our reader decoded no row.
+    // Entry deletions explicitly naming ExifIFD remain gone.
+    if !entry
+        && gone.exif_ifd_only()
+        && crate::core::operations::conversion_makernote_census(path).surviving_exif_ifd_clear > 0
+    {
+        return Ok(false);
+    }
+    // A JPEG's CIFF segment survives every deletion but `MakerNotes:All`;
+    // only a request that can address it stays live beside it: `MakerNotes:`
+    // or a group of the CIFF root's closure (`Canon:FocalLength`), never an
+    // EXIF maker-note entry (13.59: `-EXIF:All= -ExifIFD:MakerNoteCanon=` on
+    // Canon.jpg carrying ExifTool.jpg's CIFF deletes the EXIF note).
+    let can_address_ciff = !entry
+        && (group.eq_ignore_ascii_case("MakerNotes")
+            || MAKERNOTE_ROOTS.iter().any(|root| {
+                root.entry == "CIFF"
+                    && root
+                        .closure
+                        .iter()
+                        .any(|reached| reached.eq_ignore_ascii_case(group))
+            }));
+    Ok(gone.ciff || !can_address_ciff || !physical_ciff()?)
 }
 
 /// Whether ExifTool's `-<group>:All=` removes a value set earlier for `tag`
@@ -701,7 +1050,20 @@ pub(crate) fn group_covers(group: &str, tag: &str) -> bool {
 /// request). The writer's own no-op decision and post-write check
 /// (`exif_surgical::{exif_request_is_no_op, verify_exif_write}`, #943) run
 /// inside every pass (`write_metadata_transaction`).
-fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, String)>)> {
+fn execute_plan(
+    path: &Path,
+    plan: &Plan<'_>,
+    protected: &[String],
+) -> Result<(usize, Vec<(String, String)>, Vec<(String, TagValue)>)> {
+    let mut siblings: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Field(request) if request.value.is_some() => Some(request.key.clone()),
+            _ => None,
+        })
+        .collect();
+    siblings.extend_from_slice(protected);
     let mut index = 0;
     while index < plan.steps.len() {
         let is_group = matches!(plan.steps[index], Step::Group(_));
@@ -711,7 +1073,23 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
             .map_or(plan.steps.len(), |offset| index + offset);
         let mut desired = read_metadata(path)?;
         let mut removed: Vec<String> = Vec::new();
-        for step in &plan.steps[index..end] {
+        // A family-name deletion removes every physical copy before any
+        // surviving explicit directory assignment repopulates its own slot.
+        // ExifTool retains an explicit IFD0 assignment in either argument
+        // order; a later family delete only supersedes the canonical ExifIFD
+        // new-value request (reduced above).
+        let mut ordered: Vec<&Step<'_>> = plan.steps[index..end].iter().collect();
+        ordered.sort_by_key(|step| match step {
+            Step::Field(request)
+                if request.value.is_none()
+                    && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                        .is_some() =>
+            {
+                0
+            }
+            _ => 1,
+        });
+        for step in ordered {
             match step {
                 // A group removal's post-condition is the writer's: #943's
                 // expansion decides which blocks the group names (and
@@ -720,6 +1098,28 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
                 Step::Group(key) => removed.push(key.clone()),
                 Step::Field(request) => {
                     remove_field(&mut desired, &request.key);
+                    // A family-0 deletion names all native EXIF rows with
+                    // this leaf. The TIFF writer decides whether a surfaced
+                    // entry was deleted from the native key's absence in the
+                    // desired map, so remove those rows before it runs.
+                    if request.value.is_none()
+                        && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                            .is_some()
+                        && let (Some(group), leaf) = group_and_name(&request.key)
+                        && group.eq_ignore_ascii_case("EXIF")
+                    {
+                        let native: Vec<String> = desired
+                            .iter()
+                            .filter(|(key, _)| {
+                                matches!(group_and_name(key), (Some(directory), name)
+                                    if is_exif_directory(directory) && name.eq_ignore_ascii_case(leaf))
+                            })
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        for key in native {
+                            remove_field(&mut desired, &key);
+                        }
+                    }
                     match request.value {
                         Some(value) => {
                             // `insert` marks the occurrence assigned
@@ -739,7 +1139,8 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
                 }
             }
         }
-        write_metadata_transaction(path, &desired, &removed).map_err(typed_refusal)?;
+        write_metadata_transaction_among(path, &desired, &removed, &siblings)
+            .map_err(typed_refusal)?;
         index = end;
     }
     // The read-back proves every field request no later group removal
@@ -774,7 +1175,15 @@ fn execute_plan(path: &Path, plan: &Plan<'_>) -> Result<(usize, Vec<(String, Str
         .filter(|request| request.value.is_some())
         .map(|request| (request.requested.to_owned(), request.key.clone()))
         .collect();
-    Ok((caller_fields.len(), caller_fields))
+    let caller_values = proven
+        .iter()
+        .filter_map(|request| {
+            request
+                .value
+                .map(|value| (request.key.clone(), value.clone()))
+        })
+        .collect();
+    Ok((caller_fields.len(), caller_fields, caller_values))
 }
 
 /// A format writer's own refusal of one key (`exif_surgical`,
@@ -1016,6 +1425,18 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
     let file_bytes = fs::read(path)?;
     let mut failed = Vec::new();
     for request in requests {
+        let retained_family_sets: Vec<&str> = requests
+            .iter()
+            .filter(|other| other.value.is_some())
+            .filter_map(|other| {
+                let (_, name) = other.key.split_once(':')?;
+                let (_, family_name) = request.key.split_once(':')?;
+                (request.value.is_none()
+                    && request.key.starts_with("EXIF:")
+                    && name.eq_ignore_ascii_case(family_name))
+                .then_some(other.key.as_str())
+            })
+            .collect();
         // `PNG:XMP` names an ordinary text chunk when the file had one whose
         // keyword is literally `XMP` (the reader reported it, and the PNG
         // writer edits that chunk: `png_writer::plan_text_chunks`); only
@@ -1027,9 +1448,20 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
         };
         let reason = match request.value {
             Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets),
-            None if packets.map_or(!rows_at(&stored, &request.key).is_empty(), |packets| {
-                !packets.is_empty()
-            }) =>
+            None if packets.map_or(
+                if retained_family_sets.is_empty() {
+                    !rows_at(&stored, &request.key).is_empty()
+                } else {
+                    let (_, leaf) = request.key.split_once(':').unwrap_or(("", ""));
+                    stored.keys().any(|row| {
+                        matches!(group_and_name(row), (Some(group), name)
+                            if is_exif_directory(group)
+                                && name.eq_ignore_ascii_case(leaf)
+                                && !retained_family_sets.iter().any(|keep| row.eq_ignore_ascii_case(keep)))
+                    })
+                },
+                |packets| !packets.is_empty(),
+            ) =>
             {
                 Some(format!(
                     "after writing, {} is still present; nothing was written",
@@ -1193,6 +1625,26 @@ mod tests {
         assert!(same_bytes(&write("e", b""), &write("f", b"")).unwrap());
     }
 
+    /// A group deletion before a set counts only where it takes effect; one
+    /// after it cancels the set's copies in its groups either way (#960
+    /// review 4113017923; pinned 13.59 on t/images/Nikon.nef:
+    /// `-MakerNotes:All= -WhiteBalance#=1` writes `[Nikon]` too,
+    /// `-WhiteBalance#=1 -MakerNotes:All=` writes `[ExifIFD]` alone).
+    #[test]
+    fn group_deletions_follow_argument_order() {
+        let raw = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), false)]);
+        assert!(raw.for_set_at(0).makernotes);
+        assert!(!raw.for_set_at(2).makernotes);
+        let jpeg = GroupDeletions(vec![(1, "MakerNotes:All".to_string(), true)]);
+        assert!(jpeg.for_set_at(0).makernotes && jpeg.for_set_at(2).makernotes);
+        assert!(jpeg.for_set_at(2).ciff);
+        let carrier = GroupDeletions(vec![(0, "IFD0:All".to_string(), false)]);
+        assert_eq!(
+            carrier.for_set_at(1),
+            crate::writers::exif_surgical::RequestDeletions::default()
+        );
+    }
+
     #[test]
     fn replacement_after_planning_refuses_active_and_absent_delete_plans() {
         let mut accepted = Vec::new();
@@ -1300,6 +1752,38 @@ mod tests {
     }
 
     #[test]
+    fn multi_app1_planning_guard_reads_opened_inode_after_path_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.jpg");
+        let replacement = dir.path().join("replacement.jpg");
+        fs::copy(
+            "tests/fixtures/jpeg/multi_exif_app1/multi-app1-canon-nikon.jpg",
+            &path,
+        )
+        .unwrap();
+        fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &replacement).unwrap();
+        let bytes = fs::read(&replacement).unwrap();
+        let original = super::super::filesystem_metadata::open_destination(&path).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        let reader = MMapReader::from_file(original.try_clone().unwrap()).unwrap();
+        let changes = [TagChange::set("IFD0:Artist", s("refused"))];
+        let error = match plan_changes(&path, &changes, &reader, &original) {
+            Ok(_) => panic!("planning must inspect the opened multi-APP1 original"),
+            Err(error) => error,
+        };
+        match error {
+            ExifToolError::TagsNotWritten { tags } => {
+                assert_eq!(tags.len(), 1);
+                assert_eq!(tags[0].tag, "IFD0:Artist");
+                assert!(tags[0].reason.contains("EXIF APP1 blocks"));
+            }
+            other => panic!("expected multi-APP1 refusal, got {other:?}"),
+        }
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn replaced_original_is_refused_even_when_scratch_matches_replacement() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.jpg");
@@ -1331,6 +1815,37 @@ mod tests {
 
     fn s(text: &str) -> TagValue {
         TagValue::new_string(text)
+    }
+
+    /// PR #966 review 4112736391: a transaction walks the file's MIE
+    /// trailers once, whatever its number of requests -- not once per
+    /// surviving request and group deletion (each walk is file-sized).
+    #[test]
+    fn a_transaction_takes_one_mie_census() {
+        let Some(source) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mie.jpg");
+        std::fs::copy(&source, &path).unwrap();
+        let changes = [
+            TagChange::delete("IFD0:Artist"),
+            TagChange::delete("IFD0:Software"),
+            TagChange::delete("ExifIFD:UserComment"),
+            TagChange::delete("IFD0:Copyright"),
+            TagChange::delete("GPS:All"),
+            TagChange::delete("IFD1:All"),
+        ];
+        crate::parsers::mie::TRAILER_WALKS.with(|walks| walks.set(0));
+        let original = super::super::filesystem_metadata::open_destination(&path).unwrap();
+        let reader = MMapReader::from_file(original.try_clone().unwrap()).unwrap();
+        let _ = plan_changes(&path, &changes, &reader, &original);
+        assert_eq!(
+            crate::parsers::mie::TRAILER_WALKS.with(std::cell::Cell::get),
+            1,
+            "one MIE census for {} requests",
+            changes.len()
+        );
     }
 
     /// A map read from the file, then edited: the rows the caller

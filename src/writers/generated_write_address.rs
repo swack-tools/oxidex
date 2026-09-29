@@ -362,7 +362,9 @@ pub(crate) fn plan_metadata_delta_with<'a, 'k, V: PartialEq>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::generated_setnewvalue_address_rules::StaticNativeLookupFamily;
+    use super::super::generated_setnewvalue_address_rules::{
+        StaticCandidatePrintConv, StaticNativeLookupFamily,
+    };
     use super::*;
     const FAMILY: &[StaticNativeLookupFamily] = &[
         StaticNativeLookupFamily {
@@ -432,9 +434,11 @@ mod tests {
             full_name: index.map(|_| "Image::ExifTool::Fixture::Main"),
             raw_id: "123",
             writable: index.map(|_| "string"),
+            candidate_writable: index.is_some(),
             permanent: false,
             write_group: index.map(|_| "Directory"),
             groups,
+            print_conv: StaticCandidatePrintConv::Unknown,
         }
     }
 
@@ -453,9 +457,11 @@ mod tests {
             full_name: Some(full_name),
             raw_id,
             writable: Some("string"),
+            candidate_writable: true,
             permanent: false,
             write_group: Some("IFD0"),
             groups: EXIF_DIRECTORY,
+            print_conv: StaticCandidatePrintConv::Unknown,
         }
     }
 
@@ -628,9 +634,11 @@ mod tests {
             full_name: Some("Image::ExifTool::Fixture::Main"),
             raw_id: "456",
             writable: Some("string"),
+            candidate_writable: true,
             permanent: false,
             write_group: Some("Directory"),
             groups: FAMILY,
+            print_conv: StaticCandidatePrintConv::Unknown,
         }];
         let rules = AddressRules {
             explicit_directories: &[],

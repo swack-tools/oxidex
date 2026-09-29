@@ -387,8 +387,8 @@ impl OxiDexExtractor {
             TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
-                let parts: Vec<String> = arr.iter().map(Self::format_value).collect();
-                parts.join(" ")
+                serde_json::to_string(&arr.iter().map(Self::format_value).collect::<Vec<String>>())
+                    .expect("a vector of strings is JSON-serializable")
             }
         }
     }
@@ -958,6 +958,65 @@ mod tests {
             )),
             "2025-11-09T15:06:20+00:00"
         );
+    }
+
+    #[test]
+    fn format_value_preserves_array_boundaries_for_comparison() {
+        let binary = "(Binary data 32 bytes, use -b option to extract)";
+        let array = TagValue::Array(vec![
+            TagValue::String(binary.to_string()),
+            TagValue::String("a, b".to_string()),
+            TagValue::String("quote \" and slash \\".to_string()),
+        ]);
+        let rendered = OxiDexExtractor::format_value(&array);
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered).unwrap(),
+            vec![binary, "a, b", "quote \" and slash \\"]
+        );
+        assert_eq!(
+            OxiDexExtractor::format_value(&TagValue::Array(vec![])),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn formatted_array_boundaries_reach_comparison_verdict() {
+        use crate::comparison::engine::ComparisonEngine;
+
+        let compare = |items: &[&str], native_json: &str| {
+            let value = TagValue::Array(
+                items
+                    .iter()
+                    .map(|item| TagValue::String((*item).to_string()))
+                    .collect(),
+            );
+            let rendered = OxiDexExtractor::format_value(&value);
+            ComparisonEngine::compare(
+                vec![TagInfo::new("Subject".into(), "XMP".into(), rendered)],
+                vec![TagInfo::new(
+                    "Subject".into(),
+                    "XMP".into(),
+                    native_json.into(),
+                )],
+                "XMP",
+                1,
+                None,
+            )
+        };
+
+        for (items, native) in [
+            (vec!["a"], r#"["a",""]"#),
+            (vec![], r#"[""]"#),
+            (vec!["a b"], r#"["a","b"]"#),
+        ] {
+            let result = compare(&items, native);
+            assert_eq!(result.value_differences.len(), 1, "{items:?} vs {native}");
+        }
+
+        let native = r#"["a b","c,d","quote \" and slash \\"]"#;
+        let result = compare(&["a b", "c,d", "quote \" and slash \\"], native);
+        assert_eq!(result.matched_tags.len(), 1);
+        assert!(result.value_differences.is_empty());
     }
 
     #[test]
