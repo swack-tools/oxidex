@@ -1210,13 +1210,18 @@ mod tests {
                 convert_file_size_for_source(source, 171_966.0).as_deref(),
                 Some(printed)
             );
-            assert_eq!(convert_file_size_for_pinned_source(source, 171_966.0), printed);
+            assert_eq!(
+                convert_file_size_for_pinned_source(source, 171_966.0),
+                printed
+            );
         }
         assert_eq!(convert_file_size_for_source("unreviewed", 171_966.0), None);
-        assert!(std::panic::catch_unwind(|| {
-            convert_file_size_for_pinned_source("unreviewed", 171_966.0)
-        })
-        .is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                convert_file_size_for_pinned_source("unreviewed", 171_966.0)
+            })
+            .is_err()
+        );
     }
 
     /// The `u64` file-size formatter and the `f64` `PrintConv` one must be
