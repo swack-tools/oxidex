@@ -4,6 +4,11 @@ use oxidex::core::operations::read_metadata;
 use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::core::{TagId, TagValue};
 use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
+use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+use oxidex::parsers::tiff::makernote_dispatcher::dispatch_makernote;
+use oxidex::parsers::tiff::makernotes::leica::LeicaMakerNoteParser;
+use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
+use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 
@@ -363,6 +368,66 @@ fn leica_dng_reads_inline_byte_wb_levels_with_exact_origin() {
             TagValue::Integer(1),
         ]))
     );
+}
+
+#[test]
+fn detached_leica8_reads_inline_wb_but_not_tiff_relative_values() {
+    let mut bytes = leica_dng(0x08, 200);
+    set_leica_entry(&mut bytes, 0x0413, 1, 3, 0x0001_0402);
+    let mut tags = HashMap::new();
+    dispatch_makernote(
+        "Leica Camera AG",
+        &bytes[128..154],
+        ByteOrder::LittleEndian,
+        &mut tags,
+    )
+    .unwrap();
+    assert_eq!(
+        tags.get("Leica:WB_RGBLevels").map(String::as_str),
+        Some("2 4 1")
+    );
+
+    // The public parser trait also accepts a standalone MakerNote payload.
+    tags.clear();
+    LeicaMakerNoteParser
+        .parse(&bytes[128..154], ByteOrder::LittleEndian, &mut tags)
+        .unwrap();
+    assert_eq!(
+        tags.get("Leica:WB_RGBLevels").map(String::as_str),
+        Some("2 4 1")
+    );
+
+    for (field_type, count, value, expected) in [
+        (5, 0, 200, ""),
+        (4, 1, 256, "256"),
+        (2, 3, 0x0032_2031, "1 2"),
+    ] {
+        set_leica_entry(&mut bytes, 0x0413, field_type, count, value);
+        tags.clear();
+        LeicaMakerNoteParser
+            .parse(&bytes[128..154], ByteOrder::LittleEndian, &mut tags)
+            .unwrap();
+        assert_eq!(
+            tags.get("Leica:WB_RGBLevels").map(String::as_str),
+            Some(expected),
+            "type {field_type}, count {count}"
+        );
+    }
+
+    set_leica_entry(&mut bytes, 0x0413, 5, 3, 200);
+    tags.clear();
+    dispatch_makernote(
+        "Leica Camera AG",
+        &bytes[128..154],
+        ByteOrder::LittleEndian,
+        &mut tags,
+    )
+    .unwrap();
+    assert!(!tags.contains_key("Leica:WB_RGBLevels"));
+    LeicaMakerNoteParser
+        .parse(&bytes[128..154], ByteOrder::LittleEndian, &mut tags)
+        .unwrap();
+    assert!(!tags.contains_key("Leica:WB_RGBLevels"));
 }
 
 #[test]
