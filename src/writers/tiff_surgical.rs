@@ -666,6 +666,41 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
         )?);
         deletions.extend(created_exif);
     }
+    if !added_exif.is_empty()
+        && scan.exif_ifd_offset.is_some_and(|at| {
+            out.get(at..at + 2)
+                .is_some_and(|count| read_u16(count, bo) == 0)
+        })
+    {
+        let set: Vec<u16> = added_exif.iter().map(|entry| entry.tag_id).collect();
+        for edit in crate::writers::exif_ifd_creation::created_exif_ifd_entries(bo, &set)? {
+            let entry_edits::EntryMutation::Set {
+                field_type,
+                count,
+                bytes,
+            } = edit.mutation
+            else {
+                continue;
+            };
+            let mut inline_or_offset = [0u8; 4];
+            if bytes.len() <= 4 {
+                inline_or_offset[..bytes.len()].copy_from_slice(&bytes);
+            } else {
+                let at = append_aligned(&mut out, &bytes);
+                put_u32(
+                    &mut inline_or_offset,
+                    u32::try_from(at).map_err(too_big)?,
+                    bo,
+                );
+            }
+            added_exif.push(NewRecord {
+                tag_id: edit.tag_id,
+                field_type,
+                count,
+                inline_or_offset,
+            });
+        }
+    }
     if added_ifd0.is_empty() && added_exif.is_empty() && added_gps.is_empty() {
         return apply_final_edits(out, &deletions);
     }

@@ -75,9 +75,7 @@ fn cross_directory(directory: &str) -> Option<&'static str> {
     }
 }
 
-/// The file types whose EXIF writers delete an IFD0/ExifIFD row the map
-/// drops: JPEG (APP1), PNG (`eXIf`) and TIFF. Elsewhere the rule is left
-/// alone rather than turned into a deletion some writer cannot make.
+/// The non-TIFF EXIF writers that can delete an IFD0/ExifIFD row.
 const FILE_TYPES: &[&str] = &["JPEG", "PNG", "TIFF"];
 
 /// `Exif::Main`'s write group for `name` when the pinned `FindTagInfo`
@@ -243,13 +241,14 @@ pub(crate) fn cross_deletions(
     desired: &MetadataMap,
     assigned: &[String],
     siblings: &[String],
+    walkable_tiff: bool,
     held: &mut dyn FnMut(IfdKind, u16) -> bool,
 ) -> CrossDeletions {
     let mut deletions = CrossDeletions::default();
     let file_type = baseline
         .get("File:FileType")
         .and_then(|value| value.as_string());
-    if !file_type.is_some_and(|file_type| FILE_TYPES.contains(&file_type)) {
+    if !walkable_tiff && !file_type.is_some_and(|file_type| FILE_TYPES.contains(&file_type)) {
         return deletions;
     }
     let canonical = |key: &str| canonical_write_key(key, baseline);
@@ -411,10 +410,47 @@ pub(crate) fn with_cross_deletions(
     assigned: &[String],
     siblings: &[String],
 ) -> Result<Option<(MetadataMap, Vec<String>)>> {
+    let walkable_tiff = crate::io::MMapReader::new(path)
+        .ok()
+        .and_then(|reader| {
+            crate::parsers::detection::detect_format(&reader)
+                .ok()
+                .map(|format| crate::core::operations::is_surgical_tiff_target(format, &reader))
+        })
+        .unwrap_or(false);
+    // The RAW census is fallible and lazy: a non-EXIF write need not walk the
+    // directory graph, but a cross-delete requiring an unseen physical copy
+    // must not interpret a failed scan as an empty directory.
+    let raw_tiff = walkable_tiff
+        && !baseline
+            .get("File:FileType")
+            .and_then(|value| value.as_string())
+            .is_some_and(|file_type| file_type == "TIFF");
     let mut entries: Option<Vec<(IfdKind, u16)>> = None;
+    let mut scan_error = None;
     let mut held = |ifd: IfdKind, tag_id: u16| {
         entries
             .get_or_insert_with(|| {
+                if raw_tiff {
+                    use crate::core::FileReader;
+                    let scanned = (|| -> Result<Vec<(IfdKind, u16)>> {
+                        let reader = crate::io::MMapReader::new(path)?;
+                        let bytes = reader.read(0, reader.size() as usize)?;
+                        let scan = crate::writers::exif_surgical::scan_entries_with_magics(
+                            bytes,
+                            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                        )?;
+                        Ok(scan
+                            .entries
+                            .iter()
+                            .map(|entry| (entry.ifd, entry.tag_id))
+                            .collect())
+                    })();
+                    return scanned.unwrap_or_else(|error| {
+                        scan_error = Some(error);
+                        Vec::new()
+                    });
+                }
                 let file_type = baseline
                     .get("File:FileType")
                     .and_then(|value| value.as_string())
@@ -423,7 +459,17 @@ pub(crate) fn with_cross_deletions(
             })
             .contains(&(ifd, tag_id))
     };
-    let deletions = cross_deletions(baseline, desired, assigned, siblings, &mut held);
+    let deletions = cross_deletions(
+        baseline,
+        desired,
+        assigned,
+        siblings,
+        walkable_tiff,
+        &mut held,
+    );
+    if let Some(error) = scan_error {
+        return Err(error);
+    }
     if let Some((key, tag_id, exiftool_name)) = deletions.unknown.first() {
         return Err(ExifToolError::unsupported_format(format!(
             "Cannot write '{key}': pinned ExifTool 13.59 has no tag of that name there \
@@ -491,6 +537,7 @@ const EXIF_OR_DERIVED_GROUPS: &[&str] = &[
 pub(crate) fn date_set_keys(
     baseline: &MetadataMap,
     tag: &str,
+    walkable_tiff: bool,
 ) -> Result<Option<Vec<&'static str>>> {
     let (grouped, name) = match tag.split_once(':') {
         None => (false, tag),
@@ -526,6 +573,7 @@ pub(crate) fn date_set_keys(
     };
     match file_type {
         Some("JPEG" | "TIFF") => {}
+        _ if walkable_tiff => {}
         // 13.59 on t/images PDF.pdf: `-AllDates=` writes PDF:CreateDate,
         // PDF:ModifyDate and their XMP copies; the date path wrote nothing
         // and reported success.
@@ -602,7 +650,9 @@ mod tests {
     ) -> Vec<String> {
         let assigned: Vec<String> = assigned.iter().map(|key| key.to_string()).collect();
         let siblings: Vec<String> = siblings.iter().map(|key| key.to_string()).collect();
-        let deletions = cross_deletions(base, desired, &assigned, &siblings, &mut |_, _| false);
+        let deletions = cross_deletions(base, desired, &assigned, &siblings, false, &mut |_, _| {
+            false
+        });
         assert!(deletions.rowless.is_empty());
         deletions.rows
     }
@@ -629,6 +679,7 @@ mod tests {
             &base,
             &["IFD0:CreateDate".into()],
             &[],
+            false,
             &mut |ifd, id| {
                 asked.push((ifd, id));
                 true
@@ -649,6 +700,7 @@ mod tests {
             &base,
             &["IFD0:CreateDate".into()],
             &[],
+            false,
             &mut |_, _| false,
         );
         assert_eq!(deletions, CrossDeletions::default());
@@ -713,7 +765,7 @@ mod tests {
             ("ExifIFD:DateTime", 0x0132, "ModifyDate"),
         ] {
             let desired = with(&base, key, "2021:01:01 00:00:00");
-            let deletions = cross_deletions(&base, &desired, &[], &[], &mut |_, _| true);
+            let deletions = cross_deletions(&base, &desired, &[], &[], false, &mut |_, _| true);
             assert_eq!(
                 deletions.unknown,
                 [(key.to_string(), tag_id, exiftool_name)],
@@ -761,7 +813,7 @@ mod tests {
         ] {
             // Only the rows above are held: no ExifIFD InteropIndex, say.
             let desired = with(&base, key, value);
-            let deletions = cross_deletions(&base, &desired, &[], &[], &mut |_, _| false);
+            let deletions = cross_deletions(&base, &desired, &[], &[], false, &mut |_, _| false);
             assert_eq!(deletions, CrossDeletions::default(), "{key}");
         }
     }
@@ -785,7 +837,7 @@ mod tests {
             ("ExifIFD:CreateDate", "2003:12:04 06:46:52"),
         ]);
         let desired = with(&base, "IFD0:CreateDate", "2020:01:02 03:04:05");
-        let deletions = cross_deletions(&base, &desired, &[], &[], &mut |_, _| true);
+        let deletions = cross_deletions(&base, &desired, &[], &[], false, &mut |_, _| true);
         assert_eq!(deletions, CrossDeletions::default());
     }
 
@@ -798,7 +850,7 @@ mod tests {
     #[test]
     fn date_sets_are_written_to_their_exif_directories() {
         let jpeg = typed("JPEG", &[("IFD0:ModifyDate", "2003:12:04 06:46:52")]);
-        let keys = |base: &MetadataMap, tag: &str| date_set_keys(base, tag).unwrap();
+        let keys = |base: &MetadataMap, tag: &str| date_set_keys(base, tag, false).unwrap();
         assert_eq!(keys(&jpeg, "ModifyDate"), Some(vec!["IFD0:ModifyDate"]));
         assert_eq!(
             keys(&jpeg, "EXIF:ModifyDate"),
@@ -830,7 +882,7 @@ mod tests {
     #[test]
     fn a_date_exiftool_also_writes_outside_exif_is_refused_by_name() {
         let refused = |base: &MetadataMap, tag: &str, named: &str| {
-            let err = date_set_keys(base, tag).unwrap_err().to_string();
+            let err = date_set_keys(base, tag, false).unwrap_err().to_string();
             assert!(err.contains(named), "{tag}: {err}");
         };
         let png = typed("PNG", &[]);
@@ -839,7 +891,7 @@ mod tests {
         let ciff = typed("JPEG", &[("CIFF:DateTimeOriginal", "1998:05:01 21:33:18")]);
         refused(&ciff, "DateTimeOriginal", "CIFF:DateTimeOriginal");
         refused(&ciff, "AllDates", "CIFF:DateTimeOriginal");
-        assert!(date_set_keys(&ciff, "EXIF:DateTimeOriginal").is_ok());
+        assert!(date_set_keys(&ciff, "EXIF:DateTimeOriginal", false).is_ok());
         let mie = typed("JPEG", &[("MIE-Doc:Title", "x")]);
         refused(&mie, "ModifyDate", "MIE");
         refused(&typed("PDF", &[]), "AllDates", "PDF:CreateDate");
