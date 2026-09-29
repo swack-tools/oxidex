@@ -4237,6 +4237,52 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
 /// `file_bytes` (a JPEG, a PNG, or a TIFF-structured file) holds exactly the
 /// field -- type, count and bytes -- this writer would emit for `value`.
 ///
+/// Match a resolved request to the exact generated physical address, rather
+/// than to the request's spelling or its generic TagValue representation.
+pub(crate) fn generated_proof_matches_key(
+    key: &str,
+    proof: &super::generated_public_write::GeneratedWriteProof,
+) -> bool {
+    let Some((group, _)) = key.split_once(':') else {
+        return false;
+    };
+    proof.ifd.prefix() == group
+        && get_tag_descriptor(key).and_then(descriptor_tag_id) == Some(proof.tag_id)
+}
+
+/// Read back one field against the source-selected edit compiled before the
+/// write. Missing, duplicated, or differently encoded entries all fail.
+pub(crate) fn stored_entry_matches_generated_proof(
+    file_bytes: &[u8],
+    proof: &super::generated_public_write::GeneratedWriteProof,
+) -> bool {
+    let Some((field_type, count, bytes)) = proof.expected.as_ref() else {
+        return false;
+    };
+    let scan = if file_bytes.starts_with(&[0xff, 0xd8]) {
+        let Ok(Some(payload)) = jpeg_exif_payload(file_bytes) else {
+            return false;
+        };
+        scan_exif_entries(&payload)
+    } else {
+        scan_exif_entries(file_bytes)
+    };
+    let Ok(scan) = scan else {
+        return false;
+    };
+    let mut entries = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.ifd == proof.ifd && entry.tag_id == proof.tag_id);
+    let Some(entry) = entries.next() else {
+        return false;
+    };
+    entries.next().is_none()
+        && entry.field_type == *field_type
+        && entry.count == *count
+        && entry.value == *bytes
+}
+
 /// This is the read-back proof behind reporting a byte-identical write as
 /// updated. The reader's map cannot give it: it normalizes (`Make` is read
 /// through ExifTool's `RawConv` trailing-space strip), so a stored
@@ -5410,6 +5456,18 @@ pub(crate) fn verify_exif_write(
     removed: &[String],
     magics: &[u16],
 ) -> Result<()> {
+    verify_exif_write_with_proofs(original, output, baseline, desired, removed, magics, &[])
+}
+
+pub(crate) fn verify_exif_write_with_proofs(
+    original: Option<&[u8]>,
+    output: &[u8],
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+    magics: &[u16],
+    proofs: &[super::generated_public_write::GeneratedWriteProof],
+) -> Result<()> {
     let refused = |what: String| {
         ExifToolError::unsupported_format(format!(
             "EXIF write verification failed: {what}; nothing was written"
@@ -5753,6 +5811,18 @@ pub(crate) fn verify_exif_write(
         if let Some(previous) = find(&before, written.ifd, written.tag_id)
             && previous == written
         {
+            if let Some(proof) = proofs
+                .iter()
+                .rev()
+                .find(|proof| generated_proof_matches_key(key, proof))
+            {
+                if !stored_entry_matches_generated_proof(output, proof) {
+                    return Err(refused(format!(
+                        "'{key}' was set but its source-selected physical field is unchanged and mismatched"
+                    )));
+                }
+                continue;
+            }
             let expected =
                 tag_value_to_field_for_key(key, value, Some(previous.field_type), after.byte_order)
                     .ok()
@@ -5780,6 +5850,53 @@ mod tests {
     use super::*;
     use crate::core::metadata_map::MetadataMap;
     use crate::core::tag_value::TagValue;
+
+    #[test]
+    fn generated_proof_requires_unique_exact_physical_field() {
+        use crate::writers::generated_public_write::GeneratedWriteProof;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x000bu16.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        tiff.extend_from_slice(&2u32.to_le_bytes());
+        tiff.extend_from_slice(b"x\0\0\0");
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        let proof = GeneratedWriteProof {
+            ifd: IfdKind::Ifd0,
+            tag_id: 0x000b,
+            expected: Some((2, 2, b"x\0".to_vec())),
+        };
+        assert!(generated_proof_matches_key(
+            "IFD0:ProcessingSoftware",
+            &proof
+        ));
+        assert!(stored_entry_matches_generated_proof(&tiff, &proof));
+        for expected in [
+            None,
+            Some((7, 2, b"x\0".to_vec())),
+            Some((2, 3, b"x\0".to_vec())),
+            Some((2, 2, b"y\0".to_vec())),
+        ] {
+            assert!(!stored_entry_matches_generated_proof(
+                &tiff,
+                &GeneratedWriteProof {
+                    expected,
+                    ..proof.clone()
+                },
+            ));
+        }
+        assert!(!stored_entry_matches_generated_proof(
+            &tiff,
+            &GeneratedWriteProof {
+                tag_id: 0x000c,
+                ..proof.clone()
+            },
+        ));
+        let mut duplicate = tiff.clone();
+        duplicate[8..10].copy_from_slice(&2u16.to_le_bytes());
+        duplicate.splice(22..22, tiff[10..22].iter().copied());
+        assert!(!stored_entry_matches_generated_proof(&duplicate, &proof));
+    }
 
     #[test]
     fn ciff_presence_uses_app0_bytes_not_decoded_rows() {

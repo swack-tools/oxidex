@@ -48,7 +48,6 @@ use crate::core::operations::{
     group_removal_takes_effect_with_reader, mie_census_with_reader,
     plan_group_deletion_with_reader, read_metadata, removal_is_no_op_with_reader, remove_field,
     resolve_write_key_for_with_reader, resolve_write_key_in_request_with_reader,
-    write_metadata_transaction_among,
 };
 use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result, TagNotWritten};
@@ -1064,6 +1063,7 @@ fn execute_plan(
         })
         .collect();
     siblings.extend_from_slice(protected);
+    let mut proofs = Vec::new();
     let mut index = 0;
     while index < plan.steps.len() {
         let is_group = matches!(plan.steps[index], Step::Group(_));
@@ -1139,8 +1139,47 @@ fn execute_plan(
                 }
             }
         }
-        write_metadata_transaction_among(path, &desired, &removed, &siblings)
+        // Keep the old inode open: a later writer may atomically replace the
+        // path, but a no-op proof must be compiled from the prewrite carrier.
+        let mut prewrite = fs::File::open(path)?;
+        let mut pass_proofs =
+            crate::core::operations::write_metadata_transaction_among_with_proofs(
+                path, &desired, &removed, &siblings,
+            )
             .map_err(typed_refusal)?;
+        let missing: Vec<_> = plan.steps[index..end]
+            .iter()
+            .filter_map(|step| match step {
+                Step::Field(request) if request.value.is_some() => Some(request),
+                _ => None,
+            })
+            .filter(|request| {
+                crate::writers::generated_public_write::requires_generated_proof(&request.key)
+                    && !pass_proofs.iter().any(|proof| {
+                        crate::writers::exif_surgical::generated_proof_matches_key(
+                            &request.key,
+                            proof,
+                        )
+                    })
+            })
+            .collect();
+        if !missing.is_empty() {
+            use std::io::Read as _;
+            let mut old_bytes = Vec::new();
+            prewrite.read_to_end(&mut old_bytes)?;
+            for request in missing {
+                if let Some(proof) =
+                    crate::writers::generated_public_write::prewrite_already_in_effect_proof(
+                        &old_bytes,
+                        &request.key,
+                        request.value.expect("filtered to sets"),
+                    )
+                {
+                    pass_proofs.push(proof);
+                }
+            }
+        }
+        proofs.extend(pass_proofs);
         index = end;
     }
     // The read-back proves every field request no later group removal
@@ -1169,7 +1208,7 @@ fn execute_plan(
         })
         .chain(plan.absent_deletions.iter())
         .collect();
-    prove_in_effect(path, &proven, &plan.baseline)?;
+    prove_in_effect(path, &proven, &plan.baseline, &proofs)?;
     let caller_fields: Vec<_> = proven
         .iter()
         .filter(|request| request.value.is_some())
@@ -1376,7 +1415,29 @@ fn set_not_in_effect(
     key: &str,
     value: &TagValue,
     packets: Option<Vec<&[u8]>>,
+    proofs: &[crate::writers::generated_public_write::GeneratedWriteProof],
 ) -> Option<String> {
+    if let Some(proof) = proofs
+        .iter()
+        .rev()
+        .find(|proof| crate::writers::exif_surgical::generated_proof_matches_key(key, proof))
+    {
+        return (!crate::writers::exif_surgical::stored_entry_matches_generated_proof(
+            exif_payload(file_bytes),
+            proof,
+        ))
+        .then(|| {
+            format!(
+                "after writing, the stored {key} entry does not hold exactly the \
+             source-selected field (type, count and bytes); nothing was written"
+            )
+        });
+    }
+    if crate::writers::generated_public_write::requires_generated_proof(key) {
+        return Some(format!(
+            "after writing, no source-selected physical proof was retained for {key}; nothing was written"
+        ));
+    }
     match crate::writers::exif_surgical::stored_entry_matches(exif_payload(file_bytes), key, value)
     {
         Some(true) => return None,
@@ -1420,7 +1481,12 @@ fn set_not_in_effect(
 
 /// The read-back proof: every set's address holds its value and every
 /// deletion's address is gone, in the file at `path` as written.
-fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataMap) -> Result<()> {
+fn prove_in_effect(
+    path: &Path,
+    requests: &[&Resolved<'_>],
+    baseline: &MetadataMap,
+    proofs: &[crate::writers::generated_public_write::GeneratedWriteProof],
+) -> Result<()> {
     let stored = read_metadata(path)?;
     let file_bytes = fs::read(path)?;
     let mut failed = Vec::new();
@@ -1447,7 +1513,7 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
             png_xmp_packets(&file_bytes, &request.key)
         };
         let reason = match request.value {
-            Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets),
+            Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets, proofs),
             None if packets.map_or(
                 if retained_family_sets.is_empty() {
                     !rows_at(&stored, &request.key).is_empty()
@@ -1623,6 +1689,88 @@ mod tests {
         assert!(!same_bytes(&a, &write("c", &changed)).unwrap());
         assert!(!same_bytes(&a, &write("d", &big[..big.len() - 1])).unwrap());
         assert!(same_bytes(&write("e", b""), &write("f", b"")).unwrap());
+    }
+
+    #[test]
+    fn generated_physical_proof_preserves_same_value_across_carriers() {
+        for (name, input) in [
+            ("source.tif", None),
+            (
+                "source.jpg",
+                Some("tests/fixtures/jpeg/simple/synthetic_001.jpg"),
+            ),
+            (
+                "source.png",
+                Some("tests/fixtures/png/complex/synthetic_exif_001.png"),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(name);
+            match input {
+                Some(input) => {
+                    fs::copy(input, &path).unwrap();
+                }
+                None => {
+                    fs::write(&path, b"II\x2a\0\x08\0\0\0\0\0\0\0\0\0").unwrap();
+                }
+            }
+            let value = TagValue::String("same-value".to_owned());
+            apply_tag_changes(
+                &path,
+                &[TagChange::set("IFD0:ProcessingSoftware", value.clone())],
+            )
+            .unwrap();
+            let after_first = fs::read(&path).unwrap();
+            apply_tag_changes(&path, &[TagChange::set("IFD0:ProcessingSoftware", value)]).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), after_first, "{name}");
+
+            // This key is read back in the same typed form as the request,
+            // so the value-only planner omits the repeated explicit set.
+            let value = TagValue::Integer(72);
+            apply_tag_changes(
+                &path,
+                &[TagChange::set("IFD0:MinSampleValue", value.clone())],
+            )
+            .unwrap();
+            assert_eq!(
+                read_metadata(&path).unwrap().get("IFD0:MinSampleValue"),
+                Some(&value)
+            );
+            let after_numeric = fs::read(&path).unwrap();
+            apply_tag_changes(&path, &[TagChange::set("IFD0:MinSampleValue", value)]).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), after_numeric, "{name}");
+        }
+    }
+
+    #[test]
+    fn generated_physical_proof_survives_group_clear_then_recreate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jpg");
+        fs::copy("tests/fixtures/jpeg/simple/synthetic_001.jpg", &path).unwrap();
+        apply_tag_changes(
+            &path,
+            &[
+                TagChange::delete("EXIF:All"),
+                TagChange::set(
+                    "IFD0:ProcessingSoftware",
+                    TagValue::Binary(b"recreated".to_vec()),
+                ),
+            ],
+        )
+        .unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let scan = crate::writers::exif_surgical::scan_exif_entries(
+            &crate::writers::exif_surgical::jpeg_exif_payload(&bytes)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(scan.entries.iter().any(|entry| {
+            entry.ifd == crate::writers::exif_surgical::IfdKind::Ifd0
+                && entry.tag_id == 0x000b
+                && entry.field_type == 2
+                && entry.value == b"recreated\0"
+        }));
     }
 
     /// A group deletion before a set counts only where it takes effect; one

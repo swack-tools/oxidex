@@ -10,6 +10,7 @@ use super::generated_setnewvalue_public_migration_rules::{
     StaticPublicSetNewValueMigration as Migration,
 };
 use super::generated_write_address::{self, AddressRules, Resolution};
+use super::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
 use super::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest;
 use crate::core::{metadata_map::MetadataMap, tag_value::TagValue};
 use crate::error::{ExifToolError, Result};
@@ -133,6 +134,19 @@ pub(crate) fn resolve_public<'a>(
     }
 }
 
+/// A migrated spelling may use only the selected generated proof, even when
+/// the writer produced no physical Set. Legacy encoding is not evidence for it.
+pub(crate) fn requires_generated_proof(key: &str) -> bool {
+    !matches!(
+        resolve_public(
+            key,
+            &generated_write_address::generated_rules(),
+            PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+        ),
+        Resolution::OutsideMigratedScope
+    )
+}
+
 fn validate_capture() -> Result<()> {
     let address = super::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
         .ok_or_else(|| refused("selected address capture is absent"))?;
@@ -157,6 +171,113 @@ pub(crate) struct PublicWritePlan {
     pub has_legacy_changes: bool,
     /// Preserve a whole-EXIF clear before generated rows are masked from legacy.
     pub whole_exif_clear: bool,
+}
+
+/// The physical field selected by the generated writer before it mutates the
+/// carrier. A selected request with no `Set` remains selected: the transaction
+/// must not fall back to the legacy serializer to claim it was written.
+#[derive(Clone, Debug)]
+pub(crate) struct GeneratedWriteProof {
+    pub ifd: super::exif_surgical::IfdKind,
+    pub tag_id: u16,
+    pub expected: Option<(u16, u32, Vec<u8>)>,
+}
+
+/// A source-selected set omitted by a writer's value-only no-op decision can
+/// still be proven without rewriting the carrier. Compile its normal final
+/// stage against the *prewrite* TIFF payload, and retain the proof only when
+/// that physical entry already equals the selected field exactly.
+pub(crate) fn prewrite_already_in_effect_proof(
+    file_bytes: &[u8],
+    key: &str,
+    value: &TagValue,
+) -> Option<GeneratedWriteProof> {
+    if !requires_generated_proof(key) {
+        return None;
+    }
+    let payload: std::borrow::Cow<'_, [u8]> = if file_bytes.starts_with(&[0xff, 0xd8]) {
+        std::borrow::Cow::Owned(super::exif_surgical::jpeg_exif_payload(file_bytes).ok()??)
+    } else if file_bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let payloads =
+            super::png_writer::png_exif_payloads(&super::exif_surgical::SliceReader(file_bytes))
+                .ok()??;
+        let [payload] = payloads.as_slice() else {
+            return None;
+        };
+        std::borrow::Cow::Owned(payload.clone())
+    } else {
+        std::borrow::Cow::Borrowed(file_bytes)
+    };
+    let mut desired = MetadataMap::new();
+    desired.insert(key.to_string(), value.clone());
+    let plan = plan_public_write(&MetadataMap::new(), &desired, &[]).ok()?;
+    if plan.generated.len() != 1 {
+        return None;
+    }
+    let scalar_plan = super::tiff_surgical::generated_scalar::plan_resolved_generated_scalars(
+        &payload,
+        plan.generated.clone(),
+        &super::tiff_surgical::generated_scalar::generated_rules(),
+    )
+    .ok()?;
+    let [proof] = selected_proofs(&plan.generated, &scalar_plan.edits)
+        .ok()?
+        .try_into()
+        .ok()?;
+    super::exif_surgical::stored_entry_matches_generated_proof(&payload, &proof).then_some(proof)
+}
+
+pub(crate) fn selected_proofs(
+    requests: &[ResolvedScalarWriteRequest<'_>],
+    edits: &[ScopedEntryEdit],
+) -> Result<Vec<GeneratedWriteProof>> {
+    requests
+        .iter()
+        .map(|request| {
+            let ifd = [
+                super::exif_surgical::IfdKind::Ifd0,
+                super::exif_surgical::IfdKind::Ifd1,
+                super::exif_surgical::IfdKind::ExifIfd,
+                super::exif_surgical::IfdKind::Gps,
+            ]
+            .into_iter()
+            .find(|ifd| ifd.prefix() == request.selected_group)
+            .ok_or_else(|| refused("selected proof directory is unsupported"))?;
+            let tag_id = raw_id(request.raw_id)
+                .ok_or_else(|| refused("selected proof tag ID is invalid"))?;
+            let mut matching = edits
+                .iter()
+                .filter(|edit| edit.ifd == ifd && edit.tag_id == tag_id);
+            let expected = match (matching.next(), matching.next()) {
+                (
+                    Some(ScopedEntryEdit {
+                        mutation:
+                            EntryMutation::Set {
+                                field_type,
+                                count,
+                                bytes,
+                            },
+                        ..
+                    }),
+                    None,
+                ) => Some((*field_type, *count, bytes.clone())),
+                (
+                    Some(ScopedEntryEdit {
+                        mutation: EntryMutation::Delete,
+                        ..
+                    }),
+                    None,
+                )
+                | (None, None) => None,
+                _ => return Err(refused("selected proof has duplicate physical edits")),
+            };
+            Ok(GeneratedWriteProof {
+                ifd,
+                tag_id,
+                expected,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn plan_public_write(
@@ -311,6 +432,14 @@ pub(crate) fn rewrite_tiff_transaction(
     baseline: &MetadataMap,
     plan: PublicWritePlan,
 ) -> Result<Vec<u8>> {
+    rewrite_tiff_transaction_with_proofs(bytes, baseline, plan).map(|(bytes, _)| bytes)
+}
+
+pub(crate) fn rewrite_tiff_transaction_with_proofs(
+    bytes: &[u8],
+    baseline: &MetadataMap,
+    plan: PublicWritePlan,
+) -> Result<(Vec<u8>, Vec<GeneratedWriteProof>)> {
     let legacy = if plan.has_legacy_changes {
         super::tiff_surgical::rewrite_tiff_file_with_removals(
             bytes,
@@ -322,15 +451,16 @@ pub(crate) fn rewrite_tiff_transaction(
         bytes.to_vec()
     };
     if plan.generated.is_empty() {
-        return Ok(legacy);
+        return Ok((legacy, Vec::new()));
     }
     // Compile first so the cleanup guard sees the source-authorized physical
     // operation, rather than inferring a delete from a public spelling.
     let scalar_plan = super::tiff_surgical::generated_scalar::plan_resolved_generated_scalars(
         &legacy,
-        plan.generated,
+        plan.generated.clone(),
         &super::tiff_surgical::generated_scalar::generated_rules(),
     )?;
+    let proofs = selected_proofs(&plan.generated, &scalar_plan.edits)?;
     let has_ifd1_delete = has_selected_ifd1_delete(&scalar_plan.edits);
     let ifd1_entries_before = if has_ifd1_delete {
         super::tiff_surgical::entry_edits::ifd1_entry_count(&legacy)?
@@ -344,9 +474,9 @@ pub(crate) fn rewrite_tiff_transaction(
         None
     };
     if should_cleanup_mandatory_ifd1(has_ifd1_delete, ifd1_entries_before, ifd1_entries_after) {
-        cleanup_source_mandatory_ifd1(&result.bytes)
+        cleanup_source_mandatory_ifd1(&result.bytes).map(|bytes| (bytes, proofs))
     } else {
-        Ok(result.bytes)
+        Ok((result.bytes, proofs))
     }
 }
 

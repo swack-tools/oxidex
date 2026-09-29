@@ -149,6 +149,7 @@ pub(crate) fn rewrite_generated_scalars(
 /// A public-name resolver must pass the complete selected identity and native
 /// source hashes. An identically named field from another table or release
 /// cannot silently inherit a final serialization rule.
+#[derive(Clone)]
 pub(crate) struct ResolvedScalarWriteRequest<'a> {
     pub module: &'a str,
     pub table: &'a str,

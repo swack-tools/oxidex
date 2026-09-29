@@ -336,7 +336,10 @@ fn rewrite_exif_payload(
     metadata: &MetadataMap,
     baseline: &MetadataMap,
     removed: &[String],
-) -> Result<Vec<u8>> {
+) -> Result<(
+    Vec<u8>,
+    Vec<crate::writers::generated_public_write::GeneratedWriteProof>,
+)> {
     let full_baseline = baseline;
     let full_desired = metadata;
     let desired = exif_rows(metadata);
@@ -357,23 +360,26 @@ fn rewrite_exif_payload(
     } else {
         crate::writers::exif_surgical::FreshOrder::KeepReadableMark
     };
-    let payload = if plan.whole_exif_clear {
-        Vec::new()
+    let (payload, proofs) = if plan.whole_exif_clear {
+        (Vec::new(), Vec::new())
     } else if plan.generated.is_empty() {
-        crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
-            original,
-            &baseline,
-            &plan.legacy_metadata,
-            &plan.legacy_removed,
-            fresh,
-        )?
+        (
+            crate::writers::exif_surgical::rewrite_tiff_exif_with_removals(
+                original,
+                &baseline,
+                &plan.legacy_metadata,
+                &plan.legacy_removed,
+                fresh,
+            )?,
+            Vec::new(),
+        )
     } else {
         // A PNG has no JFIF segment, so `WriteExif` seeds no resolution
         // defaults from one (`$$et{JFIFYResolution}` is undefined). A new
         // block takes the same source-derived fresh byte order as a JPEG's:
         // `ProcessPNG` sets `MM` exactly as `ProcessJPEG` does (PNG.pm
         // 13.59:1441), and the oracle creates a big-endian eXIf.
-        crate::writers::jpeg_writer::rewrite_generated_exif_payload(
+        crate::writers::jpeg_writer::rewrite_generated_exif_payload_with_proofs(
             original,
             &|| Ok(std::collections::BTreeMap::new()),
             &baseline,
@@ -382,13 +388,14 @@ fn rewrite_exif_payload(
         )?
     };
     // Every removal gone, every set present, before anything is written.
-    crate::writers::exif_surgical::verify_exif_write(
+    crate::writers::exif_surgical::verify_exif_write_with_proofs(
         original,
         &payload,
         &baseline,
         &desired,
         &removed,
         crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+        &proofs,
     )?;
     // A dropped row this writer cannot delete one by one (a maker-note,
     // IFD1 or InteropIFD row) is gone, or the write is refused.
@@ -429,7 +436,7 @@ fn rewrite_exif_payload(
             crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
         )?;
     }
-    Ok(payload)
+    Ok((payload, proofs))
 }
 
 /// The payload of a raw-profile text chunk (`Raw profile type exif`/`APP1`):
@@ -462,7 +469,10 @@ enum ExifFate {
     /// Replace the (single) original `eXIf` chunk with this payload, or drop
     /// it when empty; with no original chunk, add one before the first IDAT
     /// when non-empty.
-    Replace(Vec<u8>),
+    Replace(
+        Vec<u8>,
+        Vec<crate::writers::generated_public_write::GeneratedWriteProof>,
+    ),
     /// A carrier-wide removal with nothing set, on a PNG with more than one
     /// `eXIf` chunk: every chunk goes, unparsed -- except, when `keep_short`
     /// (`IFD0:All` without `EXIF:All`), one `II`/`MM`-led and too short for
@@ -573,7 +583,7 @@ fn plan_exif(
     // rows carried such a chunk and reported success; pinned ExifTool 13.59
     // `-all=` removes it, as the whole-map rebuild did.
     if metadata.is_empty() && removed.is_empty() {
-        return Ok(ExifFate::Replace(Vec::new()));
+        return Ok(ExifFate::Replace(Vec::new(), Vec::new()));
     }
     let exif_chunks: Vec<&PngChunk> = chunks
         .iter()
@@ -735,9 +745,8 @@ fn plan_exif(
     {
         return Err(fault.refusal(block.len()));
     }
-    Ok(ExifFate::Replace(rewrite_exif_payload(
-        original, metadata, baseline, removed,
-    )?))
+    let (payload, proofs) = rewrite_exif_payload(original, metadata, baseline, removed)?;
+    Ok(ExifFate::Replace(payload, proofs))
 }
 
 /// The output order of the original chunks: those before the first IDAT
@@ -1264,6 +1273,23 @@ pub(crate) fn write_png_metadata_with_removals(
     baseline: &MetadataMap,
     removed: &[String],
 ) -> Result<()> {
+    write_png_metadata_with_removals_and_proofs(
+        path,
+        original_reader,
+        modified_metadata,
+        baseline,
+        removed,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn write_png_metadata_with_removals_and_proofs(
+    path: &Path,
+    original_reader: &dyn FileReader,
+    modified_metadata: &MetadataMap,
+    baseline: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<crate::writers::generated_public_write::GeneratedWriteProof>> {
     // Verify PNG signature
     if original_reader.size() < 8 {
         return Err(ExifToolError::parse_error("File too small to be valid PNG"));
@@ -1367,7 +1393,7 @@ pub(crate) fn write_png_metadata_with_removals(
     }
     // A new eXIf chunk follows the new text chunks.
     let has_exif_chunk = chunks.iter().any(|chunk| chunk.chunk_type == *b"eXIf");
-    if let ExifFate::Replace(payload) = &exif_fate
+    if let ExifFate::Replace(payload, _) = &exif_fate
         && !has_exif_chunk
         && !payload.is_empty()
     {
@@ -1393,10 +1419,10 @@ pub(crate) fn write_png_metadata_with_removals(
     {
         let source = original_reader.read(0, original_reader.size() as usize)?;
         if std::fs::read(path).is_ok_and(|target| target.as_slice() == source) {
-            return Ok(());
+            return Ok(Vec::new());
         }
         write_atomic(path, source)?;
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let order = output_order(&chunks, first_idat);
@@ -1425,8 +1451,8 @@ pub(crate) fn write_png_metadata_with_removals(
             b"eXIf" => match &exif_fate {
                 ExifFate::Carry => write_carried_chunk(&mut output, chunk),
                 // Nothing left in the EXIF block: the chunk goes.
-                ExifFate::Replace(payload) if payload.is_empty() => {}
-                ExifFate::Replace(payload) => write_chunk(&mut output, b"eXIf", payload),
+                ExifFate::Replace(payload, _) if payload.is_empty() => {}
+                ExifFate::Replace(payload, _) => write_chunk(&mut output, b"eXIf", payload),
                 ExifFate::Delete { keep_short } => {
                     if *keep_short
                         && MalformedExif::of(exif_block(chunk)) == Some(MalformedExif::Short)
@@ -1452,7 +1478,10 @@ pub(crate) fn write_png_metadata_with_removals(
     // Write atomically to prevent corruption
     write_atomic(path, &output)?;
 
-    Ok(())
+    Ok(match exif_fate {
+        ExifFate::Replace(_, proofs) => proofs,
+        ExifFate::Carry | ExifFate::Delete { .. } => Vec::new(),
+    })
 }
 
 #[cfg(test)]
