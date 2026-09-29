@@ -123,11 +123,13 @@ jobs:
           as the bump-exiftool-${{ inputs.version }}-reports artifact --
           read it before merging."
           git push origin "$BRANCH" --force-with-lease
-          echo "### Bump branch pushed" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Branch \`$BRANCH\` pushed. Open a PR:" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "gh pr create --base main --head $BRANCH --title 'build(exiftool): bump to ${{ inputs.version }}'" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Read the triage/gate reports in this run's artifacts first." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Bump branch pushed"
+            echo ""
+            echo "Branch \`$BRANCH\` pushed. Open a PR:"
+            echo '```'
+            echo "gh pr create --base main --head $BRANCH --title 'build(exiftool): bump to ${{ inputs.version }}'"
+            echo '```'
+            echo ""
+            echo "Read the triage/gate reports in this run's artifacts first."
+          } >> "$GITHUB_STEP_SUMMARY"
