@@ -449,36 +449,28 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
 
     for (input, lookup) in i.iter().take(9).zip(LOOKUP) {
         let Some(levels) = input else { continue };
-        let Ok(levels) = levels
+        let levels = levels
             .split_whitespace()
-            // `GetRational64u(0, 0)` yields the literal `undef`. Perl uses it
-            // as numeric zero in RedBlueBalance; a rejected parse would lose
-            // both Leica X1 composites even though ExifTool emits them.
-            .map(|part| {
-                if part == "undef" {
-                    Ok(0.0)
-                } else {
-                    part.parse() // typed-value-projection: reparse red_blue_balance_levels
-                }
-            })
-            .collect::<Result<Vec<f64>, _>>()
-        else {
-            continue;
-        };
+            // Perl numerically coerces each split component, including
+            // `undef`, a leading numeric prefix, and nonnumeric text.
+            .map(|part| crate::exiftool_tables::session::numify_str(part).as_f64())
+            .collect::<Vec<_>>();
         if levels.len() < 2 {
             continue;
         }
 
         let component_index = lookup[usize::from(blue) * 3];
-        let Some(&component) = levels.get(component_index) else {
-            continue;
-        };
+        // Perl's absent array element numifies to zero. Keep its explicit
+        // three-element guard below, which applies to every packed layout.
+        let component = levels.get(component_index).copied().unwrap_or(0.0);
         let green_index = lookup[1];
         let green = if green_index < 4 {
             if levels.len() < 3 {
                 continue;
             }
-            let green = (levels[green_index] + levels[lookup[2]]) / 2.0;
+            let green = (levels.get(green_index).copied().unwrap_or(0.0)
+                + levels.get(lookup[2]).copied().unwrap_or(0.0))
+                / 2.0;
             if green == 0.0 {
                 continue;
             }
@@ -491,13 +483,18 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
         return Some(component / green);
     }
 
-    let component = f(get(i, 9))?;
-    let green = f(get(i, 10))?;
-    if component == 0.0 || green == 0.0 {
-        None
-    } else {
-        Some(component / green)
+    let component = get(i, 9)?;
+    let green = get(i, 10)?;
+    if component.is_empty() || component == "0" || green.is_empty() || green == "0" {
+        return None;
     }
+    let green = crate::exiftool_tables::session::numify_str(green).as_f64();
+    // A truthy string may still numify to zero; Perl's guarded ValueConv
+    // then raises division-by-zero and emits no Composite value.
+    if green == 0.0 {
+        return None;
+    }
+    Some(crate::exiftool_tables::session::numify_str(component).as_f64() / green)
 }
 
 /// ExifTool's `Image::ExifTool::IsFloat` (ExifTool.pm:5947-5953), exactly:
@@ -3984,5 +3981,58 @@ mod tests {
             .as_deref(),
             Some("16.00 s")
         );
+    }
+
+    #[test]
+    fn white_balance_matches_pinned_native_layout_and_string_matrices() {
+        let layout: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/leica_balance_matrix_1359.json"
+        ))
+        .unwrap();
+        let strings: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/leica_string_balance_1359.json"
+        ))
+        .unwrap();
+        for row in layout["rows"].as_array().unwrap() {
+            let owned: Vec<Option<String>> = row["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| match value {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(text) => Some(text.clone()),
+                    value => Some(value.to_string()),
+                })
+                .collect();
+            let inputs: Vec<Option<&str>> = owned.iter().map(|value| value.as_deref()).collect();
+            let blue = row["blue"].as_u64().unwrap() == 1;
+            let got = red_blue_balance(&inputs, blue).map(perl_number);
+            assert_eq!(got.as_deref(), row["value"].as_str(), "{row}");
+        }
+        for row in strings["rows"].as_array().unwrap() {
+            let mut inputs = vec![None; 11];
+            inputs[6] = row["levels"].as_str();
+            let blue = row["blue"].as_u64().unwrap() == 1;
+            let got = red_blue_balance(&inputs, blue).map(perl_number);
+            assert_eq!(got.as_deref(), row["value"].as_str(), "{row}");
+        }
+    }
+    #[test]
+    fn white_balance_fallback_numifies_truthy_zero_without_dividing_by_it() {
+        for (component, green, expected) in [
+            ("1", "0.0", None),
+            ("1", "-0", None),
+            ("1", "x", None),
+            ("0.0", "2", Some("0")),
+            ("x", "2", Some("0")),
+            ("0", "2", None),
+            ("1", "0", None),
+        ] {
+            let mut inputs = vec![None; 11];
+            inputs[9] = Some(component);
+            inputs[10] = Some(green);
+            let actual = red_blue_balance(&inputs, false).map(perl_number);
+            assert_eq!(actual.as_deref(), expected, "{component:?}/{green:?}");
+        }
     }
 }

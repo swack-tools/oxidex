@@ -5,6 +5,7 @@ use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::core::{TagId, TagValue};
 use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
 use std::fs;
+use std::process::Command;
 
 #[path = "common/fixtures.rs"]
 mod fixtures;
@@ -474,4 +475,180 @@ fn leica_dng_signed_rational_retains_negative_zero() {
             },
         ]))
     );
+}
+
+fn set_leica_entry(bytes: &mut [u8], tag: u16, field_type: u16, count: u32, value: u32) {
+    bytes[138..140].copy_from_slice(&tag.to_le_bytes());
+    bytes[140..142].copy_from_slice(&field_type.to_le_bytes());
+    bytes[142..146].copy_from_slice(&count.to_le_bytes());
+    bytes[146..150].copy_from_slice(&value.to_le_bytes());
+}
+
+#[test]
+fn leica_wb_zero_count_and_singletons_keep_readvalue_shapes() {
+    for (field_type, count, value, printed, stored) in [
+        (5, 0, 200, "", TagValue::String(String::new())),
+        (4, 1, 256, "256", TagValue::Integer(256)),
+        (
+            5,
+            1,
+            200,
+            "0.5182186235",
+            TagValue::Rational {
+                numerator: 256,
+                denominator: 494,
+            },
+        ),
+    ] {
+        let mut bytes = leica_dng(0x08, 200);
+        set_leica_entry(&mut bytes, 0x0413, field_type, count, value);
+        let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+        assert_eq!(metadata.get_string("Leica:WB_RGBLevels"), Some(printed));
+        let row = metadata
+            .project_occurrences(ValueChannel::PrintConv)
+            .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+            .unwrap()
+            .1;
+        assert_eq!(row.stored, Some(stored));
+    }
+}
+
+#[test]
+fn leica_wb_string_and_undefined_fields_keep_perl_composite_input() {
+    let cases = [
+        (2u16, &b"1 2 3\0"[..], "1 2 3", Some("0.5"), Some("1.5")),
+        (7, &b"1 2 3\0"[..], "1 2 3", Some("0.5"), Some("1.5")),
+        (129, &b"\xff2 3\0?"[..], "?2 3?", None, None),
+        (129, &b"1 2\0 3\0"[..], "1 2 3", Some("0.5"), Some("1.5")),
+        (
+            7,
+            &b"1\x002 3 4"[..],
+            "12 3 4",
+            Some("0.333333"),
+            Some("1.333333"),
+        ),
+        (
+            129,
+            &b"1\x002 3 4"[..],
+            "12 3 4",
+            Some("0.333333"),
+            Some("1.333333"),
+        ),
+    ];
+    for (field_type, payload, printed, red, blue) in cases {
+        let mut bytes = leica_dng(0x08, 200);
+        set_leica_entry(&mut bytes, 0x0413, field_type, payload.len() as u32, 200);
+        bytes[200..200 + payload.len()].copy_from_slice(payload);
+        let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+        fs::write(file.path(), bytes).unwrap();
+        let metadata = read_metadata(file.path()).unwrap();
+        let public = metadata
+            .project_occurrences(ValueChannel::PrintConv)
+            .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+            .and_then(|(_, _, value)| value.as_string().map(str::to_owned));
+        assert_eq!(
+            public.map(|text| text.replace('\0', "")).as_deref(),
+            Some(printed)
+        );
+        assert_eq!(metadata.get_string("Composite:RedBalance"), red);
+        assert_eq!(metadata.get_string("Composite:BlueBalance"), blue);
+        for numeric in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+            command.arg("-j");
+            if numeric {
+                command.arg("-n");
+            }
+            let output = command.arg(file.path()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json[0]["Leica:WB_RGBLevels"].as_str(), Some(printed));
+        }
+    }
+}
+
+#[test]
+fn leica_wb_inline_nul_keeps_public_json_string_type() {
+    for field_type in [7u16, 129] {
+        let mut bytes = leica_dng(0x08, 200);
+        set_leica_entry(&mut bytes, 0x0413, field_type, 2, 0x0031);
+        let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+        fs::write(file.path(), bytes).unwrap();
+        for numeric in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+            command.arg("-j");
+            if numeric {
+                command.arg("-n");
+            }
+            let output = command.arg(file.path()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json[0]["Leica:WB_RGBLevels"].as_str(), Some("1"));
+        }
+    }
+}
+
+#[test]
+fn leica_non_wb_values_reject_header_and_declaring_ifd_offsets() {
+    for (layout, invalid_offsets, valid_offset) in [
+        (0x06u8, vec![0, 1, 7, 8], 72),
+        (0x08u8, vec![0, 1, 7, 136, 138], 200),
+    ] {
+        for (tag, field_type, count, name) in [
+            (0x040au16, 3u16, 4u32, "Leica:FocusDistance"),
+            (0x0303, 2, 8, "Leica:LensType"),
+            (0x0408, 2, 8, "Leica:OriginalDirectory"),
+        ] {
+            for offset in &invalid_offsets {
+                let mut bytes = leica_dng(layout, valid_offset);
+                set_leica_entry(&mut bytes, tag, field_type, count, *offset);
+                let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+                assert!(
+                    !metadata.contains_key(name),
+                    "layout {layout:#x} tag {tag:#x} offset {offset}"
+                );
+            }
+            let mut bytes = leica_dng(layout, valid_offset);
+            set_leica_entry(&mut bytes, tag, field_type, count, valid_offset);
+            let start = if layout == 0x06 {
+                128 + valid_offset as usize
+            } else {
+                valid_offset as usize
+            };
+            let payload: &[u8; 8] = if tag == 0x040a {
+                &[0x0a, 0x06, 0, 0, 0, 0, 0, 0]
+            } else {
+                b"VALID\0  "
+            };
+            bytes[start..start + 8].copy_from_slice(payload);
+            let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+            assert!(
+                metadata.contains_key(name),
+                "layout {layout:#x} tag {tag:#x} valid offset"
+            );
+            if tag == 0x040a {
+                assert_eq!(metadata.get_string(name), Some("1.546 m"));
+            }
+        }
+    }
+}
+
+#[test]
+fn leica_wb_refuses_non_apple_types_rejected_by_process_exif() {
+    for field_type in [14u16, 15, 16, 17, 18] {
+        let mut bytes = leica_dng(0x08, 200);
+        set_leica_entry(&mut bytes, 0x0413, field_type, 3, 200);
+        let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+        assert!(
+            !metadata.contains_key("Leica:WB_RGBLevels"),
+            "type {field_type}"
+        );
+    }
 }
