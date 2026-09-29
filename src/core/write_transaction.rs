@@ -1425,6 +1425,12 @@ fn set_not_in_effect(
         return (!crate::writers::exif_surgical::stored_entry_matches_generated_proof(
             exif_payload(file_bytes),
             proof,
+            if file_bytes.starts_with(b"\x89PNG\r\n\x1a\n") || file_bytes.starts_with(&[0xff, 0xd8])
+            {
+                crate::writers::exif_surgical::EXIF_BLOCK_MAGICS
+            } else {
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS
+            },
         ))
         .then(|| {
             format!(
@@ -1740,6 +1746,57 @@ mod tests {
             apply_tag_changes(&path, &[TagChange::set("IFD0:MinSampleValue", value)]).unwrap();
             assert_eq!(fs::read(&path).unwrap(), after_numeric, "{name}");
         }
+    }
+
+    #[test]
+    fn generated_physical_proof_rejects_rw2_magic_inside_png_exif() {
+        use crate::writers::exif_surgical::IfdKind;
+        use crate::writers::generated_public_write::GeneratedWriteProof;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x000bu16.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        tiff.extend_from_slice(&2u32.to_le_bytes());
+        tiff.extend_from_slice(b"x\0\0\0");
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        let proof = GeneratedWriteProof {
+            ifd: IfdKind::Ifd0,
+            tag_id: 0x000b,
+            expected: Some((2, 2, b"x\0".to_vec())),
+        };
+        let wrap = |payload: &[u8]| {
+            let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+            png.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            png.extend_from_slice(b"eXIf");
+            png.extend_from_slice(payload);
+            png.extend_from_slice(&0u32.to_be_bytes());
+            png
+        };
+        let key = "IFD0:ProcessingSoftware";
+        let value = TagValue::String("x".to_owned());
+        assert!(
+            set_not_in_effect(
+                &wrap(&tiff),
+                &MetadataMap::new(),
+                key,
+                &value,
+                None,
+                &[proof.clone()],
+            )
+            .is_none()
+        );
+        tiff[2..4].copy_from_slice(&85u16.to_le_bytes());
+        assert!(
+            set_not_in_effect(
+                &wrap(&tiff),
+                &MetadataMap::new(),
+                key,
+                &value,
+                None,
+                &[proof],
+            )
+            .is_some()
+        );
     }
 
     #[test]

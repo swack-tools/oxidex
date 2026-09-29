@@ -224,7 +224,14 @@ pub(crate) fn prewrite_already_in_effect_proof(
         .ok()?
         .try_into()
         .ok()?;
-    super::exif_surgical::stored_entry_matches_generated_proof(&payload, &proof).then_some(proof)
+    let magics =
+        if file_bytes.starts_with(&[0xff, 0xd8]) || file_bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            super::exif_surgical::EXIF_BLOCK_MAGICS
+        } else {
+            super::tiff_surgical::WALKABLE_TIFF_MAGICS
+        };
+    super::exif_surgical::stored_entry_matches_generated_proof(&payload, &proof, magics)
+        .then_some(proof)
 }
 
 pub(crate) fn selected_proofs(

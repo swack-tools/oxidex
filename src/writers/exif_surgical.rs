@@ -4255,6 +4255,7 @@ pub(crate) fn generated_proof_matches_key(
 pub(crate) fn stored_entry_matches_generated_proof(
     file_bytes: &[u8],
     proof: &super::generated_public_write::GeneratedWriteProof,
+    magics: &[u16],
 ) -> bool {
     let Some((field_type, count, bytes)) = proof.expected.as_ref() else {
         return false;
@@ -4263,9 +4264,11 @@ pub(crate) fn stored_entry_matches_generated_proof(
         let Ok(Some(payload)) = jpeg_exif_payload(file_bytes) else {
             return false;
         };
+        // APP1 EXIF remains TIFF magic 42 even when an outer TIFF/RW2
+        // caller accepts the wider standalone-file magic set.
         scan_exif_entries(&payload)
     } else {
-        scan_exif_entries(file_bytes)
+        scan_entries_with_magics(file_bytes, magics)
     };
     let Ok(scan) = scan else {
         return false;
@@ -5816,7 +5819,7 @@ pub(crate) fn verify_exif_write_with_proofs(
                 .rev()
                 .find(|proof| generated_proof_matches_key(key, proof))
             {
-                if !stored_entry_matches_generated_proof(output, proof) {
+                if !stored_entry_matches_generated_proof(output, proof, magics) {
                     return Err(refused(format!(
                         "'{key}' was set but its source-selected physical field is unchanged and mismatched"
                     )));
@@ -5870,7 +5873,11 @@ mod tests {
             "IFD0:ProcessingSoftware",
             &proof
         ));
-        assert!(stored_entry_matches_generated_proof(&tiff, &proof));
+        assert!(stored_entry_matches_generated_proof(
+            &tiff,
+            &proof,
+            EXIF_BLOCK_MAGICS
+        ));
         for expected in [
             None,
             Some((7, 2, b"x\0".to_vec())),
@@ -5883,6 +5890,7 @@ mod tests {
                     expected,
                     ..proof.clone()
                 },
+                EXIF_BLOCK_MAGICS,
             ));
         }
         assert!(!stored_entry_matches_generated_proof(
@@ -5891,11 +5899,39 @@ mod tests {
                 tag_id: 0x000c,
                 ..proof.clone()
             },
+            EXIF_BLOCK_MAGICS,
         ));
         let mut duplicate = tiff.clone();
         duplicate[8..10].copy_from_slice(&2u16.to_le_bytes());
         duplicate.splice(22..22, tiff[10..22].iter().copied());
-        assert!(!stored_entry_matches_generated_proof(&duplicate, &proof));
+        assert!(!stored_entry_matches_generated_proof(
+            &duplicate,
+            &proof,
+            EXIF_BLOCK_MAGICS
+        ));
+        let mut rw2 = tiff.clone();
+        rw2[2..4].copy_from_slice(&85u16.to_le_bytes());
+        assert!(!stored_entry_matches_generated_proof(
+            &rw2,
+            &proof,
+            EXIF_BLOCK_MAGICS
+        ));
+        assert!(stored_entry_matches_generated_proof(
+            &rw2,
+            &proof,
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        ));
+        // A JPEG APP1 EXIF payload with RW2's outer-file magic remains invalid.
+        let mut jpeg = b"\xff\xd8\xff\xe1".to_vec();
+        jpeg.extend_from_slice(&((rw2.len() + 8) as u16).to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&rw2);
+        jpeg.extend_from_slice(b"\xff\xd9");
+        assert!(!stored_entry_matches_generated_proof(
+            &jpeg,
+            &proof,
+            crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+        ));
     }
 
     #[test]
