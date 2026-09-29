@@ -72,6 +72,8 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         // ExifTool does use for GoPro MP4/GPMF tracks) still matches oxidex's
         // "GoPro:" tags.
         "GoPro" => "APP6",
+        // Vivo's JPEG trailer is group 1 Vivo but group 0 Trailer.
+        "Vivo" => "Trailer",
         // CanonDR4 -> CanonVRD. Same case as FLIR, AROT and SPIFF above:
         // `%CanonVRD::DR4` declares GROUPS => { 1 => 'CanonDR4' } with no
         // family-0 override, so ExifTool files a DPP 4 recipe tag under
@@ -194,7 +196,7 @@ fn normalize_value_for_comparison(value: &str) -> String {
     //    ExifTool can actually produce costs nothing and closes the blind
     //    spot: all 33 boolean-valued instances in the corpus still match.
     if matches!(normalized, "true" | "false" | "True" | "False") {
-        return normalized.to_ascii_lowercase();
+        return normalize_boolean_transport(normalized).to_string();
     }
 
     // 3. List-valued tags. `-json` serializes them as a JSON array where
@@ -207,16 +209,52 @@ fn normalize_value_for_comparison(value: &str) -> String {
     //    src/parsers/xmp/rdf_parser.rs and its engine-side counterpart, and
     //    is deliberately left exactly as it was here -- changing the join
     //    would move 15 more comparisons underneath that work in flight.
-    if normalized.starts_with('[') && normalized.ends_with(']') {
-        let inner = &normalized[1..normalized.len() - 1];
-        let items: Vec<&str> = inner
-            .split(',')
-            .map(|s| s.trim().trim_matches('"'))
-            .collect();
-        return items.join(" ");
+    if let Some(items) = json_array_elements(normalized) {
+        return items.join(" ").trim().to_string();
     }
 
     normalized.to_string()
+}
+
+/// Fold only the boolean spellings used by the existing scalar comparison.
+/// Array elements retain their whitespace and boundaries.
+fn normalize_boolean_transport(value: &str) -> &str {
+    match value {
+        "True" => "true",
+        "False" => "false",
+        _ => value,
+    }
+}
+
+/// Parse JSON array transport into its element texts without joining them.
+fn json_array_elements(value: &str) -> Option<Vec<String>> {
+    let items = serde_json::from_str::<Vec<serde_json::Value>>(value.trim()).ok()?;
+    Some(
+        items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(value) => value,
+                other => other.to_string(),
+            })
+            .collect(),
+    )
+}
+
+/// JSON arrays retain their element boundaries when both extractors supplied
+/// them. A joined string is still compared with an array through the legacy
+/// text normalization, since ExifTool's printable output can take that form.
+fn values_match(oxidex: &str, exiftool: &str) -> bool {
+    if let (Some(ox_items), Some(et_items)) =
+        (json_array_elements(oxidex), json_array_elements(exiftool))
+    {
+        return ox_items
+            .iter()
+            .map(|item| normalize_boolean_transport(item))
+            .eq(et_items
+                .iter()
+                .map(|item| normalize_boolean_transport(item)));
+    }
+    normalize_value_for_comparison(oxidex) == normalize_value_for_comparison(exiftool)
 }
 
 /// The first (deterministic: scanned in `ox_instances`' stored order) pair
@@ -330,8 +368,7 @@ fn count_instance_coverage(
                 .get(&(sf, key.clone()))
                 .or_else(|| ox_normalized.get(&(sf, normalize_key_for_comparison(&key))));
             if let Some(ox) = ox
-                && normalize_value_for_comparison(&ox.value)
-                    == normalize_value_for_comparison(&et.value)
+                && values_match(&ox.value, &et.value)
             {
                 matched += 1;
             }
@@ -488,10 +525,7 @@ impl ComparisonEngine {
                 };
 
                 // Normalize values for comparison to handle formatting differences
-                let norm_ox = normalize_value_for_comparison(ox_value);
-                let norm_et = normalize_value_for_comparison(et_value);
-
-                if norm_ox == norm_et {
+                if values_match(ox_value, et_value) {
                     // Values match after normalization
                     comparison.matched_tags.push(key);
                 } else {
@@ -786,14 +820,120 @@ mod tests {
         }
     }
 
-    /// The one thing that legitimately collapses: `-json` arrays. Left
-    /// exactly as-is; the join style is owned by the XMP list-rendering work.
+    /// A JSON array can still match a joined scalar. The join style is owned
+    /// by the XMP list-rendering work; two arrays compare by elements.
     #[test]
     fn test_json_array_transport_still_collapses() {
         assert_eq!(
             normalize_value_for_comparison(r#"["ExifTool","Test","XMP"]"#),
             "ExifTool Test XMP"
         );
+    }
+
+    #[test]
+    fn json_array_transport_keeps_commas_inside_values() {
+        let binary = "(Binary data 32 bytes, use -b option to extract)";
+        let encoded = serde_json::to_string(&[binary, binary]).unwrap();
+        assert_eq!(
+            normalize_value_for_comparison(&encoded),
+            format!("{binary} {binary}")
+        );
+        assert!(!values_match(r#"["",""]"#, r#"[""]"#));
+        assert_eq!(normalize_value_for_comparison(r#"["a, b","c"]"#), "a, b c");
+        assert_eq!(
+            normalize_value_for_comparison(r#"["a\\\"b","c"]"#),
+            "a\\\"b c"
+        );
+        assert_eq!(
+            normalize_value_for_comparison("[literal, bracket]"),
+            "[literal, bracket]"
+        );
+        let native = r#"["a b","c,d","quote \" and slash \\"]"#;
+        let encoded = serde_json::to_string(&["a b", "c,d", "quote \" and slash \\"]).unwrap();
+        assert!(values_match(&encoded, native));
+        assert!(values_match(r#"["1","2"]"#, "[1,2]"));
+        assert!(values_match(
+            r#"["ExifTool","Test","XMP"]"#,
+            "ExifTool Test XMP"
+        ));
+        assert!(!values_match(
+            "[literal, bracket]",
+            r#"["literal","bracket"]"#
+        ));
+    }
+
+    #[test]
+    fn json_array_boolean_transport_keeps_item_boundaries_and_whitespace() {
+        for (oxidex, native) in [
+            (r#"["True","False"]"#, "[true,false]"),
+            (r#"["true","false",""]"#, r#"[true,false,""]"#),
+        ] {
+            assert!(values_match(oxidex, native));
+            let result = ComparisonEngine::compare(
+                vec![TagInfo::new("Subject".into(), "XMP".into(), oxidex.into())],
+                vec![TagInfo::new("Subject".into(), "XMP".into(), native.into())],
+                "XMP",
+                1,
+                None,
+            );
+            assert_eq!(result.matched_tags.len(), 1);
+            assert_eq!(
+                count_instance_coverage(
+                    &instances(&[("sample.xmp", "XMP", "Subject", oxidex)]),
+                    &instances(&[("sample.xmp", "XMP", "Subject", native)]),
+                ),
+                (1, 1)
+            );
+        }
+        for (oxidex, native) in [
+            (r#"["True "]"#, "[true]"),
+            (r#"["TRUE"]"#, "[true]"),
+            (r#"["True",""]"#, "[true]"),
+        ] {
+            assert!(!values_match(oxidex, native));
+        }
+    }
+
+    #[test]
+    fn different_json_array_elements_are_value_differences() {
+        for (oxidex, exiftool) in [
+            (r#"["a"]"#, r#"["a",""]"#),
+            ("[]", r#"[""]"#),
+            ("[]", r#"["",""]"#),
+            (r#"["a b"]"#, r#"["a","b"]"#),
+            (r#"["a, b"]"#, r#"["a,","b"]"#),
+            (r#"["a "]"#, r#"["a"]"#),
+        ] {
+            let result = ComparisonEngine::compare(
+                vec![TagInfo::new("Subject".into(), "XMP".into(), oxidex.into())],
+                vec![TagInfo::new(
+                    "Subject".into(),
+                    "XMP".into(),
+                    exiftool.into(),
+                )],
+                "XMP",
+                1,
+                None,
+            );
+            assert_eq!(result.value_differences.len(), 1, "{oxidex} vs {exiftool}");
+            assert!(result.matched_tags.is_empty(), "{oxidex} vs {exiftool}");
+
+            let ox_instances = instances(&[("sample.xmp", "XMP", "Subject", oxidex)]);
+            let et_instances = instances(&[("sample.xmp", "XMP", "Subject", exiftool)]);
+            assert_eq!(
+                count_instance_coverage(&ox_instances, &et_instances),
+                (0, 1),
+                "{oxidex} vs {exiftool}"
+            );
+        }
+    }
+
+    #[test]
+    fn vivo_family1_matches_exiftool_trailer_family0() {
+        assert_eq!(normalize_family_for_comparison("Vivo"), "Trailer");
+        let ox = instances(&[("vivo.jpg", "Vivo", "ImageWidth", "1920")]);
+        let et = instances(&[("vivo.jpg", "Trailer", "ImageWidth", "1920")]);
+        assert_eq!(count_instance_coverage(&ox, &et), (1, 1));
     }
 
     #[test]
