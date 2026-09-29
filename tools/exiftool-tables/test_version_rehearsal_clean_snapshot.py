@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -204,6 +205,155 @@ class CleanSnapshotTests(unittest.TestCase):
         active.chmod(0o600)
         with self.assertRaisesRegex(snapshot.Refused, "doesn't match private"):
             self.create()
+
+    def test_source_local_ssh_revocation_is_not_lost_in_clone(self) -> None:
+        revoked = self.root / "revoked-keys"
+        signed = git(self.owned, "commit-tree", "-S", "HEAD^{tree}")
+        self.assertEqual(subprocess.run(
+            ["git", "-C", str(self.owned), "verify-commit", signed],
+            capture_output=True).returncode, 0)
+        revoked.write_bytes(self.key.with_suffix(".pub").read_bytes())
+        git(self.owned, "config", "--local", "gpg.ssh.revocationFile", "../revoked-keys")
+        self.assertNotEqual(subprocess.run(
+            ["git", "-C", str(self.owned), "verify-commit", signed],
+            capture_output=True).returncode, 0)
+        with self.assertRaises(snapshot.Refused):
+            self.create()
+
+    def test_revocation_content_change_refuses_saved_proof(self) -> None:
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        revoked = self.root / "revoked-keys"
+        revoked.write_bytes(other.with_suffix(".pub").read_bytes())
+        git(self.owned, "config", "--local", "gpg.ssh.revocationFile", "../revoked-keys")
+        proof = self.create()
+        digest = snapshot.source_tree_sha256(self.owned)
+        revoked.write_bytes(self.key.with_suffix(".pub").read_bytes())
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                              {"generated.txt", ".exiftool-version"})
+
+    def test_source_local_minimum_trust_applies_to_snapshot_verification(self) -> None:
+        git(self.owned, "config", "--local", "gpg.minTrustLevel", "fully")
+        proof = self.create()
+        digest = snapshot.source_tree_sha256(self.owned)
+        git(self.owned, "config", "--local", "gpg.minTrustLevel", "ultimate")
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                              {"generated.txt", ".exiftool-version"})
+        self.target = self.root / "other-target"
+        self.target.mkdir()
+        with self.assertRaisesRegex(snapshot.Refused, "verify-commit"):
+            self.create()
+
+    def test_default_key_command_can_sign_a_clean_snapshot(self) -> None:
+        self.git_config.write_text("[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+                                   "[gpg]\n\tformat = ssh\n")
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        self.allowed_signers.write_text(
+            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
+            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n"
+        )
+        command = self.root / "default-key-command"
+        literal = self.key.with_suffix(".pub").read_text().strip()
+        command.write_text("#!/bin/sh\nprintf '%s\\n' 'key::" + literal + "'\n")
+        command.chmod(0o700)
+        git(self.owned, "config", "--local", "gpg.ssh.defaultKeyCommand", str(command))
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        agent = subprocess.check_output(["ssh-agent", "-s"], text=True)
+        socket = re.search(r"SSH_AUTH_SOCK=([^;]+);", agent)
+        pid = re.search(r"SSH_AGENT_PID=([0-9]+);", agent)
+        self.assertIsNotNone(socket)
+        self.assertIsNotNone(pid)
+        agent_env = {"SSH_AUTH_SOCK": socket.group(1), "SSH_AGENT_PID": pid.group(1)}
+        try:
+            with patch.dict(os.environ, agent_env):
+                subprocess.run(["ssh-add", str(self.key)], check=True, capture_output=True)
+                git(self.owned, "commit-tree", "-S", "HEAD^{tree}")
+                proof = self.create()
+                digest = snapshot.source_tree_sha256(self.owned)
+                command.write_text("#!/bin/sh\nprintf '%s\\n' 'key::" +
+                                   other.with_suffix(".pub").read_text().strip() + "'\n")
+                with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+                    snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                                      {"generated.txt", ".exiftool-version"})
+        finally:
+            subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
+                           check=True, capture_output=True)
+
+    def test_default_key_command_timeout_kills_pipe_holding_child(self) -> None:
+        self.git_config.write_text("[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+                                   "[gpg]\n\tformat = ssh\n")
+        marker = self.root / "late-child-marker"
+        command = self.root / "hanging-default-key-command"
+        command.write_text("#!/bin/sh\n(sleep 1; printf child > '" + str(marker) + "') &\nexit 0\n")
+        command.chmod(0o700)
+        git(self.owned, "config", "--local", "gpg.ssh.defaultKeyCommand", str(command))
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        started = time.monotonic()
+        with patch.object(snapshot, "DEFAULT_KEY_TIMEOUT_SECONDS", 0.1):
+            with self.assertRaisesRegex(snapshot.Refused, "timed out"):
+                snapshot._signature_trust(self.owned)
+        self.assertLess(time.monotonic() - started, 0.8)
+        time.sleep(1.1)
+        self.assertFalse(marker.exists(), "timed-out descendant continued after group kill")
+
+    def test_private_signing_key_without_public_sidecar_can_sign(self) -> None:
+        git(self.owned, "config", "--local", "user.signingkey", str(self.key))
+        self.key.with_suffix(".pub").unlink()
+        git(self.owned, "commit-tree", "-S", "HEAD^{tree}")
+        proof = self.create()
+        self.assertEqual(proof["signing_key_mode"], "derived")
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        shutil.copyfile(other, self.key)
+        self.key.chmod(0o600)
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent,
+                              snapshot.source_tree_sha256(self.owned),
+                              {"generated.txt", ".exiftool-version"})
+
+    def test_encrypted_private_key_without_sidecar_refuses_without_prompt(self) -> None:
+        encrypted = self.root / "encrypted-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "secret", "-f", str(encrypted)],
+                       check=True, capture_output=True)
+        encrypted.with_suffix(".pub").unlink()
+        git(self.owned, "config", "--local", "user.signingkey", str(encrypted))
+        with self.assertRaisesRegex(snapshot.Refused, "cannot derive SSH public key noninteractively"):
+            snapshot._signature_trust(self.owned)
+
+    def test_repo_local_ssh_program_is_used_by_snapshot(self) -> None:
+        marker = self.root / "program-invoked"
+        wrapper = self.root / "ssh-keygen-wrapper"
+        wrapper.write_text("#!/bin/sh\nprintf called >> '" + str(marker) + "'\nexec '" +
+                           str(shutil.which("ssh-keygen")) + "' \"$@\"\n")
+        wrapper.chmod(0o700)
+        git(self.owned, "config", "--local", "gpg.ssh.program", str(wrapper))
+        proof = self.create()
+        self.assertTrue(marker.is_file())
+        wrapper.write_text(wrapper.read_text() + "# changed\n")
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent,
+                              snapshot.source_tree_sha256(self.owned),
+                              {"generated.txt", ".exiftool-version"})
+
+    def test_repo_local_author_identity_is_used_by_snapshot(self) -> None:
+        self.git_config.write_text("[gpg]\n\tformat = ssh\n"
+                                   f"[user]\n\tsigningkey = {self.key.with_suffix('.pub')}\n"
+                                   f"[gpg \"ssh\"]\n\tallowedSignersFile = {self.allowed_signers}\n")
+        git(self.owned, "config", "--local", "user.name", "Local Signer")
+        git(self.owned, "config", "--local", "user.email", "test@example.invalid")
+        proof = self.create()
+        self.assertIn("Local Signer", git(Path(proof["path"]), "show", "-s", "--format=%an", "HEAD"))
+        git(self.owned, "config", "--local", "user.name", "Changed Signer")
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent,
+                              snapshot.source_tree_sha256(self.owned),
+                              {"generated.txt", ".exiftool-version"})
 
     def test_unexpected_untracked_and_symlink_inputs_refuse(self) -> None:
         (self.owned / "unexpected.txt").write_text("unsafe")

@@ -15,18 +15,39 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
-from typing import Any
+from typing import Any, NamedTuple
 
 
 SNAPSHOT_DIR = "measurement-source"
 OID = re.compile(r"[0-9a-f]{40}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 EXCLUDED_DIRS = {".git", "target", "__pycache__"}
+DEFAULT_KEY_TIMEOUT_SECONDS = 5
 
 
 class Refused(ValueError):
     pass
+
+
+class SigningTrust(NamedTuple):
+    signing_format: str
+    effective_key: str
+    key_mode: str | None
+    public_path: str | None
+    public_sha: str
+    allowed_path: str | None
+    allowed_sha: str | None
+    fingerprint: str | None
+    revocation_path: str | None
+    revocation_sha: str | None
+    default_command_sha: str | None
+    program_path: str | None
+    program_sha: str | None
+    author_name: str
+    author_email: str
+    minimum_trust: str
 
 
 def _git(repo: Path, *args: str, binary: bool = False) -> str | bytes:
@@ -90,25 +111,95 @@ def _ssh_fingerprint(public_key: bytes) -> str:
     return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
-def _signature_trust(source: Path) -> tuple[str, str, str | None, str | None, str, str | None, str | None, str | None]:
-    """Resolve source signing configuration and public-key bytes, not clone config."""
+def _configured_file(source: Path, option: str, label: str) -> tuple[str | None, str | None]:
+    configured = _git(source, "config", "--path", "--get", "--default=", option)
+    assert isinstance(configured, str)
+    if not configured:
+        return None, None
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = source / path
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f"clean measurement snapshot {label} is absent or not regular")
+    path = path.resolve()
+    return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _default_ssh_key(source: Path, command: str) -> str:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    process = subprocess.Popen(command, shell=True, executable="/bin/sh", cwd=source,
+                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        stdout, _ = process.communicate(timeout=DEFAULT_KEY_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        # A shell may have exited while a child still holds stdout open. Kill
+        # the whole isolated group before reaping instead of waiting on that
+        # inherited pipe indefinitely.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        raise Refused("clean measurement snapshot default SSH key command timed out") from error
+    if process.returncode != 0 or not stdout:
+        raise Refused("clean measurement snapshot default SSH key command failed")
+    try:
+        first = stdout.splitlines()[0].decode("utf-8", errors="strict").strip()
+    except UnicodeError as error:
+        raise Refused("clean measurement snapshot default SSH key command returned invalid text") from error
+    if not first.startswith("key::"):
+        raise Refused("clean measurement snapshot default SSH key command returned no key:: public key")
+    return first
+
+
+def _ssh_program(source: Path) -> tuple[str | None, str | None]:
+    configured = _git(source, "config", "--get", "--default=", "gpg.ssh.program")
+    assert isinstance(configured, str)
+    if not configured:
+        return None, None
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        candidate = source / candidate if "/" in configured else Path(shutil.which(configured) or "")
+    if not candidate.is_file():
+        raise Refused("clean measurement snapshot SSH program is absent")
+    candidate = candidate.resolve()
+    return str(candidate), hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+
+def _signature_trust(source: Path) -> SigningTrust:
+    """Resolve effective source signing and trust configuration before cloning."""
     signing_format = _git(source, "config", "--get", "--default=openpgp", "gpg.format")
     assert isinstance(signing_format, str)
     signing_key = _git(source, "config", "--get", "--default=", "user.signingkey")
     assert isinstance(signing_key, str)
+    author_name = _git(source, "config", "--get", "--default=", "user.name")
+    author_email = _git(source, "config", "--get", "--default=", "user.email")
+    minimum_trust = _git(source, "config", "--get", "--default=", "gpg.minTrustLevel")
+    assert isinstance(author_name, str) and isinstance(author_email, str) and isinstance(minimum_trust, str)
     if signing_format != "ssh":
-        return (signing_format, signing_key, None, None,
-                hashlib.sha256(signing_key.encode()).hexdigest(), None, None, None)
+        return SigningTrust(signing_format, signing_key, None, None,
+                            hashlib.sha256(signing_key.encode()).hexdigest(), None, None, None,
+                            None, None, None, None, None, author_name, author_email, minimum_trust)
+    default_command = _git(source, "config", "--get", "--default=", "gpg.ssh.defaultKeyCommand")
+    assert isinstance(default_command, str)
+    default_command_sha = (hashlib.sha256(default_command.encode()).hexdigest()
+                           if not signing_key and default_command else None)
     if not signing_key:
-        raise Refused("clean measurement snapshot SSH signing key is absent")
-    if signing_key.startswith("key::"):
+        if not default_command:
+            raise Refused("clean measurement snapshot SSH signing key is absent")
+        signing_key = _default_ssh_key(source, default_command)
+    if signing_key.startswith("key::") or signing_key.startswith(("ssh-", "ecdsa-", "sk-")):
         literal = signing_key.removeprefix("key::").strip()
         if not literal:
             raise Refused("clean measurement snapshot literal SSH signing key is empty")
         key_mode, public_path = "literal", None
         public_sha = hashlib.sha256(literal.encode()).hexdigest()
         fingerprint = _ssh_fingerprint(literal.encode())
-        effective_key = signing_key
+        effective_key = "key::" + literal
     else:
         key_path = Path(signing_key).expanduser()
         if not key_path.is_absolute():
@@ -121,22 +212,57 @@ def _signature_trust(source: Path) -> tuple[str, str, str | None, str | None, st
         key_bytes = key_path.read_bytes()
         public_key = (key_path if key_bytes.startswith((b"ssh-", b"ecdsa-", b"sk-"))
                       else Path(str(key_path) + ".pub"))
-        if not public_key.is_file():
-            raise Refused("clean measurement snapshot SSH public signing key is absent")
-        key_mode, public_path = "file", str(public_key.resolve())
-        public_sha = hashlib.sha256(public_key.read_bytes()).hexdigest()
-        fingerprint = _ssh_fingerprint(public_key.read_bytes())
+        if public_key.is_file():
+            public_bytes = public_key.read_bytes()
+            public_path = str(public_key.resolve())
+        else:
+            # `ssh-keygen -y` emits only the public key; a blank passphrase and
+            # closed stdin keep encrypted keys from prompting indefinitely.
+            try:
+                derived = subprocess.run(["ssh-keygen", "-y", "-P", "", "-f", str(key_path)],
+                                         stdin=subprocess.DEVNULL, capture_output=True,
+                                         timeout=5, check=False)
+            except subprocess.TimeoutExpired as error:
+                raise Refused("clean measurement snapshot SSH public-key derivation timed out") from error
+            if derived.returncode != 0:
+                raise Refused("clean measurement snapshot cannot derive SSH public key noninteractively")
+            public_bytes, public_path = derived.stdout, None
+        key_mode = "file" if public_path is not None else "derived"
+        public_sha = hashlib.sha256(public_bytes).hexdigest()
+        fingerprint = _ssh_fingerprint(public_bytes)
         effective_key = str(key_path)
-    configured = _git(source, "config", "--path", "--get", "gpg.ssh.allowedSignersFile")
-    assert isinstance(configured, str)
-    path = Path(configured).expanduser()
-    if not path.is_absolute():
-        path = source / path
-    if path.is_symlink() or not path.is_file():
-        raise Refused("clean measurement snapshot allowed signers file is absent or not regular")
-    path = path.resolve()
-    return (signing_format, effective_key, key_mode, public_path, public_sha,
-            str(path), hashlib.sha256(path.read_bytes()).hexdigest(), fingerprint)
+    allowed_path, allowed_sha = _configured_file(source, "gpg.ssh.allowedSignersFile", "allowed signers file")
+    if allowed_path is None:
+        raise Refused("clean measurement snapshot allowed signers file is absent")
+    revocation_path, revocation_sha = _configured_file(source, "gpg.ssh.revocationFile", "SSH revocation file")
+    program_path, program_sha = _ssh_program(source)
+    return SigningTrust(signing_format, effective_key, key_mode, public_path, public_sha,
+                        allowed_path, allowed_sha, fingerprint, revocation_path, revocation_sha,
+                        default_command_sha, program_path, program_sha, author_name, author_email,
+                        minimum_trust)
+
+
+def _signing_options(trust: SigningTrust) -> list[str]:
+    options = ["-c", f"gpg.format={trust.signing_format}"]
+    for name, value in (("user.signingkey", trust.effective_key),
+                        ("user.name", trust.author_name), ("user.email", trust.author_email),
+                        ("gpg.ssh.program", trust.program_path)):
+        if value:
+            options += ["-c", f"{name}={value}"]
+    return options
+
+
+def _verification_options(trust: SigningTrust) -> list[str]:
+    options = ["-c", f"gpg.format={trust.signing_format}"]
+    if trust.minimum_trust:
+        options += ["-c", f"gpg.minTrustLevel={trust.minimum_trust}"]
+    if trust.signing_format == "ssh":
+        options += ["-c", f"gpg.ssh.allowedSignersFile={trust.allowed_path}"]
+        if trust.revocation_path:
+            options += ["-c", f"gpg.ssh.revocationFile={trust.revocation_path}"]
+        if trust.program_path:
+            options += ["-c", f"gpg.ssh.program={trust.program_path}"]
+    return options
 
 
 def _source_identity(source: Path, parent: str, expected_digest: str,
@@ -189,25 +315,27 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     newly_generated = sorted(set(rows) - _tracked(source))
     if newly_generated:
         _git(measured, "add", "-f", "--", *newly_generated)
-    (signing_format, signing_key, key_mode, public_path, public_sha,
-     trust_path, trust_sha, fingerprint) = _signature_trust(source)
-    signing_options = ["-c", f"gpg.format={signing_format}"]
-    if signing_key:
-        signing_options += ["-c", f"user.signingkey={signing_key}"]
-    _git(measured, *signing_options, "commit", "--quiet", "--allow-empty", "-S", "-m",
+    trust = _signature_trust(source)
+    _git(measured, *_signing_options(trust), "commit", "--quiet", "--allow-empty", "-S", "-m",
          "test: snapshot generated source for native read measurement")
     commit = _git(measured, "rev-parse", "HEAD")
     tree = _git(measured, "rev-parse", "HEAD^{tree}")
     assert isinstance(commit, str) and isinstance(tree, str)
     paths, patch_sha = _diff(measured, parent, commit)
     proof: dict[str, Any] = {
-        "schema": 1, "path": str(measured), "parent_commit": parent,
+        "schema": 2, "path": str(measured), "parent_commit": parent,
         "commit": commit, "tree": tree, "source_tree_sha256": expected_digest,
         "changed_paths": paths, "patch_sha256": patch_sha,
-        "signing_format": signing_format,
-        "signing_key_mode": key_mode, "signing_key_public_path": public_path,
-        "signing_key_sha256": public_sha, "signing_key_fingerprint": fingerprint,
-        "allowed_signers_path": trust_path, "allowed_signers_sha256": trust_sha,
+        "signing_format": trust.signing_format,
+        "signing_key_mode": trust.key_mode, "signing_key_public_path": trust.public_path,
+        "signing_key_sha256": trust.public_sha, "signing_key_fingerprint": trust.fingerprint,
+        "allowed_signers_path": trust.allowed_path, "allowed_signers_sha256": trust.allowed_sha,
+        "revocation_path": trust.revocation_path, "revocation_sha256": trust.revocation_sha,
+        "default_key_command_sha256": trust.default_command_sha,
+        "ssh_program_path": trust.program_path, "ssh_program_sha256": trust.program_sha,
+        "author_identity_sha256": hashlib.sha256(
+            json.dumps([trust.author_name, trust.author_email]).encode()).hexdigest(),
+        "minimum_trust_level": trust.minimum_trust,
     }
     validate(proof, source, target, parent, expected_digest, sanctioned_paths)
     return proof
@@ -222,8 +350,11 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
                        "source_tree_sha256", "changed_paths", "patch_sha256",
                        "signing_format", "signing_key_mode", "signing_key_public_path",
                        "signing_key_sha256", "signing_key_fingerprint",
-                       "allowed_signers_path", "allowed_signers_sha256"}
-            or proof["schema"] != 1 or proof["path"] != str(measured)
+                       "allowed_signers_path", "allowed_signers_sha256",
+                       "revocation_path", "revocation_sha256", "default_key_command_sha256",
+                       "ssh_program_path", "ssh_program_sha256", "author_identity_sha256",
+                       "minimum_trust_level"}
+            or proof["schema"] != 2 or proof["path"] != str(measured)
             or proof["parent_commit"] != parent or proof["source_tree_sha256"] != expected_digest
             or not isinstance(proof["commit"], str) or not OID.fullmatch(proof["commit"])
             or not isinstance(proof["tree"], str) or not OID.fullmatch(proof["tree"])
@@ -233,10 +364,10 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
             or not isinstance(proof["signing_key_sha256"], str)
             or not SHA.fullmatch(proof["signing_key_sha256"])
             or (proof["signing_format"] == "ssh" and
-                (proof["signing_key_mode"] not in {"file", "literal"}
+                (proof["signing_key_mode"] not in {"file", "derived", "literal"}
                  or (proof["signing_key_mode"] == "file" and
                      not isinstance(proof["signing_key_public_path"], str))
-                 or (proof["signing_key_mode"] == "literal" and
+                 or (proof["signing_key_mode"] in {"literal", "derived"} and
                      proof["signing_key_public_path"] is not None)
                  or not isinstance(proof["signing_key_fingerprint"], str)
                  or not proof["signing_key_fingerprint"].startswith("SHA256:")))
@@ -250,7 +381,20 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
                  or not SHA.fullmatch(proof["allowed_signers_sha256"])))
             or (proof["signing_format"] != "ssh" and
                 (proof["allowed_signers_path"] is not None
-                 or proof["allowed_signers_sha256"] is not None))):
+                 or proof["allowed_signers_sha256"] is not None))
+            or any(proof[path] is not None and (not isinstance(proof[path], str) or
+                       not isinstance(proof[sha], str) or not SHA.fullmatch(proof[sha]))
+                   for path, sha in (("revocation_path", "revocation_sha256"),
+                                    ("ssh_program_path", "ssh_program_sha256")))
+            or any(proof[path] is None and proof[sha] is not None
+                   for path, sha in (("revocation_path", "revocation_sha256"),
+                                    ("ssh_program_path", "ssh_program_sha256")))
+            or (proof["default_key_command_sha256"] is not None and
+                (not isinstance(proof["default_key_command_sha256"], str) or
+                 not SHA.fullmatch(proof["default_key_command_sha256"])))
+            or not isinstance(proof["author_identity_sha256"], str)
+            or not SHA.fullmatch(proof["author_identity_sha256"])
+            or not isinstance(proof["minimum_trust_level"], str)):
         raise Refused("clean measurement snapshot proof identity is malformed")
     if measured.is_symlink() or not measured.is_dir():
         raise Refused("clean measurement snapshot checkout is absent or symlinked")
@@ -261,25 +405,29 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
             or _git(measured, "rev-parse", "HEAD^{tree}") != proof["tree"]
             or _git(measured, "status", "--porcelain=v1", "--untracked-files=all")):
         raise Refused("clean measurement snapshot commit or checkout changed")
-    (signing_format, signing_key, key_mode, public_path, public_sha,
-     trust_path, trust_sha, fingerprint) = _signature_trust(source)
-    if (proof["signing_format"] != signing_format
-            or proof["signing_key_mode"] != key_mode
-            or proof["signing_key_public_path"] != public_path
-            or proof["signing_key_sha256"] != public_sha
-            or proof["signing_key_fingerprint"] != fingerprint
-            or proof["allowed_signers_path"] != trust_path
-            or proof["allowed_signers_sha256"] != trust_sha):
+    trust = _signature_trust(source)
+    if (proof["signing_format"] != trust.signing_format
+            or proof["signing_key_mode"] != trust.key_mode
+            or proof["signing_key_public_path"] != trust.public_path
+            or proof["signing_key_sha256"] != trust.public_sha
+            or proof["signing_key_fingerprint"] != trust.fingerprint
+            or proof["allowed_signers_path"] != trust.allowed_path
+            or proof["allowed_signers_sha256"] != trust.allowed_sha
+            or proof["revocation_path"] != trust.revocation_path
+            or proof["revocation_sha256"] != trust.revocation_sha
+            or proof["default_key_command_sha256"] != trust.default_command_sha
+            or proof["ssh_program_path"] != trust.program_path
+            or proof["ssh_program_sha256"] != trust.program_sha
+            or proof["author_identity_sha256"] != hashlib.sha256(
+                json.dumps([trust.author_name, trust.author_email]).encode()).hexdigest()
+            or proof["minimum_trust_level"] != trust.minimum_trust):
         raise Refused("clean measurement snapshot SSH trust differs from signed proof")
-    verification_options = ["-c", f"gpg.format={signing_format}"]
-    if signing_format == "ssh":
-        verification_options += ["-c", f"gpg.ssh.allowedSignersFile={trust_path}"]
+    verification_options = _verification_options(trust)
     _git(measured, *verification_options, "verify-commit", "HEAD")
-    if signing_format == "ssh" and _git(measured, *verification_options,
-                                          "show", "-s", "--format=%GF", "HEAD") != fingerprint:
+    if trust.signing_format == "ssh" and _git(measured, *verification_options,
+                                               "show", "-s", "--format=%GF", "HEAD") != trust.fingerprint:
         raise Refused("clean measurement snapshot signer differs from bound public key")
-    if _signature_trust(source) != (signing_format, signing_key, key_mode, public_path,
-                                    public_sha, trust_path, trust_sha, fingerprint):
+    if _signature_trust(source) != trust:
         raise Refused("clean measurement snapshot SSH trust changed during verification")
     paths, patch_sha = _diff(measured, parent, proof["commit"])
     if (paths != proof["changed_paths"] or patch_sha != proof["patch_sha256"]
