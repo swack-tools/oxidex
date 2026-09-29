@@ -91,7 +91,7 @@ TASK8_RUST_BOUNDARY = (
 # text alone can retain the same digest inside a block comment or behind
 # #[cfg(any())]. Any edit to this Rust file needs deliberate review and a pin
 # refresh, including edits unrelated to the bounded firmware route.
-KEYED_ROUTE_SOURCE_SHA256 = "865fa30f8fc3836a095fdc3ad6621a8c26cc68affdf25ee59a7e4e9d49cd24ab"
+KEYED_ROUTE_SOURCE_SHA256 = "3d0fcaec99246077518d3bc956df9b867e81c3f7eea4d6e337fd8e314fa4f5fb"
 
 # These narrower digests document which functions compose the reviewed route;
 # the complete-file digest above authenticates their compilation context.
