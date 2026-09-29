@@ -701,6 +701,13 @@ fn locate<'d>(
             ty,
         });
     }
+    // Exif.pm:6539 rejects a stored pointer into the TIFF header even when
+    // the enclosing TIFF base is unavailable. The refusal spends the same
+    // warning budget as a located suspicious pointer; other unknown
+    // out-of-line pointers remain silent until a base is known.
+    if matches!(rule, DirectoryRule::Overlap { .. }) && entry.value_offset < 8 {
+        return Err(Refusal::Warned);
+    }
     // Exif.pm:6510, 6546: an offset, corrected into `data`.
     let Some(base) = dir.base else {
         return Err(Refusal::Silent);
@@ -3500,6 +3507,23 @@ mod tests {
     }
 
     // -- K-O: Exif.pm:6539/6549, ExifTool's rules for non-MakerNotes tables ------
+
+    #[test]
+    fn detached_non_apple_location_warns_for_header_pointer_only() {
+        let data = [0u8; 64];
+        assert!(matches!(
+            non_apple_makernote_location(5, 3, 0, 18, &data, 8, 22, None),
+            MakerNoteLocation::Warned
+        ));
+        assert!(matches!(
+            non_apple_makernote_location(5, 3, 8, 18, &data, 8, 22, None),
+            MakerNoteLocation::Unavailable
+        ));
+        assert!(matches!(
+            non_apple_makernote_location(1, 3, 0, 18, &data, 8, 22, None),
+            MakerNoteLocation::Readable
+        ));
+    }
 
     /// [`STRINGS`]' tags in a table whose family-0 group is `EXIF`, as
     /// `Exif::Main`'s is: the overlap rule applies, not the floor.
