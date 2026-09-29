@@ -2879,6 +2879,23 @@ pub(crate) fn makernote_value_holds_no_tags(data: &[u8], make: &str, model: &str
     special_makernote_value("MakerNote", data, make, model).is_some()
 }
 
+/// Whether the selected source fallback files this physical note under EXIF
+/// instead of MakerNotes. A JPEG preview also holds no maker tags, but its
+/// `File:PreviewImage` is removed by `-MakerNotes:All=` in pinned 13.59, so
+/// `makernote_value_holds_no_tags` cannot answer this group-clear question.
+pub(crate) fn makernote_is_exif_fallback(data: &[u8], make: &str, model: &str) -> bool {
+    special_makernote_value("ExifIFD:MakerNote", data, make, model)
+        .as_ref()
+        .is_some_and(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "ExifIFD:MakerNoteUnknownText"
+                    | "ExifIFD:MakerNoteUnknownBinary"
+                    | "ExifIFD:MakerNoteSamsung1a"
+            )
+        })
+}
+
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],
@@ -4487,13 +4504,80 @@ fn makernote_context<'a>(
 ///
 /// Camera manufacturers store proprietary metadata in MakerNote tags.
 /// This function dispatches to the appropriate manufacturer parser based on
-/// the camera make detected from the TIFF metadata.
+/// Merge rows emitted by the MakerNote-only side decoders. Their origin is
+/// known here even when a legacy parser wrote a `Vendor:Tag` lookup key.
+/// Tables in the pinned source-derived inventory use family 0 MakerNotes;
+/// File/EXIF/Composite fallbacks and already explicit identities stay intact.
+fn merge_makernote_rows(metadata: &mut MetadataMap, source: &MetadataMap) {
+    for (key, occurrence) in source.keyed_occurrences() {
+        let mut row = occurrence.clone();
+        if crate::writers::exif_surgical::is_makernote_group(&row.group0)
+            && row.group0.as_ref() != "MakerNotes"
+        {
+            let family1 = row.group0.clone();
+            row.group0 = crate::core::tag_occurrence::intern("MakerNotes");
+            if row.group1.is_empty() {
+                row.group1 = family1;
+            }
+        }
+        metadata.record_occurrence(key.to_string(), row);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn makernote_side_decoder_merge_preserves_source_families() {
+    let mut source = MetadataMap::new();
+    source.insert("Ricoh:RicohDate", TagValue::new_string("date"));
+    source.insert("Casio:FirmwareDate", TagValue::new_string("firmware"));
+    source.insert("MakerNotes:PreviewImage", TagValue::new_binary(vec![1, 2]));
+    source.insert("File:PreviewImage", TagValue::new_binary(vec![3, 4]));
+    let mut merged = MetadataMap::new();
+    merge_makernote_rows(&mut merged, &source);
+    for key in ["Ricoh:RicohDate", "Casio:FirmwareDate"] {
+        let row = merged.occurrences_for(key)[0];
+        assert_eq!(&*row.group0, "MakerNotes");
+        assert_eq!(&*row.group1, key.split_once(':').unwrap().0);
+    }
+    assert_eq!(
+        &*merged.occurrences_for("MakerNotes:PreviewImage")[0].group0,
+        "MakerNotes"
+    );
+    assert_eq!(
+        &*merged.occurrences_for("File:PreviewImage")[0].group0,
+        "File"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn casio_side_decoder_keeps_ifd0_model_condition() {
+    let mut note = b"QVC\0\0\0".to_vec();
+    note.extend_from_slice(&1u16.to_le_bytes());
+    note.extend_from_slice(&0x3007u16.to_le_bytes());
+    note.extend_from_slice(&3u16.to_le_bytes());
+    note.extend_from_slice(&1u32.to_le_bytes());
+    note.extend_from_slice(&0u32.to_le_bytes());
+    note.extend_from_slice(&0u32.to_le_bytes());
+    let ctx = MakerNoteContext::detached(&note);
+    let mut metadata = MetadataMap::new();
+    metadata.insert("IFD0:Make", TagValue::new_string("CASIO COMPUTER CO.,LTD"));
+    metadata.insert("IFD0:Model", TagValue::new_string("EX-ZR300"));
+    parse_makernote(&ctx, ByteOrder::LittleEndian, &mut metadata);
+    assert_eq!(
+        metadata.get_string("Casio:BestShotMode"),
+        Some("Unknown (0)")
+    );
+    assert_eq!(
+        &*metadata.occurrences_for("Casio:BestShotMode")[0].group0,
+        "MakerNotes"
+    );
+}
+
+/// Parses a MakerNote using the camera make detected from TIFF metadata.
 ///
-/// # Arguments
-///
-/// * `ctx` - Where the MakerNote sits, and how far its decoder may read
-/// * `byte_order` - Byte order for interpreting multi-byte values
-/// * `metadata` - MetadataMap to populate with manufacturer-specific tags
+/// `ctx` supplies the MakerNote bytes and offset context; `byte_order`
+/// selects its numeric decoding, and `metadata` receives the resulting tags.
 fn parse_makernote_with_session(
     ctx: &MakerNoteContext<'_>,
     byte_order: ByteOrder,
@@ -4517,9 +4601,10 @@ fn parse_makernote_with_session(
         use crate::parsers::xmp::google_hdrp::{
             HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
         };
+        let mut maker_rows = MetadataMap::new();
         for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
             let priority = hdrp_tag_priority(&tag);
-            metadata.insert_occurrence(
+            maker_rows.insert_occurrence(
                 tag,
                 TagValue::String(value),
                 priority,
@@ -4527,6 +4612,7 @@ fn parse_makernote_with_session(
                 crate::core::Instance::default(),
             );
         }
+        merge_makernote_rows(metadata, &maker_rows);
         return;
     }
 
@@ -4538,13 +4624,15 @@ fn parse_makernote_with_session(
         return;
     }
 
+    let mut maker_rows = MetadataMap::new();
+
     // Sony's own `PreviewImage` (0x2001) is deliberately absent from Sony's
     // string-map `MAIN_TABLE`: its value routinely lives outside the
     // MakerNote payload the dispatcher hands that table, so it needs the
     // whole TIFF block the way Sigma's preview does. Unlike Sigma this is an
     // addition alongside the normal dispatch below, not a replacement for
     // it - every other Sony tag reaches metadata through the ordinary path.
-    parse_sony_preview_image_if_sony(&make, ctx, metadata);
+    parse_sony_preview_image_if_sony(&make, ctx, &mut maker_rows);
 
     // Casio Type2's `PreviewImage` (0x2000) and Olympus's (via
     // `CameraSettings` 0x0100/0x0101/0x0102) and Minolta's (via 0x0081 or
@@ -4554,12 +4642,19 @@ fn parse_makernote_with_session(
     // way Sigma's/Sony's do. All three are additions alongside the normal
     // dispatch below, not a replacement for it - every other tag from these
     // makes still reaches metadata through the ordinary path.
-    parse_casio_preview_image_if_casio(&make, ctx, byte_order, metadata);
-    parse_casio_type2_extra_tags_if_casio(&make, ctx, byte_order, metadata);
-    parse_ricoh_extra_tags_if_ricoh(&make, ctx, byte_order, model.as_deref(), metadata);
-    parse_ge_extra_tags_if_ge(&make, ctx, byte_order, metadata);
-    parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, metadata);
-    parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, metadata);
+    parse_casio_preview_image_if_casio(&make, ctx, byte_order, &mut maker_rows);
+    parse_casio_type2_extra_tags_if_casio(
+        &make,
+        ctx,
+        byte_order,
+        model.as_deref(),
+        &mut maker_rows,
+    );
+    parse_ricoh_extra_tags_if_ricoh(&make, ctx, byte_order, model.as_deref(), &mut maker_rows);
+    parse_ge_extra_tags_if_ge(&make, ctx, byte_order, &mut maker_rows);
+    parse_olympus_preview_image_if_olympus(&make, ctx, byte_order, &mut maker_rows);
+    parse_minolta_preview_image_if_minolta(&make, ctx, byte_order, &mut maker_rows);
+    merge_makernote_rows(metadata, &maker_rows);
 
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
@@ -4931,13 +5026,14 @@ fn parse_casio_type2_extra_tags_if_casio(
     make: &str,
     ctx: &MakerNoteContext<'_>,
     byte_order: ByteOrder,
+    model: Option<&str>,
     metadata: &mut MetadataMap,
 ) {
     if !make.trim().to_ascii_lowercase().starts_with("casio") {
         return;
     }
-    crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags(
-        ctx, byte_order, metadata,
+    crate::parsers::tiff::makernotes::casio::parse_casio_type2_extra_tags_with_model(
+        ctx, byte_order, model, metadata,
     );
 }
 
@@ -8674,9 +8770,9 @@ mod makernote_preview_image_tests {
         assert_eq!(occurrence.group1.as_ref(), "PreviewIFD");
     }
 
-    /// A maker with no family-1 override keeps passing straight through.
+    /// A maker with no family-1 override uses its MakerNote table group.
     #[test]
-    fn a_derived_pentax_preview_image_takes_no_group() {
+    fn a_derived_pentax_preview_image_uses_pentax_group() {
         let tiff = block();
         let mut metadata = MetadataMap::new();
         let ctx = MakerNoteContext::in_tiff(&tiff, 100, 200, 12);
@@ -8690,7 +8786,7 @@ mod makernote_preview_image_tests {
         );
         let occurrences = metadata.occurrences_for("Pentax:PreviewImage");
         let occurrence = occurrences.first().expect("derived Pentax preview");
-        assert_eq!(occurrence.group1.as_ref(), "");
+        assert_eq!(occurrence.group1.as_ref(), "Pentax");
     }
 
     /// Exif.pm:6228 -- `return undef if not $len`.

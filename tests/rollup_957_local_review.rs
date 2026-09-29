@@ -83,6 +83,159 @@ fn individual_copy_and_set_keep_distinct_exif_directories() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
     assert_eq!(tags(oracle, &ours), tags(oracle, &native));
+    assert_eq!(raw_create_dates(&ours), raw_create_dates(&native));
+    assert_eq!(
+        raw_create_dates(&ours).0.as_deref(),
+        Some(b"2020:01:02 03:04:05\0".as_slice())
+    );
+    assert_eq!(
+        raw_create_dates(&ours).1.as_deref(),
+        Some(b"2011:02:03 04:05:06\0".as_slice())
+    );
+}
+
+/// Read the physical 0x9004 ASCII entries from a JPEG's TIFF payload. The
+/// metadata reader can surface only one same-ID occurrence, so a row-only
+/// comparison would miss deletion of the other directory's value.
+fn raw_create_dates(path: &Path) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let bytes = fs::read(path).unwrap();
+    let at = bytes.windows(6).position(|w| w == b"Exif\0\0").unwrap() + 6;
+    let tiff = &bytes[at..];
+    let little = &tiff[..2] == b"II";
+    let word = |p: usize| -> usize {
+        let b: [u8; 2] = tiff[p..p + 2].try_into().unwrap();
+        usize::from(if little {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
+    };
+    let dword = |p: usize| -> usize {
+        let b: [u8; 4] = tiff[p..p + 4].try_into().unwrap();
+        (if little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }) as usize
+    };
+    let entry = |dir: usize, id: usize| -> Option<usize> {
+        (0..word(dir))
+            .map(|n| dir + 2 + n * 12)
+            .find(|&p| word(p) == id)
+    };
+    let value = |dir: usize| -> Option<Vec<u8>> {
+        let p = entry(dir, 0x9004)?;
+        assert_eq!(word(p + 2), 2);
+        let count = dword(p + 4);
+        let offset = if count <= 4 { p + 8 } else { dword(p + 8) };
+        Some(tiff[offset..offset + count].to_vec())
+    };
+    let ifd0 = dword(4);
+    let exif = entry(ifd0, 0x8769).map(|p| dword(p + 8));
+    (value(ifd0), exif.and_then(value))
+}
+
+#[test]
+fn copied_exif_create_date_survives_later_ifd0_set_matrix() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for source_both in [false, true] {
+        for target_exists in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let source = dir.path().join("source.jpg");
+            let ours = dir.path().join("ours.jpg");
+            let native = dir.path().join("native.jpg");
+            fs::copy(JPEG, &source).unwrap();
+            fs::copy(JPEG, &ours).unwrap();
+            let mut source_seed = vec!["-ExifIFD:CreateDate=2011:02:03 04:05:06"];
+            if source_both {
+                source_seed.push("-IFD0:CreateDate=2012:02:03 04:05:06");
+            }
+            seed(oracle, &source, &source_seed);
+            let mut dest_seed = vec!["-ExifIFD:CreateDate=2001:02:03 04:05:06"];
+            if target_exists {
+                dest_seed.push("-IFD0:CreateDate=2002:02:03 04:05:06");
+            }
+            seed(oracle, &ours, &dest_seed);
+            fs::copy(&ours, &native).unwrap();
+            let args = [
+                "-TagsFromFile",
+                source.to_str().unwrap(),
+                "-ExifIFD:CreateDate",
+                "-IFD0:CreateDate=2020:01:02 03:04:05",
+            ];
+            let expected = oracle
+                .command()
+                .arg("-overwrite_original")
+                .args(args)
+                .arg(&native)
+                .output()
+                .unwrap();
+            assert!(
+                expected.status.success(),
+                "{source_both} {target_exists}: {expected:?}"
+            );
+            let actual = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .args(args)
+                .arg(&ours)
+                .output()
+                .unwrap();
+            assert!(
+                actual.status.success(),
+                "{source_both} {target_exists}: {actual:?}"
+            );
+            let raw = raw_create_dates(&ours);
+            assert_eq!(
+                raw,
+                raw_create_dates(&native),
+                "{source_both} {target_exists}"
+            );
+            assert_eq!(raw.0.as_deref(), Some(b"2020:01:02 03:04:05\0".as_slice()));
+            assert_eq!(raw.1.as_deref(), Some(b"2011:02:03 04:05:06\0".as_slice()));
+        }
+    }
+}
+
+#[test]
+fn explicit_per_directory_sets_keep_both_while_a_single_set_moves() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for both_sets in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let ours = dir.path().join("ours.jpg");
+        let native = dir.path().join("native.jpg");
+        fs::copy(JPEG, &ours).unwrap();
+        seed(oracle, &ours, &["-ExifIFD:CreateDate=2001:02:03 04:05:06"]);
+        fs::copy(&ours, &native).unwrap();
+        let mut args = Vec::new();
+        if both_sets {
+            args.push("-ExifIFD:CreateDate=2011:02:03 04:05:06");
+        }
+        args.push("-IFD0:CreateDate=2020:01:02 03:04:05");
+        let expected = oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(&args)
+            .arg(&native)
+            .output()
+            .unwrap();
+        assert!(expected.status.success(), "{both_sets}: {expected:?}");
+        let actual = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(&args)
+            .arg(&ours)
+            .output()
+            .unwrap();
+        assert!(actual.status.success(), "{both_sets}: {actual:?}");
+        let raw = raw_create_dates(&ours);
+        assert_eq!(raw, raw_create_dates(&native), "{both_sets}");
+        assert_eq!(raw.0.as_deref(), Some(b"2020:01:02 03:04:05\0".as_slice()));
+        assert_eq!(
+            raw.1.as_deref(),
+            both_sets.then_some(b"2011:02:03 04:05:06\0".as_slice())
+        );
+    }
 }
 
 #[test]

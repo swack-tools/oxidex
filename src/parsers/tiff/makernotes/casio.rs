@@ -662,6 +662,18 @@ pub fn parse_casio_type2_extra_tags(
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
 ) {
+    let model = metadata.get_string("IFD0:Model").map(str::to_owned);
+    parse_casio_type2_extra_tags_with_model(ctx, byte_order, model.as_deref(), metadata);
+}
+
+/// The side-decoder entry point when the caller keeps pre-existing IFD0 rows
+/// outside the MakerNote output map.
+pub(crate) fn parse_casio_type2_extra_tags_with_model(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    metadata: &mut MetadataMap,
+) {
     let payload = ctx.payload();
     if !(payload.starts_with(b"QVC\0") || payload.starts_with(b"DCI\0")) {
         return;
@@ -726,7 +738,7 @@ pub fn parse_casio_type2_extra_tags(
         // Casio.pm:1517-1569 selects EX-ZR300's conditioned map before the
         // final undecoded-model arm. Its map has no zero, so ExifTool prints
         // Unknown (0); the other zero mappings, including EX-Z3, print Off.
-        let print = if metadata.get_string("IFD0:Model") == Some("EX-ZR300") {
+        let print = if model == Some("EX-ZR300") {
             "Unknown (0)"
         } else {
             "Off"

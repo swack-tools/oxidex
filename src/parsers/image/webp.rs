@@ -740,7 +740,7 @@ mod tests {
                 Some(incoming_raw)
             );
             assert_eq!(occurrences[1].priority, 1);
-            assert_eq!(occurrences[1].group1.as_ref(), "");
+            assert_eq!(occurrences[1].group1.as_ref(), "Canon");
             assert_eq!(occurrences[1].instance, Instance::default());
             assert!(occurrences[0].order < occurrences[1].order);
             assert_eq!(map.value_form(key), Some(expected_raw));

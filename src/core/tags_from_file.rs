@@ -21,7 +21,7 @@
 use crate::cli::tag_resolution::{arbitrate, family0_label, family1_label, resolved_display_value};
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations::{
-    CopyReport, is_surgical_tiff_target, read_metadata, write_metadata_counted,
+    CopyReport, is_surgical_tiff_target, read_metadata, write_metadata_counted_among,
 };
 use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
 use crate::core::{FileFormat, FileReader, TagValue};
@@ -370,6 +370,15 @@ struct Planned<'a> {
     filter: Option<&'a str>,
 }
 
+/// This physical EXIF maker-note inference may use decoded MakerNotes rows
+/// only when they came from an EXIF maker-note table. CanonRaw.pm:50/ProcessCanonRaw and
+/// KyoceraRaw.pm:27/ProcessRAW describe standalone RAW file directories;
+/// neither is an `ExifIFD:MakerNote<vendor>` source block.
+fn has_physical_exif_maker_note(occurrence: &TagOccurrence) -> bool {
+    family0_label(occurrence) == "MakerNotes"
+        && !matches!(family1_label(occurrence), "CanonRaw" | "KyoceraRaw")
+}
+
 /// A selection of the physical `ExifIFD:MakerNote<Make>` source block copies
 /// it whole. Pinned 13.59 selects the block with `all`, `EXIF:all`, or
 /// `ExifIFD:all`, but not `Canon:all` or `MakerNotes:all`, even though its
@@ -396,7 +405,7 @@ fn maker_note_rows<'a>(
     }
     let rows: Vec<(String, &TagOccurrence)> = source
         .keyed_occurrences()
-        .filter(|(_, occurrence)| family0_label(occurrence) == "MakerNotes")
+        .filter(|(_, occurrence)| has_physical_exif_maker_note(occurrence))
         .map(|(_, occurrence)| (family1_label(occurrence).to_string(), occurrence))
         .collect();
     let Some((group1, _)) = rows.first() else {
@@ -464,6 +473,8 @@ pub(crate) fn copy_tags(
     selectors: &CopySelectors,
     retain: impl Fn(&str) -> bool,
     final_make_override: Option<Option<String>>,
+    siblings: &[String],
+    copied_values: &mut Vec<(String, TagValue)>,
 ) -> Result<CopyReport> {
     let reader = MMapReader::new(dest)?;
     let format = detect_format(&reader)?;
@@ -581,7 +592,7 @@ pub(crate) fn copy_tags(
             }
             let Some((_, occurrence)) =
                 source_metadata.keyed_occurrences().find(|(_, occurrence)| {
-                    family0_label(occurrence) == "MakerNotes"
+                    has_physical_exif_maker_note(occurrence)
                         && format!("MakerNote{}", family1_label(occurrence))
                             .eq_ignore_ascii_case(source_name)
                 })
@@ -791,10 +802,16 @@ pub(crate) fn copy_tags(
                 .iter()
                 .any(|(key, _, strict)| !strict && key.eq_ignore_ascii_case(tag))
         };
-        match write_metadata_counted(dest, &dest_metadata, &[]) {
+        match write_metadata_counted_among(dest, &dest_metadata, &[], siblings) {
             Ok((outcome, proven)) => {
                 report.outcome = outcome;
                 report.copied = proven;
+                report.copied_destinations = writes.iter().map(|(key, _, _)| key.clone()).collect();
+                copied_values.extend(
+                    writes
+                        .iter()
+                        .map(|(key, value, _)| (key.clone(), value.clone())),
+                );
                 break;
             }
             Err(ExifToolError::TagsNotWritten { tags })

@@ -224,8 +224,16 @@ fn resolve_lens_occurrence(
 ) -> Option<(String, String, Option<String>)> {
     let occurrence = crate::cli::tag_resolution::resolve_requested_tag(map, key)?;
     let display = crate::cli::tag_resolution::resolved_display_value(occurrence, false);
+    // A real MakerNote occurrence has family 0 MakerNotes; its manufacturer
+    // table identity lives in family 1. Legacy rows and Composite LensType
+    // still use their existing family-0 identity.
+    let table_group = if occurrence.group0.as_ref() == "MakerNotes" {
+        &occurrence.group1
+    } else {
+        &occurrence.group0
+    };
     Some((
-        occurrence.group0.to_string(),
+        table_group.to_string(),
         value_string(&display)?,
         occurrence.value.as_ref().and_then(value_string),
     ))
