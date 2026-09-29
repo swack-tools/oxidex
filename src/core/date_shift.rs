@@ -7,7 +7,7 @@
 
 use super::operations::{read_metadata, write_metadata};
 use super::tag_value::TagValue;
-use crate::core::FileFormat;
+use crate::core::{FileFormat, FileReader};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
@@ -440,7 +440,11 @@ pub fn shift_metadata_dates(
     // this path only patched the copies the file already held.
     if op == ShiftOperation::Set
         && let Some(keys) =
-            crate::writers::exif_cross_delete::date_set_keys(&read_metadata(path)?, tag_pattern)?
+            crate::writers::exif_cross_delete::date_set_keys(&read_metadata(path)?, tag_pattern, {
+                let reader = MMapReader::new(path)?;
+                let format = detect_format(&reader)?;
+                crate::core::operations::is_surgical_tiff_target(format, &reader)
+            })?
     {
         return crate::core::operations::set_exif_dates(path, &keys, offset_or_value);
     }
@@ -464,7 +468,7 @@ pub fn shift_metadata_dates(
     }
     let spec = build_shift_spec(offset_or_value, op)?;
 
-    let format = {
+    let (format, classic_tiff_raw, walkable_tiff_raw) = {
         let reader = MMapReader::new(path)?;
         let format = detect_format(&reader)?;
         // The map and in-place shift routes can both decide that no date is
@@ -473,7 +477,13 @@ pub fn shift_metadata_dates(
         if format == FileFormat::PNG {
             crate::writers::png_writer::refuse_bad_chunk_crcs(&reader)?;
         }
-        format
+        let walkable_tiff_raw = matches!(format, FileFormat::CameraRaw(_))
+            && crate::core::operations::is_surgical_tiff_target(format, &reader);
+        let classic_tiff_raw = walkable_tiff_raw
+            && reader
+                .read(0, 4)
+                .is_ok_and(|header| matches!(header, b"II\x2a\x00" | b"MM\x00\x2a"));
+        (format, classic_tiff_raw, walkable_tiff_raw)
     };
 
     if format == FileFormat::JPEG {
@@ -490,7 +500,12 @@ pub fn shift_metadata_dates(
     // phase could still refuse (a non-EXIF CreateDate that is not a date),
     // so a direct caller got `Err` with the EXIF copies already shifted
     // (review of #964, discussion_r4112777222).
-    if matches!(format, FileFormat::TIFF | FileFormat::PNG)
+    if walkable_tiff_raw && !classic_tiff_raw && resolve_exif_targets(tag_pattern).is_some() {
+        return Err(ExifToolError::unsupported_format(
+            "Date shifts for this TIFF-derived RAW header are not supported; nothing was written",
+        ));
+    }
+    if (matches!(format, FileFormat::TIFF | FileFormat::PNG) || classic_tiff_raw)
         && let Some(targets) = resolve_exif_targets(tag_pattern)
     {
         return crate::core::write_transaction::transact(path, |scratch| {
@@ -507,6 +522,15 @@ pub fn shift_metadata_dates(
 /// segment, so binary tags are preserved byte-for-byte.
 fn shift_jpeg_dates(path: &Path, tag_pattern: &str, spec: &ShiftSpec) -> Result<()> {
     let Some(targets) = resolve_exif_targets(tag_pattern) else {
+        // These names are not ExifTool aliases for EXIF's writable dates.
+        // A JPEG with no matching XMP row treats either shift as unchanged;
+        // a matching non-EXIF row is handled by the ordinary map route.
+        if ["DateTime", "DateTimeDigitized"]
+            .iter()
+            .any(|name| tag_pattern.eq_ignore_ascii_case(name))
+        {
+            return shift_map_dates(path, tag_pattern, spec);
+        }
         return Err(ExifToolError::parse_error(format!(
             "Shifting tag '{}' is not supported for JPEG. Supported: AllDates, \
              ModifyDate, DateTimeOriginal, CreateDate",

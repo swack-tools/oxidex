@@ -1252,7 +1252,8 @@ pub(crate) fn write_metadata_with_removals(
 /// this transaction, the XP strings' direct write -- all ask). A value that
 /// differs from the file's is a set whatever its provenance (a carried row
 /// never differs); an assigned key whose value equals the file's is a set
-/// too, which the values alone cannot show. When such a same-value set falls under
+/// too, which the values alone cannot show. When a same-value set, or a
+/// surviving explicit directory assignment after a family-name delete, falls under
 /// one of the removals (`removed = ["IFD0:Make"]` and `IFD0:Make=Acme` with
 /// Make already Acme, or `EXIF:All` and a set in it) the transaction runs in
 /// ExifTool's order -- the removals, then the sets -- as two passes on a
@@ -1286,17 +1287,32 @@ pub(crate) fn write_metadata_transaction_among(
     };
     let canonical = |key: &str| crate::writers::exif_surgical::canonical_write_key(key, &baseline);
     let removals: Vec<String> = removed.iter().map(|key| canonical(key)).collect();
-    // Same-value sets a removal covers: the only ones the map cannot tell
-    // from carried rows, and the only ones that need the two passes.
+    // Sets a removal covers: same-value assignments need provenance to be
+    // distinguished from carried rows, and family-name deletion followed by
+    // an explicit directory assignment needs the same atomic two passes.
     let resets: Vec<(String, TagValue)> = assigned
         .iter()
         .filter_map(|key| {
             let value = metadata.get(key)?.clone();
             let key = canonical(key);
-            (baseline.get(key.as_str()) == Some(&value)
-                && removals.iter().any(|removal| {
-                    crate::writers::exif_surgical::removal_covers(removal, &key, &baseline)
-                }))
+            (removals.iter().any(|removal| {
+                let family_covers = removal.strip_prefix("EXIF:").is_some_and(|leaf| {
+                    [
+                        "FocalLength",
+                        "FocalLengthIn35mmFormat",
+                        "SubjectDistance",
+                        "AmbientTemperature",
+                    ]
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(leaf))
+                        && key.split_once(':').is_some_and(|(group, name)| {
+                            matches!(group, "IFD0" | "ExifIFD") && name.eq_ignore_ascii_case(leaf)
+                        })
+                });
+                family_covers
+                    || (baseline.get(key.as_str()) == Some(&value)
+                        && crate::writers::exif_surgical::removal_covers(removal, &key, &baseline))
+            }))
             .then_some((key, value))
         })
         .collect();
@@ -1319,7 +1335,7 @@ pub(crate) fn write_metadata_transaction_among(
         .tempfile_in(dir)
         .map_err(ExifToolError::from)?;
     std::fs::copy(path, staged.path()).map_err(ExifToolError::from)?;
-    // Pass 1: the removals, with the same-value sets they cover left out.
+    // Pass 1: the removals, with covered assignments left out.
     let mut first = metadata.clone();
     for (key, _) in &resets {
         first.remove(key);

@@ -126,9 +126,7 @@ pub struct WritePlan {
 const ALL_DATES: &[&str] = &["DateTimeOriginal", "CreateDate", "ModifyDate"];
 
 /// The field a date request addresses, as far as it is known before any
-/// file is opened: `(group, name)`, lower-cased, with ExifTool's other names
-/// for the EXIF dates folded in (`DateTime` is `ModifyDate`,
-/// `DateTimeDigitized` is `CreateDate`) and the `EXIF` family resolved to
+/// file is opened: `(group, name)`, lower-cased, with the `EXIF` family resolved to
 /// the directory ExifTool writes the date in (`EXIF:CreateDate` is
 /// `ExifIFD:CreateDate`). `group` is `None` for an ungrouped request, which
 /// may land in any group (a shift of `CreateDate` shifts `PDF:CreateDate` in
@@ -144,11 +142,10 @@ fn date_address(tag: &str) -> (Option<String>, String) {
         Some((group, name)) => (Some(group.to_ascii_lowercase()), name),
         None => (None, tag),
     };
-    let name = match name.to_ascii_lowercase().as_str() {
-        "datetime" => "modifydate".to_string(),
-        "datetimedigitized" => "createdate".to_string(),
-        other => other.to_string(),
-    };
+    // ExifTool does not treat DateTime or DateTimeDigitized as writable
+    // EXIF date aliases here. In particular, a rejected shift under either
+    // spelling must not conflict with a real ModifyDate/CreateDate set.
+    let name = name.to_ascii_lowercase();
     let group = group.map(|group| match (group.as_str(), name.as_str()) {
         ("exif", "modifydate") => "ifd0".to_string(),
         ("exif", "datetimeoriginal" | "createdate") => "exififd".to_string(),
