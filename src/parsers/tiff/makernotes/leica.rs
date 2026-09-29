@@ -622,7 +622,13 @@ fn leica5_wb_rgb_levels(
                 Some(print_rational(i64::from(num), i64::from(den)))
             }
             DecodedValue::SignedRational(num, den) => {
-                Some(print_rational(i64::from(num), i64::from(den)))
+                // ExifTool's signed-rational decode retains the sign of
+                // zero when the denominator is negative.
+                if num == 0 && den < 0 {
+                    Some("-0".to_owned())
+                } else {
+                    Some(print_rational(i64::from(num), i64::from(den)))
+                }
             }
             DecodedValue::Float(number) => Some(fmt_g15(number)),
             value => value.perl_string(),

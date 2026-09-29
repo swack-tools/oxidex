@@ -421,3 +421,57 @@ fn leica5_wb_duplicate_keeps_first_priority_zero_entry() {
     assert_eq!(public.get_string("Composite:RedBalance"), Some("0.518219"));
     assert_eq!(public.get_string("Composite:BlueBalance"), Some("0.723164"));
 }
+
+#[test]
+fn leica_dng_double_balance_keeps_finite_value_on_print_overflow() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&12u16.to_le_bytes());
+    for (index, value) in [1e308f64, 1.0, 1.0].into_iter().enumerate() {
+        bytes[200 + index * 8..208 + index * 8].copy_from_slice(&value.to_le_bytes());
+    }
+    let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+    fs::write(file.path(), bytes).unwrap();
+    let metadata = read_metadata(file.path()).unwrap();
+    assert_eq!(
+        metadata.get_string("Leica:WB_RGBLevels"),
+        Some("1e+308 1 1")
+    );
+    assert_eq!(metadata.get_string("Composite:RedBalance"), Some("Inf"));
+    assert_eq!(metadata.get_string("Composite:BlueBalance"), Some("1"));
+}
+
+#[test]
+fn leica_dng_signed_rational_retains_negative_zero() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&10u16.to_le_bytes());
+    for (index, (numerator, denominator)) in [(0i32, -1i32), (1, 1), (1, 4)].into_iter().enumerate()
+    {
+        let at = 200 + index * 8;
+        bytes[at..at + 4].copy_from_slice(&numerator.to_le_bytes());
+        bytes[at + 4..at + 8].copy_from_slice(&denominator.to_le_bytes());
+    }
+    let raw = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+    assert_eq!(raw.get_string("Leica:WB_RGBLevels"), Some("-0 1 0.25"));
+    let occurrence = raw
+        .project_occurrences(ValueChannel::PrintConv)
+        .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+        .unwrap()
+        .1;
+    assert_eq!(
+        occurrence.stored,
+        Some(TagValue::Array(vec![
+            TagValue::Rational {
+                numerator: 0,
+                denominator: -1
+            },
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 1
+            },
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 4
+            },
+        ]))
+    );
+}
