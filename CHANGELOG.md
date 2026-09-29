@@ -18,7 +18,10 @@ Upgrading from 1.x? Read the migration guide, `docs/guide/migrating-from-1x.md`
 
 ### Breaking changes
 
-Every entry below was checked against the v1.2.1 tag and the code at the tip.
+The entries below describe known breaking changes in the pre-tag development
+line. The migration guide separately lists library value types, per-format
+tag changes and group-option behavior that have not yet been checked against
+a v1.2.1 build; do not treat this list as an exhaustive migration check.
 
 **Command line**
 - **ExifTool's print conversion is on by default** (#643). Values now match ExifTool's display form (`Flash: Auto, Did not fire`, `FNumber: 1.8`) instead of raw numbers. Use `--no-print-conv` for raw values. OxiDex's `-n` is still the rename dry run, not ExifTool's `-n`. `-e`/`--exiftool-compat` are accepted and do nothing.
