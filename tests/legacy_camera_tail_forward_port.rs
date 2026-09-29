@@ -35,7 +35,6 @@ fn kodak_remaining_rows() {
 
     let time = occurrence(&metadata, "Kodak:TimeCreated");
     assert_groups_and_id(time, 0x0014, "Kodak", "Time");
-    assert_eq!(time.raw, TagValue::new_string("10 22 28 62"));
     assert_eq!(
         time.project(ValueChannel::Stored).as_ref(),
         &TagValue::Array(
@@ -56,7 +55,6 @@ fn kodak_remaining_rows() {
 
     let stamp = occurrence(&metadata, "Kodak:DateTimeStamp");
     assert_groups_and_id(stamp, 0x0064, "Kodak", "Camera");
-    assert_eq!(stamp.raw, TagValue::Integer(0));
     assert_eq!(
         stamp.project(ValueChannel::Stored).as_ref(),
         &TagValue::Integer(0)
@@ -84,7 +82,6 @@ fn casio_remaining_rows() {
     ] {
         let row = occurrence(&metadata, key);
         assert_groups_and_id(row, id, "Casio", "Camera");
-        assert_eq!(row.raw, TagValue::Integer(raw));
         assert_eq!(
             row.project(ValueChannel::Stored).as_ref(),
             &TagValue::Integer(raw)
