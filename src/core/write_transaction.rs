@@ -741,8 +741,14 @@ fn plan_changes<'a>(
             Err(other) => return Err(other),
         }
         if change.value().is_some()
-            && let Err(error) =
-                crate::writers::exif_cross_delete::date_set_keys(&baseline, change.tag())
+            && let Err(error) = crate::writers::exif_cross_delete::date_set_keys(
+                &baseline,
+                change.tag(),
+                crate::core::operations::is_surgical_tiff_target(
+                    crate::parsers::detection::detect_format(reader)?,
+                    reader,
+                ),
+            )
         {
             request_refusals.push((
                 at,
@@ -799,13 +805,26 @@ fn plan_changes<'a>(
     refused.extend(request_refusals.into_iter().map(|(_, _, tag)| tag));
 
     // The last request for a field replaces every earlier one.
-    let replaced: Vec<bool> = (0..pending.len())
-        .map(|index| {
-            pending[index + 1..]
-                .iter()
-                .any(|later| same_field(&later.request.key, &pending[index].request.key))
-        })
-        .collect();
+    let replaced: Vec<bool> =
+        (0..pending.len())
+            .map(|index| {
+                pending[index + 1..].iter().any(|later| {
+                    same_field(&later.request.key, &pending[index].request.key)
+                        || (later.request.value.is_none()
+                            && crate::writers::write_request::unit_suffix_family_key(
+                                later.request.requested,
+                            )
+                            .is_some_and(|family| {
+                                pending[index].request.key.starts_with("ExifIFD:")
+                                    && family.split_once(':').is_some_and(|(_, leaf)| {
+                                        pending[index].request.key.split_once(':').is_some_and(
+                                            |(_, name)| name.eq_ignore_ascii_case(leaf),
+                                        )
+                                    })
+                            }))
+                })
+            })
+            .collect();
     let last: Vec<Pending<'a>> = pending
         .into_iter()
         .zip(replaced)
@@ -1034,7 +1053,23 @@ fn execute_plan(
             .map_or(plan.steps.len(), |offset| index + offset);
         let mut desired = read_metadata(path)?;
         let mut removed: Vec<String> = Vec::new();
-        for step in &plan.steps[index..end] {
+        // A family-name deletion removes every physical copy before any
+        // surviving explicit directory assignment repopulates its own slot.
+        // ExifTool retains an explicit IFD0 assignment in either argument
+        // order; a later family delete only supersedes the canonical ExifIFD
+        // new-value request (reduced above).
+        let mut ordered: Vec<&Step<'_>> = plan.steps[index..end].iter().collect();
+        ordered.sort_by_key(|step| match step {
+            Step::Field(request)
+                if request.value.is_none()
+                    && crate::writers::write_request::unit_suffix_family_key(request.requested)
+                        .is_some() =>
+            {
+                0
+            }
+            _ => 1,
+        });
+        for step in ordered {
             match step {
                 // A group removal's post-condition is the writer's: #943's
                 // expansion decides which blocks the group names (and
@@ -1362,6 +1397,18 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
     let file_bytes = fs::read(path)?;
     let mut failed = Vec::new();
     for request in requests {
+        let retained_family_sets: Vec<&str> = requests
+            .iter()
+            .filter(|other| other.value.is_some())
+            .filter_map(|other| {
+                let (_, name) = other.key.split_once(':')?;
+                let (_, family_name) = request.key.split_once(':')?;
+                (request.value.is_none()
+                    && request.key.starts_with("EXIF:")
+                    && name.eq_ignore_ascii_case(family_name))
+                .then_some(other.key.as_str())
+            })
+            .collect();
         // `PNG:XMP` names an ordinary text chunk when the file had one whose
         // keyword is literally `XMP` (the reader reported it, and the PNG
         // writer edits that chunk: `png_writer::plan_text_chunks`); only
@@ -1373,9 +1420,20 @@ fn prove_in_effect(path: &Path, requests: &[&Resolved<'_>], baseline: &MetadataM
         };
         let reason = match request.value {
             Some(value) => set_not_in_effect(&file_bytes, &stored, &request.key, value, packets),
-            None if packets.map_or(!rows_at(&stored, &request.key).is_empty(), |packets| {
-                !packets.is_empty()
-            }) =>
+            None if packets.map_or(
+                if retained_family_sets.is_empty() {
+                    !rows_at(&stored, &request.key).is_empty()
+                } else {
+                    let (_, leaf) = request.key.split_once(':').unwrap_or(("", ""));
+                    stored.keys().any(|row| {
+                        matches!(group_and_name(row), (Some(group), name)
+                            if is_exif_directory(group)
+                                && name.eq_ignore_ascii_case(leaf)
+                                && !retained_family_sets.iter().any(|keep| row.eq_ignore_ascii_case(keep)))
+                    })
+                },
+                |packets| !packets.is_empty(),
+            ) =>
             {
                 Some(format!(
                     "after writing, {} is still present; nothing was written",
