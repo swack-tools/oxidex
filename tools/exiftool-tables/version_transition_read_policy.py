@@ -16,8 +16,8 @@ import conformance
 
 
 UNION_SCHEMA = "task19-read-union/v1"
-LEDGER_SCHEMA = "task19-read-ledger/v1"
-PAIR_SCHEMA = "task19-read-pair/v1"
+LEDGER_SCHEMA = "task19-read-ledger/v2"
+PAIR_SCHEMA = "task19-read-pair/v2"
 MANIFEST_KIND = "oxidex_version_rehearsal_fixture_manifest"
 HEX_SHA = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -149,7 +149,7 @@ def occurrence_ledger(fixture: dict, oracle_tags: dict, candidate_tags: dict,
     native_buckets: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for row in native:
         native_buckets[(row["group"], row["name"], row["normalized"])].append(row)
-    matched = []
+    matched_counts = Counter()
     native_by_name = conformance.tags_by_name(oracle_tags, conformance.split_oracle_key)
     candidate_by_name = conformance.tags_by_name(candidate_tags,
                                                   conformance.split_oxidex_key)
@@ -160,18 +160,21 @@ def occurrence_ledger(fixture: dict, oracle_tags: dict, candidate_tags: dict,
             name, expected_bucket, actual_bucket)
         wanted = Counter((group, name, conformance.norm_value(value))
                          for group, value in pairs)
-        for bucket, count in sorted(wanted.items()):
-            available = native_buckets[bucket]
-            if len(available) < count or (len(available) > count and len(available) > 1):
-                raise ReadPolicyRefused("matched duplicate cannot identify its full oracle key")
-            matched.extend({"oracle_key": row["oracle_key"], "group": row["group"],
-                            "name": row["name"], "value": row["value"],
-                            "normalized": row["normalized"]}
-                           for row in available[:count])
-    matched.sort(key=lambda row: row["oracle_key"])
-    if len(matched) != expected["matched_occurrences"]:
+        matched_counts.update(wanted)
+    native_classes = []
+    for (group, name, normalized), members in sorted(native_buckets.items()):
+        matched_count = matched_counts[(group, name, normalized)]
+        if matched_count > len(members):
+            raise ReadPolicyRefused("matched class exceeds native multiplicity")
+        native_classes.append({"group": group, "name": name,
+                               "normalized": normalized,
+                               "native_keys": sorted(row["oracle_key"] for row in members),
+                               "native_count": len(members),
+                               "matched_count": matched_count})
+    if sum(row["matched_count"] for row in native_classes) != expected["matched_occurrences"]:
         raise ReadPolicyRefused("matched ledger count differs from conformance")
-    counts = {"matched": len(matched), "missing": len(comparison["missing"]),
+    counts = {"matched": sum(row["matched_count"] for row in native_classes),
+              "missing": len(comparison["missing"]),
               "value_diff": len(comparison["value_diff"]),
               "renames": len(comparison["renames"]), "extra": len(comparison["extra"])}
     payload = sum(row["group"] not in {"", "File", "System", "ExifTool"}
@@ -181,7 +184,7 @@ def occurrence_ledger(fixture: dict, oracle_tags: dict, candidate_tags: dict,
     proof = {"schema": LEDGER_SCHEMA, "fixture": bound_fixture,
              "transcript": expected, "native": native, "candidate": candidate,
              "native_status": native_status,
-             "matched": matched,
+             "native_classes": native_classes,
              "discrepancies": {
                  "missing": {key: list(value) for key, value in comparison["missing"].items()},
                  "value_diff": [list(row) for row in comparison["value_diff"]],
@@ -294,8 +297,14 @@ def _keyed_values(rows: list[dict], status: int) -> dict[str, str]:
 def _matched_counter(row: dict) -> Counter:
     if row["native_status"] != 0:
         return Counter()
-    return Counter((entry["oracle_key"], entry["normalized"])
-                   for entry in row["matched"] if _is_scored_read(entry))
+    return Counter({(entry["group"], entry["name"], entry["normalized"]):
+                    entry["matched_count"] for entry in row["native_classes"]
+                    if _is_scored_read(entry) and entry["matched_count"]})
+
+
+def _class_index(row: dict) -> dict[tuple[str, str, str], dict]:
+    return {(entry["group"], entry["name"], entry["normalized"]): entry
+            for entry in row["native_classes"]}
 
 
 def _is_scored_read(row: dict) -> bool:
@@ -309,24 +318,96 @@ def _is_payload(row: dict) -> bool:
 
 
 def _extra_counter(row: dict) -> Counter:
-    return Counter((name, group, conformance.norm_value(value))
-                   for name, (group, value) in row["discrepancies"]["extra"].items())
+    return Counter((*_report_identity(row["candidate"], report_key, value,
+                                      group=group), conformance.norm_value(value))
+                   for report_key, (group, value)
+                   in row["discrepancies"]["extra"].items())
+
+
+def _report_identity(rows: list[dict], report_key: str, value: object,
+                     *, group: str | None = None) -> tuple[str, str]:
+    base = re.sub(r" \([0-9]+\)$", "", report_key)
+    normalized = conformance.norm_value(value)
+    identities = {(entry["group"], entry["name"]) for entry in rows
+                  if (group is None or entry["group"] == group)
+                  and entry["normalized"] == normalized
+                  and base in {entry["name"],
+                               f'{entry["group"]}:{entry["name"]}'}}
+    if len(identities) != 1:
+        raise ReadPolicyRefused("report occurrence cannot identify one canonical class")
+    return next(iter(identities))
+
+
+def _gap_entries(row: dict) -> tuple[list, list[dict]]:
+    gaps = row["discrepancies"]
+    entries, diagnostics = [], []
+
+    def native_diagnostic(name, value):
+        return (row["native_status"] != 0
+                and name in {"Error", "Warning"}
+                and any(native["group"] == "ExifTool"
+                        and native["name"] == name
+                        and native["normalized"] == conformance.norm_value(value)
+                        for native in row["native"]))
+
+    for report_key, (group, value) in gaps["missing"].items():
+        _group, name = _report_identity(row["native"], report_key, value,
+                                        group=group)
+        if group == "ExifTool" and native_diagnostic(name, value):
+            diagnostics.append({"kind": "missing", "name": name,
+                                "report_key": report_key,
+                                "value": conformance.norm_value(value)})
+        else:
+            entries.append(["missing", group, name,
+                            conformance.norm_value(value)])
+    native_by_name = conformance.tags_by_name(
+        {entry["oracle_key"]: entry["value"] for entry in row["native"]},
+        conformance.split_oracle_key)
+    candidate_by_name = conformance.tags_by_name(
+        {entry["candidate_key"]: entry["value"] for entry in row["candidate"]},
+        conformance.split_oxidex_key)
+    diff_pairs = []
+    for name in sorted(native_by_name.keys() | candidate_by_name.keys()):
+        _matches, diffs, _missing, _extra, _duplicate = conformance._match_bucket(
+            name, native_by_name.get(name, []), candidate_by_name.get(name, []))
+        diff_pairs.extend((name, *pair) for pair in diffs)
+    if len(diff_pairs) != len(gaps["value_diff"]):
+        raise ReadPolicyRefused("value gap multiplicity differs from canonical matcher")
+    for name, native_group, expected, candidate_group, actual in diff_pairs:
+        if native_group == "ExifTool" and native_diagnostic(name, expected):
+            diagnostics.append({"kind": "value", "name": name,
+                                "value": conformance.norm_value(expected),
+                                "candidate_value": conformance.norm_value(actual)})
+        else:
+            entries.append(["value", native_group, name,
+                            conformance.norm_value(expected), candidate_group,
+                            conformance.norm_value(actual)])
+    for source, target, value in gaps["renames"]:
+        source_group, source_name = _report_identity(row["candidate"], source,
+                                                     value)
+        target_group, target_name = _report_identity(row["native"], target,
+                                                     value)
+        if (source_group == "ExifTool" and target_group == "ExifTool"
+                and source_name in {"Error", "Warning"}
+                and source_name == target_name
+                and native_diagnostic(target_name, value)):
+            diagnostics.append({"kind": "rename", "name": target_name,
+                                "report_key": target,
+                                "value": conformance.norm_value(value)})
+        else:
+            entries.append(["rename", source_group, source_name,
+                            target_group, target_name,
+                            conformance.norm_value(value)])
+    return entries, diagnostics
 
 
 def _gap_counter(row: dict) -> Counter:
-    gaps = row["discrepancies"]
-    entries = [["missing", name, group, conformance.norm_value(value)]
-               for name, (group, value) in gaps["missing"].items()]
-    entries += [["value", name, conformance.norm_value(expected),
-                 conformance.norm_value(actual)]
-                for name, expected, actual, _severity in gaps["value_diff"]]
-    entries += [["rename", source, target, conformance.norm_value(value)]
-                for source, target, value in gaps["renames"]]
+    entries, _diagnostics = _gap_entries(row)
     return Counter(_canonical_bytes(entry).decode("utf-8") for entry in entries)
 
 
 def _missing_gap_id(name: str, group: str, value: object) -> str:
-    return _canonical_bytes(["missing", name, group,
+    return _canonical_bytes(["missing", group, name,
                              conformance.norm_value(value)]).decode("utf-8")
 
 
@@ -340,7 +421,7 @@ def _exact_missing_key(row: dict, native_row: dict) -> str | None:
         return None
     missing = []
     for report_key, (group, value) in row["discrepancies"]["missing"].items():
-        base = re.sub(r" \([2-9][0-9]*\)$", "", report_key)
+        base = re.sub(r" \([0-9]+\)$", "", report_key)
         if (group, conformance.norm_value(value)) == signature[::2] \
                 and base in {native_row["name"],
                              f'{native_row["group"]}:{native_row["name"]}'}:
@@ -389,12 +470,18 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
     native_delta = []
     newly_supported_unread = []
     new_losses = []
+    diagnostic_gaps = []
     standing = Counter()
     for key in sorted(fixtures):
         old, new = before[key], after[key]
         allowed_new_missing = Counter()
+        for side, row in (("before", old), ("after", new)):
+            diagnostic_gaps.extend({"side": side, "logical_name": key[0],
+                                    "fixture_sha256": key[1],
+                                    "native_status": row["native_status"], **entry}
+                                   for entry in _gap_entries(row)[1])
         if mode == "same-pin":
-            for field in ("native_status", "native", "candidate", "matched",
+            for field in ("native_status", "native", "candidate", "native_classes",
                           "discrepancies", "counts", "payload_occurrences"):
                 if old[field] != new[field]:
                     raise ReadPolicyRefused(f"same-pin {field} differs for {key}")
@@ -407,24 +494,30 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                                      "oracle_key": oracle_key, "before": prior,
                                      "after": later})
         old_matched, new_matched = _matched_counter(old), _matched_counter(new)
-        stable_native = {(k, v) for k, v in old_native.items()
-                         if new_native.get(k) == v}
-        lost = (old_matched - new_matched)
-        for identity, count in lost.items():
-            if identity in stable_native:
+        old_classes, new_classes = _class_index(old), _class_index(new)
+        for identity, credited in old_matched.items():
+            members = old_classes[identity]["native_keys"]
+            stable = sum(new_native.get(member) == identity[2] for member in members)
+            required = min(credited, stable)
+            if new_matched[identity] < required:
                 new_losses.append({"logical_name": key[0], "fixture_sha256": key[1],
-                                   "oracle_key": identity[0], "value": identity[1],
-                                   "count": count})
+                                   "group": identity[0], "name": identity[1],
+                                   "value": identity[2], "required": required,
+                                   "observed": new_matched[identity],
+                                   "stable_native_keys": stable})
         if new_losses:
             raise ReadPolicyRefused("previously matched native-supported read was lost")
         if mode == "historical":
             for oracle_key, value in new_native.items():
-                if old_native.get(oracle_key) != value \
-                        and new_matched[(oracle_key, value)] < 1:
-                    if oracle_key in old_native:
-                        raise ReadPolicyRefused("changed native value lacks its new match")
+                if old_native.get(oracle_key) != value:
                     native_row = next(row for row in new["native"]
                                       if row["oracle_key"] == oracle_key)
+                    class_key = (native_row["group"], native_row["name"], value)
+                    member_class = new_classes[class_key]
+                    if member_class["matched_count"] == member_class["native_count"]:
+                        continue
+                    if oracle_key in old_native:
+                        raise ReadPolicyRefused("changed native value lacks its new match")
                     missing_key = _exact_missing_key(new, native_row)
                     if missing_key is None:
                         raise ReadPolicyRefused("new native occurrence is not exact MISSING")
@@ -433,7 +526,7 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                         "oracle_key": oracle_key, "value": value,
                         "missing_key": missing_key})
                     group, raw_value = new["discrepancies"]["missing"][missing_key]
-                    allowed_new_missing[_missing_gap_id(missing_key, group,
+                    allowed_new_missing[_missing_gap_id(native_row["name"], group,
                                                         raw_value)] += 1
             for oracle_key, value in old_native.items():
                 if new_native.get(oracle_key) != value:
@@ -480,6 +573,7 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                                           "after": _sha(_canonical_bytes(later_artifacts))},
              "artifact_delta": artifact_delta, "native_delta": native_delta,
              "newly_supported_unread": newly_supported_unread,
+             "diagnostic_gaps": diagnostic_gaps,
              "native_error_carriers": {side: [list(key) for key, row in sorted(rows.items())
                                                if row["native_status"] != 0]
                                        for side, rows in (("before", before), ("after", after))},

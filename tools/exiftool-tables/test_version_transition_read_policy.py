@@ -86,10 +86,11 @@ class LedgerTests(unittest.TestCase):
                      "ExifIFD:CreateDate": "2021:01:01"}
         result = policy.occurrence_ledger(self.fixture, oracle, candidate,
                                           self.transcript(oracle, candidate), native_status=0)
-        self.assertEqual(result["schema"], "task19-read-ledger/v1")
-        self.assertEqual([(row["oracle_key"], row["value"]) for row in result["matched"]], [
-            ("EXIF:ExifIFD:Copy1:CreateDate", "2021:01:01"),
-            ("EXIF:IFD0:Copy1:CreateDate", "2020:01:01"),
+        self.assertEqual(result["schema"], "task19-read-ledger/v2")
+        self.assertEqual([(row["native_keys"], row["matched_count"])
+                          for row in result["native_classes"]], [
+            (["EXIF:IFD0:Copy1:CreateDate"], 1),
+            (["EXIF:ExifIFD:Copy1:CreateDate"], 1),
         ])
         self.assertEqual(result["counts"]["matched"], 2)
         self.assertEqual(result["counts"]["missing"], 0)
@@ -104,13 +105,17 @@ class LedgerTests(unittest.TestCase):
             policy.occurrence_ledger(self.fixture, oracle, {"IFD0:Make": "Canon"},
                                      transcript, native_status=0)
 
-    def test_refuses_partial_ambiguous_duplicate_credit(self):
+    def test_represents_partial_duplicate_as_class_without_full_key_credit(self):
         oracle = {"EXIF:IFD0:Copy1:Make": "Pentax",
                   "EXIF:ExifIFD:Copy1:Make": "Pentax"}
         candidate = {"IFD0:Make": "Pentax"}
-        with self.assertRaises(policy.ReadPolicyRefused):
-            policy.occurrence_ledger(self.fixture, oracle, candidate,
-                                     self.transcript(oracle, candidate), native_status=0)
+        result = policy.occurrence_ledger(self.fixture, oracle, candidate,
+                                          self.transcript(oracle, candidate), native_status=0)
+        self.assertEqual(result["native_classes"], [
+            {"group": "EXIF", "name": "Make", "normalized": "pentax",
+             "native_keys": ["EXIF:ExifIFD:Copy1:Make", "EXIF:IFD0:Copy1:Make"],
+             "native_count": 2, "matched_count": 1}])
+        self.assertEqual(result["counts"]["matched"], 1)
 
 
 class PairTests(unittest.TestCase):
@@ -173,7 +178,7 @@ class PairTests(unittest.TestCase):
         native = {"EXIF:IFD0:Make": "Pentax"}
         row = self.ledger(native, {"IFD0:Make": "Pentax"})
         forged = json.loads(json.dumps(row))
-        forged["matched"] = []
+        forged["native_classes"] = []
         forged["ledger_sha256"] = hashlib.sha256(policy._canonical_bytes(
             {key: value for key, value in forged.items()
              if key != "ledger_sha256"})).hexdigest()
@@ -194,6 +199,105 @@ class PairTests(unittest.TestCase):
         with self.assertRaisesRegex(policy.ReadPolicyRefused,
                                     "previously matched native-supported read"):
             self.replay(before, after, mode="historical")
+
+    def test_partial_duplicate_class_same_pin_and_loss(self):
+        native = {"EXIF:IFD0:Copy1:Make": "Pentax",
+                  "EXIF:ExifIFD:Copy1:Make": "Pentax"}
+        one = self.ledger(native, {"IFD0:Make": "Pentax"})
+        self.assertEqual(self.replay(one, one)["status"], "passed")
+        none = self.ledger(native, {})
+        with self.assertRaisesRegex(policy.ReadPolicyRefused,
+                                    "previously matched native-supported read"):
+            self.replay(one, none, mode="historical")
+
+    def test_full_duplicate_to_one_after_native_removal_keeps_one_credit(self):
+        old = {"EXIF:IFD0:Copy1:Make": "Pentax",
+               "EXIF:ExifIFD:Copy1:Make": "Pentax"}
+        new = {"EXIF:IFD0:Copy1:Make": "Pentax"}
+        before = self.ledger(old, {"IFD0:Make": "Pentax", "ExifIFD:Make": "Pentax"})
+        after = self.ledger(new, {"IFD0:Make": "Pentax"})
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": "EXIF:ExifIFD:Copy1:Make", "before": "pentax",
+                     "after": None, "reason": "native-version"}]
+        self.assertEqual(self.replay(before, after, mode="historical",
+                                     native_change_evidence=evidence)["status"], "passed")
+        retained = self.ledger(new, {"IFD0:Make": "Pentax",
+                                     "ExifIFD:Make": "Pentax"})
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, retained, mode="historical",
+                        native_change_evidence=evidence)
+
+    def test_duplicate_missing_report_suffix_does_not_create_new_gap(self):
+        old = {"EXIF:IFD0:Make": "Pentax", "EXIF:IFD1:Copy1:Make": "Pentax",
+               "EXIF:IFD0:Model": "Stable"}
+        new = {"EXIF:IFD0:Make": "Pentax", "EXIF:IFD0:Model": "Stable"}
+        candidate = {"IFD0:Model": "Stable"}
+        before = self.ledger(old, candidate)
+        after = self.ledger(new, candidate)
+        self.assertEqual(len(before["discrepancies"]["missing"]), 2)
+        self.assertEqual(len(after["discrepancies"]["missing"]), 1)
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": "EXIF:IFD1:Copy1:Make", "before": "pentax",
+                     "after": None, "reason": "native-version"}]
+        self.assertEqual(self.replay(before, after, mode="historical",
+                                     native_change_evidence=evidence)["status"], "passed")
+        reverse_evidence = [{**evidence[0], "before": None, "after": "pentax",
+                             "reason": "native-version"}]
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(after, before, mode="historical",
+                        native_change_evidence=reverse_evidence)
+
+    def test_cross_tag_replacement_does_not_hide_lost_class(self):
+        native = {"EXIF:IFD0:Make": "Pentax", "EXIF:IFD0:Model": "Optio"}
+        before = self.ledger(native, {"IFD0:Make": "Pentax", "IFD0:Model": "Optio"})
+        after = self.ledger(native, {"IFD0:Make": "Pentax", "IFD0:New": "x"})
+        with self.assertRaisesRegex(policy.ReadPolicyRefused,
+                                    "previously matched native-supported read"):
+            self.replay(before, after, mode="historical")
+
+    def test_native_error_diagnostic_gap_has_no_credit_but_retention_refuses(self):
+        def manifest_two(side):
+            return manifest((f"/{side}/t/images/legacy.bin", "b" * 64, 10),
+                            (f"/{side}/t/images/stable.jpg", "a" * 64, 10))
+
+        union = policy.freeze_union(manifest_two("old"), manifest_two("new"))
+        legacy, stable = union["fixtures"]
+
+        def row(fixture, native, candidate, status=0):
+            transcript = conformance.transcript_row(
+                "/staged/" + fixture["logical_name"], native, candidate,
+                conformance.compare(native, candidate))
+            return policy.occurrence_ledger(fixture, native, candidate, transcript,
+                                            native_status=status)
+
+        control = row(stable, {"EXIF:IFD0:Make": "Pentax"},
+                      {"IFD0:Make": "Pentax"})
+        old = row(legacy, {"EXIF:IFD0:Model": "Optio"},
+                  {"IFD0:Model": "Optio"})
+        error = {"ExifTool:Error": "Unknown file type"}
+        unsupported = row(legacy, error, {}, status=1)
+        evidence = [{"logical_name": "legacy.bin", "fixture_sha256": "b" * 64,
+                     "oracle_key": "EXIF:IFD0:Model", "before": "optio",
+                     "after": None, "reason": "native-version"}]
+        args = dict(mode="historical", union=union, before_ledgers=[old, control],
+                    payload_floors={"before": 1, "after": 1},
+                    before_artifacts={"tables.json": "a" * 64},
+                    after_artifacts={"tables.json": "a" * 64},
+                    native_change_evidence=evidence, artifact_change_evidence=[])
+        result = policy.replay_pair(after_ledgers=[unsupported, control], **args)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["native_error_carriers"]["after"],
+                         [["legacy.bin", "b" * 64]])
+        self.assertEqual(result["payload_occurrences"]["after"], 1)
+        self.assertEqual(result["diagnostic_gaps"][0]["name"], "Error")
+        retained = row(legacy, error, {"IFD0:Model": "Optio"}, status=1)
+        with self.assertRaisesRegex(policy.ReadPolicyRefused,
+                                    "removed native value retained"):
+            policy.replay_pair(after_ledgers=[retained, control], **args)
+        disguised = row(legacy, error, {"IFD0:Model": "Unknown file type"},
+                        status=1)
+        with self.assertRaises(policy.ReadPolicyRefused):
+            policy.replay_pair(after_ledgers=[disguised, control], **args)
 
     def test_historical_classifies_new_native_only_missing_without_credit(self):
         old = {"EXIF:IFD0:Make": "Pentax"}
