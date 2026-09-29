@@ -11,7 +11,7 @@ use crate::core::{FileFormat, FileReader};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
 use crate::parsers::detection::detect_format;
-use chrono::{DateTime, Duration, Months, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, Months, NaiveDate, NaiveDateTime, Utc};
 use std::path::Path;
 
 /// Operation type for date shifting
@@ -381,8 +381,8 @@ fn key_matches_pattern(key: &str, pattern: &str) -> bool {
 }
 
 /// ExifTool prepends the operation sign before validating a time shift.
-/// An operand with its own sign therefore never shifts `AllDates`: one or
-/// two compact components are unchanged, while a date/time form is invalid.
+/// A second sign makes one or two numeric components a timezone shift;
+/// larger signed additions are invalid, while larger subtractions are no-ops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignedAllDatesShift {
     Invalid,
@@ -602,6 +602,40 @@ pub fn shift_metadata_dates(
     shift_map_dates(path, tag_pattern, offset_or_value, &spec)
 }
 
+fn date_text_has_timezone(text: &str) -> bool {
+    let (date, has_zone) = if let Some(date) = text.strip_suffix('Z') {
+        (date, true)
+    } else if text.len() >= 6 {
+        let Some(date) = text.get(..text.len() - 6) else {
+            return false;
+        };
+        let suffix = &text[text.len() - 6..];
+        let bytes = suffix.as_bytes();
+        let valid_zone = matches!(bytes[0], b'+' | b'-')
+            && bytes[1..3].iter().all(u8::is_ascii_digit)
+            && bytes[3] == b':'
+            && bytes[4..6].iter().all(u8::is_ascii_digit);
+        (date, valid_zone)
+    } else {
+        return false;
+    };
+    if !has_zone {
+        return false;
+    }
+    let (whole, fraction_ok) = match date.split_once('.') {
+        Some((whole, fraction)) => (
+            whole,
+            !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()),
+        ),
+        None => (date, true),
+    };
+    fraction_ok
+        && (NaiveDateTime::parse_from_str(whole, "%Y:%m:%d %H:%M:%S").is_ok()
+            || NaiveDateTime::parse_from_str(whole, "%Y-%m-%dT%H:%M:%S").is_ok()
+            || NaiveDate::parse_from_str(whole, "%Y:%m:%d").is_ok()
+            || NaiveDate::parse_from_str(whole, "%Y-%m-%d").is_ok())
+}
+
 /// A compact signed AllDates operand is a timezone shift in native Shift.pl,
 /// so EXIF date strings without zones are left untouched. The current writer
 /// cannot persist timezone-bearing XMP/PDF/PNG date rows. Refuse those rows
@@ -619,10 +653,7 @@ fn shift_signed_alldates_timezone_only(
     let timezoned = metadata.iter().find(|(key, value)| {
         let name = key.rsplit_once(':').map_or(key.as_str(), |(_, name)| name);
         ALL_DATES_NAMES.contains(&name.to_ascii_lowercase().as_str())
-            && value.as_string().is_some_and(|text| {
-                text.get(19..)
-                    .is_some_and(|suffix| suffix.starts_with(['+', '-', 'Z']))
-            })
+            && value.as_string().is_some_and(date_text_has_timezone)
     });
     if let Some((key, _)) = timezoned {
         return Err(ExifToolError::unsupported_format(format!(
@@ -876,20 +907,25 @@ mod tests {
     #[test]
     fn signed_compact_alldates_refuses_unwritable_timezone_atomically() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("dates.xmp");
-        let xmp = br#"<?xpacket begin="" id=""?>
+        for value in ["2020:01:02 03:04:05+02:00", "2020:01:02 03:04:05.123+02:00"] {
+            let file = dir.path().join("dates.xmp");
+            let xmp = format!(
+                r#"<?xpacket begin="" id=""?>
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"
- xmp:CreateDate="2020:01:02 03:04:05+02:00" />
-</rdf:RDF><?xpacket end="w"?>"#;
-        std::fs::write(&file, xmp).unwrap();
-        assert_eq!(
-            read_metadata(&file).unwrap().get_string("XMP:CreateDate"),
-            Some("2020:01:02 03:04:05+02:00")
-        );
-        let error = shift_metadata_dates(&file, "AllDates", "-1", ShiftOperation::Add).unwrap_err();
-        assert!(error.to_string().contains("XMP:CreateDate"), "{error}");
-        assert_eq!(std::fs::read(&file).unwrap(), xmp);
+ xmp:CreateDate="{value}" />
+</rdf:RDF><?xpacket end="w"?>"#
+            );
+            std::fs::write(&file, &xmp).unwrap();
+            assert_eq!(
+                read_metadata(&file).unwrap().get_string("XMP:CreateDate"),
+                Some(value)
+            );
+            let error =
+                shift_metadata_dates(&file, "AllDates", "-1", ShiftOperation::Add).unwrap_err();
+            assert!(error.to_string().contains("XMP:CreateDate"), "{error}");
+            assert_eq!(std::fs::read(&file).unwrap(), xmp.as_bytes());
+        }
     }
 
     #[test]
