@@ -4,14 +4,19 @@ This document reports two separate things about OxiDex, and does not mix them:
 how many tags it has **definitions** for, and how many tags it actually
 **extracts** from real files.
 
-::: info Auto-Generated
-This document is automatically updated on each push to `main`. Last updated: **2026-08-08**
+::: warning Historical snapshot: 2026-08-08
+This committed report records the tag definitions and extraction measurements
+from 2026-08-08. Its figures, including the 16,684 definitions below, do not
+describe the current v2.0.0-beta.1 candidate. The report is not automatically
+updated on every push to `main`; the coverage workflow prepares changes for
+review. For the current committed definition count, see [Status](/status/).
 :::
 
 ## Tag Definitions
 
-Counted from the `oxidex-tags-*` YAML databases. This is what OxiDex knows a
-tag *exists*; it says nothing about whether any parser reads it.
+At the snapshot date, counted from the `oxidex-tags-*` YAML databases. This
+records which tags were defined then; it says nothing about whether any parser
+reads them or how many definitions the current candidate holds.
 
 | Metric | Value |
 |--------|-------|
@@ -53,9 +58,10 @@ covering read *and* write round-trips, regression-gated in CI:
 
 ## Measured Extraction Coverage
 
-Every number in this section comes from running OxiDex and ExifTool
-13.59 over the same files and diffing the output tag by tag. It is
-a measurement, not an estimate derived from source code.
+Every number in this historical 2026-08-08 section came from running
+OxiDex and ExifTool 13.59 over the same files and diffing the output tag by
+tag. It is a dated measurement, not a current beta parity result or an
+estimate derived from source code.
 
 **Corpus:** ExifTool 13.59 `t/images` + `tests/fixtures`
 
