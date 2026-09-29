@@ -549,6 +549,145 @@ fn set_leica_entry(bytes: &mut [u8], tag: u16, field_type: u16, count: u32, valu
     bytes[146..150].copy_from_slice(&value.to_le_bytes());
 }
 
+fn leica_dng_with_prefix(layout: u8, prefix: &[(u16, u16, u32, u32)]) -> Vec<u8> {
+    let mut bytes = leica_dng(layout, 64);
+    bytes.resize(512, 0);
+    let entries = prefix.len() + 1;
+    let note_len = 8 + 2 + 12 * entries + 4;
+    bytes[102..106].copy_from_slice(&(note_len as u32).to_le_bytes());
+    bytes[136..138].copy_from_slice(&(entries as u16).to_le_bytes());
+    for (index, &(tag, field_type, count, value)) in prefix.iter().enumerate() {
+        let at = 138 + 12 * index;
+        bytes[at..at + 12].copy_from_slice(
+            &[
+                tag.to_le_bytes().as_slice(),
+                field_type.to_le_bytes().as_slice(),
+                count.to_le_bytes().as_slice(),
+                value.to_le_bytes().as_slice(),
+            ]
+            .concat(),
+        );
+    }
+    let at = 138 + 12 * prefix.len();
+    bytes[at..at + 12].copy_from_slice(
+        &[
+            0x0413u16.to_le_bytes().as_slice(),
+            1u16.to_le_bytes().as_slice(),
+            3u32.to_le_bytes().as_slice(),
+            0x0001_0402u32.to_le_bytes().as_slice(),
+        ]
+        .concat(),
+    );
+    bytes
+}
+
+#[test]
+fn leica_wb_respects_process_exif_directory_refusal_budget() {
+    for layout in [0x06, 0x08] {
+        let cases = vec![
+            ("first format 14", vec![(0x0305, 14, 1, 123456)], false),
+            ("first format zero", vec![(0x0305, 0, 1, 123456)], false),
+            ("first accepted", vec![(0x03ff, 1, 1, 1)], true),
+            (
+                "ten bad formats",
+                std::iter::once((0x03ff, 1, 1, 1))
+                    .chain((0..10).map(|i| (0x0500 + i, 14, 1, 1)))
+                    .collect(),
+                true,
+            ),
+            (
+                "eleven bad formats",
+                std::iter::once((0x03ff, 1, 1, 1))
+                    .chain((0..11).map(|i| (0x0500 + i, 14, 1, 1)))
+                    .collect(),
+                false,
+            ),
+            (
+                "eleven zero formats",
+                std::iter::once((0x03ff, 1, 1, 1))
+                    .chain((0..11).map(|i| (0x0500 + i, 0, 1, 1)))
+                    .collect(),
+                true,
+            ),
+            (
+                "ten bad offsets",
+                std::iter::once((0x03ff, 1, 1, 1))
+                    .chain((0..10).map(|i| (0x0500 + i, 2, 8, 0)))
+                    .collect(),
+                true,
+            ),
+            (
+                "eleven bad offsets",
+                std::iter::once((0x03ff, 1, 1, 1))
+                    .chain((0..11).map(|i| (0x0500 + i, 2, 8, 0)))
+                    .collect(),
+                false,
+            ),
+        ];
+        for (case, prefix, expected) in cases {
+            let bytes = leica_dng_with_prefix(layout, &prefix);
+            let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+            fs::write(file.path(), bytes).unwrap();
+            let metadata = read_metadata(file.path()).unwrap();
+            assert_eq!(
+                metadata.contains_key("Leica:WB_RGBLevels"),
+                expected,
+                "layout {layout}: {case}"
+            );
+            assert_eq!(
+                metadata.contains_key("Composite:RedBalance"),
+                expected,
+                "layout {layout}: {case}"
+            );
+            assert_eq!(
+                metadata.contains_key("Composite:BlueBalance"),
+                expected,
+                "layout {layout}: {case}"
+            );
+        }
+
+        // Exif.pm exempts a first bad entry when Model already starts ILCE.
+        // Put Model before ExifIFD so the source has seen it on entry.
+        let mut bytes = leica_dng_with_prefix(layout, &[(0x0305, 14, 1, 123456)]);
+        bytes[8..10].copy_from_slice(&4u16.to_le_bytes());
+        bytes[22..34].copy_from_slice(
+            &[
+                0x0110u16.to_le_bytes().as_slice(),
+                2u16.to_le_bytes().as_slice(),
+                5u32.to_le_bytes().as_slice(),
+                80u32.to_le_bytes().as_slice(),
+            ]
+            .concat(),
+        );
+        bytes[34..46].copy_from_slice(
+            &[
+                0x8769u16.to_le_bytes().as_slice(),
+                4u16.to_le_bytes().as_slice(),
+                1u32.to_le_bytes().as_slice(),
+                96u32.to_le_bytes().as_slice(),
+            ]
+            .concat(),
+        );
+        bytes[46..58].copy_from_slice(
+            &[
+                0xc612u16.to_le_bytes().as_slice(),
+                1u16.to_le_bytes().as_slice(),
+                4u32.to_le_bytes().as_slice(),
+                0x0000_0401u32.to_le_bytes().as_slice(),
+            ]
+            .concat(),
+        );
+        bytes[80..85].copy_from_slice(b"ILCE\0");
+        let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+        fs::write(file.path(), bytes).unwrap();
+        let metadata = read_metadata(file.path()).unwrap();
+        assert!(
+            metadata.contains_key("Leica:WB_RGBLevels"),
+            "layout {layout}: ILCE exception"
+        );
+    }
+}
+
 #[test]
 fn leica_wb_zero_count_and_singletons_keep_readvalue_shapes() {
     for (field_type, count, value, printed, stored) in [

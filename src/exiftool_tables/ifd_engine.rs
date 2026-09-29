@@ -448,6 +448,101 @@ fn accepted_type(code: u16, in_maker_notes: bool, ctx: &cond::Ctx) -> Option<Ent
     if accepted { entry_type(code) } else { None }
 }
 
+/// The ProcessExif per-directory format and warning gate (Exif.pm:6455-6478).
+#[derive(Default)]
+pub(crate) struct EntryWarningBudget(u32);
+
+pub(crate) enum FormatAdmission<T> {
+    Accepted(T),
+    Skip,
+    Stop,
+}
+
+impl EntryWarningBudget {
+    pub(crate) fn exhausted(&self) -> bool {
+        self.0 > 10
+    }
+
+    pub(crate) fn warned(&mut self) {
+        self.0 += 1;
+    }
+
+    pub(crate) fn admit<T>(
+        &mut self,
+        index: usize,
+        code: u16,
+        accepted: Option<T>,
+        model_is_ilce: bool,
+    ) -> FormatAdmission<T> {
+        match accepted {
+            Some(ty) => FormatAdmission::Accepted(ty),
+            None => {
+                // Zero padding is rejected but does not consume the warning
+                // budget unless ExifTool validation is enabled.
+                if code != 0 {
+                    self.warned();
+                }
+                if index == 0 && !model_is_ilce {
+                    FormatAdmission::Stop
+                } else {
+                    FormatAdmission::Skip
+                }
+            }
+        }
+    }
+}
+
+/// Physical ProcessExif admission for a non-Apple MakerNote entry. The Leica
+/// hand path supplies its verified payload/TIFF coordinates and uses the
+/// overlap rule, which permits values elsewhere in the enclosing TIFF.
+pub(crate) enum MakerNoteLocation {
+    Readable,
+    Warned,
+    Unavailable,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn non_apple_makernote_location(
+    code: u16,
+    count: u32,
+    value_offset: u32,
+    value_field_pos: usize,
+    data: &[u8],
+    directory_start: usize,
+    directory_end: usize,
+    base: Option<i64>,
+) -> MakerNoteLocation {
+    let mut members = std::collections::HashMap::new();
+    let ctx = cond::Ctx::new(&mut members);
+    let Some(ty) = non_apple_makernote_entry_type(code, &ctx) else {
+        return MakerNoteLocation::Unavailable;
+    };
+    let dir = IfdDir {
+        data,
+        data_domain: 0,
+        ifd_start: directory_start,
+        base,
+        byte_order: ByteOrder::Little,
+        group1: None,
+    };
+    let entry = IfdEntry {
+        tag_id: 0,
+        field_type: code,
+        count,
+        value_offset,
+        value_field_pos,
+    };
+    let rule = DirectoryRule::Overlap {
+        dir_start: directory_start,
+        dir_end: directory_end,
+    };
+    match locate(&dir, &entry, ty, rule) {
+        Ok(_) => MakerNoteLocation::Readable,
+        Err(Refusal::Warned) => MakerNoteLocation::Warned,
+        Err(Refusal::Silent) => MakerNoteLocation::Unavailable,
+    }
+}
+
 /// Decode an already bounded non-Apple MakerNote field through the same
 /// `ProcessExif` type admission and `ReadValue` plan as the IFD walker.
 /// The caller remains responsible for locating the entry's physical bytes.
@@ -1142,36 +1237,37 @@ fn walk_scoped(
     // file's Session under the current directory scope.
     let generated = conv::decoder(table);
 
-    let mut warn_count = 0u32;
+    let mut warning_budget = EntryWarningBudget::default();
     for (index, entry) in entries.iter().enumerate() {
         // Exif.pm:6455-6457.
-        if warn_count > 10 {
+        if warning_budget.exhausted() {
             refuse_rest(&mut decoded, index);
             return Some(());
         }
         // Exif.pm:6463-6478.
-        let Some(ty) = accepted_type(entry.field_type, in_maker_notes, ctx) else {
-            // Exif.pm:6470-6473: "warn unless the IFD was just padded with
-            // zeros" -- a zero code does not spend the warning budget.
-            if entry.field_type != 0 {
-                warn_count += 1;
-            }
-            // Exif.pm:6474-6477: "assume corrupted IFD if this is our first
-            // entry (except Sony ILCE which have an empty first entry)".
-            if index == 0 && !model_is_ilce(ctx) {
+        let ty = match warning_budget.admit(
+            index,
+            entry.field_type,
+            accepted_type(entry.field_type, in_maker_notes, ctx),
+            model_is_ilce(ctx),
+        ) {
+            FormatAdmission::Accepted(ty) => ty,
+            FormatAdmission::Stop => {
                 refuse_rest(&mut decoded, index);
                 return Some(());
             }
-            if let Some(reads) = decoded.as_deref_mut() {
-                reads.entries[index] = EntryRead::Refused;
+            FormatAdmission::Skip => {
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads.entries[index] = EntryRead::Refused;
+                }
+                continue;
             }
-            continue;
         };
         // Exif.pm:6502-6680.
         let located = match locate(&dir, entry, ty, rule) {
             Ok(located) => located,
             Err(Refusal::Warned) => {
-                warn_count += 1;
+                warning_budget.warned();
                 if let Some(reads) = decoded.as_deref_mut() {
                     reads.entries[index] = EntryRead::Refused;
                 }
