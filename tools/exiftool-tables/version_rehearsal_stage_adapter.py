@@ -29,6 +29,7 @@ import native_write_matrix as native
 import instrument  # noqa: E402 -- scripts/ is on sys.path via native_write_matrix
 import version_rehearsal as rehearsal
 import version_rehearsal_clean_snapshot as clean_snapshot
+import version_rehearsal_raw_maps as raw_maps
 import version_rehearsal_executor as executor
 
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
@@ -1044,6 +1045,13 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     data = _json(comparison)
     _verify_conformance_measurement(data, snapshot_proof, executable, binary["sha256"])
     _verify_conformance_scope(data, fixtures)
+    raw_maps_path = report.parent / "raw" / "read-maps.json"
+    try:
+        captured_maps = raw_maps.capture_authenticated_maps(
+            comparison, fixtures, measurement_source, executable, perl, native_source)
+    except raw_maps.Refused as error:
+        raise Refused(f"authenticated read raw-map capture refused: {error}") from error
+    _atomic(raw_maps_path, captured_maps)
     per_format = data["per_format"]
     classification_counts = {"matched": 0, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0}
     for format_counts in per_format.values():
@@ -1055,7 +1063,7 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     matched = classification_counts["matched"]
     mismatched = sum(classification_counts[key] for key in ("value_diff", "missing", "renames", "extra"))
     denominator = matched + mismatched
-    state = "passed" if denominator > 0 and mismatched == 0 else "failed"
+    state = "measured" if denominator > 0 else "failed"
     result = {**_base("read", args, checkout, identity), "state": state, "denominator": denominator,
               "native_release": args.release, "native_probe_sha256": args.native_probe_sha256,
               "comparison": {"kind": "oxidex_vs_native", "native_release": args.release, "matched": matched, "mismatched": mismatched},
@@ -1063,7 +1071,8 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
               "generated_artifacts": generated, "measurement_snapshot": snapshot_proof,
               "binary": {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size},
               "fixtures": {"manifest": str(Path(args.fixture_manifest).absolute()), "manifest_sha256": fixture_digest, "entries": fixtures}, "raw_report": raw,
-              "conformance_report": {"path": str(comparison), "sha256": _sha(comparison)}}
+              "conformance_report": {"path": str(comparison), "sha256": _sha(comparison)},
+              "raw_maps": {"path": str(raw_maps_path), "sha256": _sha(raw_maps_path)}}
     _atomic(report, result)
     return result
 

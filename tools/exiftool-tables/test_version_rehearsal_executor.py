@@ -20,6 +20,8 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import version_rehearsal_executor as executor
+REAL_REQUIRE_READ_RAW_MAPS = executor._require_read_raw_maps
+REAL_REQUIRE_READ_COUNTS = executor._require_read_counts
 import version_rehearsal_native_oracle as native
 import version_transition_qualification as qualification
 import test_version_rehearsal_native_oracle as fixture
@@ -116,6 +118,10 @@ class ExecutorTests(unittest.TestCase):
         # snapshot verifier is exercised with real Git in its own test suite.
         snapshot_replay = patch.object(executor, "_require_read_measurement_snapshot")
         snapshot_replay.start(); self.addCleanup(snapshot_replay.stop)
+        raw_replay = patch.object(executor, "_require_read_raw_maps")
+        self.mock_raw_replay = raw_replay.start(); self.addCleanup(raw_replay.stop)
+        count_replay = patch.object(executor, "_require_read_counts")
+        self.mock_count_replay = count_replay.start(); self.addCleanup(count_replay.stop)
         temporary, capture, catalog, plan, resolution, materialization, cache, sources, _ = fixture.make_state()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -1359,6 +1365,7 @@ class ExecutorTests(unittest.TestCase):
                                    "verified_before_run": True, "verified_after_run": True},
             }
         if stage == "read":
+            body["state"] = "measured"
             body["classification_counts"] = {
                 "matched": 3, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
             }
@@ -1385,19 +1392,59 @@ class ExecutorTests(unittest.TestCase):
         journal = self.execute()
         self.assertEqual(journal["phase"], "complete")
         self.assertEqual(journal["promotion"], "forbidden")
-        self.assertEqual(journal["scope"]["parity"], "per-version-read-write-rehearsed; no-promotion")
+        self.assertEqual(journal["scope"]["parity"], "unproven_pending_pair_policy; no-promotion")
+        self.assertEqual(journal["scope"]["read_acceptance"], "pending_pair_policy")
         self.assertEqual(self.native_calls, self.releases)
         self.assertEqual(len(self.checkouts), len(self.releases))
         self.assertTrue(all(commit == self.plan["repository_commit"] for _, commit, _ in self.checkouts))
         self.assertEqual({target for _, _, target in self.calls},
                          {str(self.run_dir / "targets" / executor._safe_name(release)) for release in self.releases})
         for release in self.releases:
-            self.assertEqual(journal["releases"][release]["state"], "passed")
-            self.assertTrue(all(value == "passed" for value in journal["releases"][release]["stages"].values()))
+            self.assertEqual(journal["releases"][release]["state"], "measured_pending_pair_policy")
+            self.assertEqual(journal["releases"][release]["stages"]["read"], "measured")
+            self.assertTrue(all(value == "passed" for stage, value in journal["releases"][release]["stages"].items()
+                                if stage != "read"))
+            self.assertEqual(journal["releases"][release]["reports"]["read"]["acceptance"],
+                             "pending_pair_policy")
             self.assertEqual(journal["releases"][release]["reports"]["read"]["denominator"], 3)
             self.assertEqual(journal["releases"][release]["reports"]["write"]["denominator"], 3)
             command_log = self.run_dir / journal["releases"][release]["reports"]["build"]["command"]["path"]
             self.assertEqual(json.loads(command_log.read_text())["stdout"], "ok")
+
+    def test_authenticated_standing_read_gap_reaches_pending_pair_policy(self):
+        self.initialize(self.config())
+        original = self.command
+
+        def standing_gap(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "read":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text())
+                body["comparison"].update(matched=2, mismatched=1)
+                body["classification_counts"].update(matched=2, missing=1)
+                report.write_text(json.dumps(body))
+            return result
+
+        self.command = standing_gap
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "complete")
+        self.assertEqual(journal["scope"]["read_acceptance"], "pending_pair_policy")
+        for release in self.releases:
+            self.assertEqual(journal["releases"][release]["stages"]["read"], "measured")
+            report_path = self.run_dir / journal["releases"][release]["reports"]["read"]["path"]
+            read = json.loads(report_path.read_text())
+            self.assertEqual(read["comparison"], {"kind": "oxidex_vs_native", "native_release": release,
+                                                   "matched": 2, "mismatched": 1})
+
+    def test_unauthenticated_read_maps_fail_before_pair_policy(self):
+        self.initialize(self.config())
+        self.mock_raw_replay.side_effect = executor.Refused("raw-map receipt changed")
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "read")
+        self.assertIn("raw-map receipt changed", failure["detail"])
+        self.assertNotEqual(journal["scope"].get("read_acceptance"), "pending_pair_policy")
 
     def test_selected_release_uses_one_verified_plan_side_and_explicit_target(self):
         selected = self.releases[0]
@@ -1558,7 +1605,7 @@ class ExecutorTests(unittest.TestCase):
         journal = self.execute()
         self.assertEqual(journal["phase"], "complete")
         self.assertEqual(journal["scope"]["write_acceptance"], "unsupported_for_one_or_more_releases")
-        self.assertEqual(journal["scope"]["parity"], "unproven_without_all_per-release_read_and_write_acceptance")
+        self.assertEqual(journal["scope"]["parity"], "unproven_pending_pair_policy; no-promotion")
         self.assertTrue(all(row["stages"]["write"] == "unsupported" for row in journal["releases"].values()))
         self.assertNotIn("write", [argv[0] for argv, _, _ in self.calls])
 
@@ -2621,14 +2668,84 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")
         self.assertEqual(executor._text_output(b""), "")
 
-    def test_mismatches_and_boolean_counts_refuse_pass_results(self):
+    def test_read_counts_must_equal_authenticated_conformance_report(self):
+        report = self.root / "conformance.json"
+        report.write_text(json.dumps({"per_format": {"AAC": {"matched": 7, "value_diff": 0,
+            "missing": 1, "renames": 0, "extra": 4}},
+            "instrument": {"measurement_transcript": {"rows": [
+                {"matched_occurrences": 7, "value_occurrences": 0,
+                 "missing_occurrences": 1, "rename_source_occurrences": 0,
+                 "extra_occurrences": 4}]}}}))
+        result = {"conformance_report": {"path": str(report)},
+                  "classification_counts": {"matched": 7, "value_diff": 0,
+                                            "missing": 1, "renames": 0, "extra": 4},
+                  "comparison": {"matched": 7, "mismatched": 5}, "denominator": 12}
+        REAL_REQUIRE_READ_COUNTS(result)
+        result["comparison"]["mismatched"] = 0
+        with self.assertRaisesRegex(executor.Refused, "counts differ"):
+            REAL_REQUIRE_READ_COUNTS(result)
+        result["comparison"]["mismatched"] = 5
+        result["classification_counts"]["missing"] = 0
+        with self.assertRaisesRegex(executor.Refused, "counts differ"):
+            REAL_REQUIRE_READ_COUNTS(result)
+        result["classification_counts"]["missing"] = 1
+        forged = json.loads(report.read_text())
+        forged["per_format"]["AAC"]["missing"] = 0
+        result["comparison"]["mismatched"] = 4
+        result["denominator"] = 11
+        result["classification_counts"]["missing"] = 0
+        report.write_text(json.dumps(forged))
+        with self.assertRaisesRegex(executor.Refused, "scored transcript"):
+            REAL_REQUIRE_READ_COUNTS(result)
+
+    def test_raw_map_receipt_path_hash_and_replay_are_required(self):
+        stage_path = self.root / "read.json"
+        maps = self.root / "raw/read-maps.json"
+        maps.parent.mkdir()
+        maps.write_text(json.dumps({"schema": 1, "rows": [{"raw": "bytes"}]}))
+        digest = __import__("hashlib").sha256(maps.read_bytes()).hexdigest()
+        binary = self.root / "oxidex"; binary.write_bytes(b"binary")
+        report = self.root / "conformance.json"; report.write_text("{}")
+        result = {"raw_maps": {"path": str(maps), "sha256": digest},
+                  "conformance_report": {"path": str(report)},
+                  "fixtures": {"entries": [{"source": str(self.fixture)}]},
+                  "measurement_snapshot": {"path": str(self.root / "snapshot")},
+                  "binary": {"path": str(binary)}}
+        with patch.object(executor.raw_maps, "validate_capture") as replay:
+            REAL_REQUIRE_READ_RAW_MAPS(result, stage_path, (self.root, self.root, self.root),
+                                            str(self.root / "perl"))
+            self.assertEqual(replay.call_args.args[0], json.loads(maps.read_text()))
+            self.assertEqual(replay.call_args.args[1], report)
+            self.assertEqual(replay.call_args.args[2], result["fixtures"]["entries"])
+        result["raw_maps"]["path"] = str(self.root / "other.json")
+        with self.assertRaisesRegex(executor.Refused, "exact authenticated raw-map receipt"):
+            REAL_REQUIRE_READ_RAW_MAPS(result, stage_path, (self.root, self.root, self.root), "perl")
+        result["raw_maps"]["path"] = str(maps)
+        maps.write_text("{\"changed\":true}")
+        with self.assertRaisesRegex(executor.Refused, "receipt changed"):
+            REAL_REQUIRE_READ_RAW_MAPS(result, stage_path, (self.root, self.root, self.root), "perl")
+
+    def test_write_mismatch_still_refuses_a_pass_result(self):
+        path = self.root / "write.json"
+        path.write_text(json.dumps({"schema": executor.SCHEMA, "kind": executor.RESULT_KIND,
+                                    "stage": "write", "release": self.releases[0],
+                                    "state": "passed", "denominator": 3,
+                                    "native_release": self.releases[0],
+                                    "native_probe_sha256": "a" * 64,
+                                    "comparison": {"kind": "oxidex_vs_native",
+                                                   "native_release": self.releases[0],
+                                                   "matched": 2, "mismatched": 1}}))
+        with self.assertRaisesRegex(executor.Refused, "outcomes"):
+            executor._stage_result(path, self.releases[0], "write", "a" * 64)
+
+    def test_measured_read_allows_counted_gaps_but_refuses_bad_counts(self):
         path = self.root / "result.json"
         base = {"schema": executor.SCHEMA, "kind": executor.RESULT_KIND, "stage": "read", "release": self.releases[0],
-                "state": "passed", "denominator": 3, "native_release": self.releases[0], "native_probe_sha256": "a" * 64,
+                "state": "measured", "denominator": 3, "native_release": self.releases[0], "native_probe_sha256": "a" * 64,
                 "comparison": {"kind": "oxidex_vs_native", "native_release": self.releases[0], "matched": 2, "mismatched": 1}}
         path.write_text(json.dumps(base))
-        with self.assertRaisesRegex(executor.Refused, "outcomes"):
-            executor._stage_result(path, self.releases[0], "read", "a" * 64)
+        self.assertEqual(executor._stage_result(path, self.releases[0], "read", "a" * 64)["state"],
+                         "measured")
         base["comparison"] = {"kind": "oxidex_vs_native", "native_release": self.releases[0], "matched": True, "mismatched": 0}
         path.write_text(json.dumps(base))
         with self.assertRaisesRegex(executor.Refused, "outcomes"):
