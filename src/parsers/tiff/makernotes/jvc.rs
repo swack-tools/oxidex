@@ -461,10 +461,28 @@ mod tests {
         let path = crate::test_support::pinned_combined_fixture_path("JVC.jpg")
             .expect("pinned combined-samples/JVC.jpg is required");
         let metadata = crate::core::operations::read_metadata(&path).expect("JVC fixture parses");
-        assert_eq!(
-            metadata.get_string("JVC:CPUVersions"),
-            Some("CPU1 2.00, 0, CPU2 0496, 0")
-        );
+        // The typed read keeps the original NUL-separated bytes. ExifTool's
+        // JVC ValueConv joins their components for the two display channels;
+        // `get_string` intentionally does not coerce a Binary raw value.
+        assert!(matches!(
+            metadata.get("JVC:CPUVersions"),
+            Some(TagValue::Binary(bytes)) if bytes.starts_with(b"CPU1 2.00\0")
+                && bytes.contains(&0)
+        ));
+        for channel in [
+            crate::core::tag_occurrence::ValueChannel::ValueConv,
+            crate::core::tag_occurrence::ValueChannel::PrintConv,
+        ] {
+            let projected: Vec<_> = metadata
+                .project_occurrences(channel)
+                .filter(|(key, _, _)| *key == "JVC:CPUVersions")
+                .map(|(_, _, value)| value.into_owned())
+                .collect();
+            assert_eq!(
+                projected,
+                [TagValue::new_string("CPU1 2.00, 0, CPU2 0496, 0")]
+            );
+        }
     }
 
     #[test]
