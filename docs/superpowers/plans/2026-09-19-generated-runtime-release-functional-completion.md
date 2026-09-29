@@ -2838,6 +2838,8 @@ manifest delta, and recovery controls. No code or fixture edit is allowed after
 the run starts. Invoke the same entry point with `--only 11.78-to-12.64`.
 
 ```bash
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 RUN=forward-r1  # choose a new run ID if this one already exists
 python3 tools/exiftool-tables/version_transition_qualification.py \
   --matrix tools/exiftool-tables/version_transition_matrix.json \
@@ -2857,6 +2859,8 @@ Apply the same gates and prove removed artifacts are handled only by manifest
 delta. Invoke the same entry point with `--only 12.64-to-11.78`.
 
 ```bash
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 RUN=reverse-r1  # choose a new run ID if this one already exists
 python3 tools/exiftool-tables/version_transition_qualification.py \
   --matrix tools/exiftool-tables/version_transition_matrix.json \
