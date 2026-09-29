@@ -1368,7 +1368,13 @@ impl LeicaMakerNoteParser {
                 && tag_id == leica5::WB_RGB_LEVELS
             {
                 if let Some(priority) = leica5_wb_admitted()
-                    && let Some(directory) = entry_directory.clone()
+                    // A standalone MakerNote passed to `MakerNoteParser::parse`
+                    // has no TIFF coordinates. Inline values need none; the
+                    // decoder still refuses out-of-line values without a
+                    // located `LeicaValues` window.
+                    && let Some(directory) = entry_directory
+                        .clone()
+                        .or_else(|| ctx.is_none().then_some(0..0))
                     && let Some((decoded, stored)) =
                         leica5_wb_decoded(&entry, entry_data, values, byte_order, directory)
                     && let Some(raw_text) = leica5_wb_text(&decoded)

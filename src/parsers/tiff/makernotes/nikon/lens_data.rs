@@ -84,6 +84,18 @@ pub fn parse_lens_data(data: &[u8], tags: &mut HashMap<String, String>) {
     parse_lens_data_with_values(data, tags, &mut HashMap::new());
 }
 
+/// Fields shared with the generated encrypted layouts. Plaintext layouts are
+/// hand owned, but need physical occurrences when another tag has the same
+/// name (notably Main 0x008b versus LensData 0x0098).
+pub(super) struct PlaintextOverlap {
+    pub name: &'static str,
+    pub offset: usize,
+    pub raw: u8,
+    pub value: Option<f64>,
+    pub print: String,
+    pub table: &'static str,
+}
+
 /// Parse plaintext LensData while retaining ValueConv forms separately from
 /// their rounded PrintConv strings.
 pub fn parse_lens_data_with_values(
@@ -91,41 +103,82 @@ pub fn parse_lens_data_with_values(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) {
+    parse_lens_data_with_occurrences(data, tags, value_forms);
+}
+
+/// Return source-backed overlap fields for the structured MakerNote bridge.
+pub(super) fn parse_lens_data_with_occurrences(
+    data: &[u8],
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> Vec<PlaintextOverlap> {
     if data.len() < 4 {
-        return;
+        return Vec::new();
     }
     let version = ascii_value(&data[..4]);
     if version.is_empty() {
-        return;
+        return Vec::new();
     }
     tags.insert("Nikon:LensDataVersion".to_string(), version.clone());
 
-    let layout = match version.as_str() {
-        "0100" => &LAYOUT_00,
-        "0101" => &LAYOUT_01,
+    let (layout, table) = match version.as_str() {
+        "0100" => (&LAYOUT_00, "LensData00"),
+        "0101" => (&LAYOUT_01, "LensData01"),
         // 020x and later are encrypted; only the version string is plaintext.
-        _ => return,
+        _ => return Vec::new(),
     };
 
     let at = |offset: usize| data.get(offset).copied();
+    let mut overlap = Vec::new();
 
-    if let Some(raw) = layout.exit_pupil_position.and_then(at) {
+    if let Some((offset, raw)) = layout
+        .exit_pupil_position
+        .and_then(|offset| at(offset).map(|raw| (offset, raw)))
+    {
         // ValueConv: $val ? 2048 / $val : $val
         let value = if raw == 0 { 0.0 } else { 2048.0 / raw as f64 };
-        tags.insert(
-            "Nikon:ExitPupilPosition".to_string(),
-            format!("{:.1} mm", value),
-        );
+        let print = format!("{:.1} mm", value);
+        tags.insert("Nikon:ExitPupilPosition".to_string(), print.clone());
+        overlap.push(PlaintextOverlap {
+            name: "ExitPupilPosition",
+            offset,
+            raw,
+            value: Some(value),
+            print,
+            table,
+        });
     }
-    if let Some(raw) = layout.af_aperture.and_then(at) {
-        tags.insert(
-            "Nikon:AFAperture".to_string(),
-            format!("{:.1}", nikon_aperture(raw)),
-        );
+    if let Some((offset, raw)) = layout
+        .af_aperture
+        .and_then(|offset| at(offset).map(|raw| (offset, raw)))
+    {
+        let value = nikon_aperture(raw);
+        let print = format!("{:.1}", value);
+        tags.insert("Nikon:AFAperture".to_string(), print.clone());
+        overlap.push(PlaintextOverlap {
+            name: "AFAperture",
+            offset,
+            raw,
+            value: Some(value),
+            print,
+            table,
+        });
     }
-    if let Some(raw) = layout.focus_position.and_then(at) {
+    if let Some((offset, raw)) = layout
+        .focus_position
+        .and_then(|offset| at(offset).map(|raw| (offset, raw)))
+    {
         // Upper nibble = far focus range, lower nibble = near focus range.
-        tags.insert("Nikon:FocusPosition".to_string(), format!("0x{:02x}", raw));
+        let print = format!("0x{:02x}", raw);
+        tags.insert("Nikon:FocusPosition".to_string(), print.clone());
+        overlap.push(PlaintextOverlap {
+            name: "FocusPosition",
+            offset,
+            raw,
+            value: None,
+            print,
+            table,
+        });
     }
     if let Some(raw) = layout.focus_distance.and_then(at) {
         // ValueConv: 0.01 * 10**($val/40), in metres.
@@ -148,10 +201,17 @@ pub fn parse_lens_data_with_values(
         tags.insert("Nikon:LensIDNumber".to_string(), raw.to_string());
     }
     if let Some(raw) = at(layout.lens_fstops) {
-        tags.insert(
-            "Nikon:LensFStops".to_string(),
-            format!("{:.2}", raw as f64 / 12.0),
-        );
+        let value = raw as f64 / 12.0;
+        let print = format!("{:.2}", value);
+        tags.insert("Nikon:LensFStops".to_string(), print.clone());
+        overlap.push(PlaintextOverlap {
+            name: "LensFStops",
+            offset: layout.lens_fstops,
+            raw,
+            value: Some(value),
+            print,
+            table,
+        });
     }
     if let Some(raw) = at(layout.min_focal_length) {
         tags.insert(
@@ -186,6 +246,7 @@ pub fn parse_lens_data_with_values(
             format!("{:.1}", nikon_aperture(raw)),
         );
     }
+    overlap
 }
 
 #[cfg(test)]

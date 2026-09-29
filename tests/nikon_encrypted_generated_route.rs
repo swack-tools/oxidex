@@ -73,6 +73,225 @@ fn d810_distinct_lens_fstops(standalone_last: bool) -> Vec<u8> {
     exif
 }
 
+fn d810_plaintext_lens_fstops(version: &[u8; 4], standalone_last: bool) -> Vec<u8> {
+    let mut exif = d810_distinct_lens_fstops(standalone_last);
+    let nikon = exif
+        .windows(10)
+        .position(|bytes| bytes == b"Nikon\0\x02\x11\0\0")
+        .unwrap();
+    let tiff = nikon + 10;
+    let ifd = tiff + u32::from_le_bytes(exif[tiff + 4..tiff + 8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(exif[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let lens = (0..count)
+        .map(|i| ifd + 2 + i * 12)
+        .find(|&at| u16::from_le_bytes(exif[at..at + 2].try_into().unwrap()) == 0x0098)
+        .unwrap();
+    let offset = tiff + u32::from_le_bytes(exif[lens + 8..lens + 12].try_into().unwrap()) as usize;
+    exif[offset..offset + 4].copy_from_slice(version);
+    exif[offset + if version == b"0100" { 7 } else { 12 }] = 64;
+    exif
+}
+
+#[test]
+fn plaintext_lens_fstops_keeps_physical_order_and_numeric_value() {
+    for version in [b"0100", b"0101"] {
+        for standalone_last in [false, true] {
+            for extension in [".jpg", ".nef", ".nrw"] {
+                let exif = d810_plaintext_lens_fstops(version, standalone_last);
+                let carrier = d810_carrier_from(&exif, extension);
+                let metadata = read_metadata(carrier.path()).unwrap();
+                let rows: Vec<_> = metadata
+                    .project_occurrences(ValueChannel::PrintConv)
+                    .filter(|(key, _, _)| *key == "Nikon:LensFStops")
+                    .collect();
+                assert_eq!(rows.len(), 2, "{version:?} {extension} {standalone_last}");
+                let expected = if standalone_last {
+                    ["5.33", "7.00"]
+                } else {
+                    ["7.00", "5.33"]
+                };
+                for ((_, row, value), print) in rows.iter().zip(expected) {
+                    assert_eq!(value.as_ref(), &TagValue::String(print.to_owned()));
+                    if row.origin.table != Some("Main") {
+                        assert_eq!(
+                            row.origin.table,
+                            Some(if version == b"0100" {
+                                "LensData00"
+                            } else {
+                                "LensData01"
+                            })
+                        );
+                        assert_eq!(
+                            row.id,
+                            TagId::Numeric(if version == b"0100" { 7 } else { 12 })
+                        );
+                        assert_eq!(row.raw, TagValue::String("5.33".to_string()));
+                        assert_eq!(row.stored, Some(TagValue::Integer(64)));
+                        assert_eq!(row.value, Some(TagValue::Float(64.0 / 12.0)));
+                    }
+                }
+                assert_eq!(metadata.get_string("Nikon:LensFStops"), Some(expected[1]));
+                let run = |flags: &[&str]| {
+                    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                        .args(flags)
+                        .args(["-s3", "-LensFStops"])
+                        .arg(carrier.path())
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                    String::from_utf8(output.stdout)
+                        .unwrap()
+                        .lines()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(run(&["-a"]), expected);
+                let numeric = if standalone_last {
+                    ["5.33333333333333", "7"]
+                } else {
+                    ["7", "5.33333333333333"]
+                };
+                assert_eq!(run(&["-a", "--no-print-conv"]), numeric);
+            }
+        }
+    }
+}
+
+fn d810_mixed_plaintext_and_encrypted(version: &[u8; 4], plaintext_last: bool) -> Vec<u8> {
+    let mut exif = D810_EXIF.to_vec();
+    let nikon = exif
+        .windows(10)
+        .position(|bytes| bytes == b"Nikon\0\x02\x11\0\0")
+        .unwrap();
+    let tiff = nikon + 10;
+    let ifd = tiff + u32::from_le_bytes(exif[tiff + 4..tiff + 8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(exif[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entry = |id: u16, data: &[u8]| {
+        (0..count)
+            .map(|i| ifd + 2 + i * 12)
+            .find(|&at| u16::from_le_bytes(data[at..at + 2].try_into().unwrap()) == id)
+            .unwrap()
+    };
+    let earlier = entry(0x0097, &exif);
+    let later = entry(0x0098, &exif);
+    let encrypted_at =
+        tiff + u32::from_le_bytes(exif[later + 8..later + 12].try_into().unwrap()) as usize;
+    let spare_at =
+        tiff + u32::from_le_bytes(exif[earlier + 8..earlier + 12].try_into().unwrap()) as usize;
+    let encrypted = exif[encrypted_at..encrypted_at + 33].to_vec();
+    assert_eq!(&encrypted[..4], b"0204");
+    exif[spare_at..spare_at + 33].copy_from_slice(&encrypted);
+    exif[earlier..earlier + 2].copy_from_slice(&0x0098u16.to_le_bytes());
+    exif[earlier + 4..earlier + 8].copy_from_slice(&33u32.to_le_bytes());
+    exif[encrypted_at..encrypted_at + 4].copy_from_slice(version);
+    exif[encrypted_at + if version == b"0100" { 7 } else { 12 }] = 64;
+    if !plaintext_last {
+        for byte in 0..12 {
+            exif.swap(earlier + byte, later + byte);
+        }
+    }
+    exif
+}
+
+#[test]
+fn truncated_plaintext_field_does_not_invent_lens_fstops() {
+    for (version, cut) in [(b"0100", 7u32), (b"0101", 12u32)] {
+        let mut exif = d810_plaintext_lens_fstops(version, true);
+        let nikon = exif
+            .windows(10)
+            .position(|bytes| bytes == b"Nikon\0\x02\x11\0\0")
+            .unwrap();
+        let tiff = nikon + 10;
+        let ifd = tiff + u32::from_le_bytes(exif[tiff + 4..tiff + 8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(exif[ifd..ifd + 2].try_into().unwrap()) as usize;
+        let lens = (0..count)
+            .map(|i| ifd + 2 + i * 12)
+            .find(|&at| u16::from_le_bytes(exif[at..at + 2].try_into().unwrap()) == 0x0098)
+            .unwrap();
+        exif[lens + 4..lens + 8].copy_from_slice(&cut.to_le_bytes());
+        let carrier = d810_carrier_from(&exif, ".nef");
+        let metadata = read_metadata(carrier.path()).unwrap();
+        let rows: Vec<_> = metadata
+            .project_occurrences(ValueChannel::PrintConv)
+            .filter(|(key, _, _)| *key == "Nikon:LensFStops")
+            .collect();
+        assert_eq!(rows.len(), 1, "{version:?}");
+        assert_eq!(rows[0].1.origin.table, Some("Main"));
+        assert_eq!(rows[0].2.as_ref(), &TagValue::String("7.00".to_owned()));
+    }
+}
+
+#[test]
+fn plaintext_and_generated_overlap_keep_both_physical_owners() {
+    for version in [b"0100", b"0101"] {
+        for plaintext_last in [false, true] {
+            let exif = d810_mixed_plaintext_and_encrypted(version, plaintext_last);
+            let carrier = d810_carrier_from(&exif, ".nef");
+            let metadata = read_metadata(carrier.path()).unwrap();
+            let rows: Vec<_> = metadata
+                .project_occurrences(ValueChannel::PrintConv)
+                .filter(|(key, _, _)| *key == "Nikon:LensFStops")
+                .collect();
+            assert_eq!(rows.len(), 3, "{version:?} plaintext_last={plaintext_last}");
+            let expected = if plaintext_last {
+                ["6.00", "6.00", "5.33"]
+            } else {
+                ["6.00", "5.33", "6.00"]
+            };
+            for ((_, _, value), printed) in rows.iter().zip(expected) {
+                assert_eq!(value.as_ref(), &TagValue::String(printed.to_owned()));
+            }
+            let plaintext: Vec<_> = rows
+                .iter()
+                .filter(|(_, row, _)| {
+                    row.origin.table
+                        == Some(if version == b"0100" {
+                            "LensData00"
+                        } else {
+                            "LensData01"
+                        })
+                })
+                .collect();
+            assert_eq!(plaintext.len(), 1);
+            assert_eq!(plaintext[0].1.stored, Some(TagValue::Integer(64)));
+            assert_eq!(plaintext[0].1.value, Some(TagValue::Float(64.0 / 12.0)));
+            if version == b"0101" {
+                for (name, field_id, stored, printed, value) in [
+                    (
+                        "AFAperture",
+                        5,
+                        6,
+                        "1.2",
+                        TagValue::Float(2.0_f64.powf(6.0 / 24.0)),
+                    ),
+                    (
+                        "ExitPupilPosition",
+                        4,
+                        46,
+                        "44.5 mm",
+                        TagValue::Float(2048.0 / 46.0),
+                    ),
+                    ("FocusPosition", 8, 133, "0x85", TagValue::Integer(133)),
+                ] {
+                    let matches: Vec<_> = metadata
+                        .project_occurrences(ValueChannel::PrintConv)
+                        .filter(|(key, row, _)| {
+                            *key == format!("Nikon:{name}")
+                                && row.origin.table == Some("LensData01")
+                        })
+                        .collect();
+                    assert_eq!(matches.len(), 1, "{name}");
+                    assert_eq!(matches[0].1.id, TagId::Numeric(field_id));
+                    assert_eq!(matches[0].1.value, Some(value));
+                    assert_eq!(matches[0].1.stored, Some(TagValue::Integer(stored)));
+                    assert_eq!(matches[0].1.raw, TagValue::String(printed.to_owned()));
+                }
+            }
+            assert_eq!(metadata.get_string("Nikon:LensFStops"), Some(expected[2]));
+        }
+    }
+}
+
 #[test]
 fn standalone_lens_fstops_survives_generated_ownership_in_physical_order() {
     for extension in [".jpg", ".nef", ".nrw"] {
