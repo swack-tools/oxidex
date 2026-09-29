@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
+use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::exiftool_tables::session::Session;
 use oxidex::exiftool_tables::{
     BinaryTable, Ctx, Dir, Emitted, Field, Fmt, GateA, IfdDir, IfdFlags, IfdTable, IfdTag,
@@ -159,37 +160,25 @@ fn inventory_names_every_enabled_walker_with_its_contract() {
     }
 }
 
-/// The keyed walker has no production caller, and the Task 8 attribution
-/// instrument refuses to measure if one appears without controller review.
-/// The inventory must say so rather than claim a parsed route.
+/// The CIFF carrier now reaches a checked projection of generated Main 0x080b.
+/// Keep the inventory synchronized with the actual production call site.
 #[test]
-fn inventory_records_keyed_as_detected_not_parsed() {
+fn inventory_records_real_keyed_route() {
     let inventory = inventory();
     let keyed = &inventory["walkers"][2];
     assert_eq!(keyed["id"], "keyed");
-    assert_eq!(keyed["production_callers"], Value::Array(Vec::new()));
+    assert_eq!(
+        keyed["production_callers"],
+        serde_json::json!([
+            "src/parsers/raw/metadata.rs (CanonRaw CRW/CIFF hand-discovered bounded entry, CanonFirmwareVersion 0x080b)"
+        ])
+    );
     assert!(
         keyed["detected_versus_parsed"]
             .as_str()
-            .is_some_and(|state| state.starts_with("detected-not-parsed"))
+            .is_some_and(|state| state.starts_with("parsed: CanonRaw::Main key 0x080b only"))
     );
-    for relative in [
-        "src/main.rs",
-        "src/core/operations.rs",
-        "src/core/file_metadata.rs",
-        "src/exiftool_tables/mod.rs",
-        "src/exiftool_tables/engine.rs",
-        "src/exiftool_tables/ifd_engine.rs",
-        "src/exiftool_tables/serial_engine.rs",
-        PIPELINE,
-    ] {
-        if std::path::Path::new(&format!("{REPO}/{relative}")).is_file() {
-            assert!(
-                !production(relative).contains("process_keyed_directory("),
-                "{relative} must not add a keyed production caller"
-            );
-        }
-    }
+    assert!(production("src/parsers/raw/metadata.rs").contains("process_keyed_directory("));
 }
 
 /// Nikon::LensData0204 reaches the generated binary walker after source-keyed
@@ -1138,8 +1127,97 @@ const ROUTES: [(&str, &str, WalkerTag); 11] = [
         "ICC_Profile",
         Some(("ICC_Profile:CMMFlags", "Not Embedded, Independent")),
     ),
-    ("CanonRaw.crw", "CanonRaw", None),
+    (
+        "CanonRaw.crw",
+        "CanonRaw",
+        Some(("CanonRaw:CanonFirmwareVersion", "Firmware Version 1.1.1")),
+    ),
 ];
+
+/// The real CRW route must retain the generated row's source identity,
+/// groups, value forms and provenance after the public read inserts it.
+#[test]
+fn canonraw_keyed_route_records_the_generated_occurrence() {
+    let Some(path) = fixtures::pinned_t_images_fixture_path("CanonRaw.crw") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read real CanonRaw CRW through public API");
+    let key = "CanonRaw:CanonFirmwareVersion";
+    let rows: Vec<_> = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .filter(|(name, _, _)| *name == key)
+        .collect();
+    assert_eq!(rows.len(), 1, "one source firmware record");
+    let (_, row, print) = &rows[0];
+    assert_eq!(row.id, TagId::Numeric(0x080b));
+    assert_eq!(row.name.as_ref(), "CanonFirmwareVersion");
+    assert_eq!(row.group0.as_ref(), "MakerNotes");
+    assert_eq!(row.group1.as_ref(), "CanonRaw");
+    assert_eq!(row.group2.as_deref(), Some("Camera"));
+    assert_eq!(row.origin.module, Some("CanonRaw"));
+    assert_eq!(row.origin.table, Some("Main"));
+    assert_eq!(row.priority, 1);
+    assert!(!row.is_list);
+    let firmware = TagValue::new_string("Firmware Version 1.1.1");
+    assert_eq!(row.stored.as_ref(), Some(&firmware));
+    assert_eq!(row.value.as_ref(), Some(&firmware));
+    assert_eq!(row.print.as_ref(), Some(&firmware));
+    assert_eq!(print.as_ref(), &firmware);
+    assert_eq!(metadata.get(key), Some(&firmware));
+    assert!(
+        !metadata.is_assigned(key),
+        "file read must retain read provenance"
+    );
+}
+
+/// Silence attribution on the actual pinned CRW, not on a hand-built CIFF
+/// block. The sole missing occurrence must be the source key 0x080b field.
+#[test]
+fn canonraw_keyed_route_has_one_real_attributed_occurrence() {
+    use std::process::Command;
+    let Some(path) = fixtures::pinned_t_images_fixture_path("CanonRaw.crw") else {
+        return;
+    };
+    let run = |silence: bool, requested: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+        command.args(["-j", "-G1", "-a"]);
+        if requested {
+            command.arg("-CanonFirmwareVersion");
+        }
+        if silence {
+            command.env("OXIDEX_GENSHARE_SILENCE", "keyed");
+        } else {
+            command.env_remove("OXIDEX_GENSHARE_SILENCE");
+        }
+        let output = command.arg(&path).output().expect("run oxidex CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).expect("CLI JSON");
+        document[0]
+            .as_object()
+            .expect("one metadata object")
+            .clone()
+    };
+    let normal = run(false, false);
+    let silenced = run(true, false);
+    let tag = "CanonRaw:CanonFirmwareVersion";
+    assert_eq!(normal[tag], "Firmware Version 1.1.1");
+    assert!(!silenced.contains_key(tag));
+    let missing: Vec<_> = normal
+        .keys()
+        .filter(|key| !silenced.contains_key(*key))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(missing, [tag]);
+    assert_eq!(run(false, true)[tag], normal[tag]);
+    assert!(!run(true, true).contains_key(tag));
+    // The projection excludes every other generated Main row. In particular,
+    // the hand-owned sibling still survives keyed-token silence.
+    assert_eq!(normal["CanonRaw:OwnerName"], silenced["CanonRaw:OwnerName"]);
+}
 
 #[test]
 fn route_controls_report_metadata_beyond_file_identity() {

@@ -77,6 +77,7 @@ TASK8_RUST_BOUNDARY = (
     "src/parsers/flir_fpf.rs",
     "src/parsers/jpeg/app_segments/infiray.rs",
     "src/parsers/macho/metadata_extractor.rs",
+    "src/parsers/raw/metadata.rs",
     "src/parsers/specialized/fits.rs",
     "src/parsers/tiff/geotiff_parser.rs",
     "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
@@ -85,6 +86,37 @@ TASK8_RUST_BOUNDARY = (
     "src/parsers/tiff/makernotes/sony.rs",
     "src/parsers/tiff/makernotes/sony/binary_data.rs",
 )
+
+# The complete reviewed production source is the fail-closed boundary. Function
+# text alone can retain the same digest inside a block comment or behind
+# #[cfg(any())]. Any edit to this Rust file needs deliberate review and a pin
+# refresh, including edits unrelated to the bounded firmware route.
+KEYED_ROUTE_SOURCE_SHA256 = "3d0fcaec99246077518d3bc956df9b867e81c3f7eea4d6e337fd8e314fa4f5fb"
+
+# These narrower digests document which functions compose the reviewed route;
+# the complete-file digest above authenticates their compilation context.
+KEYED_ROUTE_FUNCTION_SHA256 = {
+    "canon_firmware_projection_matches": "7ebda29d9628fbab4202cea00c5dee4ceaa13af49b8344b1099236b726963d5c",
+    "canon_firmware_keyed_table": "a49e24fcb45ed04500233baa22f058e7d55c2489d1f9e843efba5af5e10b8d7d",
+    "canon_firmware_from_keyed_entry": "73239e02e18eb2be717c17f65b1ab451d85a5b68bdb2416c1eaa3afb73858cb8",
+    "decode_ciff_container": "c9a8d44f60050702501dfd44ed64acfbeebbdf8c34c34bb9f01c19015908456f",
+}
+
+
+def _attested_keyed_route(source: str) -> bool:
+    if hashlib.sha256(source.encode()).hexdigest() != KEYED_ROUTE_SOURCE_SHA256:
+        return False
+    for name, expected in KEYED_ROUTE_FUNCTION_SHA256.items():
+        match = re.search(rf"(?m)^pub\(crate\) fn {name}\(|^fn {name}\(", source)
+        if match is None:
+            return False
+        end = source.find("\n}\n", match.start())
+        if end < 0:
+            return False
+        body = source[match.start() : end + 2]
+        if hashlib.sha256(body.encode()).hexdigest() != expected:
+            return False
+    return True
 
 
 class ReceiptError(ValueError):
@@ -1361,6 +1393,13 @@ def _route_ledger(repository: Path, root: Path) -> dict:
 
     serial_calls = external_calls("process_serial_directory", "src/exiftool_tables/serial_engine.rs")
     keyed_calls = external_calls("process_keyed_directory", "src/exiftool_tables/keyed_engine.rs")
+    keyed_source = (repository / "src/parsers/raw/metadata.rs").read_text(encoding="utf-8")
+    if (len(keyed_calls) != 1
+        or keyed_calls[0]["path"] != "src/parsers/raw/metadata.rs"
+        or not _attested_keyed_route(keyed_source)):
+        raise ReceiptError(
+            "keyed route ledger changed: bounded firmware projection or caller is not attested"
+        )
     ledger = {
         "tokens": list(TOKENS),
         "sources": rows,
@@ -1371,10 +1410,8 @@ def _route_ledger(repository: Path, root: Path) -> dict:
             "serial": bool(serial_calls),
             "keyed": bool(keyed_calls),
         },
-        "keyed_note": "no public production caller; zero remains unexercised",
+        "keyed_note": "CanonRaw CRW/CIFF 0x080b is production reachable; the Task 8 bounded corpus has no CRW and remains unexercised for this token",
     }
-    if keyed_calls:
-        raise ReceiptError("keyed route ledger changed: production caller requires controller review")
     path = root / "contracts" / "route-ledger.json"
     write_json(path, ledger)
     return {"artifact": _artifact_record(path), "sha256": canonical_sha256(ledger), **ledger}
@@ -1390,7 +1427,7 @@ def _fixture_observations(
             "status": exercise_status(
                 projections["control-empty"]["aggregate"],
                 projections[token]["aggregate"],
-                production_reachable=token != "keyed",
+                production_reachable=True,
             ),
             "matched_lost": reconciliations[token]["matched_lost"],
         }
@@ -1437,7 +1474,7 @@ def _fixture_observations(
         delta["removed"] or delta["added"] or delta["changed_or_reordered"]
         for delta in keyed_deltas.values()
     ):
-        raise ReceiptError("keyed changed output despite having no production caller")
+        raise ReceiptError("keyed changed Task 8 bounded-corpus output without a CRW fixture")
     corpus = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
     exact_loss_payload = {
         "schema": "genshare-exact-loss/v1",

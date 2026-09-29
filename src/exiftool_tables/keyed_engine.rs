@@ -2,11 +2,13 @@
 //!
 //! CanonRaw ProcessCanonRaw reads CIFF10 entries, not a fixed-offset
 //! ProcessBinaryData record. This module owns only CIFF10 layout, then hands
-//! raw values to the shared decoder, conversion and rendering path. It has no
-//! parser caller or enabled production table.
+//! raw values to the shared decoder, conversion and rendering path. CanonRaw
+//! admits one source-checked firmware row from a hand-discovered CIFF entry;
+//! the full generated Main table remains blocked.
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;
+use std::collections::HashSet;
 
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
@@ -210,7 +212,10 @@ fn process_ciff10_directory(
         result.gate_b_blocked = 1;
         return result;
     }
-    let mut visited = Vec::new();
+    // A CIFF subdirectory is bounded by its carrier bytes, but a long chain
+    // can contain many distinct offsets. Keep the cycle guard constant-time
+    // so a valid linear-size chain cannot make the walk quadratic.
+    let mut visited = HashSet::new();
     let mut work = vec![KeyedWork::Enter(block)];
     while let Some(item) = work.pop() {
         match item {
@@ -500,7 +505,7 @@ enum KeyedEntryAction<'a> {
 fn enter_directory<'a>(
     table: &'static KeyedDirectoryTable,
     block: KeyedBlock<'a>,
-    visited: &mut Vec<(usize, usize)>,
+    visited: &mut HashSet<(usize, usize)>,
     result: &mut KeyedWalkResult,
 ) -> Option<KeyedWork<'a>> {
     if !matches!(table.layout, KeyedLayout::Ciff10) {
@@ -542,7 +547,7 @@ fn enter_directory<'a>(
         result.malformed_directory += 1;
         return None;
     }
-    visited.push((table_id, address));
+    let _ = visited.insert((table_id, address));
     Some(KeyedWork::Entries {
         block,
         directory_offset,
@@ -2137,6 +2142,39 @@ mod tests {
         assert_eq!(result.duplicate_directory, 0);
         assert_eq!(result.emitted, 1);
         assert_eq!(sink.rows[0].name, "Leaf");
+        assert_eq!(sink.rows[0].value, TagValue::Integer(7));
+    }
+
+    #[test]
+    fn ciff_cycle_and_shared_child_are_visited_once() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "Leaf", Some(Fmt::Int8u), None)];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+
+        // The root entry points at its own complete block. The address guard
+        // must stop the second entry without recursing or emitting a row.
+        let mut cycle = ciff(ByteOrder::Little, &[(0x2804, Vec::new())]);
+        let cycle_size = cycle.len() as u32;
+        cycle[4..8].copy_from_slice(&cycle_size.to_le_bytes());
+        cycle[8..12].copy_from_slice(&0u32.to_le_bytes());
+        let (sink, result) = walk_test(&TABLE, &cycle, ByteOrder::Little);
+        assert_eq!(result.entries_seen, 1);
+        assert_eq!(result.duplicate_directory, 1);
+        assert_eq!(result.emitted, 0);
+        assert!(sink.rows.is_empty());
+
+        // Two parent entries address the same valid child. It owns one leaf
+        // occurrence, regardless of how many structural edges point to it.
+        let child = ciff(ByteOrder::Little, &[(0x4001, vec![7])]);
+        let mut shared = ciff(
+            ByteOrder::Little,
+            &[(0x2804, child.clone()), (0x2804, child.clone())],
+        );
+        let second_entry = child.len() * 2 + 2 + 10;
+        shared[second_entry + 6..second_entry + 10].copy_from_slice(&0u32.to_le_bytes());
+        let (sink, result) = walk_test(&TABLE, &shared, ByteOrder::Little);
+        assert_eq!(result.duplicate_directory, 1);
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows.len(), 1);
         assert_eq!(sink.rows[0].value, TagValue::Integer(7));
     }
 

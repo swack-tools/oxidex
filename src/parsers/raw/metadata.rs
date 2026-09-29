@@ -29,10 +29,13 @@ use crate::core::formatters::{
     format_sharpness,
 };
 use crate::core::tag_conversion::{apply_tile_offsets_value_conv, exif_entry_to_tag_value};
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{FileReader, Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
-    Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
+    Acknowledged, Ctx, Emitted, GateA, KeyedBlock, KeyedDirectoryTable, KeyedEmissionSink,
+    KeyedScope, PerlCitation, RawAccess, decode_binary_table, find_keyed_table, find_table,
+    process_keyed_directory,
 };
 use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
@@ -8029,6 +8032,7 @@ fn read_ciff_u32(data: &[u8], offset: usize, order: TableByteOrder) -> Option<u3
 /// enclosing directory's `Name`, which one `Condition` in the table keys off.
 struct CiffEntry<'a> {
     id: u16,
+    raw_tag: u16,
     tag_type: u16,
     dir_name: &'static str,
     value: &'a [u8],
@@ -8218,6 +8222,7 @@ fn walk_ciff_directory<'a>(
 
         out.push(CiffEntry {
             id,
+            raw_tag: tag,
             tag_type,
             dir_name,
             value,
@@ -8730,10 +8735,10 @@ fn emit_ciff_main_tag(metadata: &mut MetadataMap, entry: &CiffEntry<'_>, model: 
 ///   conversions, via [`parse_canon_ciff_records`];
 /// * `%Canon::ColorBalance` is decoded from its generated table here, because
 ///   the MakerNote side has no decoder for it ([`emit_canon_color_balance`]);
-/// * `%CanonRaw::Main`'s scalar entries -- the part of the format that is a tag
-///   *dictionary* rather than a binary record, and so is not in the generated
-///   schema at all -- are the only hand-written decode
-///   ([`emit_ciff_main_tag`]), each arm carrying its CanonRaw.pm citation.
+/// * `%CanonRaw::Main`'s 0x080b firmware field is read from a checked projection
+///   of its generated keyed row; other scalar entries still use the cited
+///   hand reader ([`emit_ciff_main_tag`]). The full generated Main table stays
+///   blocked until its remaining formats and edges are representable.
 ///
 /// # Deliberately omitted
 ///
@@ -8791,6 +8796,156 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
     decode_ciff_container(data, &mut metadata);
     Ok(metadata)
+}
+
+/// The 13.59 CanonRaw Main table is blocked as a whole: other rows have
+/// unmodeled formats and edges. This projection admits only the generated
+/// 0x080b row after checking every property the keyed scalar path consumes.
+/// Absence or changed source facts leaves the existing hand reader in charge.
+fn canon_firmware_projection_matches(
+    source: &KeyedDirectoryTable,
+    tag: &crate::exiftool_tables::KeyedTag,
+) -> bool {
+    source.module == "CanonRaw"
+        && source.table == "Main"
+        && source.group0 == "MakerNotes"
+        && source.group1 == ""
+        && source.group2 == "Camera"
+        && matches!(source.layout, crate::exiftool_tables::KeyedLayout::Ciff10)
+        && tag.raw_id == 0x080b
+        && tag.name == "CanonFirmwareVersion"
+        && tag.groups == crate::exiftool_tables::TagGroups::NONE
+        && tag.format.is_none()
+        && tag.count.is_none()
+        && tag.condition.is_none()
+        && tag.raw_conv.is_none()
+        && tag.value_conv.is_none()
+        && matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
+        && tag.edge.is_none()
+        && !tag.omitted.value_conv
+        && !tag.omitted.raw_conv
+        && !tag.omitted.condition
+        && !tag.omitted.hook
+        && !tag.omitted.subdirectory
+        && !tag.omitted.print_conv
+        && !tag.flags.unknown
+        && !tag.flags.binary
+        && !tag.flags.list
+        && !tag.flags.avoid
+        && tag.flags.priority.is_none()
+}
+
+fn canon_firmware_keyed_table() -> Option<&'static KeyedDirectoryTable> {
+    static PROJECTION: std::sync::OnceLock<Option<KeyedDirectoryTable>> =
+        std::sync::OnceLock::new();
+    PROJECTION
+        .get_or_init(|| {
+            let source = find_keyed_table("CanonRaw", "Main")?;
+            let tag = source.tags.iter().find(|tag| tag.raw_id == 0x080b)?;
+            if !canon_firmware_projection_matches(source, tag) {
+                return None;
+            }
+            Some(KeyedDirectoryTable {
+                gate_a: GateA { blocked_by: &[] },
+                tags: std::slice::from_ref(tag),
+                variants: &[],
+                ..*source
+            })
+        })
+        .as_ref()
+}
+
+#[derive(Default)]
+struct CanonFirmwareKeyedSink {
+    rows: Vec<Emitted>,
+}
+
+impl KeyedEmissionSink for CanonFirmwareKeyedSink {
+    fn emit(&mut self, row: Emitted) {
+        self.rows.push(row);
+    }
+
+    fn keyed_enabled(&self, table: &'static KeyedDirectoryTable) -> bool {
+        canon_firmware_keyed_table().is_some_and(|enabled| std::ptr::eq(enabled, table))
+    }
+}
+
+/// Decode the one firmware record already found by the hand CIFF reader.
+/// Rebuild only its bounded CIFF10 entry so the generated keyed reader still
+/// selects the source row and runs the shared conversion/emission pipeline.
+/// The remaining heap may contain arbitrarily deep or aliased subdirectories;
+/// it is unrelated to this scalar and must not be walked a second time.
+/// Repeated records and values over the keyed reader's scalar limit retain
+/// the hand reader's ownership and behavior.
+fn canon_firmware_from_keyed_entry(entry: &CiffEntry<'_>) -> Option<Option<Emitted>> {
+    if entry.id != 0x080b
+        || entry.raw_tag & 0x3fff != entry.id
+        || entry.value.is_empty()
+        || entry.value.len() > 512
+        || (entry.raw_tag & 0x4000 != 0 && entry.value.len() != 8)
+    {
+        return None;
+    }
+    let table = canon_firmware_keyed_table()?;
+    let inline = entry.raw_tag & 0x4000 != 0;
+    let mut projected = Vec::with_capacity(entry.value.len() + 16);
+    if !inline {
+        projected.extend_from_slice(entry.value);
+    }
+    let directory_offset = u32::try_from(projected.len()).ok()?;
+    let write_u16 = |value: u16| match entry.order {
+        TableByteOrder::Little => value.to_le_bytes(),
+        TableByteOrder::Big => value.to_be_bytes(),
+    };
+    let write_u32 = |value: u32| match entry.order {
+        TableByteOrder::Little => value.to_le_bytes(),
+        TableByteOrder::Big => value.to_be_bytes(),
+    };
+    projected.extend_from_slice(&write_u16(1));
+    projected.extend_from_slice(&write_u16(entry.raw_tag));
+    if inline {
+        // The eight bytes following the tag are the value itself.
+        projected.extend_from_slice(entry.value);
+    } else {
+        projected.extend_from_slice(&write_u32(u32::try_from(entry.value.len()).ok()?));
+        projected.extend_from_slice(&write_u32(0));
+    }
+    projected.extend_from_slice(&write_u32(directory_offset));
+    let mut members = std::collections::HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    let mut sink = CanonFirmwareKeyedSink::default();
+    let block = KeyedBlock::new(
+        &projected,
+        entry.order,
+        KeyedScope {
+            group1_override: Some("CanonRaw"),
+        },
+    );
+    let result = process_keyed_directory(table, block, &mut ctx, &mut sink);
+    if result.entries_seen != 1
+        || result.emitted != 1
+        || result.gate_a_blocked != 0
+        || result.gate_b_blocked != 0
+        || result.malformed_directory != 0
+        || result.high_bit_error != 0
+        || result.duplicate_directory != 0
+        || result.initial_context_refusal != 0
+        || result.omitted != 0
+        || result.bad_value != 0
+        || result.large_scalar != 0
+        || result.unwalked_edge != 0
+        || result.unavailable_target != 0
+        || result.validation_rejected != 0
+    {
+        return None;
+    }
+    // The attribution token suppresses the outward row after pipeline::execute.
+    // A silenced row still consumes this source occurrence: falling back to
+    // the hand reader would hide that the keyed route had no output.
+    if sink.rows.len() > 1 {
+        return None;
+    }
+    Some(sink.rows.pop())
 }
 
 /// Decode one little-endian CIFF container -- `II`, a 4-byte header length,
@@ -8853,9 +9008,45 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
         }
     }
 
+    let mut firmware_entries = entries.iter().filter(|entry| entry.id == 0x080b);
+    let mut firmware_from_keyed =
+        if let (Some(entry), None) = (firmware_entries.next(), firmware_entries.next()) {
+            canon_firmware_from_keyed_entry(entry)
+        } else {
+            None
+        };
     let mut canon_records: Vec<(u16, &[u8])> = Vec::new();
     for entry in &entries {
         match entry.id {
+            0x080b if firmware_from_keyed.is_some() => {
+                if let Some(row) = firmware_from_keyed.take().flatten() {
+                    let key = format!("{}:{}", row.group1, row.name);
+                    let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+                    metadata.record_occurrence(
+                        key,
+                        TagOccurrence {
+                            id: row.source_id,
+                            name: intern(row.name),
+                            group0: intern(row.group0),
+                            group1: intern(row.group1),
+                            group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
+                            instance: Instance::default(),
+                            raw: row.value.clone(),
+                            value: Some(value),
+                            print: Some(row.value),
+                            stored: Some(row.stored),
+                            priority: u8::from(!(row.low_priority || row.avoid)),
+                            is_list: row.is_list,
+                            order: 0,
+                            origin: Provenance {
+                                module: Some(row.module),
+                                table: Some(row.table),
+                                byte_range: None,
+                            },
+                        },
+                    );
+                }
+            }
             0x080a => {}
             // The eight transcribed `%CanonRaw::*` binary records
             // (CanonRaw.pm:427-590), reached from Main at the cited lines.
@@ -12636,6 +12827,238 @@ mod rational_array_tests {
         file.extend_from_slice(&0u32.to_le_bytes()); // next-directory word
         file.extend_from_slice(&directory_relative.to_le_bytes());
         file
+    }
+
+    #[test]
+    fn keyed_firmware_projection_has_a_bounded_single_entry() {
+        let value = b"Firmware Version 1.1.1\0";
+        let entry = CiffEntry {
+            id: 0x080b,
+            raw_tag: 0x080b,
+            tag_type: 0x08,
+            dir_name: "CRW",
+            value,
+            order: TableByteOrder::Little,
+        };
+        let row = canon_firmware_from_keyed_entry(&entry)
+            .expect("one generated source occurrence")
+            .expect("keyed output row");
+        assert_eq!(row.name, "CanonFirmwareVersion");
+        assert_eq!(row.group1, "CanonRaw");
+        assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(0x080b));
+        assert_eq!(row.value.as_string(), Some("Firmware Version 1.1.1"));
+        // The projection never retains or searches the surrounding heap.
+        // Exactly one entry reaches the keyed engine, even for a 512-byte
+        // value; larger values use the existing hand path without a copy.
+        let boundary = vec![b'A'; 512];
+        let boundary_entry = CiffEntry {
+            value: &boundary,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&boundary_entry).is_some());
+        let empty_entry = CiffEntry {
+            value: b"",
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&empty_entry).is_none());
+        let empty = build_ciff(&[(0x080b, Vec::new())]);
+        assert!(
+            parse_canon_crw(&empty, RawFormat::CanonCRW)
+                .expect("zero-length CRW")
+                .get_string("CanonRaw:CanonFirmwareVersion")
+                .is_none()
+        );
+        let mut public = empty[..14].to_vec();
+        public[2..6].copy_from_slice(&26u32.to_le_bytes());
+        public.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        public.extend_from_slice(&empty[14..]);
+        let directory = tempfile::tempdir().expect("CRW temporary directory");
+        let path = directory.path().join("zero-length.crw");
+        std::fs::write(&path, public).expect("write zero-length CRW");
+        let metadata = crate::core::operations::read_metadata(&path).expect("public CRW read");
+        assert!(
+            metadata
+                .occurrences_for("CanonRaw:CanonFirmwareVersion")
+                .is_empty()
+        );
+        let over = vec![b'A'; 513];
+        let over_entry = CiffEntry {
+            value: &over,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&over_entry).is_none());
+        let unknown = CiffEntry {
+            id: 0x08fe,
+            raw_tag: 0x08fe,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&unknown).is_none());
+        let mismatched = CiffEntry {
+            raw_tag: 0x080c,
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&mismatched).is_none());
+    }
+
+    #[test]
+    fn keyed_firmware_projection_rejects_changed_source_groups_and_layout() {
+        let source = find_keyed_table("CanonRaw", "Main").expect("generated Main");
+        let tag = source
+            .tags
+            .iter()
+            .find(|tag| tag.raw_id == 0x080b)
+            .expect("generated firmware row");
+        assert!(canon_firmware_projection_matches(source, tag));
+        let mut changed_source = *source;
+        for group in ["", "EXIF"] {
+            changed_source.group0 = group;
+            assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        }
+        changed_source = *source;
+        changed_source.group1 = "CIFF";
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        changed_source = *source;
+        changed_source.group2 = "Image";
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        changed_source = *source;
+        changed_source.layout =
+            crate::exiftool_tables::keyed_tables::KEYED_CANONCUSTOM_FUNCSUNKNOWN.layout;
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        let mut changed_tag = *tag;
+        changed_tag.groups.g0 = Some("EXIF");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
+        changed_tag = *tag;
+        changed_tag.groups.g1 = Some("CIFF");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
+        changed_tag = *tag;
+        changed_tag.groups.g2 = Some("Image");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
+    }
+
+    #[test]
+    fn keyed_firmware_uses_discovered_child_and_preserves_duplicate_hand_ownership() {
+        let directory = tempfile::tempdir().expect("temporary CRW directory");
+        let public = |name: &str, file: &[u8]| {
+            let mut carrier = file[..14].to_vec();
+            carrier[2..6].copy_from_slice(&26u32.to_le_bytes());
+            carrier.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            carrier.extend_from_slice(&file[14..]);
+            let path = directory.path().join(name);
+            std::fs::write(&path, carrier).expect("write public CRW carrier");
+            crate::core::operations::read_metadata(&path).expect("public CRW read")
+        };
+        let child = build_ciff(&[(0x080b, b"Child firmware\0".to_vec())]);
+        let one = build_ciff(&[
+            (0x2804, child[14..].to_vec()),
+            (0x0810, b"Owner\0".to_vec()),
+        ]);
+        let metadata = public("child.crw", &one);
+        let key = "CanonRaw:CanonFirmwareVersion";
+        assert_eq!(metadata.get_string(key), Some("Child firmware"));
+        let rows: Vec<_> = metadata
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.origin.table, Some("Main"));
+        assert_eq!(metadata.get_string("CanonRaw:OwnerName"), Some("Owner"));
+
+        let twice = build_ciff(&[
+            (0x080b, b"First\0".to_vec()),
+            (0x080b, b"Second\0".to_vec()),
+        ]);
+        let metadata = public("duplicate.crw", &twice);
+        assert_eq!(metadata.get_string(key), Some("Second"));
+        assert!(
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .all(|(name, row, _)| name != key || row.origin.table != Some("Main"))
+        );
+
+        // Two directory edges to the same child are two hand-discovered
+        // occurrences. The generated projection must not claim either one.
+        let block = child[14..].to_vec();
+        let mut alias = build_ciff(&[(0x2804, block.clone()), (0x2804, block)]);
+        let root = read_ciff_u32(&alias, alias.len() - 4, TableByteOrder::Little)
+            .expect("root directory offset") as usize;
+        let second_pointer = 14 + root + 2 + 10 + 6;
+        alias[second_pointer..second_pointer + 4].copy_from_slice(&0u32.to_le_bytes());
+        let metadata = public("alias.crw", &alias);
+        assert_eq!(metadata.get_string(key), Some("Child firmware"));
+        assert!(
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .all(|(name, row, _)| name != key || row.origin.table != Some("Main"))
+        );
+    }
+
+    #[test]
+    fn keyed_firmware_route_accepts_root_record_with_deep_valid_ciff_chain() {
+        // One root firmware record reaches the public keyed route. The hand
+        // reader stops after depth 16; the generated projection reads only
+        // that record, independent of this otherwise valid child chain.
+        // Build the chain in linear space so the test itself stays bounded.
+        const DEPTH: usize = 2_048;
+        let firmware = b"Firmware Version 1.1.1\0";
+        let root_offset = firmware.len();
+        let child_offset = root_offset + 2 + 2 * 10 + 4;
+        let child_size = 10 + DEPTH * 20;
+        const HEAP_START: usize = 26;
+        let mut file = Vec::with_capacity(HEAP_START + child_offset + child_size + 4);
+        file.extend_from_slice(b"II");
+        file.extend_from_slice(&(HEAP_START as u32).to_le_bytes());
+        file.extend_from_slice(b"HEAPCCDR");
+        // The public signature detector requires the native 0x1a heap start.
+        // These 12 header bytes match the pinned CanonRaw.crw carrier.
+        file.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        file.extend_from_slice(firmware);
+        file.extend_from_slice(&2u16.to_le_bytes());
+        file.extend_from_slice(&0x080bu16.to_le_bytes());
+        file.extend_from_slice(&(firmware.len() as u32).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0x2804u16.to_le_bytes());
+        file.extend_from_slice(&(child_size as u32).to_le_bytes());
+        file.extend_from_slice(&(child_offset as u32).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        for level in 0..DEPTH {
+            file.extend_from_slice(&1u16.to_le_bytes());
+            file.extend_from_slice(&0x2804u16.to_le_bytes());
+            file.extend_from_slice(&((10 + (DEPTH - level - 1) * 20) as u32).to_le_bytes());
+            file.extend_from_slice(&16u32.to_le_bytes());
+            file.extend_from_slice(&0u32.to_le_bytes());
+        }
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..DEPTH {
+            file.extend_from_slice(&0u32.to_le_bytes());
+        }
+        file.extend_from_slice(&(root_offset as u32).to_le_bytes());
+        assert_eq!(file.len(), HEAP_START + child_offset + child_size + 4);
+
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("valid CRW");
+        let key = "CanonRaw:CanonFirmwareVersion";
+        assert_eq!(metadata.get_string(key), Some("Firmware Version 1.1.1"));
+        let occurrences: Vec<_> = metadata
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0].1.origin.module, Some("CanonRaw"));
+        assert_eq!(occurrences[0].1.origin.table, Some("Main"));
+
+        let directory = tempfile::tempdir().expect("temporary CRW directory");
+        let path = directory.path().join("deep.crw");
+        std::fs::write(&path, &file).expect("write valid CRW carrier");
+        let public = crate::core::operations::read_metadata(&path).expect("public CRW read");
+        let public_rows: Vec<_> = public
+            .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+            .filter(|(name, _, _)| *name == key)
+            .collect();
+        assert_eq!(public_rows.len(), 1);
+        assert_eq!(public_rows[0].1.origin.module, Some("CanonRaw"));
+        assert_eq!(public_rows[0].1.origin.table, Some("Main"));
+        assert_eq!(public.get_string(key), metadata.get_string(key));
     }
 
     /// A `0x28`-typed subdirectory is entered.
