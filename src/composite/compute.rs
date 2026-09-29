@@ -470,7 +470,9 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
         }
 
         let component_index = lookup[usize::from(blue) * 3];
-        let component = *levels.get(component_index)?;
+        let Some(&component) = levels.get(component_index) else {
+            continue;
+        };
         let green_index = lookup[1];
         let green = if green_index < 4 {
             if levels.len() < 3 {
@@ -1937,17 +1939,17 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                 };
                 return Computed::new(printed, printed);
             }
-            let millionths = (value * 1e6 + 0.5) as i64;
-            let absolute = millionths.unsigned_abs();
-            let sign = if millionths < 0 { "-" } else { "" };
-            let mut printed = format!("{sign}{}.{:06}", absolute / 1_000_000, absolute % 1_000_000);
-            while printed.ends_with('0') {
-                printed.pop();
+            let rounded = (value * 1e6 + 0.5).trunc();
+            if !rounded.is_finite() {
+                return None;
             }
-            if printed.ends_with('.') {
-                printed.pop();
-            }
-            Computed::new(value.to_string(), printed)
+            // Perl may promote int() to an NV for a large result, then
+            // stringifies both the raw ratio and rounded result at 15 digits.
+            // Rust's integer cast would saturate and its shortest f64 text
+            // can expose digits Perl would not print.
+            let value = crate::core::formatters::numeric_precision::perl_number(value);
+            let printed = crate::core::formatters::numeric_precision::perl_number(rounded * 1e-6);
+            Computed::new(value, printed)
         }
 
         ("Exif", "SubSecCreateDate" | "SubSecDateTimeOriginal" | "SubSecModifyDate") => {
@@ -2722,6 +2724,29 @@ mod tests {
         rgb[6] = Some("0.5182186235 inf 0.7231638418");
         assert_eq!(c("RedBalance", &rgb).as_deref(), Some("0"));
         assert_eq!(c("BlueBalance", &rgb).as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn white_balance_short_packed_candidate_does_not_block_blue_fallback() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("256 512");
+        inputs[9] = Some("512");
+        inputs[10] = Some("256");
+        assert_eq!(c("BlueBalance", &inputs).as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn white_balance_large_finite_ratio_does_not_saturate() {
+        let mut inputs = vec![None; 11];
+        inputs[6] = Some("4294967295 2.328306437e-10 0.7231638418");
+        assert_eq!(
+            c("RedBalance", &inputs).as_deref(),
+            Some("1.84467440657598e+19")
+        );
+        assert_eq!(
+            c("BlueBalance", &inputs).as_deref(),
+            Some("3105965049.56534")
+        );
     }
 
     #[test]
