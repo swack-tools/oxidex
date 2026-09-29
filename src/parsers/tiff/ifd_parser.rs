@@ -449,8 +449,8 @@ pub struct EntryPosition {
     pub value_offset: u32,
     /// The value's length in bytes: `count * sizeof(type)`.
     pub value_len: u64,
-    /// One past the last byte of the declaring IFD -- its count, its 12-byte
-    /// entries and its next-IFD pointer. ExifTool's `$dirEnd`.
+    /// One past the count and 12-byte entries of the declaring IFD.
+    /// ExifTool's `$dirEnd` excludes the next-IFD pointer.
     pub dir_end: u64,
 }
 
@@ -479,11 +479,10 @@ pub(crate) fn find_entry_position_at(
     let count_bytes = reader.read(ifd_offset, 2).ok()?;
     let entry_count = EndianReader::new(count_bytes, io_order).u16_at(0)?;
 
-    // count + 12 bytes per entry + the next-IFD pointer.
+    // Exif.pm's suspicious-offset boundary excludes the next-IFD pointer.
     let dir_end = ifd_offset
         .checked_add(2)?
-        .checked_add(u64::from(entry_count).checked_mul(12)?)?
-        .checked_add(4)?;
+        .checked_add(u64::from(entry_count).checked_mul(12)?)?;
 
     let entries_data = reader
         .read(ifd_offset + 2, entry_count as usize * 12)

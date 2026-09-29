@@ -1437,9 +1437,10 @@ impl LeicaMakerNoteParser {
                         leica5_wb_decoded(&entry, entry_data, values, byte_order, directory)
                     && let Some(raw_text) = leica5_wb_text(&decoded)
                 {
-                    // Both ValueConv and PrintConv retain source NULs here.
-                    // The public formatter strips them after JSON type
-                    // selection; Composite needs the unmodified tokens.
+                    // Legacy map access exposes the NUL-free display. Keep
+                    // source NULs in ValueConv for composite arithmetic and
+                    // in PrintConv until EscapeJSON selects the JSON type:
+                    // a numeric token ending in NUL must remain a string.
                     if let Some(rows) = occurrences.as_mut() {
                         rows.push((
                             "Leica:WB_RGBLevels".to_string(),
@@ -1450,7 +1451,7 @@ impl LeicaMakerNoteParser {
                                 group1: intern("Leica"),
                                 group2: Some(intern("Camera")),
                                 instance: Instance::default(),
-                                raw: TagValue::String(raw_text.clone()),
+                                raw: TagValue::String(raw_text.replace('\0', "")),
                                 value: Some(TagValue::String(raw_text.clone())),
                                 print: Some(TagValue::String(raw_text)),
                                 stored: Some(stored),

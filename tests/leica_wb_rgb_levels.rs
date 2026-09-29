@@ -202,6 +202,50 @@ fn leica_dng(layout: u8, wb_offset: u32) -> Vec<u8> {
 }
 
 #[test]
+fn leica_makernote_entry_array_boundary_is_read_in_raw_tiff_and_jpeg() {
+    for note_at in [110usize, 111, 113, 114, 128] {
+        for extension in ["dng", "tiff", "jpg"] {
+            let mut bytes = leica_dng(0x08, 200);
+            let note = bytes[128..154].to_vec();
+            bytes[110..154].fill(0);
+            bytes[note_at..note_at + note.len()].copy_from_slice(&note);
+            bytes[106..110].copy_from_slice(&(note_at as u32).to_le_bytes());
+            if extension != "dng" {
+                // Remove DNGVersion while retaining the physical IFD layout.
+                bytes[34..36].copy_from_slice(&0x0100u16.to_le_bytes());
+            }
+            if extension == "jpg" {
+                let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+                jpeg.extend_from_slice(&((bytes.len() + 8) as u16).to_be_bytes());
+                jpeg.extend_from_slice(b"Exif\0\0");
+                jpeg.extend_from_slice(&bytes);
+                jpeg.extend_from_slice(&[0xff, 0xd9]);
+                bytes = jpeg;
+            }
+            let file = tempfile::Builder::new()
+                .suffix(&format!(".{extension}"))
+                .tempfile()
+                .unwrap();
+            fs::write(file.path(), bytes).unwrap();
+            let metadata = read_metadata(file.path()).unwrap();
+            assert_eq!(
+                metadata.get_string("Leica:WB_RGBLevels"),
+                Some("0.5182186235 1 0.7231638418"),
+                "{extension}: MakerNote starts at {note_at}"
+            );
+            assert_eq!(
+                metadata.get_string("Composite:RedBalance"),
+                Some("0.518219")
+            );
+            assert_eq!(
+                metadata.get_string("Composite:BlueBalance"),
+                Some("0.723164")
+            );
+        }
+    }
+}
+
+#[test]
 fn leica_dng_located_levels_have_public_and_typed_values() {
     for (layout, wb_offset) in [(0x06, 26u32), (0x08, 200u32)] {
         let bytes = leica_dng(layout, wb_offset);
@@ -746,6 +790,14 @@ fn leica_wb_string_and_undefined_fields_keep_perl_composite_input() {
         let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
         fs::write(file.path(), bytes).unwrap();
         let metadata = read_metadata(file.path()).unwrap();
+        assert_eq!(metadata.get_string("Leica:WB_RGBLevels"), Some(printed));
+        assert_eq!(
+            metadata
+                .iter()
+                .find(|(key, _)| key.as_str() == "Leica:WB_RGBLevels")
+                .and_then(|(_, value)| value.as_string()),
+            Some(printed)
+        );
         let public = metadata
             .project_occurrences(ValueChannel::PrintConv)
             .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
