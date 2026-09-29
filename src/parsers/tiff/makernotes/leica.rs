@@ -17,9 +17,9 @@
 use crate::core::tag_occurrence::{Instance, Provenance, TagOccurrence, intern};
 use crate::core::{TagId, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::runtime::to_stored_tag_value;
+use crate::exiftool_tables::runtime::{decode_value_of, to_stored_tag_value};
 use crate::exiftool_tables::session::Session;
-use crate::exiftool_tables::{Ctx, DecodedValue};
+use crate::exiftool_tables::{Ctx, DecodedValue, Fmt};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use nom::{
@@ -504,10 +504,10 @@ pub(crate) fn resolve_unknown_byte_order(ifd_data: &[u8], inherited: ByteOrder) 
 /// entry is written with. `None` for a type this parser does not size.
 fn tiff_type_size(field_type: u16) -> Option<usize> {
     Some(match field_type {
-        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
-        3 | 8 => 2,         // SHORT, SSHORT
-        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
-        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
+        1 | 2 | 6 | 7 => 1,   // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,           // SHORT, SSHORT
+        4 | 9 | 11 | 13 => 4, // LONG, SLONG, FLOAT, IFD
+        5 | 10 | 12 => 8,     // RATIONAL, SRATIONAL, DOUBLE
         _ => return None,
     })
 }
@@ -547,6 +547,11 @@ fn leica5_wb_bytes<'a>(
         .ok()?
         .checked_mul(tiff_type_size(entry.field_type)?)?;
     if len > 4 {
+        // ProcessExif checks the stored offset before adding a MakerNote base.
+        // Values at 0..7 point into the enclosing TIFF header.
+        if entry.value_offset < 8 {
+            return None;
+        }
         let values = values?;
         let start = values
             .base
@@ -563,10 +568,46 @@ fn leica5_wb_bytes<'a>(
     subdir_bytes(entry, entry_bytes, values)
 }
 
-/// Decode the actual TIFF field type and count for Leica5/Leica8 0x0413.
-/// The source declares rational64u[3] for writing, but ExifTool reads the
-/// recorded field type and count: a short[3] prints three integers, while a
-/// rational64u[2] prints two quotients and cannot feed a balance composite.
+/// The TIFF entry's actual numeric format controls the read.  The Leica5
+/// table's `Writable => rational64u` describes writes, not how ProcessExif
+/// reads an existing SHORT, LONG, signed number, float, or IFD field.
+fn leica5_wb_format(field_type: u16) -> Option<Fmt> {
+    Some(match field_type {
+        1 => Fmt::Int8u,
+        3 => Fmt::Int16u,
+        4 | 13 => Fmt::Int32u,
+        5 => Fmt::Rational64u,
+        6 => Fmt::Int8s,
+        8 => Fmt::Int16s,
+        9 => Fmt::Int32s,
+        10 => Fmt::Rational64s,
+        11 => Fmt::Float,
+        12 => Fmt::Double,
+        _ => return None,
+    })
+}
+
+fn leica5_wb_values(
+    entry: &IfdEntry,
+    entry_bytes: &[u8],
+    values: Option<LeicaValues<'_>>,
+    byte_order: ByteOrder,
+    directory: std::ops::Range<usize>,
+) -> Option<Vec<DecodedValue>> {
+    let format = leica5_wb_format(entry.field_type)?;
+    let count = usize::try_from(entry.value_count).ok()?;
+    // ProcessExif refuses numeric arrays beyond this limit (Exif.pm:6763).
+    if count == 0 || count > 100_000 {
+        return None;
+    }
+    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
+    bytes
+        .chunks_exact(usize::try_from(format.size()).ok()?)
+        .take(count)
+        .map(|bytes| decode_value_of(bytes, format, byte_order.to_io_byte_order()))
+        .collect()
+}
+
 fn leica5_wb_rgb_levels(
     entry: &IfdEntry,
     entry_bytes: &[u8],
@@ -574,38 +615,34 @@ fn leica5_wb_rgb_levels(
     byte_order: ByteOrder,
     directory: std::ops::Range<usize>,
 ) -> Option<String> {
-    if !matches!(entry.field_type, 3 | 5) {
-        return None;
-    }
-    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
-    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
-    let count = usize::try_from(entry.value_count).ok()?;
-    let mut parts = Vec::new();
-    for index in 0..count {
-        let part = match entry.field_type {
-            3 => reader.u16_at(index.checked_mul(2)?)?.to_string(),
-            5 => {
-                let start = index.checked_mul(8)?;
-                print_rational(
-                    i64::from(reader.u32_at(start)?),
-                    i64::from(reader.u32_at(start + 4)?),
-                )
+    leica5_wb_values(entry, entry_bytes, values, byte_order, directory)?
+        .into_iter()
+        .map(|value| match value {
+            DecodedValue::UnsignedRational(num, den) => {
+                Some(print_rational(i64::from(num), i64::from(den)))
             }
-            _ => unreachable!("field type checked above"),
-        };
-        parts.push(part);
-    }
-    Some(parts.join(" "))
+            DecodedValue::SignedRational(num, den) => {
+                // ExifTool's signed-rational decode retains the sign of
+                // zero when the denominator is negative.
+                if num == 0 && den < 0 {
+                    Some("-0".to_owned())
+                } else {
+                    Some(print_rational(i64::from(num), i64::from(den)))
+                }
+            }
+            DecodedValue::Float(number) => Some(fmt_g15(number)),
+            value => value.perl_string(),
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join(" "))
 }
 
-fn leica5_wb_admitted() -> bool {
-    crate::exiftool_tables::find_ifd_table("Panasonic", "Leica5")
-        .and_then(|table| table.tag(leica5::WB_RGB_LEVELS))
-        .is_some_and(|tag| {
-            tag.name == "WB_RGBLevels"
-                && tag.writable == Some("rational64u")
-                && tag.count == Some(3)
-        })
+fn leica5_wb_admitted() -> Option<u8> {
+    let table = crate::exiftool_tables::find_ifd_table("Panasonic", "Leica5")?;
+    let tag = table.tag(leica5::WB_RGB_LEVELS)?;
+    (tag.name == "WB_RGBLevels" && tag.writable == Some("rational64u") && tag.count == Some(3))
+        .then(|| u8::try_from(table.priority.unwrap_or(1)).ok())
+        .flatten()
 }
 
 fn leica5_wb_stored(
@@ -615,23 +652,7 @@ fn leica5_wb_stored(
     byte_order: ByteOrder,
     directory: std::ops::Range<usize>,
 ) -> Option<TagValue> {
-    let bytes = leica5_wb_bytes(entry, entry_bytes, values, directory)?;
-    let reader = EndianReader::new(bytes, byte_order.to_io_byte_order());
-    let values = (0..usize::try_from(entry.value_count).ok()?)
-        .map(|index| match entry.field_type {
-            3 => Some(DecodedValue::Integer(i64::from(
-                reader.u16_at(index.checked_mul(2)?)?,
-            ))),
-            5 => {
-                let start = index.checked_mul(8)?;
-                Some(DecodedValue::UnsignedRational(
-                    reader.u32_at(start)?,
-                    reader.u32_at(start + 4)?,
-                ))
-            }
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let values = leica5_wb_values(entry, entry_bytes, values, byte_order, directory)?;
     Some(to_stored_tag_value(
         &DecodedValue::Array(values),
         byte_order.to_io_byte_order(),
@@ -1405,7 +1426,7 @@ impl LeicaMakerNoteParser {
             if matches!(layout, LeicaLayout::Leica5 | LeicaLayout::Leica8)
                 && tag_id == leica5::WB_RGB_LEVELS
             {
-                if leica5_wb_admitted()
+                if let Some(priority) = leica5_wb_admitted()
                     && let Some(directory) = wb_directory.clone()
                     && let Some(printed) = leica5_wb_rgb_levels(
                         &entry,
@@ -1432,7 +1453,7 @@ impl LeicaMakerNoteParser {
                                 value: Some(TagValue::String(printed.clone())),
                                 print: Some(TagValue::String(printed)),
                                 stored: Some(stored),
-                                priority: 1,
+                                priority,
                                 is_list: false,
                                 order: 0,
                                 origin: Provenance {

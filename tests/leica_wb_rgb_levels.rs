@@ -305,3 +305,173 @@ fn leica_dng_preserves_infinite_red_and_blue_balances() {
     assert_eq!(metadata.get_string("Composite:RedBalance"), Some("NaN"));
     assert_eq!(metadata.get_string("Composite:BlueBalance"), Some("0"));
 }
+
+#[test]
+fn leica_dng_reads_long_wb_levels_with_stored_type() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&4u16.to_le_bytes());
+    for (index, value) in [256u32, 512, 128].into_iter().enumerate() {
+        bytes[200 + index * 4..204 + index * 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+    assert_eq!(
+        metadata.get_string("Leica:WB_RGBLevels"),
+        Some("256 512 128")
+    );
+    let occurrence = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+        .unwrap()
+        .1;
+    assert_eq!(
+        occurrence.stored,
+        Some(TagValue::Array(vec![
+            TagValue::Integer(256),
+            TagValue::Integer(512),
+            TagValue::Integer(128),
+        ]))
+    );
+    assert_eq!(occurrence.origin.byte_range, Some(200..212));
+    assert_eq!(occurrence.priority, 0);
+    let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+    fs::write(file.path(), bytes).unwrap();
+    let public = read_metadata(file.path()).unwrap();
+    assert_eq!(public.get_string("Composite:RedBalance"), Some("0.5"));
+    assert_eq!(public.get_string("Composite:BlueBalance"), Some("0.25"));
+}
+
+#[test]
+fn leica_dng_reads_inline_byte_wb_levels_with_exact_origin() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&1u16.to_le_bytes());
+    bytes[146..150].copy_from_slice(&[2, 4, 1, 0]);
+    let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+    assert_eq!(metadata.get_string("Leica:WB_RGBLevels"), Some("2 4 1"));
+    let occurrence = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+        .unwrap()
+        .1;
+    assert_eq!(occurrence.origin.byte_range, Some(146..149));
+    assert_eq!(occurrence.priority, 0);
+    assert_eq!(
+        occurrence.stored,
+        Some(TagValue::Array(vec![
+            TagValue::Integer(2),
+            TagValue::Integer(4),
+            TagValue::Integer(1),
+        ]))
+    );
+}
+
+#[test]
+fn leica_dng_rejects_stored_offsets_into_tiff_header() {
+    for offset in 0..8 {
+        let bytes = leica_dng(0x08, offset);
+        let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+        assert!(
+            !metadata.contains_key("Leica:WB_RGBLevels"),
+            "offset {offset}"
+        );
+        assert!(
+            !metadata.contains_key("Composite:RedBalance"),
+            "offset {offset}"
+        );
+        assert!(
+            !metadata.contains_key("Composite:BlueBalance"),
+            "offset {offset}"
+        );
+    }
+}
+
+#[test]
+fn leica5_wb_duplicate_keeps_first_priority_zero_entry() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[102..106].copy_from_slice(&38u32.to_le_bytes());
+    bytes[136..138].copy_from_slice(&2u16.to_le_bytes());
+    bytes[150..152].copy_from_slice(&0x0413u16.to_le_bytes());
+    bytes[152..154].copy_from_slice(&5u16.to_le_bytes());
+    bytes[154..158].copy_from_slice(&3u32.to_le_bytes());
+    bytes[158..162].copy_from_slice(&224u32.to_le_bytes());
+    for (index, (num, den)) in [(128u32, 256u32), (1, 1), (128, 256)]
+        .into_iter()
+        .enumerate()
+    {
+        let at = 224 + index * 8;
+        bytes[at..at + 4].copy_from_slice(&num.to_le_bytes());
+        bytes[at + 4..at + 8].copy_from_slice(&den.to_le_bytes());
+    }
+    let metadata = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+    let rows: Vec<_> = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .filter(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|(_, occurrence, _)| occurrence.priority == 0)
+    );
+    assert_eq!(
+        metadata.get_string("Leica:WB_RGBLevels"),
+        Some("0.5182186235 1 0.7231638418")
+    );
+    let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+    fs::write(file.path(), bytes).unwrap();
+    let public = read_metadata(file.path()).unwrap();
+    assert_eq!(public.get_string("Composite:RedBalance"), Some("0.518219"));
+    assert_eq!(public.get_string("Composite:BlueBalance"), Some("0.723164"));
+}
+
+#[test]
+fn leica_dng_double_balance_keeps_finite_value_on_print_overflow() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&12u16.to_le_bytes());
+    for (index, value) in [1e308f64, 1.0, 1.0].into_iter().enumerate() {
+        bytes[200 + index * 8..208 + index * 8].copy_from_slice(&value.to_le_bytes());
+    }
+    let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
+    fs::write(file.path(), bytes).unwrap();
+    let metadata = read_metadata(file.path()).unwrap();
+    assert_eq!(
+        metadata.get_string("Leica:WB_RGBLevels"),
+        Some("1e+308 1 1")
+    );
+    assert_eq!(metadata.get_string("Composite:RedBalance"), Some("Inf"));
+    assert_eq!(metadata.get_string("Composite:BlueBalance"), Some("1"));
+}
+
+#[test]
+fn leica_dng_signed_rational_retains_negative_zero() {
+    let mut bytes = leica_dng(0x08, 200);
+    bytes[140..142].copy_from_slice(&10u16.to_le_bytes());
+    for (index, (numerator, denominator)) in [(0i32, -1i32), (1, 1), (1, 4)].into_iter().enumerate()
+    {
+        let at = 200 + index * 8;
+        bytes[at..at + 4].copy_from_slice(&numerator.to_le_bytes());
+        bytes[at + 4..at + 8].copy_from_slice(&denominator.to_le_bytes());
+    }
+    let raw = parse_raw_metadata(&bytes, RawFormat::AdobeDNG).unwrap();
+    assert_eq!(raw.get_string("Leica:WB_RGBLevels"), Some("-0 1 0.25"));
+    let occurrence = raw
+        .project_occurrences(ValueChannel::PrintConv)
+        .find(|(key, _, _)| *key == "Leica:WB_RGBLevels")
+        .unwrap()
+        .1;
+    assert_eq!(
+        occurrence.stored,
+        Some(TagValue::Array(vec![
+            TagValue::Rational {
+                numerator: 0,
+                denominator: -1
+            },
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 1
+            },
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 4
+            },
+        ]))
+    );
+}

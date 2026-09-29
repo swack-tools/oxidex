@@ -45,7 +45,7 @@ fn tested_source() -> TestedSource {
 
 use super::nikon_capture_data;
 use crate::core::tag_occurrence::intern;
-use crate::core::{Instance, Provenance, TagOccurrence};
+use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
@@ -1379,7 +1379,39 @@ impl NikonParser {
                     if let Some(bytes) = bytes_of(entry)
                         && let Some(value) = nikon_unsigned_ratio(&bytes)
                     {
-                        tags.insert("Nikon:LensFStops".to_string(), format!("{:.2}", value));
+                        let printed = format!("{:.2}", value);
+                        if let Some(rows) = structured_rows.as_deref_mut() {
+                            // This standalone Main 0x008b entry is a separate
+                            // physical occurrence from encrypted LensData
+                            // 0x0098's field 13. Keep its IFD order and
+                            // provenance even when generated ownership later
+                            // removes the hand LensData map value.
+                            rows.push((
+                                "Nikon:LensFStops".to_string(),
+                                TagOccurrence {
+                                    id: oxidex_tags::TagId::Numeric(NIKON_LENS_FSTOPS),
+                                    name: intern("LensFStops"),
+                                    group0: intern("MakerNotes"),
+                                    group1: intern("Nikon"),
+                                    group2: Some(intern("Camera")),
+                                    instance: Instance::default(),
+                                    raw: TagValue::new_string(&printed),
+                                    value: Some(TagValue::Float(value)),
+                                    print: Some(TagValue::new_string(&printed)),
+                                    stored: Some(TagValue::Binary(bytes.to_vec())),
+                                    priority: 1,
+                                    is_list: false,
+                                    order: 0,
+                                    origin: Provenance {
+                                        module: Some("Nikon"),
+                                        table: Some("Main"),
+                                        byte_range: None,
+                                    },
+                                },
+                            ));
+                        } else {
+                            tags.insert("Nikon:LensFStops".to_string(), printed);
+                        }
                     }
                 }
 

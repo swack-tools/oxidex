@@ -21,21 +21,147 @@ use std::io::Write;
 const D810_EXIF: &[u8] = include_bytes!("fixtures/nikon/d810-exif.nef");
 
 fn d810_carrier(extension: &str) -> tempfile::NamedTempFile {
+    d810_carrier_from(D810_EXIF, extension)
+}
+
+fn d810_carrier_from(exif: &[u8], extension: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new()
         .suffix(extension)
         .tempfile()
         .expect("create D810 metadata carrier");
     if extension == ".jpg" {
-        let app1_len = u16::try_from(D810_EXIF.len() + 8).expect("EXIF fits in JPEG APP1");
+        let app1_len = u16::try_from(exif.len() + 8).expect("EXIF fits in JPEG APP1");
         file.write_all(b"\xff\xd8\xff\xe1").unwrap();
         file.write_all(&app1_len.to_be_bytes()).unwrap();
         file.write_all(b"Exif\0\0").unwrap();
     }
-    file.write_all(D810_EXIF).unwrap();
+    file.write_all(exif).unwrap();
     if extension == ".jpg" {
         file.write_all(b"\xff\xd9").unwrap();
     }
     file
+}
+
+fn d810_distinct_lens_fstops(standalone_last: bool) -> Vec<u8> {
+    let mut exif = D810_EXIF.to_vec();
+    let nikon = exif
+        .windows(10)
+        .position(|window| window == b"Nikon\0\x02\x11\0\0")
+        .expect("pinned D810 MakerNote");
+    let tiff = nikon + 10;
+    assert_eq!(&exif[tiff..tiff + 2], b"II");
+    let ifd = tiff + u32::from_le_bytes(exif[tiff + 4..tiff + 8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(exif[ifd..ifd + 2].try_into().unwrap()) as usize;
+    let entry = |id: u16, data: &[u8]| {
+        (0..count)
+            .map(|index| ifd + 2 + index * 12)
+            .find(|&position| {
+                u16::from_le_bytes(data[position..position + 2].try_into().unwrap()) == id
+            })
+            .expect("pinned Nikon physical entry")
+    };
+    let standalone = entry(0x008b, &exif);
+    let encrypted = entry(0x0098, &exif);
+    assert!(standalone < encrypted, "pinned D810 starts in sorted order");
+    assert_eq!(&exif[standalone + 8..standalone + 12], &[72, 1, 12, 0]);
+    exif[standalone + 8] = 84; // 0x008b: 84 * 1/12 = 7.00, versus 0x0098's 6.00.
+    if standalone_last {
+        for offset in 0..12 {
+            exif.swap(standalone + offset, encrypted + offset);
+        }
+    }
+    exif
+}
+
+#[test]
+fn standalone_lens_fstops_survives_generated_ownership_in_physical_order() {
+    for extension in [".jpg", ".nef", ".nrw"] {
+        for standalone_last in [false, true] {
+            let exif = d810_distinct_lens_fstops(standalone_last);
+            let carrier = d810_carrier_from(&exif, extension);
+            let metadata = read_metadata(carrier.path()).expect("read pinned D810 variant");
+            let rows: Vec<_> = metadata
+                .project_occurrences(ValueChannel::PrintConv)
+                .filter(|(key, _, _)| *key == "Nikon:LensFStops")
+                .collect();
+            assert_eq!(
+                rows.len(),
+                2,
+                "{extension} standalone_last={standalone_last}"
+            );
+            let expected = if standalone_last {
+                [(13, "LensData0204", "6.00"), (0x008b, "Main", "7.00")]
+            } else {
+                [(0x008b, "Main", "7.00"), (13, "LensData0204", "6.00")]
+            };
+            for (row, (id, table, printed)) in rows.iter().zip(expected) {
+                assert_eq!(row.1.id, TagId::Numeric(id));
+                assert_eq!(row.1.origin.table, Some(table));
+                assert_eq!(row.2.as_ref(), &TagValue::String(printed.to_owned()));
+            }
+            assert_eq!(
+                metadata.get_string("Nikon:LensFStops"),
+                Some(if standalone_last { "7.00" } else { "6.00" })
+            );
+        }
+    }
+}
+
+#[test]
+fn standalone_lens_fstops_cli_matches_native_order_winner_and_silence() {
+    for extension in [".jpg", ".nef", ".nrw"] {
+        for standalone_last in [false, true] {
+            let exif = d810_distinct_lens_fstops(standalone_last);
+            let carrier = d810_carrier_from(&exif, extension);
+            let run = |all: bool, numeric: bool, silence: bool| {
+                let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"));
+                if all {
+                    command.arg("-a");
+                }
+                if numeric {
+                    command.arg("--no-print-conv");
+                }
+                if silence {
+                    command.env("OXIDEX_GENSHARE_SILENCE", "engine");
+                }
+                let output = command
+                    .args(["-s3", "-LensFStops"])
+                    .arg(carrier.path())
+                    .output()
+                    .expect("run D810 LensFStops CLI");
+                assert!(output.status.success(), "{extension}: {output:?}");
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            let ordered = if standalone_last {
+                ["6.00", "7.00"]
+            } else {
+                ["7.00", "6.00"]
+            };
+            let numeric = if standalone_last {
+                ["6", "7"]
+            } else {
+                ["7", "6"]
+            };
+            assert_eq!(run(true, false, false), ordered, "{extension} -a order");
+            assert_eq!(
+                run(true, true, false),
+                numeric,
+                "{extension} -a numeric order"
+            );
+            assert_eq!(run(false, false, false), [ordered[1]], "{extension} winner");
+            if extension != ".jpg" {
+                assert_eq!(
+                    run(false, false, true),
+                    ["7.00"],
+                    "{extension} standalone under silence"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -117,14 +243,25 @@ fn nef_and_nrw_lens_data_use_the_same_generated_owner_as_jpeg() {
                 .project_occurrences(ValueChannel::PrintConv)
                 .filter(|(candidate, _, _)| *candidate == key)
                 .collect();
+            let expected_count = if name == "LensFStops" { 2 } else { 1 };
             assert_eq!(
                 rows.len(),
-                1,
-                "{extension} {key}: one public RAW occurrence"
+                expected_count,
+                "{extension} {key}: physical occurrences"
             );
-            assert_eq!(rows[0].1.origin.module, Some("Nikon"));
-            assert_eq!(rows[0].1.origin.table, Some("LensData0204"));
-            assert_eq!(rows[0].2.as_ref(), &TagValue::String(printed.to_owned()));
+            let generated = rows
+                .iter()
+                .find(|(_, row, _)| row.origin.table == Some("LensData0204"))
+                .expect("generated LensData occurrence");
+            assert_eq!(generated.1.origin.module, Some("Nikon"));
+            assert_eq!(generated.2.as_ref(), &TagValue::String(printed.to_owned()));
+            if name == "LensFStops" {
+                assert!(
+                    rows.iter()
+                        .any(|(_, row, _)| row.id == TagId::Numeric(0x008b)
+                            && row.origin.table == Some("Main"))
+                );
+            }
             assert_eq!(metadata.get_string(&key), Some(printed));
         }
         assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
@@ -153,17 +290,13 @@ fn engine_silence_suppresses_raw_generated_fields_without_hiding_residuals() {
         assert!(output.status.success(), "{extension}: {output:?}");
         let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let row = &rows[0];
-        for name in [
-            "ExitPupilPosition",
-            "AFAperture",
-            "FocusPosition",
-            "LensFStops",
-        ] {
+        for name in ["ExitPupilPosition", "AFAperture", "FocusPosition"] {
             assert!(
                 row.get(format!("Nikon:{name}")).is_none(),
                 "{extension} {name}: no hand fallback"
             );
         }
+        assert_eq!(row["Nikon:LensFStops"], 6.0, "standalone 0x008b survives");
         assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
     }
 }
@@ -240,13 +373,21 @@ fn engine_silence_does_not_resurrect_hand_copies_on_real_d810() {
         let key = format!("Nikon:{name}");
         assert!(!tags.contains_key(&key), "{key}: no hand copy");
         assert!(!value_forms.contains_key(&key), "{key}: no hand ValueConv");
+        let selected: Vec<_> = rows
+            .iter()
+            .filter(|(candidate, _)| candidate == &key)
+            .collect();
+        let expected = usize::from(!silenced) + usize::from(name == "LensFStops");
         assert_eq!(
-            rows.iter()
-                .filter(|(candidate, _)| candidate == &key)
-                .count(),
-            usize::from(!silenced),
-            "{key}: only the generated route may report"
+            selected.len(),
+            expected,
+            "{key}: generated plus physical standalone"
         );
+        if name == "LensFStops" {
+            assert!(selected.iter().any(
+                |(_, row)| row.id == TagId::Numeric(0x008b) && row.origin.table == Some("Main")
+            ));
+        }
     }
     assert_eq!(
         tags.get("Nikon:MinFocalLength").map(String::as_str),
