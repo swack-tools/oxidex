@@ -364,6 +364,48 @@ fn canon_and_kyocera_raw_rows_keep_makernotes_family_selection() {
             serde_json::from_str(&stdout(&["-j", "-G0:1", "-XMP:all"], &file))
                 .expect("negative JSON");
         assert!(negative[0].get(&key).is_none(), "{file_name}");
+
+        // Family-0 selection is a read identity. A standalone RAW directory
+        // is not an ExifIFD:MakerNote<vendor> block for TagsFromFile.
+        for selector in ["-all", "-MakerNotes:all", &format!("-MakerNote{group1}")] {
+            let dir = tempfile::tempdir().expect("isolated copy destination");
+            let destination = dir.path().join("destination.jpg");
+            std::fs::copy(REPO_FIXTURE, &destination).expect("copy destination");
+            let before = std::fs::read(&destination).expect("read destination");
+            let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .args([
+                    "-TagsFromFile",
+                    file.to_str().expect("UTF-8 fixture"),
+                    selector,
+                ])
+                .arg(&destination)
+                .output()
+                .expect("copy command");
+            assert!(
+                output.status.success(),
+                "{file_name} {selector}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let uncopied = stderr
+                .split("oxidex cannot write the ")
+                .nth(1)
+                .unwrap_or("")
+                .split(" group(s)")
+                .next()
+                .unwrap_or("");
+            assert!(
+                !uncopied.split(", ").any(|group| group == group1),
+                "{file_name} {selector}: invented physical RAW block: {stderr}"
+            );
+            if selector != "-all" {
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    before,
+                    "{file_name} {selector}"
+                );
+            }
+        }
     }
 }
 
