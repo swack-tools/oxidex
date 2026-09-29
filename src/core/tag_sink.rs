@@ -405,6 +405,22 @@ impl TagSink {
         Some(self.occurrences[idx].raw.clone())
     }
 
+    /// File identity is a single derived fact, even when a format parser and
+    /// the file-type resolver both supplied it. Retire superseded recordings
+    /// while preserving the winning row and all of its typed forms.
+    pub(crate) fn retain_only_winner(&mut self, key: &str) {
+        let Some(&winner) = self.winners.get(key) else {
+            return;
+        };
+        if let Some(indices) = self.key_indices.get(key) {
+            for &idx in indices {
+                if idx != winner {
+                    self.tombstoned[idx] = true;
+                }
+            }
+        }
+    }
+
     /// Whether occurrence `idx` is still active (never retired by
     /// [`TagSink::remove`]).
     fn is_active(&self, idx: usize) -> bool {

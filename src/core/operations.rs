@@ -303,6 +303,12 @@ fn normalize_identity_tags(metadata: &mut MetadataMap) {
         metadata.insert("File:FileType", TagValue::new_string(name));
     }
 
+    // Parsers and the file-type resolver may both record the same derived
+    // answer. Their separate recordings are not physical duplicate tags.
+    for tag in IDENTITY_TAGS {
+        metadata.retain_only_winner(&format!("File:{tag}"));
+    }
+
     debug_assert!(
         IDENTITY_TAGS.iter().all(|t| !metadata.contains_key(*t)),
         "identity tags must be emitted only under the File group"
@@ -3756,6 +3762,64 @@ mod tests {
         }
         assert_eq!(map.get_string("File:FileType"), Some("TXT"));
         assert_eq!(map.get_string("File:MIMEType"), Some("text/plain"));
+    }
+
+    #[test]
+    fn grouped_file_identity_is_one_derived_occurrence() {
+        let mut map = crate::core::metadata_map::file_rows(|| {
+            let mut map = identity_map(
+                &[("FileType", "DNG"), ("MIMEType", "image/x-adobe-dng")],
+                &[],
+            );
+            map.insert_occurrence_with_forms(
+                "File:FileType",
+                TagValue::new_string("DNG"),
+                TagValue::new_string("value-DNG"),
+                Some(TagValue::new_string("stored-DNG")),
+                1,
+                "File",
+                crate::core::Instance::default(),
+            );
+            map.insert("File:MIMEType", TagValue::new_string("image/x-adobe-dng"));
+            map.insert("EXIF:Make", TagValue::new_string("Canon"));
+            map.insert("EXIF:Make", TagValue::new_string("Other"));
+            map
+        });
+        normalize_identity_tags(&mut map);
+        for key in ["File:FileType", "File:MIMEType"] {
+            assert_eq!(
+                map.keyed_occurrences()
+                    .filter(|(name, _)| *name == key)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(map.get_string("File:FileType"), Some("DNG"));
+        let selected = map
+            .keyed_occurrences()
+            .find(|(name, _)| *name == "File:FileType")
+            .expect("selected identity")
+            .1;
+        assert_eq!(selected.stored, Some(TagValue::new_string("stored-DNG")));
+        assert_eq!(selected.value, Some(TagValue::new_string("value-DNG")));
+        assert_eq!(selected.print, Some(TagValue::new_string("DNG")));
+        let mut exported = MetadataMap::new();
+        exported.merge(map.clone());
+        let copied = exported
+            .keyed_occurrences()
+            .find(|(name, _)| *name == "File:FileType")
+            .expect("copied identity")
+            .1;
+        assert_eq!(copied.stored, selected.stored);
+        assert_eq!(copied.value, selected.value);
+        assert_eq!(copied.print, selected.print);
+        // A real repeated source tag remains repeatable.
+        assert_eq!(
+            map.keyed_occurrences()
+                .filter(|(name, _)| *name == "EXIF:Make")
+                .count(),
+            2
+        );
     }
 
     #[test]

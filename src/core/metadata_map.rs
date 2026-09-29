@@ -1058,6 +1058,12 @@ impl MetadataMap {
         self.sink.remove(key)
     }
 
+    /// Retain only the winning recording of a derived single-instance tag.
+    /// Physical duplicate tags must never use this route.
+    pub(crate) fn retain_only_winner(&mut self, key: &str) {
+        self.sink.retain_only_winner(key);
+    }
+
     /// Checks if a tag exists in the map
     pub fn contains_key(&self, key: &str) -> bool {
         self.sink.contains_key(key)

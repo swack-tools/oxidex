@@ -5896,6 +5896,11 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     for (tag_name, tag_value) in
         crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags)
     {
+        // This is the same physical 0x0097 CMT3 field captured as bytes above.
+        // The dispatcher supplies only a display string; keep the binary row.
+        if dust_removal_data.is_some() && tag_name == "Canon:DustRemovalData" {
+            continue;
+        }
         if attach_canon_value(metadata, &tag_name, &tag_value, &mut forms, true) {
             continue;
         }
@@ -6361,20 +6366,6 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
     // from the start of the box. Nothing read this box before, which is the
     // whole reason a CR3 reported zero MakerNotes tags.
     parse_cr3_cmt3_makernotes(data, &mut metadata);
-
-    // Canon.pm's CR3 `THMB` entry is a binary ThumbnailImage whose first 16
-    // payload bytes are an atom-specific header (`RawConv => substr($val,16)`).
-    // Keep the exact remaining bytes; the normal binary formatter supplies
-    // ExifTool's `(Binary data N bytes, use -b option to extract)` display.
-    if let Some(payload) = find_cr3_box(data, b"THMB")
-        && let Some(image) = payload.get(16..)
-        && !image.is_empty()
-    {
-        metadata.insert(
-            "Canon:ThumbnailImage".to_string(),
-            TagValue::new_binary(image.to_vec()),
-        );
-    }
 
     // Canon.pm's CMP1 table is a separate CR3 atom, not part of CMT3's TIFF
     // MakerNote.  Decode its two declared dimensions directly from the
@@ -10583,6 +10574,16 @@ mod cr3_cmt1_artist_tests {
                 b"<Dummy thumbnail image data>".to_vec()
             ))
         );
+        for key in ["Canon:ThumbnailImage", "Canon:DustRemovalData"] {
+            assert_eq!(
+                metadata
+                    .keyed_occurrences()
+                    .filter(|(name, _)| *name == key)
+                    .count(),
+                1,
+                "{key} is one physical CR3 field",
+            );
+        }
     }
 
     #[test]

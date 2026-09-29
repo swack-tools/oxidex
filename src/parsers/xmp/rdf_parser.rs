@@ -530,10 +530,17 @@ fn parse_xmp_packet(
     Vec<Option<String>>,
 )> {
     let mut reader = Reader::from_reader(xml_bytes);
-    reader.config_mut().trim_text(true); // Trim whitespace from text nodes
+    // FoundXMP sees the decoded text of a default property's value before
+    // its Binary length check. Keep source whitespace in this primary walk;
+    // known-property formatting still trims where its old contract did.
+    reader.config_mut().trim_text(false);
 
     let mut resolver = NamespaceResolver::new();
     let mut results: Vec<(String, String)> = Vec::new();
+    // A namespace with no selected ExifTool table gives its properties
+    // `IsDefault`. Capture that at the property's source element, before
+    // prefixes may be rebound later in the packet.
+    let mut default_namespace_tags = std::collections::HashSet::new();
     // The same emissions under the keys this reader used before XMP tags
     // carried their namespace group -- see `LegacyResults`.
     let mut legacy = LegacyResults::default();
@@ -556,9 +563,11 @@ fn parse_xmp_packet(
     // parsing its children, so a declaration inside the value must not
     // change it (see `NamespaceResolver::group_for_prefix`).
     let mut current_tag = String::new();
+    let mut current_default_namespace = false;
     // ... and its legacy key, resolved at the same time.
     let mut current_legacy = String::new();
     let mut current_value = String::new();
+    let mut after_collection_close = false;
     let mut depth = 0;
     let mut property_depth = 0;
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
@@ -602,15 +611,24 @@ fn parse_xmp_packet(
                         property_is_struct = true;
                     }
                     // Extract rdf:about and property attributes from Description
-                    extract_description_attributes(&e, &resolver, &mut results, &mut legacy)?;
+                    extract_description_attributes(
+                        &e,
+                        &resolver,
+                        &mut results,
+                        &mut legacy,
+                        &mut default_namespace_tags,
+                    )?;
                 } else if description_depth > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
                         current_tag = format_tag_name(&tag_name, &resolver);
+                        current_default_namespace =
+                            has_unregistered_namespace(&tag_name, &resolver);
                         current_legacy = legacy_simple_key(&tag_name, &resolver, &current_tag);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
+                        after_collection_close = false;
                         collection_values.clear();
                         collection_langs.clear();
                         inside_collection = false;
@@ -623,8 +641,12 @@ fn parse_xmp_packet(
                         inside_collection = true;
                         collection_values.clear();
                         collection_langs.clear();
+                        current_value.clear();
                     } else if inside_collection && is_rdf_li(&tag_name, &resolver) {
                         pending_lang = xml_lang_attribute(&e);
+                        // Ignore indentation between list items while
+                        // preserving the item's own leading/trailing text.
+                        current_value.clear();
                     } else if !is_rdf_namespace(&tag_name, &resolver) {
                         property_is_struct = true;
                     }
@@ -638,19 +660,30 @@ fn parse_xmp_packet(
                     description_depth = description_depth.saturating_sub(1);
                 } else if is_rdf_li(&tag_name, &resolver) && inside_collection {
                     // End of rdf:li - save the collected value
-                    if !current_value.trim().is_empty() {
-                        collection_values.push(current_value.trim().to_string());
+                    let item = if current_default_namespace {
+                        current_value.as_str()
+                    } else {
+                        current_value.trim()
+                    };
+                    if !item.is_empty() {
+                        collection_values.push(item.to_string());
                         collection_langs.push(pending_lang.take());
                     }
                     pending_lang = None;
                     current_value.clear();
                 } else if is_collection_container(&tag_name, &resolver) {
                     inside_collection = false;
+                    // Text after a closed Bag/Seq/Alt belongs to the parent
+                    // element's indentation, not the container value.
+                    after_collection_close = true;
                 } else if current_property.is_some() && depth == property_depth {
                     // End of current property - extract tag name and value
                     let prefixed_name = std::mem::take(&mut current_tag);
                     let legacy_name = std::mem::take(&mut current_legacy);
 
+                    if !property_is_struct && current_default_namespace {
+                        default_namespace_tags.insert(prefixed_name.clone());
+                    }
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
@@ -670,6 +703,9 @@ fn parse_xmp_packet(
                                         _ => continue,
                                     };
                                 let tag = format!("{prefixed_name}{suffix}");
+                                if current_default_namespace {
+                                    default_namespace_tags.insert(tag.clone());
+                                }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 if !legacy.has(&legacy_tag) {
                                     legacy.push(&legacy_tag, &tag, value);
@@ -691,25 +727,30 @@ fn parse_xmp_packet(
                             );
                             results.push((prefixed_name, collection_values.join(", ")));
                         }
-                    } else if !current_value.trim().is_empty() {
-                        legacy.push(&legacy_name, &prefixed_name, current_value.trim());
-                        results.push((prefixed_name, current_value.trim().to_string()));
                     } else {
+                        // Default properties reach FoundXMP with decoded
+                        // whitespace intact; its Binary threshold uses the
+                        // full source length, including trailing space.
+                        let value = if current_default_namespace {
+                            current_value.as_str()
+                        } else {
+                            current_value.trim()
+                        };
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
-                        // only content is an empty Bag/Seq/Alt. ExifTool
-                        // reports it with an empty value (XMP.pm's ParseXMPElement
-                        // calls FoundXMP whenever `length $val or not $shorthand`),
-                        // so dropping it loses the tag outright.
-                        legacy.push(&legacy_name, &prefixed_name, "");
-                        results.push((prefixed_name, String::new()));
+                        // only content is an empty Bag/Seq/Alt -- is still
+                        // reported by ExifTool as an empty value.
+                        legacy.push(&legacy_name, &prefixed_name, value);
+                        results.push((prefixed_name, value.to_string()));
                     }
                     current_property = None;
                     current_value.clear();
+                    after_collection_close = false;
                     collection_values.clear();
                     collection_langs.clear();
                     pending_lang = None;
                     inside_collection = false;
                     property_is_struct = false;
+                    current_default_namespace = false;
                 }
                 depth -= 1;
             }
@@ -718,6 +759,7 @@ fn parse_xmp_packet(
                 // Collect text content if we're inside a property
                 // First decode the bytes, then unescape XML entities like &apos; &quot; &amp; etc.
                 if current_property.is_some()
+                    && !after_collection_close
                     && let Ok(decoded) = e.xml10_content()
                 {
                     // Unescape XML entities (e.g., &apos; -> ', &quot; -> ", &amp; -> &)
@@ -740,7 +782,23 @@ fn parse_xmp_packet(
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    extract_description_attributes(&e, &resolver, &mut results, &mut legacy)?;
+                    extract_description_attributes(
+                        &e,
+                        &resolver,
+                        &mut results,
+                        &mut legacy,
+                        &mut default_namespace_tags,
+                    )?;
+                } else if current_property.is_some()
+                    && is_collection_container(&tag_name, &resolver)
+                {
+                    // A self-closing Bag/Seq/Alt has no inner value. Ignore
+                    // parent indentation that follows it, like End(Bag).
+                    current_value.clear();
+                    collection_values.clear();
+                    collection_langs.clear();
+                    inside_collection = false;
+                    after_collection_close = true;
                 }
             }
 
@@ -748,7 +806,7 @@ fn parse_xmp_packet(
 
             Ok(Event::GeneralRef(e)) => {
                 // Handle XML entity references like &apos; &quot; &amp; &lt; &gt;
-                if current_property.is_some() {
+                if current_property.is_some() && !after_collection_close {
                     if let Ok(entity_name) = e.xml10_content() {
                         // First try to resolve as character reference (&#123; or &#x7B;)
                         if let Ok(Some(ch)) = e.resolve_char_ref() {
@@ -1016,7 +1074,13 @@ fn parse_xmp_packet(
             return XmpValue::List(
                 elements
                     .iter()
-                    .map(|element| format_xmp_value(tag, element))
+                    .map(|element| {
+                        format_xmp_value_with_default(
+                            tag,
+                            element,
+                            default_namespace_tags.contains(tag),
+                        )
+                    })
                     .collect(),
             );
         }
@@ -1057,7 +1121,11 @@ fn parse_xmp_packet(
                 rational_forms.push((tag.to_string(), value.to_string()));
             }
         }
-        XmpValue::Scalar(format_xmp_value(tag, value))
+        XmpValue::Scalar(format_xmp_value_with_default(
+            tag,
+            value,
+            default_namespace_tags.contains(tag),
+        ))
     };
 
     // Post-process results to apply formatting for specific tags
@@ -3314,6 +3382,7 @@ fn extract_description_attributes(
     resolver: &NamespaceResolver,
     results: &mut Vec<(String, String)>,
     legacy: &mut LegacyResults,
+    default_namespace_tags: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -3367,9 +3436,21 @@ fn extract_description_attributes(
                 continue;
             }
             let prefixed_name = format_tag_name(key, resolver);
+            let is_default = has_unregistered_namespace(key, resolver);
+            if is_default {
+                default_namespace_tags.insert(prefixed_name.clone());
+            }
             let legacy_name = legacy_simple_key(key, resolver, &prefixed_name);
-            legacy.push(&legacy_name, &prefixed_name, value.trim());
-            results.push((prefixed_name, value.trim().to_string()));
+            // FoundXMP sees the unescaped attribute value before its
+            // >65536-byte IsDefault Binary check (XMP.pm:3650-3696).
+            let decoded = quick_xml::escape::unescape(value)
+                .map(|v| v.into_owned())
+                .unwrap_or_else(|_| value.to_string());
+            // Keep decoded property whitespace. FoundXMP applies its Binary
+            // length rule to the untrimmed value, and also prints short values
+            // with their original leading and trailing spaces.
+            legacy.push(&legacy_name, &prefixed_name, &decoded);
+            results.push((prefixed_name, decoded));
         }
     }
     Ok(())
@@ -3699,6 +3780,23 @@ fn base64_binary_placeholder(value: &str) -> Option<String> {
     ))
 }
 
+/// A property in a namespace absent from the selected ExifTool source tables
+/// has `IsDefault` (XMP.pm:3589-3596). This is a proven subset of default
+/// properties: a new property in a known namespace is also default, but needs
+/// a property-level table inventory before it can be classified safely.
+fn has_unregistered_namespace(qname: &str, resolver: &NamespaceResolver) -> bool {
+    let Some(prefix) = NamespaceResolver::extract_prefix(qname) else {
+        return true;
+    };
+    let Some(uri) = resolver.resolve_prefix(prefix) else {
+        return true;
+    };
+    canonical_standard_uri(uri).is_none()
+        && !super::generated_namespaces::TABLE_NAMESPACES
+            .iter()
+            .any(|(known, _, _)| *known == uri)
+}
+
 /// Formats a tag name to match ExifTool's XMP output conventions.
 ///
 /// The group is ExifTool's family-1 `XMP-<prefix>`, where the prefix is the
@@ -3763,7 +3861,23 @@ fn capitalize_first_letter(s: &str) -> String {
 /// - **TIFF (tiff:)**: Make, Model, XResolution, YResolution, Software, DateTime
 /// - **EXIF (exif:)**: ISO, ShutterSpeed, Aperture, ExposureCompensation, FocalLength
 /// - **Basic Job Ticket (xmpBJ:)**: JobName, CreationDate, Status
+#[cfg(test)]
 fn format_xmp_value(tag: &str, value: &str) -> String {
+    format_xmp_value_with_default(tag, value, false)
+}
+
+/// `FoundXMP` marks a newly defined property Binary when XMPAutoConv is on
+/// and its decoded value exceeds 65536 bytes (XMP.pm:3675,3695-3696).
+/// `is_default` is proven from a namespace absent from the selected source
+/// tables, not guessed from a displayed property name. Short GMask:Data text
+/// remains ordinary text.
+fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> String {
+    if is_default && value.len() > 65536 {
+        return format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            value.len()
+        );
+    }
     if let Some(forms) = convert_xmp_gps(tag, value) {
         return forms.print;
     }
@@ -4949,6 +5063,124 @@ fn format_photoshop_quality(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unregistered_xmp_namespace_binary_threshold_is_source_derived() {
+        fn packet(value: &str, known_description: &str) -> String {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GMask="http://ns.google.com/photos/1.0/gmaskmap/" xmlns:dc="http://purl.org/dc/elements/1.1/"><GMask:Data>{value}</GMask:Data><dc:description>{known_description}</dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        }
+        let known = "A".repeat(65537);
+        for (value, expected) in [
+            ("  A  ".to_owned(), "  A  ".to_owned()),
+            ("AQIDBA==".to_owned(), "AQIDBA==".to_owned()),
+            ("A".repeat(65536), "A".repeat(65536)),
+            (
+                "A".repeat(65537),
+                "(Binary data 65537 bytes, use -b option to extract)".to_owned(),
+            ),
+            (
+                format!("{} ", "A".repeat(65536)),
+                "(Binary data 65537 bytes, use -b option to extract)".to_owned(),
+            ),
+            ("é".repeat(32768), "é".repeat(32768)),
+            (
+                "é".repeat(32769),
+                "(Binary data 65538 bytes, use -b option to extract)".to_owned(),
+            ),
+        ] {
+            let entries = parse_xmp_typed(packet(&value, &known).as_bytes())
+                .expect("source-backed XMP packet");
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|(tag, _)| tag == "XMP-GMask:Data")
+                    .map(|(_, v)| v.to_string()),
+                Some(expected),
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|(tag, _)| tag == "XMP-dc:Description")
+                    .map(|(_, v)| v.to_string()),
+                Some(known.clone()),
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_namespace_shorthand_uses_same_binary_threshold() {
+        for (source, expected) in [
+            ("  A  ".to_string(), "  A  ".to_string()),
+            (
+                "A".repeat(65537),
+                "(Binary data 65537 bytes, use -b option to extract)".to_string(),
+            ),
+            (format!("{}&#x41;", "A".repeat(65531)), "A".repeat(65532)),
+            (
+                format!("{} ", "A".repeat(65536)),
+                "(Binary data 65537 bytes, use -b option to extract)".to_string(),
+            ),
+        ] {
+            let packet = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GMask="http://ns.google.com/photos/1.0/gmaskmap/" GMask:Data="{source}" /></rdf:RDF></x:xmpmeta>"#
+            );
+            let entries = parse_xmp_typed(packet.as_bytes()).expect("shorthand XMP packet");
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|(tag, _)| tag == "XMP-GMask:Data")
+                    .map(|(_, value)| value.to_string()),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn unregistered_xmp_list_item_keeps_decoded_whitespace_for_binary_length() {
+        for (value, expected) in [
+            ("  A  ".to_string(), "  A  ".to_string()),
+            (
+                format!("{} ", "A".repeat(65536)),
+                "(Binary data 65537 bytes, use -b option to extract)".to_string(),
+            ),
+        ] {
+            let packet = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GMask="http://ns.google.com/photos/1.0/gmaskmap/"><GMask:Data><rdf:Bag><rdf:li>{value}</rdf:li></rdf:Bag></GMask:Data></rdf:Description></rdf:RDF></x:xmpmeta>"#
+            );
+            let entries = parse_xmp_typed(packet.as_bytes()).expect("unregistered XMP list");
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|(tag, _)| tag == "XMP-GMask:Data")
+                    .map(|(_, value)| value.to_string()),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn unregistered_xmp_empty_bag_excludes_parent_indentation() {
+        for (bag, expected) in [
+            ("<rdf:Bag></rdf:Bag>".to_string(), ""),
+            ("<rdf:Bag>\n  </rdf:Bag>".to_string(), "\n  "),
+            ("<rdf:Bag/>".to_string(), ""),
+        ] {
+            let packet = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GMask="http://ns.google.com/photos/1.0/gmaskmap/"><GMask:Data>{bag}
+</GMask:Data></rdf:Description></rdf:RDF></x:xmpmeta>"#
+            );
+            let entries = parse_xmp_typed(packet.as_bytes()).expect("empty XMP bag");
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|(tag, _)| tag == "XMP-GMask:Data")
+                    .map(|(_, value)| value.to_string()),
+                Some(expected.to_string()),
+            );
+        }
+    }
 
     #[test]
     fn rebound_custom_prefix_gets_a_tmp_prefix_of_its_own() {

@@ -73,7 +73,7 @@ fn flir_fixture_reports_makernote_rational_measurements() {
         assert_eq!(
             row.project(oxidex::core::tag_occurrence::ValueChannel::Stored)
                 .as_ref(),
-            &oxidex::core::TagValue::new_rational(value.into(), 1),
+            &oxidex::core::TagValue::new_rational(value, 1),
         );
         for channel in [
             oxidex::core::tag_occurrence::ValueChannel::ValueConv,
