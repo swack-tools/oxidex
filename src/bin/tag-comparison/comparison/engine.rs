@@ -493,6 +493,7 @@ impl ComparisonEngine {
         exiftool_instances: &HashMap<String, Vec<TagInfo>>,
     ) -> FormatComparison {
         let mut comparison = FormatComparison::new(format.to_string(), files_tested);
+        comparison.regressions_assessed = previous.is_some();
         comparison.total_exiftool_tags = exiftool_tags.len();
 
         // Build lookup maps using both original and normalized keys
@@ -1028,6 +1029,7 @@ mod tests {
             ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 2, Some(&previous));
 
         // Should have 1 regression (Model is missing)
+        assert!(result.regressions_assessed);
         assert_eq!(result.regressions.len(), 1);
         assert!(result.regressions.contains(&"EXIF:Model".to_string()));
 
@@ -1055,7 +1057,8 @@ mod tests {
 
         let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
 
-        // No regressions when there's no previous baseline
+        // No regression assessment without a previous baseline.
+        assert!(!result.regressions_assessed);
         assert_eq!(result.regressions.len(), 0);
     }
 
@@ -1078,6 +1081,7 @@ mod tests {
             ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, Some(&previous));
 
         // No regressions - we still have Make, and we added Model
+        assert!(result.regressions_assessed);
         assert_eq!(result.regressions.len(), 0);
         assert_eq!(result.matched_tags.len(), 2);
     }

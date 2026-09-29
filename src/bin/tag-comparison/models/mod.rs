@@ -80,6 +80,10 @@ pub struct FormatComparison {
     pub value_differences: Vec<ValueDifference>,
     /// Tags that were present in baseline but now missing (regressions)
     pub regressions: Vec<String>,
+    /// Whether this format had a previous comparison to assess regressions.
+    /// Older reports lack this evidence and default to unassessed.
+    #[serde(default)]
+    pub regressions_assessed: bool,
     /// Tag keys ("family:name") the oxidex side emits more than once for
     /// the SAME sample file (spec M3 double-emission gate). Defaults to
     /// empty for any report serialized before this field existed.
@@ -133,6 +137,7 @@ impl FormatComparison {
             extra_in_oxidex: Vec::new(),
             value_differences: Vec::new(),
             regressions: Vec::new(),
+            regressions_assessed: false,
             duplicate_emissions: Vec::new(),
             coverage_percentage: 0.0,
             total_exiftool_tags: 0,
@@ -563,6 +568,16 @@ mod tests {
         }"#;
         let deserialized: FormatComparison = serde_json::from_str(json).unwrap();
         assert!(deserialized.duplicate_emissions.is_empty());
+        assert!(!deserialized.regressions_assessed);
+    }
+
+    #[test]
+    fn test_regression_assessment_serialization() {
+        let mut comparison = FormatComparison::new("JPEG".to_string(), 1);
+        comparison.regressions_assessed = true;
+        let json = serde_json::to_string(&comparison).unwrap();
+        let restored: FormatComparison = serde_json::from_str(&json).unwrap();
+        assert!(restored.regressions_assessed);
     }
 
     #[test]
@@ -585,11 +600,13 @@ mod tests {
         let mut comp1 = FormatComparison::new("JPEG".to_string(), 5);
         comp1.total_exiftool_tags = 100;
         comp1.matched_tags = vec!["EXIF:Make".to_string()];
+        comp1.regressions_assessed = true;
         comp1.regressions = vec!["EXIF:Model".to_string(), "EXIF:DateTime".to_string()];
 
         let mut comp2 = FormatComparison::new("PNG".to_string(), 3);
         comp2.total_exiftool_tags = 50;
         comp2.matched_tags = vec!["PNG:Width".to_string()];
+        comp2.regressions_assessed = true;
         comp2.regressions = vec!["PNG:Height".to_string()];
 
         report.add_format("JPEG".to_string(), comp1);
