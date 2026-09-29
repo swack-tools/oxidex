@@ -432,6 +432,15 @@ pub fn convert_pfn(val: f64) -> String {
 pub fn convert_file_size(val: f64) -> String {
     let source = super::helpers::selected_port_source("Image::ExifTool::ConvertFileSize")
         .expect("unverified ConvertFileSize source");
+    convert_file_size_for_pinned_source(source, val)
+}
+
+/// Evaluate the shared runtime conversion against an independently checked
+/// native source body. The pre-codegen expression oracle uses this entry point
+/// because the generated table version still names the previous release.
+#[doc(hidden)]
+#[must_use]
+pub fn convert_file_size_for_pinned_source(source: &str, val: f64) -> String {
     convert_file_size_for_source(source, val).expect("unverified ConvertFileSize body")
 }
 
@@ -1201,8 +1210,13 @@ mod tests {
                 convert_file_size_for_source(source, 171_966.0).as_deref(),
                 Some(printed)
             );
+            assert_eq!(convert_file_size_for_pinned_source(source, 171_966.0), printed);
         }
         assert_eq!(convert_file_size_for_source("unreviewed", 171_966.0), None);
+        assert!(std::panic::catch_unwind(|| {
+            convert_file_size_for_pinned_source("unreviewed", 171_966.0)
+        })
+        .is_err());
     }
 
     /// The `u64` file-size formatter and the `f64` `PrintConv` one must be
