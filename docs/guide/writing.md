@@ -39,8 +39,9 @@ A catalog entry counts as **write-proven** only if it passes both checks of
    new value must be present and identical in both, and must differ from
    the seed.
 
-Credit needs an exact `Group1:Name` match with the catalog row. Nineteen
-entries pass today, all of them in `Exif::Main` and written as `IFD0`:
+Credit needs an exact `Group1:Name` match with the catalog row. A historical
+observation at commit `7a9c7576` credited 19 entries, all in `Exif::Main`
+and written as `IFD0`:
 
 `ProcessingSoftware`, `DocumentName`, `MinSampleValue`, `MaxSampleValue`,
 `XResolution`, `YResolution`, `PageName`, `XPosition`, `YPosition`,
@@ -48,11 +49,12 @@ entries pass today, all of them in `Exif::Main` and written as `IFD0`:
 `GDALNoData`, `UniqueCameraModel`, `CameraSerialNumber`, `ReelName`,
 `CameraLabel`.
 
-That is **19 of the 14,169** entries ExifTool marks writable (0.13%). The
+At that historical source, this was **19 of the 14,169** entries ExifTool
+marks writable (0.13%). The
 list is committed as `tools/exiftool-tables/tiff_scalar_final_ledger.json`,
 and the observations as `docs/public/measurements/catalog-hydrated-observed-13.59.json`.
 The [parity ratchet](/contributing/#what-ci-enforces) holds the count at a
-floor of 19 or more.
+floor of 19 or more; the final beta write qualification is still pending.
 
 **The public-API scalar write matrix** exercises those 19 tags through the
 public API. Each tag is written under three spellings (`EXIF:`, `IFD0:`,

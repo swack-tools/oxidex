@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Both base image versions are ARGs so a bump is a one-line change.
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.97.1
 ARG ALPINE_VERSION=3.24
 
 # ---------------------------------------------------------------------------
@@ -26,6 +26,7 @@ RUN apk add --no-cache build-base
 
 WORKDIR /src
 COPY . .
+RUN test "$(rustc --version | awk '{print $2}')" = "$(awk -F '"' '/^channel =/ {print $2}' rust-toolchain.toml)"
 
 # `--bin oxidex` restricts the build to the CLI, skipping the feature-gated
 # tag-comparison and jpeg-tag-matrix binaries -- that is all `--bin` does.
@@ -75,7 +76,7 @@ ENTRYPOINT ["/usr/local/bin/oxidex"]
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="oxidex" \
-      org.opencontainers.image.description="High-performance Rust implementation of ExifTool for reading, writing and editing metadata in 300+ file formats" \
+      org.opencontainers.image.description="High-performance Rust implementation of ExifTool for reading, writing and editing metadata" \
       org.opencontainers.image.source="https://github.com/swack-tools/oxidex" \
       org.opencontainers.image.licenses="GPL-3.0" \
       org.opencontainers.image.version="${VERSION}" \

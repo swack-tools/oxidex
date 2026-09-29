@@ -961,6 +961,15 @@ class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
     GATE = "enable=${{ !contains(github.ref_name, '-') }}"
 
+    def test_publishing_requires_matching_package_and_image_versions(self):
+        verify = job_block(self.text, "verify-tag-on-main")
+        build = job_block(self.text, "build")
+        self.assertIn("python3 tools/ci/release_version.py --tag", verify)
+        self.assertIn("github.event_name != 'workflow_dispatch'", verify)
+        self.assertIn("needs.verify-tag-on-main.result == 'success'", build)
+        self.assertIn('expected="oxidex ${GITHUB_REF_NAME#v}"', build)
+        self.assertIn('[ "$version" != "$expected" ]', build)
+
     def meta_step(self) -> str:
         block = job_block(self.text, "merge")
         match = re.search(r"- name: Compute tags\n(.*?)(?=\n      - name: |\Z)", block, re.S)
