@@ -75,6 +75,56 @@ class CleanSnapshotTests(unittest.TestCase):
         snapshot.validate(proof, self.owned, self.target, self.parent, before,
                           {"generated.txt", ".exiftool-version"})
 
+    def test_repo_local_ssh_trust_survives_isolated_clone_verification(self) -> None:
+        # A local Git config is inherited by worktrees, but not by git clone.
+        self.git_config.write_text(
+            "[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+        )
+        git(self.owned, "config", "--local", "gpg.format", "ssh")
+        git(self.owned, "config", "--local", "user.signingkey", str(self.key.with_suffix('.pub')))
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        proof = self.create()
+        measured = Path(proof["path"])
+        self.assertIn("-----BEGIN SSH SIGNATURE-----", git(measured, "cat-file", "-p", "HEAD"))
+        self.assertEqual(proof["allowed_signers_path"], str(self.allowed_signers.resolve()))
+        self.assertFalse(subprocess.run(
+            ["git", "-C", str(measured), "config", "--local", "--get",
+             "gpg.ssh.allowedSignersFile"], capture_output=True).returncode == 0)
+        snapshot.validate(proof, self.owned, self.target, self.parent,
+                          snapshot.source_tree_sha256(self.owned),
+                          {"generated.txt", ".exiftool-version"})
+
+    def test_repo_local_ssh_trust_rejects_unauthorized_signer(self) -> None:
+        self.git_config.write_text(
+            "[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+            "[gpg]\n\tformat = ssh\n"
+            f"[user]\n\tsigningkey = {self.key.with_suffix('.pub')}\n"
+        )
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        self.allowed_signers.write_text(f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n")
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        with self.assertRaisesRegex(snapshot.Refused, "verify-commit"):
+            self.create()
+
+    def test_relative_repo_local_trust_and_changed_file_replay_refusal(self) -> None:
+        self.git_config.write_text(
+            "[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+            "[gpg]\n\tformat = ssh\n"
+            f"[user]\n\tsigningkey = {self.key.with_suffix('.pub')}\n"
+        )
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", "../allowed-signers")
+        proof = self.create()
+        digest = snapshot.source_tree_sha256(self.owned)
+        self.assertEqual(proof["allowed_signers_path"], str(self.allowed_signers.resolve()))
+        snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                          {"generated.txt", ".exiftool-version"})
+        self.allowed_signers.write_text(self.allowed_signers.read_text() + "# changed\n")
+        with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
+            snapshot.validate(proof, self.owned, self.target, self.parent, digest,
+                              {"generated.txt", ".exiftool-version"})
+
     def test_unexpected_untracked_and_symlink_inputs_refuse(self) -> None:
         (self.owned / "unexpected.txt").write_text("unsafe")
         with self.assertRaisesRegex(snapshot.Refused, "untracked"):

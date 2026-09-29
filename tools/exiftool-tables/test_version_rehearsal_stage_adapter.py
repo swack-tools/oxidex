@@ -1394,4 +1394,25 @@ class CurrentGeneratedMatrixContractTests(unittest.TestCase):
         self.assertGreater(baseline, 0)
 
 
+class StageCliExitTests(unittest.TestCase):
+    def test_measured_read_exits_success_without_claiming_pair_acceptance(self) -> None:
+        for stage, state, expected_exit in (("read", "measured", 0),
+                                             ("read", "refused", 2),
+                                             ("write", "measured", 2),
+                                             ("write", "passed", 0)):
+            with self.subTest(stage=stage, state=state):
+                source = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+                          "import version_rehearsal_stage_adapter as adapter; "
+                          f"adapter.{stage} = lambda args: {{'state': '{state}'}}; "
+                          "raise SystemExit(adapter.main(sys.argv[1:]))")
+                command = [sys.executable, "-c", source, str(HERE), stage]
+                for option in ("checkout", "target", "report", "release", "source-commit",
+                               "native-source", "native-lib", "native-perl"):
+                    command += ["--" + option, "unused"]
+                command += ["--fixture-manifest", "unused", "--native-probe-sha256", "unused"]
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["state"], state)
+
+
 if __name__ == "__main__": unittest.main()

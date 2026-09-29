@@ -1587,6 +1587,13 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                       f"not {matrix_path}")
     matrix_binding = {"path": str(CANONICAL_MATRIX), "sha256": _sha_file(CANONICAL_MATRIX)}
     caller = snapshot_caller(repository)
+    # The owned checkout is a worktree, but its later signed measurement clone
+    # does not inherit repository-local SSH verification configuration. Refuse
+    # missing trust before the costly generation/build stages begin.
+    try:
+        stage_adapter.clean_snapshot._signature_trust(repository)
+    except stage_adapter.clean_snapshot.Refused as error:
+        raise Refused(str(error)) from error
     pinned = caller["pin_version"]
     matrix = materialize_matrix(load_matrix(CANONICAL_MATRIX, pinned), output_root=output_root,
                                 target_root=target_root, run_id=run_id)

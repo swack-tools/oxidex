@@ -78,6 +78,27 @@ def _diff(root: Path, parent: str, child: str) -> tuple[list[str], str]:
             hashlib.sha256(patch).hexdigest())
 
 
+def _signature_trust(source: Path) -> tuple[str, str, str | None, str | None]:
+    """Resolve the source checkout's signing format and SSH trust, not clone config."""
+    signing_format = _git(source, "config", "--get", "--default=openpgp", "gpg.format")
+    assert isinstance(signing_format, str)
+    signing_key = _git(source, "config", "--get", "--default=", "user.signingkey")
+    assert isinstance(signing_key, str)
+    if signing_format != "ssh":
+        return signing_format, signing_key, None, None
+    if not signing_key:
+        raise Refused("clean measurement snapshot SSH signing key is absent")
+    configured = _git(source, "config", "--path", "--get", "gpg.ssh.allowedSignersFile")
+    assert isinstance(configured, str)
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = source / path
+    if path.is_symlink() or not path.is_file():
+        raise Refused("clean measurement snapshot allowed signers file is absent or not regular")
+    path = path.resolve()
+    return signing_format, signing_key, str(path), hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _source_identity(source: Path, parent: str, expected_digest: str,
                      sanctioned_paths: set[str]) -> dict[str, list[str]]:
     if not OID.fullmatch(parent) or not SHA.fullmatch(expected_digest):
@@ -128,7 +149,11 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     newly_generated = sorted(set(rows) - _tracked(source))
     if newly_generated:
         _git(measured, "add", "-f", "--", *newly_generated)
-    _git(measured, "commit", "--quiet", "--allow-empty", "-S", "-m",
+    signing_format, signing_key, trust_path, trust_sha = _signature_trust(source)
+    signing_options = ["-c", f"gpg.format={signing_format}"]
+    if signing_key:
+        signing_options += ["-c", f"user.signingkey={signing_key}"]
+    _git(measured, *signing_options, "commit", "--quiet", "--allow-empty", "-S", "-m",
          "test: snapshot generated source for native read measurement")
     commit = _git(measured, "rev-parse", "HEAD")
     tree = _git(measured, "rev-parse", "HEAD^{tree}")
@@ -138,6 +163,9 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
         "schema": 1, "path": str(measured), "parent_commit": parent,
         "commit": commit, "tree": tree, "source_tree_sha256": expected_digest,
         "changed_paths": paths, "patch_sha256": patch_sha,
+        "signing_format": signing_format,
+        "signing_key_sha256": hashlib.sha256(signing_key.encode()).hexdigest(),
+        "allowed_signers_path": trust_path, "allowed_signers_sha256": trust_sha,
     }
     validate(proof, source, target, parent, expected_digest, sanctioned_paths)
     return proof
@@ -149,12 +177,25 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
     source, target = Path(source).absolute(), Path(target).absolute()
     measured = target / SNAPSHOT_DIR
     if (set(proof) != {"schema", "path", "parent_commit", "commit", "tree",
-                       "source_tree_sha256", "changed_paths", "patch_sha256"}
+                       "source_tree_sha256", "changed_paths", "patch_sha256",
+                       "signing_format", "signing_key_sha256",
+                       "allowed_signers_path", "allowed_signers_sha256"}
             or proof["schema"] != 1 or proof["path"] != str(measured)
             or proof["parent_commit"] != parent or proof["source_tree_sha256"] != expected_digest
             or not isinstance(proof["commit"], str) or not OID.fullmatch(proof["commit"])
             or not isinstance(proof["tree"], str) or not OID.fullmatch(proof["tree"])
-            or not isinstance(proof["patch_sha256"], str) or not SHA.fullmatch(proof["patch_sha256"])):
+            or not isinstance(proof["patch_sha256"], str) or not SHA.fullmatch(proof["patch_sha256"])
+            or not isinstance(proof["signing_format"], str)
+            or not proof["signing_format"]
+            or not isinstance(proof["signing_key_sha256"], str)
+            or not SHA.fullmatch(proof["signing_key_sha256"])
+            or (proof["signing_format"] == "ssh" and
+                (not isinstance(proof["allowed_signers_path"], str)
+                 or not isinstance(proof["allowed_signers_sha256"], str)
+                 or not SHA.fullmatch(proof["allowed_signers_sha256"])))
+            or (proof["signing_format"] != "ssh" and
+                (proof["allowed_signers_path"] is not None
+                 or proof["allowed_signers_sha256"] is not None))):
         raise Refused("clean measurement snapshot proof identity is malformed")
     if measured.is_symlink() or not measured.is_dir():
         raise Refused("clean measurement snapshot checkout is absent or symlinked")
@@ -165,7 +206,18 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
             or _git(measured, "rev-parse", "HEAD^{tree}") != proof["tree"]
             or _git(measured, "status", "--porcelain=v1", "--untracked-files=all")):
         raise Refused("clean measurement snapshot commit or checkout changed")
-    _git(measured, "verify-commit", "HEAD")
+    signing_format, signing_key, trust_path, trust_sha = _signature_trust(source)
+    if (proof["signing_format"] != signing_format
+            or proof["signing_key_sha256"] != hashlib.sha256(signing_key.encode()).hexdigest()
+            or proof["allowed_signers_path"] != trust_path
+            or proof["allowed_signers_sha256"] != trust_sha):
+        raise Refused("clean measurement snapshot SSH trust differs from signed proof")
+    verification_options = ["-c", f"gpg.format={signing_format}"]
+    if signing_format == "ssh":
+        verification_options += ["-c", f"gpg.ssh.allowedSignersFile={trust_path}"]
+    _git(measured, *verification_options, "verify-commit", "HEAD")
+    if _signature_trust(source) != (signing_format, signing_key, trust_path, trust_sha):
+        raise Refused("clean measurement snapshot SSH trust changed during verification")
     paths, patch_sha = _diff(measured, parent, proof["commit"])
     if (paths != proof["changed_paths"] or patch_sha != proof["patch_sha256"]
             or set(paths) - sanctioned_paths):

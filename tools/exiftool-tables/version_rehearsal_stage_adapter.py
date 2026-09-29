@@ -1347,7 +1347,9 @@ def main(argv: list[str] | None = None) -> int:
         stage = {"generate": generate, "build": build, "test": run_release_tests,
                  "read": read, "write": write}[args.stage]
         result = stage(args)
-        print(json.dumps(result, sort_keys=True)); return 0 if result["state"] == "passed" else 2
+        print(json.dumps(result, sort_keys=True))
+        return 0 if (result["state"] == "passed"
+                     or args.stage == "read" and result["state"] == "measured") else 2
     except (Refused, OSError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr); return 2
 
