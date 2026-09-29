@@ -1073,6 +1073,7 @@ impl MakerNoteParser for PentaxParser {
             model,
             tags,
             false,
+            None,
             Some(occurrences),
         )?;
 
@@ -1098,6 +1099,7 @@ pub(crate) fn parse_asahi_with_context(
     byte_order: ByteOrder,
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
     occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
 ) -> std::result::Result<(), String> {
     let parser = PentaxParser::default();
@@ -1108,6 +1110,7 @@ pub(crate) fn parse_asahi_with_context(
         model,
         tags,
         true,
+        Some(value_forms),
         occurrences,
     )?;
     let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
@@ -1133,7 +1136,9 @@ impl PentaxParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, false, None)
+        self.parse_located_with_occurrences(
+            data, byte_order, data_base, model, tags, false, None, None,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1145,6 +1150,7 @@ impl PentaxParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
         asahi_make: bool,
+        value_forms: Option<&mut HashMap<String, String>>,
         mut occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -1193,7 +1199,7 @@ impl PentaxParser {
             0
         };
 
-        // MakerNotes.pm selects Pentax::Type2 for Asahi's headerless note,
+        // MakerNotes.pm selects Pentax::Type2 for Asahi's non-AOC note,
         // with no Model test. Its AOC Optio 330RS/430RS branch instead selects
         // Casio::Type2; the dispatcher passes actual Make into this routine.
         let legacy_type2 = asahi_make && !is_aoc_header;
@@ -1245,6 +1251,14 @@ impl PentaxParser {
             .into_iter()
             .map(|entry| right_align_inline_value(entry, byte_order))
             .collect();
+
+        // MakerNotes.pm:782-790 routes a non-AOC Asahi IFD to
+        // Pentax::Type2. None of its ids may reach Pentax::Main's supplement
+        // or match arms: even shared names have different tag ids and values.
+        if legacy_type2 {
+            decode_pentax_type2(&entries, data, value_base, byte_order, tags, value_forms);
+            return Ok(());
+        }
 
         // "AOC\0" MakerNotes declare no Base of their own, so their offsets
         // are read against the enclosing TIFF header -- but real files move
@@ -2861,25 +2875,6 @@ impl PentaxParser {
                     }
                 }
 
-                PENTAX_TYPE2_HOMETOWN_CITY_CODE | PENTAX_TYPE2_DESTINATION_CITY_CODE
-                    if legacy_type2 && entry.field_type == 7 && entry.value_count == 4 =>
-                {
-                    let Some(table) = crate::exiftool_tables::find_ifd_table("Pentax", "Type2")
-                    else {
-                        continue;
-                    };
-                    let Some(row) = table.tags.iter().find(|row| row.id == entry.tag_id) else {
-                        continue;
-                    };
-                    if row.count != Some(4) || row.writable != Some("undef") {
-                        continue;
-                    }
-                    if let Some(value) =
-                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
-                    {
-                        tags.insert(format!("Pentax:{}", row.name), value);
-                    }
-                }
                 CASIO_TYPE2_BEST_SHOT_MODE if legacy_casio_type2 => {
                     // Casio::Type2 declares int16u. An unsupported format's
                     // value_offset may be zero without representing Off.
@@ -2898,6 +2893,82 @@ impl PentaxParser {
         }
 
         Ok(())
+    }
+}
+
+/// Decode only the fields authenticated by Pentax::Type2 in pinned Pentax.pm.
+/// The Asahi Type2 IFD shares several ids with Pentax::Main but assigns
+/// them different meanings, so no Main decoder may run on this path.
+fn decode_pentax_type2(
+    entries: &[IfdEntry],
+    data: &[u8],
+    value_base: i64,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+    mut value_forms: Option<&mut HashMap<String, String>>,
+) {
+    use crate::exiftool_tables::PrintConv;
+
+    let Some(table) = crate::exiftool_tables::find_ifd_table("Pentax", "Type2") else {
+        return;
+    };
+    for entry in entries {
+        let Some(row) = table.tag(entry.tag_id) else {
+            continue;
+        };
+        if row.omitted.any()
+            || row.subdir.is_some()
+            || row.condition.is_some()
+            || row.raw_conv.is_some()
+            || row.value_conv.is_some()
+            || row.format.is_some()
+        {
+            continue;
+        }
+        let decoded = match entry.tag_id {
+            PENTAX_TYPE2_HOMETOWN_CITY_CODE | PENTAX_TYPE2_DESTINATION_CITY_CODE
+                if entry.field_type == 7
+                    && entry.value_count == 4
+                    && row.count == Some(4)
+                    && row.writable == Some("undef") =>
+            {
+                extract_raw_string_preserve_spaces(entry, data, value_base, byte_order)
+                    .map(|value| (value, None))
+            }
+            0x000a
+                if entry.field_type == 4
+                    && entry.value_count == 1
+                    && row.writable == Some("int32u")
+                    && matches!(row.print_conv, PrintConv::None) =>
+            {
+                entry_components(entry, data, value_base, byte_order)
+                    .first()
+                    .map(|value| (value.to_string(), None))
+            }
+            _ if entry.field_type == 3 && entry.value_count == 1 && row.writable.is_none() => {
+                let PrintConv::IntEnum(values) = row.print_conv else {
+                    continue;
+                };
+                let Some(raw) = entry_components(entry, data, value_base, byte_order)
+                    .first()
+                    .copied()
+                else {
+                    continue;
+                };
+                values
+                    .binary_search_by_key(&raw, |(key, _)| *key)
+                    .ok()
+                    .map(|index| (values[index].1.to_string(), Some(raw.to_string())))
+            }
+            _ => None,
+        };
+        if let Some((value, raw_form)) = decoded {
+            let key = format!("Pentax:{}", row.name);
+            if let (Some(forms), Some(raw)) = (value_forms.as_deref_mut(), raw_form) {
+                forms.insert(key.clone(), raw);
+            }
+            tags.insert(key, value);
+        }
     }
 }
 
@@ -4685,6 +4756,91 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asahi_type2_decodes_its_own_ids_in_both_byte_orders() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut data = Vec::new();
+            let word = |value: u16| match order {
+                ByteOrder::LittleEndian => u32::from(value).to_le_bytes(),
+                ByteOrder::BigEndian => (u32::from(value) << 16).to_be_bytes(),
+            };
+            let short = |value: u16| match order {
+                ByteOrder::LittleEndian => value.to_le_bytes(),
+                ByteOrder::BigEndian => value.to_be_bytes(),
+            };
+            data.extend_from_slice(&short(4));
+            for (id, kind, count, bytes) in [
+                (0x0002, 3, 1, word(2)),
+                (0x0003, 3, 1, word(3)),
+                (0x0008, 3, 1, word(1)),
+                (0x1000, 7, 4, *b"NYC "),
+            ] {
+                data.extend_from_slice(&short(id));
+                data.extend_from_slice(&short(kind));
+                let count_bytes = match order {
+                    ByteOrder::LittleEndian => (count as u32).to_le_bytes(),
+                    ByteOrder::BigEndian => (count as u32).to_be_bytes(),
+                };
+                data.extend_from_slice(&count_bytes);
+                data.extend_from_slice(&bytes);
+            }
+            data.extend_from_slice(&[0; 4]);
+            let mut tags = HashMap::new();
+            let mut value_forms = HashMap::new();
+            PentaxParser::default()
+                .parse_located_with_occurrences(
+                    &data,
+                    order,
+                    None,
+                    Some("PENTAX Optio 430"),
+                    &mut tags,
+                    true,
+                    Some(&mut value_forms),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(tags.get("Pentax:Quality").map(String::as_str), Some("Best"));
+            assert_eq!(
+                tags.get("Pentax:FocusMode").map(String::as_str),
+                Some("Auto")
+            );
+            assert_eq!(
+                tags.get("Pentax:HometownCityCode").map(String::as_str),
+                Some("NYC ")
+            );
+            assert_eq!(tags.len(), 3, "Main-only 0x0008 must not be decoded");
+            assert_eq!(
+                value_forms.get("Pentax:Quality").map(String::as_str),
+                Some("2")
+            );
+            assert_eq!(
+                value_forms.get("Pentax:FocusMode").map(String::as_str),
+                Some("3")
+            );
+            assert!(!value_forms.contains_key("Pentax:HometownCityCode"));
+        }
+    }
+
+    #[test]
+    fn non_asahi_pentax_header_keeps_main_table() {
+        let data = pentax_block(&[(PENTAX_QUALITY, 3, 1, 2 << 16)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located_with_occurrences(
+                &data,
+                ByteOrder::LittleEndian,
+                None,
+                None,
+                &mut tags,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(tags.get("Pentax:Quality").map(String::as_str), Some("Best"));
+        assert!(!tags.contains_key("Pentax:RecordingMode"));
+    }
 
     #[test]
     fn caf_point_info_preserves_packed_value_before_print_conv() {

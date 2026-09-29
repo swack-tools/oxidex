@@ -428,6 +428,7 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 byte_order,
                 model,
                 tags,
+                value_forms,
                 occurrences.as_deref_mut(),
             )?;
             return Ok(());

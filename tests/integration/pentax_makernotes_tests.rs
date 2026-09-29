@@ -12,23 +12,65 @@ const PENTAX_OPTIO_430: &str = "Pentax/PentaxOptio430.jpg";
 const PENTAX_OPTIO_430_RS: &str = "Pentax/PentaxOptio430RS.jpg";
 const PENTAX_EI_200: &str = "Pentax/PentaxEI-200.jpg";
 
-/// Pentax Type2 records store their city codes as four-byte `undef` values,
-/// including significant trailing spaces.  ExifTool exposes the raw string,
-/// not a numeric city lookup, for these legacy Optio fields.
+/// Asahi's headerless Optio 430 note selects Pentax::Type2, not Pentax::Main.
+/// These are the complete public Pentax values from pinned ExifTool 13.59;
+/// the city-code whitespace is significant.
 #[test]
 #[ignore = "requires pinned ExifTool 13.59 combined-samples"]
-fn pentax_type2_preserves_hometown_and_destination_city_codes() {
+fn pentax_type2_uses_its_own_table_without_main_leakage() {
     use oxidex::core::operations::read_metadata;
 
     let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(
         PENTAX_OPTIO_430,
     ))
     .expect("Pentax Optio 430 parses");
-    assert_eq!(metadata.get_string("Pentax:HometownCityCode"), Some("NYC "));
-    assert_eq!(
-        metadata.get_string("Pentax:DestinationCityCode"),
-        Some("    ")
-    );
+    let expected = [
+        ("RecordingMode", "Auto"),
+        ("Quality", "Best"),
+        ("FocusMode", "Auto"),
+        ("FlashMode", "Off"),
+        ("WhiteBalance", "Auto"),
+        ("DigitalZoom", "0"),
+        ("Sharpness", "Normal"),
+        ("Contrast", "Normal"),
+        ("Saturation", "Normal"),
+        ("ISO", "100"),
+        ("ColorFilter", "Full"),
+        ("HometownCityCode", "NYC "),
+        ("DestinationCityCode", "    "),
+    ];
+    for (name, value) in expected {
+        assert_eq!(metadata.get_string(&format!("Pentax:{name}")), Some(value));
+    }
+    let actual: std::collections::HashSet<_> = metadata
+        .iter()
+        .filter_map(|(name, _)| name.strip_prefix("Pentax:"))
+        .collect();
+    let expected_names: std::collections::HashSet<_> =
+        expected.iter().map(|(name, _)| *name).collect();
+    assert_eq!(actual, expected_names, "Type2 must not emit Main-only tags");
+
+    // `-n` bypasses each Type2 PrintConv. Pinned ExifTool 13.59 reports
+    // these exact raw values; using Main's reverse enum would be wrong.
+    let raw = metadata.without_print_conv();
+    let expected_raw = [
+        ("RecordingMode", "0"),
+        ("Quality", "2"),
+        ("FocusMode", "3"),
+        ("FlashMode", "4"),
+        ("WhiteBalance", "0"),
+        ("DigitalZoom", "0"),
+        ("Sharpness", "0"),
+        ("Contrast", "0"),
+        ("Saturation", "0"),
+        ("ISO", "100"),
+        ("ColorFilter", "1"),
+        ("HometownCityCode", "NYC "),
+        ("DestinationCityCode", "    "),
+    ];
+    for (name, value) in expected_raw {
+        assert_eq!(raw.get_string(&format!("Pentax:{name}")), Some(value));
+    }
 }
 
 /// The AOC directory in the Optio 430RS selects Casio::Type2's 0x3007 field.
