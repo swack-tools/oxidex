@@ -10,8 +10,19 @@
 //! coverage census measured against; none of them is synthetic.
 
 use crate::fixtures::pinned_fixture_path;
+use chrono::DateTime;
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
+use oxidex::core::tag_occurrence::ValueChannel;
+
+fn assert_local_time_is(actual: Option<&str>, expected_utc: &str) {
+    let actual = actual.expect("timestamp is present");
+    let parsed = DateTime::parse_from_str(actual, "%Y:%m:%d %H:%M:%S%:z")
+        .expect("timestamp has an explicit numeric offset and second precision");
+    assert_eq!(parsed.format("%Y:%m:%d %H:%M:%S%:z").to_string(), actual);
+    let expected = DateTime::parse_from_rfc3339(expected_utc).expect("fixed UTC instant");
+    assert_eq!(parsed, expected, "{actual} is not {expected_utc}");
+}
 
 /// `Torrent.torrent`, all 21 `Torrent` tags. Covers the bencode reader's
 /// three value shapes (integer, text, binary), `ExtractTags`' list-index
@@ -47,10 +58,7 @@ fn torrent_fixture_matches_pinned_oracle() {
     );
     assert_eq!(m.get_string("Torrent:Creator"), Some("uTorrent/1840"));
     // `ValueConv => 'ConvertUnixTime($val,1)'` (Torrent.pm:40).
-    assert_eq!(
-        m.get_string("Torrent:CreateDate"),
-        Some("2013:09:06 15:33:59+00:00")
-    );
+    assert_local_time_is(m.get_string("Torrent:CreateDate"), "2013-09-06T15:33:59Z");
     assert_eq!(m.get_string("Torrent:Encoding"), Some("UTF-8"));
     assert_eq!(m.get_string("Torrent:Name"), Some("Image-ExifTool-9.35"));
     // `PrintConv => 'ConvertFileSize($val)'` (Torrent.pm:79).
@@ -78,8 +86,8 @@ fn torrent_fixture_matches_pinned_oracle() {
 
 /// `Palm.mobi`, all 21 `Palm`/`MOBI` tags. Covers `Palm::Main` and
 /// `Palm::MOBI` read through the generated binary tables, the `%dateTimeInfo`
-/// re-base + `ConvertUnixTime` the generator refused, `ConvertFileSize` on
-/// the `conv_dropped` `UncompressedTextLength`, the `BookName` string that
+/// re-base + `ConvertUnixTime` the generator refused, the generated
+/// `ConvertFileSize` on `UncompressedTextLength`, the `BookName` string that
 /// replaces its own offset, and cp1252 decoding of the `EXTH` text driven by
 /// `CodePage`.
 #[test]
@@ -95,14 +103,8 @@ fn mobi_fixture_matches_pinned_oracle() {
         m.get_string("Palm:DatabaseName"),
         Some("El_Diezmo_Continua_Vigente")
     );
-    assert_eq!(
-        m.get_string("Palm:CreateDate"),
-        Some("2014:05:28 00:00:51+00:00")
-    );
-    assert_eq!(
-        m.get_string("Palm:ModifyDate"),
-        Some("2014:05:28 00:00:51+00:00")
-    );
+    assert_local_time_is(m.get_string("Palm:CreateDate"), "2014-05-28T00:00:51Z");
+    assert_local_time_is(m.get_string("Palm:ModifyDate"), "2014-05-28T00:00:51Z");
     // ExifTool.pm:6787: a Unix time of exactly zero short-circuits.
     assert_eq!(
         m.get_string("Palm:LastBackupDate"),
@@ -114,9 +116,27 @@ fn mobi_fixture_matches_pinned_oracle() {
     assert_eq!(m.get_string("Palm:PalmFileType"), Some("Mobipocket"));
 
     assert_eq!(m.get_string("MOBI:Compression"), Some("PalmDOC"));
-    // `PrintConv => \&ConvertFileSize` (Palm.pm:123), hand-applied because a
-    // Perl code ref is not something the transcription can carry.
-    assert_eq!(m.get_string("MOBI:UncompressedTextLength"), Some("172 kB"));
+    // `PrintConv => \&ConvertFileSize` (Palm.pm:123) is transcribed as an
+    // exact generated expression; the parser preserves its raw value too.
+    assert_eq!(m.get_string("Palm:UncompressedTextLength"), Some("172 kB"));
+    assert_eq!(
+        m.without_print_conv()
+            .get_integer("Palm:UncompressedTextLength"),
+        Some(171_966)
+    );
+    for (channel, expected) in [
+        (ValueChannel::Stored, TagValue::Integer(171_966)),
+        (ValueChannel::ValueConv, TagValue::Integer(171_966)),
+        (ValueChannel::PrintConv, TagValue::new_string("172 kB")),
+    ] {
+        let (_, occurrence, projected) = m
+            .project_occurrences(channel)
+            .find(|(key, _, _)| *key == "Palm:UncompressedTextLength")
+            .expect("MOBI length occurrence");
+        assert_eq!(occurrence.group0.as_ref(), "Palm");
+        assert_eq!(occurrence.group1.as_ref(), "MOBI");
+        assert_eq!(projected.as_ref(), &expected);
+    }
     assert_eq!(m.get_string("MOBI:Encryption"), Some("None"));
     assert_eq!(m.get_string("MOBI:MobiType"), Some("Mobipocket Book"));
     assert_eq!(
@@ -302,12 +322,13 @@ fn macos_fixture_matches_pinned_oracle() {
     );
     // A binary plist holding a one-element array of a `CFDate`, which
     // PLIST.pm:279 renders with `ConvertUnixTime($val + 11323*86400, 1)`.
-    assert_eq!(
-        m.get("MacOS:XAttrMDItemDownloadedDate"),
-        Some(&TagValue::Array(vec![TagValue::new_string(
-            "2020:11:12 12:27:26+00:00"
-        )]))
-    );
+    let Some(TagValue::Array(downloaded_dates)) = m.get("MacOS:XAttrMDItemDownloadedDate") else {
+        panic!("MacOS:XAttrMDItemDownloadedDate must remain an array");
+    };
+    let [TagValue::String(downloaded_date)] = downloaded_dates.as_slice() else {
+        panic!("MacOS:XAttrMDItemDownloadedDate must contain one string");
+    };
+    assert_local_time_is(Some(downloaded_date), "2020-11-12T12:27:26Z");
     assert_eq!(
         m.get("MacOS:XAttrMDItemWhereFroms"),
         Some(&TagValue::Array(vec![TagValue::new_string(

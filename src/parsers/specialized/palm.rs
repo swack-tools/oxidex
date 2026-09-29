@@ -12,8 +12,8 @@
 //!
 //! `Palm::Main` (Palm.pm:67-100) and `Palm::MOBI` (Palm.pm:104-165) are both
 //! `ProcessBinaryData` tables with `FORMAT => 'int32u'`, so their byte layout
-//! is read from `exiftool_tables` rather than restated here. Three things in
-//! them are not:
+//! is read from `exiftool_tables` rather than restated here. Three fields need
+//! parser handling beyond that generated layout:
 //!
 //! * The three `Palm::Main` dates carry `%dateTimeInfo` (Palm.pm:54-64), whose
 //!   `RawConv` re-bases a Mac-epoch timestamp onto the Unix epoch and whose
@@ -21,12 +21,10 @@
 //!   [`Omitted`], so they are hand-implemented behind a [`RawAccess`]
 //!   citation.
 //! * `Palm::MOBI`'s `UncompressedTextLength` declares `PrintConv =>
-//!   \&Image::ExifTool::ConvertFileSize` (Palm.pm:123). A Perl code ref is not
-//!   something the transcription can reproduce, so the generated field carries
-//!   `PrintConv::None` and the table fails Gate A with `conv_dropped: 1`.
-//!   Calling `.emit()` on it would report the raw byte count where ExifTool
-//!   prints `172 kB` -- a plausible wrong value under a real tag name -- so
-//!   that one field is converted by hand instead.
+//!   \&Image::ExifTool::ConvertFileSize` (Palm.pm:123). The generated field
+//!   now carries that exact conversion. This parser attaches the decoded
+//!   integer as its no-PrintConv form while retaining `.emit()` as the printed
+//!   form; it does not calculate a second file-size conversion.
 //! * `BookName` (index 21) is an offset in the record, which Palm.pm:326-330
 //!   overwrites with the string it points at. The table's integer is
 //!   discarded for the same reason.
@@ -48,8 +46,7 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/Palm.pm`
 
-use crate::core::value_formatter::format_file_size;
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::{FileReader, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
@@ -80,6 +77,10 @@ const LAST_BACKUP_DATE: PerlCitation = citation("Main", "LastBackupDate", "Palm.
 /// Palm.pm:154, `RawConv => '$$self{CodePage} = $val'` -- a side effect that
 /// leaves the value itself untouched.
 const CODE_PAGE: PerlCitation = citation("MOBI", "CodePage", "Palm.pm:152-161");
+/// Palm.pm:121-124, the generated PrintConv keeps the raw byte count as
+/// ExifTool's `-n` value and renders the printed file size itself.
+const UNCOMPRESSED_TEXT_LENGTH: PerlCitation =
+    citation("MOBI", "UncompressedTextLength", "Palm.pm:121-124");
 
 /// Extract Palm database / Mobipocket metadata.
 pub fn parse_palm_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
@@ -188,12 +189,22 @@ fn read_mobi_header(
             // string it points at by `read_book_name`.
             "BookName" => {}
             "UncompressedTextLength" => {
-                // Palm.pm:122-124's `PrintConv => \&ConvertFileSize`, which
-                // the generator could not transcribe (`conv_dropped`).
-                if let Some(TagValue::Integer(bytes)) = decoded.emit()
-                    && let Ok(bytes) = u64::try_from(bytes)
+                // Palm.pm:121-124: use the generated PrintConv for display,
+                // and keep its pre-PrintConv integer for `--no-print-conv`.
+                if let Some(access) =
+                    RawAccess::new(decoded, Acknowledged::NONE, &UNCOMPRESSED_TEXT_LENGTH)
+                    && let Some(raw) = access.raw().as_integer()
+                    && let Some(printed) = decoded.emit()
                 {
-                    metadata.insert(key, TagValue::new_string(format_file_size(bytes)));
+                    metadata.insert_occurrence_with_forms(
+                        format!("{}:{name}", table.group0),
+                        printed,
+                        TagValue::Integer(raw),
+                        Some(TagValue::Integer(raw)),
+                        SHIM_DEFAULT_PRIORITY,
+                        table.group1,
+                        Instance::default(),
+                    );
                 }
             }
             "CodePage" => {
