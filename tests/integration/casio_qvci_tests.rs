@@ -10,7 +10,21 @@ use oxidex::core::operations::read_metadata;
 fn casio_qvci_reports_economy_quality() {
     let path = fixtures::required_combined_fixture_path("CasioQVCI.jpg");
     let metadata = read_metadata(&path).expect("Casio QVCI parses");
-    assert_eq!(metadata.get_string("Casio:CasioQuality"), Some("Economy"));
+    assert_eq!(metadata.get_integer("Casio:CasioQuality"), Some(1));
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-j", "-G1", "-s"])
+        .arg(&path)
+        .output()
+        .expect("run oxidex on Casio QVCI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse printed JSON");
+    assert_eq!(json[0]["Casio:CasioQuality"], "Economy");
 }
 
 /// `Casio.pm` Type2 tag 0x301b applies its ArtMode PrintConv to the inline

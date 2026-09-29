@@ -31,7 +31,7 @@ fn dji_m3t_app7_sensor_id_matches_exiftool() {
 fn dji_xt2_xmp_rtk_flag_matches_exiftool() {
     let path = fixtures::required_combined_fixture_path("DJI/DJI_XT2.jpg");
     let metadata = read_metadata(&path).expect("DJI XT2 parses");
-    assert_eq!(metadata.get_string("XMP:RtkFlag"), Some("0"));
+    assert_eq!(metadata.get_string("XMP-drone-dji:RtkFlag"), Some("0"));
 }
 
 /// The Mavic 2 Enterprise Advanced `MakerNoteDJIInfo` stream carries these

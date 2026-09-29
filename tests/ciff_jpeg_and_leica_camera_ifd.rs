@@ -11,7 +11,7 @@
 //! $ exiftool-pinned.sh -G1 -a -s -CameraIFD:all -OriginalDirectory LeicaQ3.jpg
 //! ```
 
-use oxidex::core::operations::read_metadata;
+use oxidex::core::{TagValue, operations::read_metadata};
 #[path = "common/fixtures.rs"]
 mod fixtures;
 
@@ -27,6 +27,18 @@ fn assert_tags(file: &str, group: &str, expected: &[(&str, &str)]) {
     }
 }
 
+fn assert_typed_tags(file: &str, group: &str, expected: &[(&str, TagValue)]) {
+    let path = fixtures::required_combined_fixture_path(file);
+    let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
+    for (tag, value) in expected {
+        assert_eq!(
+            metadata.get(&format!("{group}:{tag}")),
+            Some(value),
+            "{file} {group}:{tag}"
+        );
+    }
+}
+
 /// A little-endian (`II`) APP0 CIFF, including a `%Canon::FocalLength`
 /// record (`[CIFF]`, not `[Canon]`: ExifTool.pm:7734 sets `SET_GROUP1`).
 #[test]
@@ -37,8 +49,6 @@ fn little_endian_app0_ciff_matches_pinned_exiftool() {
         "CIFF",
         &[
             ("FileFormat", "JPEG (lossy)"),
-            ("ImageWidth", "768"),
-            ("ImageHeight", "512"),
             ("FileNumber", "43"),
             ("DateTimeOriginal", "1998:10:23 10:56:08"),
             ("OriginalFileName", "AUT_0043.JPG"),
@@ -52,6 +62,14 @@ fn little_endian_app0_ciff_matches_pinned_exiftool() {
             ("FocalPlaneXSize", "7.85 mm"),
         ],
     );
+    assert_typed_tags(
+        "Canon/CanonPowerShotPro70.jpg",
+        "CIFF",
+        &[
+            ("ImageWidth", TagValue::Integer(768)),
+            ("ImageHeight", TagValue::Integer(512)),
+        ],
+    );
 }
 
 /// A big-endian (`MM`) APP0 CIFF (ExifTool.pm:7730 accepts `(II|MM)`).
@@ -63,18 +81,24 @@ fn big_endian_app0_ciff_matches_pinned_exiftool() {
         "CIFF",
         &[
             ("FileFormat", "JPEG (lossy/non-quantization toggled)"),
-            ("ImageWidth", "832"),
-            ("ImageHeight", "608"),
-            ("ColorBW", "257"),
-            ("RecordID", "58"),
             ("FileNumber", "3"),
             ("DateTimeOriginal", "1970:01:01 15:11:20"),
-            ("TimeZoneCode", "-9"),
             ("ShutterSpeedValue", "1/128"),
             ("ApertureValue", "8.6"),
-            ("FlashThreshold", "8.5"),
             ("OwnerName", "111"),
             ("ComponentVersion", "Component version 1.00"),
+        ],
+    );
+    assert_typed_tags(
+        "Canon/CanonPowerShot600.jpg",
+        "CIFF",
+        &[
+            ("ImageWidth", TagValue::Integer(832)),
+            ("ImageHeight", TagValue::Integer(608)),
+            ("ColorBW", TagValue::Integer(257)),
+            ("RecordID", TagValue::Integer(58)),
+            ("TimeZoneCode", TagValue::Integer(-9)),
+            ("FlashThreshold", TagValue::Float(8.5)),
         ],
     );
 }

@@ -4,9 +4,9 @@
 //! Google's camera app (GCamera) stores per-shot debug metadata as a
 //! base64-encoded, encrypted, gzipped Protobuf blob under the
 //! `GCamera:HdrPlusMakernote` XMP property. ExifTool decodes it in
-//! `Google::ProcessHDRP` and re-files the extracted fields under the
-//! `MakerNotes` group (`Google::HDRPlusMakerNote`'s `GROUPS => { 0 =>
-//! 'MakerNotes' }`), even though the bytes never pass through a TIFF
+//! `Google::ProcessHDRP` and re-files the extracted fields under family-0
+//! `MakerNotes` and family-1 `Google` (`Google::HDRPlusMakerNote`'s
+//! `GROUPS => { 0 => 'MakerNotes' }`). The bytes never pass through a TIFF
 //! MakerNote IFD -- there is no numeric-tag `google` MakerNote parser in
 //! `src/parsers/tiff/makernotes` for exactly this reason (see
 //! `tiff/makernote_dispatcher.rs` and `tiff/makernotes/mod.rs`).
@@ -22,21 +22,22 @@ use std::io::Read;
 /// 2 => 'Image' }` and no family 1 (Google.pm:514-515, 579-580, 591-592), so
 /// `GetGroup` reports the module name: the pinned oracle prints
 /// `[Google] CreateDate` for `t/images/Google.jpg`.
+pub(crate) const HDRP_GROUP0: &str = "MakerNotes";
 pub(crate) const HDRP_GROUP1: &str = "Google";
 
 /// `FoundTag`'s priority (ExifTool.pm:9469-9473) for one decoded row, by its
-/// `MakerNotes:<Name>` key. `9-36-1` `CreateDate` is the one field the Google
+/// `Google:<Name>` key. `9-36-1` `CreateDate` is the one field the Google
 /// tables declare `Priority => 0` for -- "to give EXIF priority"
 /// (Google.pm:539-546) -- so it never displaces an `ExifIFD:CreateDate`
 /// already found, although the XMP packet (and the Exif MakerNote) is found
 /// after it; every other field has the default 1.
 pub(crate) fn hdrp_tag_priority(key: &str) -> u8 {
-    u8::from(key != "MakerNotes:CreateDate")
+    u8::from(key != "Google:CreateDate")
 }
 
 /// Decodes a `GCamera:HdrPlusMakernote` XMP property value (still
 /// base64-encoded, exactly as read from the XMP packet) into the
-/// `MakerNotes:*` tags ExifTool reports for it.
+/// `Google:*` tags ExifTool reports for it.
 ///
 /// Returns an empty `Vec` if the value cannot be base64-decoded, does not
 /// start with the expected `HDRP` signature, is not the protobuf-framed
@@ -75,10 +76,10 @@ pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
     // ImageData is Binary => 1, so ExifTool renders its decoded byte length.
     if let Some(Field::Bytes(sub1)) = last_field(&top, 1) {
         let f1 = parse_fields(sub1);
-        push_string_field(&f1, 1, "MakerNotes:ImageName", &mut out);
+        push_string_field(&f1, 1, "Google:ImageName", &mut out);
         if let Some(Field::Bytes(bytes)) = last_field(&f1, 2) {
             out.push((
-                "MakerNotes:ImageData".to_string(),
+                "Google:ImageData".to_string(),
                 format!(
                     "(Binary data {} bytes, use -b option to extract)",
                     bytes.len()
@@ -94,26 +95,26 @@ pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
             let f36 = parse_fields(sub36);
             if let Some(Field::Varint(secs)) = last_field(&f36, 1) {
                 out.push((
-                    "MakerNotes:CreateDate".to_string(),
+                    "Google:CreateDate".to_string(),
                     crate::core::file_metadata::format_unix_time_local(*secs as i64),
                 ));
             }
         }
         // `9-3`: FrameCount (Google.pm:537).
         if let Some(Field::Varint(n)) = last_field(&f9, 3) {
-            out.push(("MakerNotes:FrameCount".to_string(), n.to_string()));
+            out.push(("Google:FrameCount".to_string(), n.to_string()));
         }
     }
 
     // `12-*`: device/software identification (Google.pm:547-561).
     if let Some(Field::Bytes(sub12)) = last_field(&top, 12) {
         let f12 = parse_fields(sub12);
-        push_string_field(&f12, 1, "MakerNotes:DeviceMake", &mut out);
-        push_string_field(&f12, 2, "MakerNotes:DeviceModel", &mut out);
-        push_string_field(&f12, 3, "MakerNotes:DeviceCodename", &mut out);
-        push_string_field(&f12, 4, "MakerNotes:DeviceHardwareRevision", &mut out);
-        push_string_field(&f12, 6, "MakerNotes:HDRPSoftware", &mut out);
-        push_string_field(&f12, 7, "MakerNotes:AndroidRelease", &mut out);
+        push_string_field(&f12, 1, "Google:DeviceMake", &mut out);
+        push_string_field(&f12, 2, "Google:DeviceModel", &mut out);
+        push_string_field(&f12, 3, "Google:DeviceCodename", &mut out);
+        push_string_field(&f12, 4, "Google:DeviceHardwareRevision", &mut out);
+        push_string_field(&f12, 6, "Google:HDRPSoftware", &mut out);
+        push_string_field(&f12, 7, "Google:AndroidRelease", &mut out);
         // `12-8`: Unix milliseconds, PrintConv => ConvertDateTime
         // (Google.pm:554-559). The protobuf value is integral milliseconds,
         // and the source table's precision is three decimal places.
@@ -122,15 +123,15 @@ pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
                 && let Some(utc) = chrono::DateTime::from_timestamp_millis(millis)
             {
                 out.push((
-                    "MakerNotes:SoftwareDate".to_string(),
+                    "Google:SoftwareDate".to_string(),
                     utc.with_timezone(&chrono::Local)
                         .format("%Y:%m:%d %H:%M:%S%.3f%:z")
                         .to_string(),
                 ));
             }
         }
-        push_string_field(&f12, 9, "MakerNotes:Application", &mut out);
-        push_string_field(&f12, 10, "MakerNotes:AppVersion", &mut out);
+        push_string_field(&f12, 9, "Google:Application", &mut out);
+        push_string_field(&f12, 10, "Google:AppVersion", &mut out);
 
         // `12-12-*`, `12-13-*`, and `12-14` are protobuf fixed32 floats.
         // ExifTool widens the f32 and stringifies the resulting Perl NV with
@@ -140,24 +141,24 @@ pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
             push_f32_field(
                 &exposure,
                 1,
-                "MakerNotes:ExposureTimeMin",
+                "Google:ExposureTimeMin",
                 1.0 / 1000.0,
                 &mut out,
             );
             push_f32_field(
                 &exposure,
                 2,
-                "MakerNotes:ExposureTimeMax",
+                "Google:ExposureTimeMax",
                 1.0 / 1000.0,
                 &mut out,
             );
         }
         if let Some(Field::Bytes(iso)) = last_field(&f12, 13) {
             let iso = parse_fields(iso);
-            push_f32_field(&iso, 1, "MakerNotes:ISOMin", 1.0, &mut out);
-            push_f32_field(&iso, 2, "MakerNotes:ISOMax", 1.0, &mut out);
+            push_f32_field(&iso, 1, "Google:ISOMin", 1.0, &mut out);
+            push_f32_field(&iso, 2, "Google:ISOMax", 1.0, &mut out);
         }
-        push_f32_field(&f12, 14, "MakerNotes:MaxAnalogISO", 1.0, &mut out);
+        push_f32_field(&f12, 14, "Google:MaxAnalogISO", 1.0, &mut out);
     }
 
     out
@@ -177,11 +178,11 @@ pub fn decode_hdrp_shot_log_data(raw_value: &str) -> Vec<(String, String)> {
     let fields = parse_fields(&inflated);
     let mut out = Vec::new();
     if let Some(Field::Varint(n)) = last_field(&fields, 2) {
-        out.push(("MakerNotes:MeteringFrameCount".to_string(), n.to_string()));
+        out.push(("Google:MeteringFrameCount".to_string(), n.to_string()));
     }
     if let Some(Field::Varint(n)) = last_field(&fields, 3) {
         out.push((
-            "MakerNotes:OriginalPayloadFrameCount".to_string(),
+            "Google:OriginalPayloadFrameCount".to_string(),
             n.to_string(),
         ));
     }
@@ -274,7 +275,7 @@ const V2_TABLE: &[(&[u8], &str)] = &[
 fn decode_hdrp_v2_text(data: &[u8]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut emit = |name: String, value: String| {
-        let tag = format!("MakerNotes:{name}");
+        let tag = format!("Google:{name}");
         out.retain(|(existing, _)| *existing != tag);
         out.push((tag, value));
     };
@@ -560,7 +561,7 @@ mod tests {
              Summary: inline\nignored\nLast note here.\n");
         let get = |t: &str| {
             out.iter()
-                .find(|(k, _)| k == &format!("MakerNotes:{t}"))
+                .find(|(k, _)| k == &format!("Google:{t}"))
                 .map(|(_, v)| v.as_str())
         };
         // "abc\ndef\n " -- through the byte before `Rectiface`.
@@ -643,10 +644,7 @@ mod tests {
 
         let tags = decode_hdrp_plus_makernote(&b64);
         assert!(
-            tags.contains(&(
-                "MakerNotes:DeviceCodename".to_string(),
-                "codename".to_string()
-            )),
+            tags.contains(&("Google:DeviceCodename".to_string(), "codename".to_string())),
             "{tags:?}"
         );
     }

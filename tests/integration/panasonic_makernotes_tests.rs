@@ -39,7 +39,7 @@ fn panasonic_pv_dv401_reports_type2_gain() {
     let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(PV_DV401_K))
         .expect("Panasonic PV-DV401 parses");
     assert_eq!(metadata.get_string("Panasonic:MakerNoteType"), Some("MKEM"));
-    assert_eq!(metadata.get_string("Panasonic:Gain"), Some("136"));
+    assert_eq!(metadata.get_integer("Panasonic:Gain"), Some(136));
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn leica_cam_dc25_reports_lens_type_make() {
         LEICA_CAM_DC25,
     ))
     .expect("Leica CAM-DC25 parses");
-    assert_eq!(metadata.get_string("Panasonic:LensTypeMake"), Some("0"));
+    assert_eq!(metadata.get_integer("Panasonic:LensTypeMake"), Some(0));
 }
 
 /// Leica's D-Lux 8 uses ExifTool's `MakerNoteLeica10`, which routes its

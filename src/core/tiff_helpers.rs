@@ -4629,15 +4629,16 @@ fn parse_makernote_with_session(
     // 47037a04).
     if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
         use crate::parsers::xmp::google_hdrp::{
-            HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
+            HDRP_GROUP0, HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
         };
         let mut maker_rows = MetadataMap::new();
         for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
             let priority = hdrp_tag_priority(&tag);
-            maker_rows.insert_occurrence(
+            maker_rows.insert_occurrence_with_group0(
                 tag,
                 TagValue::String(value),
                 priority,
+                HDRP_GROUP0,
                 HDRP_GROUP1,
                 crate::core::Instance::default(),
             );

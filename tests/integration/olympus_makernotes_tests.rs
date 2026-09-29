@@ -24,19 +24,31 @@ fn u20d_reports_main_white_balance_mode() {
     assert_eq!(metadata.get_string("Olympus:WBMode"), Some("Auto"));
 }
 
-/// Olympus::Main 0x0f04/0x0f05 form a binary composite `ZoomedPreviewImage`.
-/// ExifTool 13.59 reports 92,592 bytes on this real u1040 fixture.
+/// Olympus::Main 0x0f04/0x0f05 declare a ZoomedPreviewImage outside
+/// this 19,778-byte file. Never invent its bytes from the native display
+/// placeholder: targeted native extraction warns that the image cannot be read.
 #[test]
 #[ignore = "requires pinned ExifTool 13.59 combined-samples"]
-fn u1040_reports_zoomed_preview_image() {
+fn u1040_refuses_out_of_bounds_zoomed_preview_image() {
     use oxidex::core::operations::read_metadata;
 
     let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(U1040))
         .expect("u1040 parses");
     assert_eq!(
-        metadata.get_string("Olympus:ZoomedPreviewImage"),
-        Some("(Binary data 92592 bytes, use -b option to extract)")
+        metadata.get_integer("Olympus:ZoomedPreviewStart"),
+        Some(4_184_638)
     );
+    assert_eq!(
+        metadata.get_integer("Olympus:ZoomedPreviewLength"),
+        Some(92_592)
+    );
+    assert!(
+        4_184_638
+            > std::fs::metadata(crate::fixtures::required_combined_fixture_path(U1040))
+                .unwrap()
+                .len()
+    );
+    assert!(metadata.get("Olympus:ZoomedPreviewImage").is_none());
 }
 
 /// The E-P5 is an older-model `AFPointDetails` variant, which ExifTool 13.59
@@ -49,7 +61,7 @@ fn e_p5_reports_legacy_af_point_details_and_empty_extender_status() {
 
     let metadata =
         read_metadata(&crate::fixtures::required_combined_fixture_path(E_P5)).expect("E-P5 parses");
-    assert_eq!(metadata.get_string("Olympus:AFPointDetails"), Some("0"));
+    assert_eq!(metadata.get_integer("Olympus:AFPointDetails"), Some(0));
     assert_eq!(
         metadata.get_string("Composite:ExtenderStatus"),
         Some("Not attached")
@@ -106,10 +118,10 @@ fn om_1_reports_focus_info_wait_and_caf_sensitivity() {
     let metadata =
         read_metadata(&crate::fixtures::required_combined_fixture_path(OM_1)).expect("OM-1 parses");
     assert_eq!(
-        metadata.get_string("Olympus:AntiShockWaitingTime"),
-        Some("0")
+        metadata.get_integer("Olympus:AntiShockWaitingTime"),
+        Some(0)
     );
-    assert_eq!(metadata.get_string("Olympus:CAFSensitivity"), Some("0"));
+    assert_eq!(metadata.get_integer("Olympus:CAFSensitivity"), Some(0));
 }
 
 #[test]

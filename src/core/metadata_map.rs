@@ -652,6 +652,30 @@ impl MetadataMap {
         previous
     }
 
+    /// Records a row whose physical family-0 group differs from its public
+    /// lookup-key prefix, as with Google's HDRP MakerNote fields.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_group0<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        priority: u8,
+        group0: &str,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.priority = priority;
+        occurrence.group0 = super::tag_occurrence::intern(group0);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.instance = instance;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     /// Like [`insert_occurrence`](Self::insert_occurrence), but also attaches
     /// the value `--no-print-conv` should show instead of `display_value`.
     ///

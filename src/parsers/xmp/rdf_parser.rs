@@ -247,7 +247,7 @@ impl XmpEntry {
     }
 
     /// An entry decoded from Google's `HdrPlusMakernote`/`ShotLogData`
-    /// (`google_hdrp`): a `MakerNotes` tag under family-1 group `Google`.
+    /// (`google_hdrp`): family 0 is MakerNotes and family 1 is Google.
     fn hdrp(key: String, value: XmpValue) -> Self {
         Self {
             group1: super::google_hdrp::HDRP_GROUP1.to_string(),
@@ -387,6 +387,17 @@ pub(crate) fn insert_xmp_entry_with_source(
             entry.key.split_once(':').map_or("", |(group, _)| group),
         )
     };
+    if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
+        metadata.insert_occurrence_with_group0(
+            entry.key.clone(),
+            value,
+            priority,
+            super::google_hdrp::HDRP_GROUP0,
+            &entry.group1,
+            crate::core::Instance::default(),
+        );
+        return;
+    }
     if let Some((source, forms)) =
         source.and_then(|raw| convert_xmp_gps(&entry.tag, raw).map(|forms| (raw, forms)))
     {
@@ -1040,9 +1051,9 @@ fn parse_xmp_packet(
 
     // Google's `GCamera:HdrPlusMakernote` property carries a base64,
     // encrypted, gzipped Protobuf blob (Google.pm's `ProcessHDRP`). ExifTool
-    // re-files the fields it extracts from that blob under the `MakerNotes`
-    // group rather than `XMP` (`Google::HDRPlusMakerNote`'s `GROUPS => { 0
-    // => 'MakerNotes' }`), so decode it here, before `format_xmp_value` gets
+    // re-files the fields it extracts from that blob under family-0
+    // `MakerNotes`, family-1 `Google` rather than `XMP` (`Google::HDRPlusMakerNote`'s
+    // `GROUPS => { 0 => 'MakerNotes' }`), so decode it here, before `format_xmp_value` gets
     // a chance to see -- and rewrite -- the raw base64 text.
     //
     // The older, text-framed version-2 stream is the same envelope under
