@@ -66,13 +66,16 @@ pub fn resolve_family0(group0: &str) -> &str {
         // shape: `GROUPS => { 0 => 'EXIF', 1 => 'GPS', ... }`.
         "IFD0" | "IFD1" | "IFD2" | "ExifIFD" | "GPS" | "InteropIFD" | "SubIFD" => "EXIF",
         // CanonRaw.pm:50 `%Main = ( GROUPS => { 0 => 'MakerNotes', ... } )`
-        // for the CIFF case (`process_ciff_app0_segments`'s `CIFF:` keys);
+        // for the CRW reader's `CanonRaw:` and CIFF APP0's `CIFF:` keys;
+        // KyoceraRaw.pm:27 declares the same family 0 for `KyoceraRaw:`.
         // every other manufacturer table in this codebase's existing
         // `Manufacturer:Tag` key convention follows the same
         // `GROUPS => { 0 => 'MakerNotes', 1 => '<Manufacturer>' }` shape
         // (e.g. Canon.pm's own `%Main`).
-        "CIFF" | "Canon" | "CanonCustom" | "Nikon" | "Sony" | "Pentax" | "Panasonic"
-        | "Olympus" | "FujiFilm" | "Leica" | "SigmaRaw" | "PhaseOne" => "MakerNotes",
+        "CIFF" | "CanonRaw" | "KyoceraRaw" | "Canon" | "CanonCustom" | "Nikon" | "Sony"
+        | "Pentax" | "Panasonic" | "Olympus" | "FujiFilm" | "Leica" | "SigmaRaw" | "PhaseOne" => {
+            "MakerNotes"
+        }
         // ID3.pm's per-version tables set only family 1 -- `%ID3::v1` is
         // `GROUPS => { 1 => 'ID3v1', 2 => 'Audio' }` (ID3.pm:335-337) -- so
         // family 0 falls through to `%ID3::Main`'s own 'ID3'. The pinned

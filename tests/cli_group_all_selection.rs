@@ -294,6 +294,80 @@ fn rename_exclusion_fails_closed_before_moving_a_file() {
 mod fixtures;
 
 #[test]
+#[ignore = "explicit CI replay against pinned ExifTool 13.59 t/images RAW fixtures"]
+fn canon_and_kyocera_raw_rows_keep_makernotes_family_selection() {
+    use oxidex::cli::tag_resolution::{family0_label, family1_label, resolve_requested_tags};
+    use oxidex::core::operations::read_metadata;
+
+    let oracle = oxidex::exiftool_oracle::graded().expect("pinned capable 13.59 oracle");
+    for (file_name, group1, tag, expected) in [
+        ("CanonRaw.crw", "CanonRaw", "FileFormat", "CRW"),
+        (
+            "KyoceraRaw.raw",
+            "KyoceraRaw",
+            "FirmwareVersion",
+            "Ver. 1.07",
+        ),
+    ] {
+        let file = fixtures::required_t_images_fixture_path(file_name);
+        let key = format!("MakerNotes:{group1}:{tag}");
+        let native = oracle
+            .command()
+            .args(["-j", "-G0:1", &format!("-MakerNotes:{tag}")])
+            .arg(&file)
+            .output()
+            .expect("pinned native read");
+        assert!(
+            native.status.success(),
+            "{file_name}: {}",
+            String::from_utf8_lossy(&native.stderr)
+        );
+        let native: serde_json::Value =
+            serde_json::from_slice(&native.stdout).expect("native JSON");
+        assert_eq!(native[0][&key], expected, "pinned native {file_name}");
+        let metadata = read_metadata(&file).expect("public library read");
+        let selected = resolve_requested_tags(&metadata, &[format!("MakerNotes:{tag}")], false);
+        let row = selected
+            .iter()
+            .find(|row| row.occurrence.name.as_ref() == tag)
+            .expect("public library family-0 selection");
+        assert_eq!(family0_label(row.occurrence), "MakerNotes", "{file_name}");
+        assert_eq!(family1_label(row.occurrence), group1, "{file_name}");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout(&["-j", "-G0:1", "-MakerNotes:all"], &file))
+                .expect("selected JSON");
+        assert_eq!(json[0][&key], expected, "{file_name}");
+        assert!(
+            json[0].get(format!("{group1}:{tag}")).is_none(),
+            "{file_name}"
+        );
+        let family1: serde_json::Value =
+            serde_json::from_str(&stdout(&["-j", "-G1", &format!("-{group1}:all")], &file))
+                .expect("family-1 JSON");
+        assert_eq!(
+            family1[0][format!("{group1}:{tag}")],
+            expected,
+            "{file_name}"
+        );
+        let full = stdout(&["-G0:1", "-s"], &file);
+        assert!(
+            full.contains(&format!("[MakerNotes:{group1}]")),
+            "{file_name}"
+        );
+        let csv = stdout(&["-csv", "-G0:1", "-MakerNotes:all"], &file);
+        assert!(
+            csv.contains(&format!("[MakerNotes:{group1}] {tag}")),
+            "{file_name}: {csv}"
+        );
+        let negative: serde_json::Value =
+            serde_json::from_str(&stdout(&["-j", "-G0:1", "-XMP:all"], &file))
+                .expect("negative JSON");
+        assert!(negative[0].get(&key).is_none(), "{file_name}");
+    }
+}
+
+#[test]
 #[ignore = "requires pinned ExifTool 13.59 and combined-samples/Leica/LeicaX1.jpg"]
 fn leica_x1_public_read_selectors_match_pinned_oracle() {
     let oracle = oxidex::exiftool_oracle::graded().expect("pinned capable 13.59 oracle");
