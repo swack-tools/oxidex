@@ -15,6 +15,7 @@
   "composite_parse_classifications": [
     {"id":"perl_join","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool.pm:3697 (converted list scalar rejoin)"},
     {"id":"rational_parts","parse_count":2,"input_channel":"ValueConv","source":"Image/ExifTool.pm:5969-5978 (ToFloat adapter boundary)"},
+    {"id":"red_blue_balance_levels","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5676-5725 (RedBlueBalance numeric levels)"},
     {"id":"to_float_prefix","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool.pm:5969-5978 (ToFloat numeric prefix)"},
     {"id":"printed_integer_direct","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool.pm:3627-3634 (PrintConv integer input)"},
     {"id":"printed_integer_unknown","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool.pm:3627-3634 (PrintConv Unknown (N) fallback)"},

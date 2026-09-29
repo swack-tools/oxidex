@@ -100,8 +100,8 @@ impl<'a> MakerNoteContext<'a> {
     ///
     /// There is no verified enclosing block, so `window()` equals `payload()`
     /// and nothing widens: this is exactly the reach every decoder had before
-    /// contexts existed. Used by the AVI and RAW entry points, which are handed
-    /// a detached copy of the value.
+    /// contexts existed. Used by AVI and RAW entry points when the enclosing
+    /// TIFF block has not been located.
     pub fn detached(payload: &'a [u8]) -> Self {
         Self {
             tiff: payload,
