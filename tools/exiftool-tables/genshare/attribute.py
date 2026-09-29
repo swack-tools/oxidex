@@ -87,10 +87,14 @@ TASK8_RUST_BOUNDARY = (
     "src/parsers/tiff/makernotes/sony/binary_data.rs",
 )
 
-# These production functions are the reviewed reachability and bounded
-# projection contract. Any source change requires a fresh review and digest
-# update; a textual call in a comment, dead branch, or another function cannot
-# authenticate the route.
+# The complete reviewed production source is the fail-closed boundary. Function
+# text alone can retain the same digest inside a block comment or behind
+# #[cfg(any())]. Any edit to this Rust file needs deliberate review and a pin
+# refresh, including edits unrelated to the bounded firmware route.
+KEYED_ROUTE_SOURCE_SHA256 = "865fa30f8fc3836a095fdc3ad6621a8c26cc68affdf25ee59a7e4e9d49cd24ab"
+
+# These narrower digests document which functions compose the reviewed route;
+# the complete-file digest above authenticates their compilation context.
 KEYED_ROUTE_FUNCTION_SHA256 = {
     "canon_firmware_projection_matches": "7ebda29d9628fbab4202cea00c5dee4ceaa13af49b8344b1099236b726963d5c",
     "canon_firmware_keyed_table": "a49e24fcb45ed04500233baa22f058e7d55c2489d1f9e843efba5af5e10b8d7d",
@@ -100,6 +104,8 @@ KEYED_ROUTE_FUNCTION_SHA256 = {
 
 
 def _attested_keyed_route(source: str) -> bool:
+    if hashlib.sha256(source.encode()).hexdigest() != KEYED_ROUTE_SOURCE_SHA256:
+        return False
     for name, expected in KEYED_ROUTE_FUNCTION_SHA256.items():
         match = re.search(rf"(?m)^pub\(crate\) fn {name}\(|^fn {name}\(", source)
         if match is None:

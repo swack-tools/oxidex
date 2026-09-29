@@ -592,6 +592,26 @@ class RouteLedgerTests(unittest.TestCase):
                         attribute.ReceiptError, "bounded firmware projection or caller"
                     ):
                         attribute._route_ledger(repository, run_root)
+            # A body-only digest accepts these context changes: the bounded
+            # function bytes remain, but the route is no longer compiled.
+            name = "fn canon_firmware_from_keyed_entry("
+            start = original.rfind("\n", 0, original.index(name)) + 1
+            end = original.index("\n}\n", start) + 2
+            function = original[start:end]
+            context_mutations = {
+                "whole_function_commented": (
+                    original[:start] + "/*\n" + function + "\n*/" + original[end:]
+                ),
+                "cfg_disabled": original[:start] + "#[cfg(any())]\n" + original[start:],
+                "duplicate_fake_definition": original + "\n#[cfg(any())]\n" + function + "\n",
+            }
+            for label, changed in context_mutations.items():
+                with self.subTest(context=label):
+                    route.write_text(changed, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        attribute.ReceiptError, "bounded firmware projection or caller"
+                    ):
+                        attribute._route_ledger(repository, run_root)
             route.write_text(
                 original.replace("canon_firmware_from_keyed_entry(entry)", "None"),
                 encoding="utf-8",
