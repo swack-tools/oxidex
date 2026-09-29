@@ -44,6 +44,7 @@ fn tested_source() -> TestedSource {
 }
 
 use super::nikon_capture_data;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::tag_occurrence::intern;
 use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
@@ -69,6 +70,7 @@ use value_reader::{
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::print_im::decode_print_im_from_ifd;
+use super::shared::table_ifd;
 
 // Nikon MakerNote Tag IDs (from ExifTool Nikon.pm)
 /// Nikon Capture NX edit history (`NikonCaptureData`), a record stream
@@ -236,6 +238,101 @@ const LENS_DATA_MIN_FOCAL_LENGTH: usize = 9;
 const LENS_DATA_MAX_FOCAL_LENGTH: usize = 10;
 const LENS_DATA_MAX_APERTURE_AT_MIN_FOCAL: usize = 11;
 const LENS_DATA_MAX_APERTURE_AT_MAX_FOCAL: usize = 12;
+
+/// The early `Nikon\0\x01` directory has no embedded TIFF header. Its tag
+/// identities come from the generated Nikon::Type2 table, not Nikon::Main.
+/// Out-of-line offsets are relative to the enclosing TIFF header; a detached
+/// payload cannot supply their base and must withhold those values.
+fn parse_legacy_type2(
+    data: &[u8],
+    located: Option<(&[u8], usize)>,
+    tags: &mut HashMap<String, String>,
+) {
+    const IFD_START: usize = 8;
+    let Some(table) = crate::exiftool_tables::find_ifd_table("Nikon", "Type2") else {
+        return;
+    };
+    let Some(entries) = table_ifd::read_ifd(data, IFD_START, ByteOrder::LittleEndian) else {
+        return;
+    };
+    let dir_end = IFD_START + 2 + entries.len() * 12;
+
+    for entry in entries {
+        let Some(row) = table.tags.iter().find(|row| row.id == entry.tag_id) else {
+            continue;
+        };
+        match (row.name, entry.field_type, entry.count) {
+            ("Focus", table_ifd::ftype::TIFF_RATIONAL, 1) => {
+                let Some((tiff, payload_offset)) = located else {
+                    continue;
+                };
+                let Some(dir_start) = payload_offset.checked_add(IFD_START) else {
+                    continue;
+                };
+                let Some(dir_end) = payload_offset.checked_add(dir_end) else {
+                    continue;
+                };
+                let start = entry.value_offset as usize;
+                let Some(end) = start.checked_add(8) else {
+                    continue;
+                };
+                if start < 8 || (start < dir_end && end > dir_start) {
+                    continue;
+                }
+                let Some(raw) = tiff.get(start..end) else {
+                    continue;
+                };
+                let numerator = u32::from_le_bytes(raw[0..4].try_into().expect("slice length"));
+                let denominator = u32::from_le_bytes(raw[4..8].try_into().expect("slice length"));
+                let printed = if denominator == 0 {
+                    "undef".to_string()
+                } else {
+                    perl_number(numerator as f64 / denominator as f64)
+                };
+                tags.insert(format!("Nikon:{}", row.name), printed);
+            }
+            ("Converter", table_ifd::ftype::TIFF_SHORT, 1) => {
+                if let Some(value) = table_ifd::decode_entry_with_floor(
+                    data,
+                    &entry,
+                    Some(0),
+                    ByteOrder::LittleEndian,
+                    None,
+                    dir_end + 4,
+                ) {
+                    tags.insert(format!("Nikon:{}", row.name), value.print_raw());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The plaintext `ShotInfoUnknown` fallback owns the P6000 byte at 0x10.
+/// The encrypted dispatcher deliberately skips that root; use its generated
+/// Nikon::ShotInfo field identity/PrintConv only when the native source's
+/// model and unknown-version gates are both known.
+fn plaintext_p6000_distortion(bytes: &[u8], model: Option<&str>) -> Option<String> {
+    let model = model?;
+    let head = model.trim_end().strip_suffix("P6000")?;
+    if head.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        || bytes.get(..4)? != [0, 0, 0, 0]
+    {
+        return None;
+    }
+    let raw = i64::from(*bytes.get(0x10)?);
+    let table = crate::exiftool_tables::find_table("Nikon", "ShotInfo")?;
+    let field = table.fields.iter().find(|field| {
+        field.index == 0x10 && field.name == "DistortionControl" && field.count == 1
+    })?;
+    let crate::exiftool_tables::PrintConv::IntEnum(values) = field.print_conv else {
+        return None;
+    };
+    Some(values.iter().find(|(value, _)| *value == raw).map_or_else(
+        || format!("Unknown ({raw})"),
+        |(_, printed)| (*printed).to_string(),
+    ))
+}
 
 /// Decodes Nikon flash mode to human-readable string (`Nikon::Main` 0x0087).
 fn decode_flash_mode(value: i32) -> String {
@@ -613,6 +710,13 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        if ctx.payload().starts_with(b"Nikon\0\x01") {
+            let located = ctx
+                .is_located()
+                .then_some((ctx.tiff(), ctx.payload_offset()));
+            parse_legacy_type2(ctx.window(), located, tags);
+            return Ok(());
+        }
         if !ctx.payload().starts_with(b"Nikon\0") {
             if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
                 tags.insert("PrintIM:PrintIMVersion".to_string(), version);
@@ -668,6 +772,13 @@ impl MakerNoteParser for NikonParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        if ctx.payload().starts_with(b"Nikon\0\x01") {
+            let located = ctx
+                .is_located()
+                .then_some((ctx.tiff(), ctx.payload_offset()));
+            parse_legacy_type2(ctx.window(), located, tags);
+            return Ok(());
+        }
         if !ctx.payload().starts_with(b"Nikon\0") {
             return self.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms);
         }
@@ -707,6 +818,13 @@ impl MakerNoteParser for NikonParser {
         value_forms: &mut HashMap<String, String>,
         occurrences: &mut Vec<(String, crate::core::TagOccurrence)>,
     ) -> std::result::Result<(), String> {
+        if ctx.payload().starts_with(b"Nikon\0\x01") {
+            let located = ctx
+                .is_located()
+                .then_some((ctx.tiff(), ctx.payload_offset()));
+            parse_legacy_type2(ctx.window(), located, tags);
+            return Ok(());
+        }
         if !ctx.payload().starts_with(b"Nikon\0") {
             return self.parse_with_context_and_values_and_session(
                 ctx,
@@ -776,6 +894,11 @@ impl NikonParser {
         mut structured_rows: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
+            return Ok(());
+        }
+
+        if data.starts_with(b"Nikon\0\x01") {
+            parse_legacy_type2(data, None, tags);
             return Ok(());
         }
 
@@ -1758,6 +1881,9 @@ impl NikonParser {
                     if let Some(bytes) = bytes_of(entry)
                         && bytes.len() >= 4
                     {
+                        if let Some(printed) = plaintext_p6000_distortion(&bytes, model) {
+                            tags.insert("Nikon:DistortionControl".to_string(), printed);
+                        }
                         let version = ascii_value(&bytes[..4]);
                         if version.len() == 4 && version.chars().all(|c| c.is_ascii_digit()) {
                             tags.insert("Nikon:ShotInfoVersion".to_string(), version);
@@ -2274,6 +2400,75 @@ mod tests {
         assert!(is_nikon_makernote(b"Nikon\0extra data"));
         assert!(!is_nikon_makernote(b"Canon\0"));
         assert!(!is_nikon_makernote(b"Nikon")); // Too short
+    }
+
+    #[test]
+    fn legacy_type2_uses_enclosing_tiff_offset_with_padding() {
+        use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+
+        for (numerator, denominator, printed) in [(0u32, 0u32, "undef"), (3u32, 2u32, "1.5")] {
+            let mut note = b"Nikon\0\x01\0".to_vec();
+            note.extend_from_slice(&2u16.to_le_bytes());
+            // An inline entry preceding Focus must not be treated as an
+            // out-of-line pointer when resolving the Focus value.
+            note.extend_from_slice(&0x000bu16.to_le_bytes());
+            note.extend_from_slice(&3u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.extend_from_slice(&0x0008u16.to_le_bytes());
+            note.extend_from_slice(&5u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&75u32.to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.extend_from_slice(&[0xaa; 5]);
+            note.extend_from_slice(&numerator.to_le_bytes());
+            note.extend_from_slice(&denominator.to_le_bytes());
+            assert_eq!(note.len(), 51);
+
+            let mut detached = HashMap::new();
+            parse_nikon_makernotes(&note, ByteOrder::LittleEndian, &mut detached);
+            assert!(!detached.contains_key("Nikon:Focus"));
+            assert_eq!(
+                detached.get("Nikon:Converter").map(String::as_str),
+                Some("0")
+            );
+
+            let mut tiff = vec![0; 32];
+            tiff.extend_from_slice(&note);
+            let ctx = MakerNoteContext::in_tiff(&tiff, 32, note.len(), 0);
+            let mut located = HashMap::new();
+            NikonParser
+                .parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut located)
+                .expect("Type2 parse");
+            assert_eq!(
+                located.get("Nikon:Focus").map(String::as_str),
+                Some(printed)
+            );
+            assert_eq!(
+                located.get("Nikon:Converter").map(String::as_str),
+                Some("0")
+            );
+        }
+    }
+
+    #[test]
+    fn plaintext_p6000_distortion_uses_generated_shot_info_value_map() {
+        let mut bytes = vec![0; 17];
+        assert_eq!(
+            plaintext_p6000_distortion(&bytes, Some("NIKON COOLPIX P6000")),
+            Some("Off".to_string())
+        );
+        bytes[16] = 1;
+        assert_eq!(
+            plaintext_p6000_distortion(&bytes, Some("NIKON COOLPIX P6000")),
+            Some("On".to_string())
+        );
+        assert_eq!(plaintext_p6000_distortion(&bytes, Some("NIKON D600")), None);
+        bytes[0] = b'0';
+        assert_eq!(
+            plaintext_p6000_distortion(&bytes, Some("NIKON COOLPIX P6000")),
+            None
+        );
     }
 
     #[test]

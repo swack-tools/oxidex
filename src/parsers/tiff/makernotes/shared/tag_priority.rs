@@ -232,6 +232,14 @@ fn record_dispatched_row(
         row.value = Some(value);
     }
     let key_group = key.split_once(':').map_or("", |(group, _)| group);
+    // PhaseOne::Main applies a fixed-three-decimal PrintConv to these two
+    // matrices before handing the printed string to this legacy map. Mark
+    // that form explicitly here: after group0 becomes MakerNotes, the name
+    // only compatibility formatter would mistake it for an ICC/DNG matrix
+    // and trim its trailing zeros. The raw/ValueConv channel stays intact.
+    if key_group == "PhaseOne" && matches!(row.name.as_ref(), "ColorMatrix1" | "ColorMatrix2") {
+        row.print = Some(row.raw.clone());
+    }
     if crate::writers::exif_surgical::is_makernote_group(key_group) {
         row.group0 = crate::core::tag_occurrence::intern("MakerNotes");
         row.group1 = crate::core::tag_occurrence::intern(if group1_override.is_empty() {
@@ -248,6 +256,31 @@ fn record_dispatched_row(
 #[cfg(test)]
 mod dispatched_group_tests {
     use super::*;
+
+    #[test]
+    fn phaseone_matrix_retains_parser_print_form_after_group_assignment() {
+        let mut metadata = crate::core::MetadataMap::new();
+        record_makernote_tag(
+            &mut metadata,
+            "PhaseOne:ColorMatrix1".to_string(),
+            crate::core::TagValue::new_string("1.280 -0.280 0.000"),
+        );
+        let row = metadata
+            .occurrences_for("PhaseOne:ColorMatrix1")
+            .into_iter()
+            .next()
+            .expect("PhaseOne matrix row");
+        assert_eq!(row.group0.as_ref(), "MakerNotes");
+        assert_eq!(row.group1.as_ref(), "PhaseOne");
+        assert_eq!(
+            row.print,
+            Some(crate::core::TagValue::new_string("1.280 -0.280 0.000"))
+        );
+        assert_eq!(
+            row.raw,
+            crate::core::TagValue::new_string("1.280 -0.280 0.000")
+        );
+    }
 
     #[test]
     fn maker_dispatch_records_true_family_without_reclassifying_other_dji_rows() {
