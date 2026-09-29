@@ -1061,7 +1061,7 @@ pub(crate) fn write_metadata_counted_among(
     let read = metadata.read_from_identity(identity) || unverifiable;
     let mut changes = changes_between(&baseline, metadata, read);
     if read {
-        removals_in_call_order(metadata, mutations, &mut changes);
+        removals_in_call_order(&reader, &baseline, metadata, mutations, &mut changes);
     }
     if mutations.is_empty() && changes.iter().any(|change| change.value().is_none()) {
         // A plain map has no call order: a present assignment replaces an
@@ -1181,17 +1181,25 @@ fn finish_metadata_write(
 ///   a log (`write_metadata`) has no order to go by, and a set of the field
 ///   under one spelling replaces a removal of the other.
 fn removals_in_call_order(
+    reader: &MMapReader,
+    baseline: &MetadataMap,
     metadata: &MetadataMap,
     mutations: &[String],
     changes: &mut Vec<crate::core::write_transaction::TagChange>,
 ) {
     use crate::core::write_transaction::TagChange;
+    let physical = |key: &str| {
+        resolve_write_key_for_with_reader(key, baseline, reader)
+            .map(|(field, _)| field)
+            .unwrap_or_else(|_| key.to_string())
+    };
     for (index, call) in mutations.iter().enumerate() {
         let later = &mutations[index + 1..];
         if crate::writers::write_request::group_deletion(call).is_some()
             || later.iter().any(|next| next.eq_ignore_ascii_case(call))
             // The last call on the key left it in the map: a set.
             || metadata.contains_key(call)
+            || later.iter().any(|next| physical(next).eq_ignore_ascii_case(&physical(call)))
             // Rows describing the file are never deleted by name.
             || call.split_once(':').is_some_and(|(group, _)| {
                 ["File", "System", "Composite", "ExifTool"]
@@ -1277,6 +1285,9 @@ pub(crate) fn write_metadata_transaction_among(
 ) -> Result<()> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes(
+        path, &baseline, metadata, removed, &assigned,
+    )?;
     crate::writers::rw2_ifd0::refuse_rw2_same_value_sets(path, &baseline, metadata, &assigned)?;
     let expanded = crate::writers::exif_cross_delete::with_cross_deletions(
         path, &baseline, metadata, removed, &assigned, siblings,

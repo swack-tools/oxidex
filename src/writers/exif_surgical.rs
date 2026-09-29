@@ -2596,6 +2596,11 @@ pub(crate) struct MakerNoteCensus {
     /// JPEG). Unwalked directories are recorded separately below; a zero
     /// count proves absence only when their uncertainty flags are clear.
     pub tag_bearing: usize,
+    /// Physical note entries this block files under MakerNotes, including
+    /// previews. The source fallback values filed under EXIF are excluded.
+    /// Unlike `tag_bearing`, this is a group-clear decision, not a bare-name
+    /// write-candidate count.
+    pub makernotes_group_entries: usize,
     /// A pinned MakerNotes::Main root proven from the physical value and
     /// camera data when exactly one tag-bearing note exists.
     pub identified_single_root: Option<&'static str>,
@@ -2626,6 +2631,7 @@ impl MakerNoteCensus {
         blocks: usize::MAX,
         notes: usize::MAX,
         tag_bearing: usize::MAX,
+        makernotes_group_entries: usize::MAX,
         identified_single_root: None,
         ifd1_tag_bearing: usize::MAX,
         surviving_exif_ifd_clear: usize::MAX,
@@ -3000,6 +3006,15 @@ fn makernote_census_inner(
         for entry in &scan.entries {
             if is_makernote_entry(entry.ifd, entry.tag_id) {
                 census.notes += 1;
+                if entry.ifd != IfdKind::ExifIfd
+                    || !crate::core::tiff_helpers::makernote_is_exif_fallback(
+                        &entry.value,
+                        &make,
+                        &model,
+                    )
+                {
+                    census.makernotes_group_entries += 1;
+                }
                 if !crate::core::tiff_helpers::makernote_value_holds_no_tags(
                     &entry.value,
                     &make,
@@ -3043,6 +3058,7 @@ fn makernote_census_inner(
                     continue;
                 };
                 census.notes += notes;
+                census.makernotes_group_entries += notes;
                 if notes > 0 {
                     census.identified_single_root = None;
                 }
@@ -4083,6 +4099,12 @@ pub(crate) fn rewrite_jpeg_exif_with_removals(
         )?,
         None => MetadataMap::new(),
     };
+    crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_rewrite(
+        file_bytes,
+        &original_map,
+        desired,
+        removed,
+    )?;
     // A created IFD0 takes its resolution from a JFIF APP0 segment read
     // before the EXIF one (WriteExif.pl 13.59:705-711): the segments ahead
     // of the existing EXIF APP1, or the leading APP0 run a new one follows.
@@ -4503,6 +4525,19 @@ pub(crate) fn exif_request_is_no_op(
                         .iter()
                         .filter_map(|key| group_removal(key))
                         .all(|group| {
+                            // The read map combines every JPEG APP1. Its
+                            // unknown-note row cannot classify another
+                            // block's note. Use each block's physical census
+                            // and selected source fallback instead.
+                            if group == GroupRemoval::MakerNotes && group_blocks.len() > 1 {
+                                let census = makernote_census(&[*block], magics);
+                                if census.makernotes_group_entries > 0
+                                    || census.uncertain_outside_ifd1
+                                    || census.uncertain_ifd1
+                                {
+                                    return false;
+                                }
+                            }
                             if group_has_content(group, &scan, baseline) {
                                 return false;
                             }
