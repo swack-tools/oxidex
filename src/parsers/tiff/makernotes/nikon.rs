@@ -1007,11 +1007,50 @@ impl NikonParser {
                 // tables.
                 NIKON_LENS_DATA => {
                     if let Some(bytes) = bytes_of(entry) {
-                        lens_data::parse_lens_data_with_values(
+                        let plaintext = lens_data::parse_lens_data_with_occurrences(
                             &bytes,
                             tags,
                             &mut parsed_value_forms,
                         );
+                        if let Some(rows) = structured_rows.as_deref_mut() {
+                            // These hand-owned plaintext fields share names
+                            // with encrypted generated fields and standalone
+                            // Main entries. Keep the 0x0098 physical position,
+                            // field ID and full ValueConv before removing the
+                            // flat-map fallback that bridges append later.
+                            for field in plaintext {
+                                let key = format!("Nikon:{}", field.name);
+                                rows.push((
+                                    key.clone(),
+                                    TagOccurrence {
+                                        id: oxidex_tags::TagId::Numeric(field.offset as u16),
+                                        name: intern(field.name),
+                                        group0: intern("MakerNotes"),
+                                        group1: intern("Nikon"),
+                                        group2: Some(intern("Camera")),
+                                        instance: Instance::default(),
+                                        raw: TagValue::String(field.print.clone()),
+                                        value: Some(
+                                            field.value.map(TagValue::Float).unwrap_or_else(|| {
+                                                TagValue::Integer(i64::from(field.raw))
+                                            }),
+                                        ),
+                                        print: Some(TagValue::String(field.print)),
+                                        stored: Some(TagValue::Integer(i64::from(field.raw))),
+                                        priority: 1,
+                                        is_list: false,
+                                        order: 0,
+                                        origin: Provenance {
+                                            module: Some("Nikon"),
+                                            table: Some(field.table),
+                                            byte_range: None,
+                                        },
+                                    },
+                                ));
+                                tags.remove(&key);
+                                parsed_value_forms.remove(&key);
+                            }
+                        }
                         let generated = encrypted::parse_lens_data(
                             &bytes,
                             entry.value_count as usize,
