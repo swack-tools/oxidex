@@ -1,6 +1,6 @@
 ---
 title: Autogeneration status
-description: Where OxiDex stands on ExifTool tag parity and autogeneration, rendered from committed measurements.
+description: Historical ExifTool parity and autogeneration measurements from committed snapshots.
 outline: [2, 3]
 ---
 
@@ -12,18 +12,20 @@ import StatusMeter from './StatusMeter.vue'
 
 # Autogeneration status
 
-How much of ExifTool 13.59 OxiDex reads and writes correctly, and how much of that comes from code generated from ExifTool's own tables rather than typed in by hand. This page is generated from committed measurement files. It measures nothing itself, and no number on it was typed by hand. Each figure names the instrument that produced it and the commit it was measured at. CI re-renders the page and fails if any source changed without a refresh.
+These are historical measurements of ExifTool 13.59 read and write parity and source-generation progress, not an exact-candidate release receipt. This page is generated from committed measurement files and measures nothing itself. The sections below name each measurement's instrument and source commit. CI re-renders the page and fails if a source changes without a refresh.
 
 Where these numbers are going, and the rules for what counts as progress: [Autogeneration plan](/AUTOGENERATION-PLAN) (progress log: [Autogeneration progress](/AUTOGENERATION-PROGRESS); mechanism: [v2 design](/AUTOGENERATION-V2-DESIGN)).
 
 ## At a glance
 
+The read observations below were measured at [`7a9c7576`](https://github.com/swack-tools/oxidex/commit/7a9c7576dcb9d799cab79b837f3699063bc246b8); write observations at [`7a9c7576`](https://github.com/swack-tools/oxidex/commit/7a9c7576dcb9d799cab79b837f3699063bc246b8); expression coverage at [`f5da2325`](https://github.com/swack-tools/oxidex/commit/f5da2325b036bc7baa6fb93ea7ae401588d6d08e); generated share at [`2d8ff775`](https://github.com/swack-tools/oxidex/commit/2d8ff7750507e15445e46c74114fb8e6b0b04424). Other meters are committed source inventories. None is a current release-candidate measurement.
+
 <div class="status-meters">
-<StatusMeter label="Read parity: catalog entries proven" :value="2378" :total="33487" note="observed_matched_read / ExifTool 13.59 catalog entries" />
+<StatusMeter label="Read parity: catalog entries proven" :value="2378" :total="33487" note="observed_matched_read at 7a9c7576 / ExifTool 13.59 catalog entries" />
 <StatusMeter label="Of what ExifTool reads in the corpus" :value="2378" :total="4270" note="credited catalog entries / entries ExifTool reads in the corpus" />
-<StatusMeter label="Write parity: writable entries proven" :value="19" :total="14169" note="observed_matched_write / writable catalog entries" />
+<StatusMeter label="Write parity: writable entries proven" :value="19" :total="14169" note="observed_matched_write at 7a9c7576 / writable catalog entries" />
 <StatusMeter label="Catalog entries with a generated reader (strict)" :value="3667" :total="33487" note="unconditional generated declarations / catalog entries" />
-<StatusMeter label="Expression uses today's translators accept" :value="9068" :total="13290" note="exprs.py and conds.py, every expression in the dump" />
+<StatusMeter label="Expression uses baseline translators accept" :value="9068" :total="13290" note="exprs.py and conds.py at f5da2325, every expression in the dump" />
 <StatusMeter label="Reachable with Session + ported helpers" :value="12513" :total="13290" note="with the 19 v2 helper ports, same denominator" />
 <StatusMeter label="Helper subs ported" :value="25" :total="157" note="helpers.rs PORTS / distinct helper subs the tables call" />
 <StatusMeter label="Generated share of correct output (a floor)" :value="43.43" :total="100" note="probe census at 2d8ff775 on 2026-09-18; engine alone 38.64%" />
@@ -31,7 +33,7 @@ Where these numbers are going, and the rules for what counts as progress: [Autog
 
 ## Catalog size
 
-Three different counts describe "how many tags". They measure different things and should not be compared with each other.
+Three counts describe tag totals. They measure different things and should not be compared with each other.
 
 | What | Count | What it counts | Source |
 | --- | ---: | --- | --- |
@@ -80,7 +82,7 @@ The write-matrix rows come from the 13.59 control run in the [upgrade rehearsal]
 
 ### Reader declarations
 
-How each of the 33,487 catalog entries is implemented on the read side today. Source: [`catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) `counts.reader_implementation`. The proven-reads column counts `observed_matched_read` entries in each state, from [`catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json).
+How the committed source inventory classifies each of the 33,487 catalog entries. Source: [`catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) `counts.reader_implementation`. The proven-reads column counts `observed_matched_read` entries in each state, from [`catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json).
 
 | Reader state | Entries | Share | Proven reads |
 | --- | ---: | ---: | ---: |
@@ -98,18 +100,18 @@ How each of the 33,487 catalog entries is implemented on the read side today. So
 
 ### Expression coverage
 
-ExifTool's tables embed Perl expressions (`Condition`, `RawConv`, `ValueConv`, `PrintConv` and their inverses). A *use* is one table field that references one. These are dependency ceilings measured over the pinned dump, not evaluations. The *today* rung is what the committed translators accept. The last rung is what the v2 `Session`, its member map and the helper ports reach.
+ExifTool's tables embed Perl expressions (`Condition`, `RawConv`, `ValueConv`, `PrintConv` and their inverses). A *use* is one table field that references one. These are dependency ceilings measured over the pinned dump, not evaluations. The *translator baseline* rung is what the measured translators accepted. The last rung is what the v2 `Session`, its member map and the helper ports reach.
 
 Instrument: `session_helper_coverage.py` at [`f5da2325`](https://github.com/swack-tools/oxidex/commit/f5da2325b036bc7baa6fb93ea7ae401588d6d08e) ([`SESSION_HELPER_COVERAGE.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/spike/SESSION_HELPER_COVERAGE.md)), measured with 19 helper ports.
 
-| Frame | Uses | Today | Parseable | Session + helpers |
+| Frame | Uses | Translator baseline | Parseable | Session + helpers |
 | --- | ---: | ---: | ---: | ---: |
 | A: `expr_coverage.py`'s denominator | 6,993 | 75.7% | 99.9% | **95.2%** |
 | B: every expression | 13,290 | 68.2% | 99.7% | **94.2%** |
 | M: `Exif::Main`, all slots | 349 | 48.4% | 98.6% | **90.5%** |
 | Mr: `Exif::Main`, read side | 255 | 51.0% | 100.0% | **92.9%** |
 
-From the coverage spike (`run_spike.py` at [`53d27645`](https://github.com/swack-tools/oxidex/commit/53d276459ddac1e1a5a380ba1846e5c32ff6f9b8), [`COVERAGE.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/spike/COVERAGE.md)): a grammar alone parses 99.7% of all uses, but an interpreter with no helpers evaluates only 69.6% of Frame A, less than today's 75.4%. The work is in the helpers and the session. With all session keys and the top 25 helpers, Frame B reaches 95.7%.
+From the coverage spike (`run_spike.py` at [`53d27645`](https://github.com/swack-tools/oxidex/commit/53d276459ddac1e1a5a380ba1846e5c32ff6f9b8), [`COVERAGE.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/spike/COVERAGE.md)): a grammar alone parses 99.7% of all uses, but an interpreter with no helpers evaluates only 69.6% of Frame A, less than the baseline's 75.4%. The work is in the helpers and the session. With all session keys and the top 25 helpers, Frame B reaches 95.7%.
 
 ### Helper ports
 
