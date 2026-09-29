@@ -1033,6 +1033,7 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     fixtures, fixture_digest, corpus = _fixtures(Path(args.fixture_manifest), target,
                                                   kind=READ_FIXTURE_KIND, subtarget="rehearsal-fixtures")
     comparison = report.parent / "raw" / "read-conformance.json"
+    comparison.parent.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, str(measurement_source / "tools" / "exiftool-tables" / "conformance.py"), str(corpus), "--recursive", "--exiftool-dir", str(native_source), "--oxidex", str(executable), "--min-files", str(len(fixtures)), "--min-tags", "1", "--json-out", str(comparison)]
     env = _environment(perl, native_lib, target); env.pop("OXIDEX_ALLOW_DIRTY_TREE", None)
     record = _run(command, cwd=measurement_source, env=env, run=run); raw = _raw(report, "read", record)

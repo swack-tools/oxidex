@@ -432,6 +432,20 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(read["denominator"], 3)
         self.assertTrue(Path(read["raw_maps"]["path"]).is_file())
 
+    def test_read_creates_raw_json_output_directory_before_conformance(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        shutil.rmtree(self.reports / "raw")
+
+        def require_output_parent(argv, **kwargs):
+            if argv[0] == sys.executable and "conformance.py" in argv[1]:
+                self.assertTrue(Path(argv[argv.index("--json-out") + 1]).parent.is_dir())
+            return self.fake_run(argv, **kwargs)
+
+        read = adapter.read(self.args("read"), run=require_output_parent)
+        self.assertEqual(read["state"], "measured")
+        self.assertTrue((self.reports / "raw/read-conformance.json").is_file())
+
     def test_read_refuses_unauthenticated_raw_map_capture(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
