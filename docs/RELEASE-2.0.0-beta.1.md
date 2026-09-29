@@ -175,7 +175,7 @@ orders the crates by dependency, and `publish = false` keeps the root crate
 out:
 
 ```bash
-cargo publish --workspace --exclude oxidex --dry-run   # rehearse (passes today)
+cargo publish --workspace --exclude oxidex --dry-run   # rehearse on the final candidate; result unverified here
 cargo publish --workspace --exclude oxidex             # uploads in this order:
 # oxidex-tags-shared 0.1.0, oxidex-tags-core, -camera, -document, -image,
 # -media, -specialty, then oxidex-tags (all 2.0.0-beta.1)

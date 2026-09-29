@@ -40,7 +40,9 @@ Perl subroutine at a time. See [Architecture](/architecture/).
   claim; see [ExifTool parity](/guide/exiftool-parity) and the
   [status page](/status/).
 - 🔶 **Writing.** JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF can be
-  written, atomically. 19 tags are proven byte-for-byte against ExifTool.
+  written, atomically. A historical observation at commit `7a9c7576`
+  proved 19 tags byte-for-byte against ExifTool; final beta write evidence
+  remains pending.
   See [Writing metadata](/guide/writing).
 - 🔶 **Performance receipt pending.** The figures on the
   [Performance](/performance/) page are historical measurements at commit
