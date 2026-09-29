@@ -82,7 +82,7 @@ const FILE_TYPES: &[&str] = &["JPEG", "PNG", "TIFF"];
 /// capture has writable `Exif::Main` candidates for it that all agree: the
 /// candidate's `WriteGroup`, else the table's `WRITE_GROUP => 'ExifIFD'`
 /// (Exif.pm 13.59:415). An `EXIF:<name>` set is written there.
-fn exif_main_write_group(name: &str) -> Option<&'static str> {
+pub(crate) fn exif_main_write_group(name: &str) -> Option<&'static str> {
     let mut groups = SET_NEW_VALUE_LOOKUP
         .iter()
         .filter(|candidate| {
