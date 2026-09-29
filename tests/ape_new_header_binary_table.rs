@@ -89,10 +89,13 @@ fn reads_every_mac_new_header_field_the_pinned_oracle_reports() {
     assert_eq!(metadata.get_integer("APE:Channels"), Some(2));
     assert_eq!(metadata.get_integer("APE:SampleRate"), Some(44100));
 
-    // `APE::Composite::Duration` (APE.pm:81-93) is a Composite, not a field
-    // of the binary table, so the fold must NOT have taken it with the
-    // offsets it deleted.
-    assert_eq!(metadata.get_string("APE:Duration"), Some("2.64 s"));
+    // `APE::Composite::Duration` (APE.pm:81-93) belongs to the public
+    // composite pass, not the binary-table parser. The pinned oracle emits
+    // Composite:Duration and no APE:Duration for this carrier.
+    assert!(!metadata.contains_key("APE:Duration"));
+    let public = oxidex::core::operations::read_metadata(&path).expect("read APE fixture");
+    assert_eq!(public.get_string("Composite:Duration"), Some("2.64 s"));
+    assert!(!public.contains_key("APE:Duration"));
 
     // APE.pm:71 comments FormatFlags out at key 1: not a tag ExifTool emits,
     // so not one the table walk may invent either.

@@ -456,6 +456,36 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires pinned combined-samples/JVC.jpg"]
+    fn jvc_fixture_reports_cpu_versions() {
+        let path = crate::test_support::pinned_combined_fixture_path("JVC.jpg")
+            .expect("pinned combined-samples/JVC.jpg is required");
+        let metadata = crate::core::operations::read_metadata(&path).expect("JVC fixture parses");
+        // The typed read keeps the original NUL-separated bytes. ExifTool's
+        // JVC ValueConv joins their components for the two display channels;
+        // `get_string` intentionally does not coerce a Binary raw value.
+        assert!(matches!(
+            metadata.get("JVC:CPUVersions"),
+            Some(TagValue::Binary(bytes)) if bytes.starts_with(b"CPU1 2.00\0")
+                && bytes.contains(&0)
+        ));
+        for channel in [
+            crate::core::tag_occurrence::ValueChannel::ValueConv,
+            crate::core::tag_occurrence::ValueChannel::PrintConv,
+        ] {
+            let projected: Vec<_> = metadata
+                .project_occurrences(channel)
+                .filter(|(key, _, _)| *key == "JVC:CPUVersions")
+                .map(|(_, _, value)| value.into_owned())
+                .collect();
+            assert_eq!(
+                projected,
+                [TagValue::new_string("CPU1 2.00, 0, CPU2 0496, 0")]
+            );
+        }
+    }
+
+    #[test]
     fn signed_jvc_ifd_uses_its_own_byte_order() {
         // MakerNotes.pm:237-243 declares Start +4 and ByteOrder Unknown.
         // Exif.pm:6886-6893 swaps the inherited order when the IFD entry

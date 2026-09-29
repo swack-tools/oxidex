@@ -35,6 +35,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{TagOccurrence, TagValue};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
@@ -567,6 +569,50 @@ impl MakerNoteParser for DjiParser {
             offset += entry_size;
         }
 
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &super::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        if !ctx.payload().starts_with(b"[ae_dbg_info:") {
+            return self.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            );
+        }
+
+        // MakerNotes.pm selects DJI::Info for this record stream. Keep each
+        // ProcessDJIInfo value typed and ordered here: the legacy string map
+        // would turn binary bytes into a display placeholder, then synthesize
+        // a second occurrence over the real value at the TIFF merge boundary.
+        for (name, value) in process_dji_info(ctx.payload()) {
+            let key = format!("DJI:{name}");
+            let value = match value {
+                DjiInfoValue::Text(text) => TagValue::String(text),
+                DjiInfoValue::Binary(bytes) => TagValue::Binary(bytes),
+            };
+            let mut row = TagOccurrence::from_insert_shim(&key, value, 0);
+            row.group0 = intern("MakerNotes");
+            row.group1 = intern("DJI");
+            row.origin.module = Some("DJI");
+            row.origin.table = Some("Info");
+            occurrences.push((key, row));
+        }
         Ok(())
     }
 }

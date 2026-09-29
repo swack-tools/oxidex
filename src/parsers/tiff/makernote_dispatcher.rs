@@ -184,6 +184,11 @@ fn parser_for_make_prefix(
     if make.starts_with("panasonic") {
         return Some(Box::new(panasonic::PanasonicParser) as Box<dyn MakerNoteParser>);
     }
+    // MakerNotes.pm::MakerNoteFLIR claims both prefixes before Make-exact
+    // fallback. FLIR Systems AB appears on the pinned FLIR.jpg fixture.
+    if make.starts_with("flir systems") || make.starts_with("teledyne flir") {
+        return Some(Box::new(flir::FlirParser) as Box<dyn MakerNoteParser>);
+    }
     // `make` reaches here already lowercased, so this is ExifTool's
     // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
     // "RICOH IMAGING COMPANY, LTD." Pentax bodies satisfy too.
@@ -412,6 +417,22 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
     // and only the first was recognised, so 102 of 315 Olympus JPEGs never
     // reached a parser at all.
     if let Some(parser) = parser_for_make_prefix(&make_normalized, data) {
+        // MakerNotes.pm:784-804 selects Pentax::Type2 and Casio::Type2 only
+        // when actual Make begins with Asahi. Route before the generic header
+        // validator: a real headerless Type2 can be big-endian, but that
+        // validator probes its count in little-endian only. The helper uses
+        // the enclosing TIFF order and checks the count and entry bounds.
+        if make.starts_with("Asahi") && parser.manufacturer_name() == "Pentax" {
+            pentax::parse_asahi_with_context(
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                occurrences.as_deref_mut(),
+            )?;
+            return Ok(());
+        }
         if parser.validate_header(data) {
             // `..._and_values`, not `parse_with_context`: the prefix-dispatched
             // makes reached the value-less entry point, so any ValueConv form
@@ -800,6 +821,80 @@ mod staleness_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn asahi_legacy_table_selection_requires_make_and_signature() {
+        use super::*;
+        let mut city = Vec::new();
+        city.extend_from_slice(&1u16.to_le_bytes());
+        city.extend_from_slice(&0x1000u16.to_le_bytes());
+        city.extend_from_slice(&7u16.to_le_bytes());
+        city.extend_from_slice(&4u32.to_le_bytes());
+        city.extend_from_slice(b"NYC ");
+        city.extend_from_slice(&0u32.to_le_bytes());
+
+        for (make, expected) in [("Asahi Optical Co.,Ltd", true), ("PENTAX", false)] {
+            let mut tags = HashMap::new();
+            dispatch_makernote_with_model(
+                make,
+                Some("PENTAX Optio 430"),
+                &city,
+                ByteOrder::LittleEndian,
+                &mut tags,
+            )
+            .expect("headerless legacy dispatch");
+            assert_eq!(tags.get("Pentax:HometownCityCode").is_some(), expected);
+        }
+
+        // Optio430's real headerless note starts with a big-endian 27-entry
+        // count. The generic Pentax header validator reads that count in LE,
+        // so source-selected Asahi Type2 must reach the TIFF-order parser first.
+        let mut city_be = Vec::new();
+        city_be.extend_from_slice(&1u16.to_be_bytes());
+        city_be.extend_from_slice(&0x1000u16.to_be_bytes());
+        city_be.extend_from_slice(&7u16.to_be_bytes());
+        city_be.extend_from_slice(&4u32.to_be_bytes());
+        city_be.extend_from_slice(b"NYC ");
+        city_be.extend_from_slice(&0u32.to_be_bytes());
+        let mut be_tags = HashMap::new();
+        dispatch_makernote_with_model(
+            "Asahi Optical Co.,Ltd",
+            Some("PENTAX Optio 430"),
+            &city_be,
+            ByteOrder::BigEndian,
+            &mut be_tags,
+        )
+        .expect("big-endian headerless Type2 dispatches");
+        assert_eq!(
+            be_tags.get("Pentax:HometownCityCode").map(String::as_str),
+            Some("NYC ")
+        );
+
+        let mut aoc = b"AOC\0II".to_vec();
+        aoc.extend_from_slice(&1u16.to_le_bytes());
+        aoc.extend_from_slice(&0x3007u16.to_le_bytes());
+        aoc.extend_from_slice(&3u16.to_le_bytes());
+        aoc.extend_from_slice(&1u32.to_le_bytes());
+        aoc.extend_from_slice(&0u32.to_le_bytes());
+        aoc.extend_from_slice(&0u32.to_le_bytes());
+        for (make, model, expected) in [
+            ("Asahi Optical Co.,Ltd", "PENTAX Optio430RS", true),
+            ("PENTAX", "PENTAX Optio430RS", false),
+            ("Asahi Optical Co.,Ltd", "PENTAX K-5", false),
+            ("Asahi Optical Co.,Ltd", "PENTAX Optio  430RS", false),
+            (" Asahi Optical Co.,Ltd", "PENTAX Optio430RS", false),
+        ] {
+            let mut tags = HashMap::new();
+            dispatch_makernote_with_model(
+                make,
+                Some(model),
+                &aoc,
+                ByteOrder::LittleEndian,
+                &mut tags,
+            )
+            .expect("AOC dispatch");
+            assert_eq!(tags.get("Casio:BestShotMode").is_some(), expected);
+        }
+    }
     use super::*;
 
     fn panasonic_quality_note() -> Vec<u8> {

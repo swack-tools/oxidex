@@ -2309,7 +2309,7 @@ task values. Require zero lost reads and zero new VALUE rows.
 
 **Interfaces:** Consumes the Task 3 typed projection contract, Task 11 frozen
 adapter contract, and Task 13 merged composite ownership. Preserves existing
-XMP parser entry points and the family-1 group model. Generated composite arms
+XMP parser entry points and the family 1 group model. Generated composite arms
 receive typed inputs and return the existing `Computed` shape.
 
 - [ ] **Step 1: Re-measure remaining DJI/XMP/composite gaps**
@@ -2319,7 +2319,7 @@ Separate already landed floats from `FlightSpeed`, debug tags, embedded
 
 - [ ] **Step 2: Add failing group-aware tests**
 
-Pin family-1 XMP groups, typed numeric values, and composite cascade behavior.
+Pin family 1 XMP groups, typed numeric values, and composite cascade behavior.
 
 - [ ] **Step 3: Port source behavior on current XMP machinery**
 
@@ -2699,8 +2699,9 @@ retained compatibility symbol with its reason.
 **Target:** `$OXIDEX_TARGET_ROOT/version-transition-qualification`
 **Commit:** `test: prove reversible ExifTool version regeneration`
 
-**Launch:**
-`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 19`
+**Launch:** Use the qualification entry point below from the clean candidate
+checkout. The historical fleet-controller launch is superseded. The entry
+point owns the single transition lease; do not wrap it in `locked.py`.
 
 **Files:**
 
@@ -2767,7 +2768,7 @@ RUN=same-pin-r1
 mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 python3 tools/exiftool-tables/version_transition_qualification.py \
   --matrix tools/exiftool-tables/version_transition_matrix.json \
-  --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
+  --repository "$(git rev-parse --show-toplevel)" \
   --output "$OUT" --lease "$OUT/transition.host.lock" \
   --run-id "$RUN" --only "same-pin-$(cat .exiftool-version)" \
   --owner-receipt "$OUT/$RUN/lease-owner.json" \
@@ -2780,8 +2781,8 @@ python3 tools/exiftool-tables/version_transition_qualification.py \
 Run each matrix row once per unique run ID (see `docs/UPGRADE-NEXT-STEPS.md`).
 
 It calls the existing planner/executor/stage adapter, refuses an unclean
-caller, runs all three matrix rows, and restores/verifies the caller without a
-promotion action.
+caller, runs the selected matrix row, and restores/verifies the caller without
+a promotion action. The three invocations together qualify the full matrix.
 
 - [ ] **Step 4: Make tests release-aware**
 
@@ -2799,7 +2800,9 @@ counted.
 
 Require both variants freshly generated, second regeneration clean, identical
 pin/artifact manifest, and no tracked caller diff. Invoke the qualification
-entry point through the exclusive lock:
+entry point with its own exclusive lease. Use the same output root and lease
+for all three rows, with a new run ID for every attempt. Provision the
+verified input bundles for this exact candidate before starting:
 
 ```bash
 git add tools/exiftool-tables/version_transition_qualification.py \
@@ -2810,13 +2813,19 @@ git add tools/exiftool-tables/version_transition_qualification.py \
   docs/reference/upgrade-rehearsal-11.78-12.64.md
 git commit -S -m "test: prove reversible ExifTool version regeneration"
 test -z "$(git status --short)"
-python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
-  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log" -- \
-  python3 tools/exiftool-tables/version_transition_qualification.py \
-    --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
-    --only "same-pin-$OXIDEX_EXIFTOOL_VERSION"
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
+RUN=same-pin-r1  # choose a new run ID if this one already exists
+python3 tools/exiftool-tables/version_transition_qualification.py \
+  --matrix tools/exiftool-tables/version_transition_matrix.json \
+  --repository "$(git rev-parse --show-toplevel)" \
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only "same-pin-$(cat .exiftool-version)" \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
 ```
 
 If the worktree is not clean after the signed commit, do not start the
@@ -2829,13 +2838,19 @@ manifest delta, and recovery controls. No code or fixture edit is allowed after
 the run starts. Invoke the same entry point with `--only 11.78-to-12.64`.
 
 ```bash
-python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
-  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log" -- \
-  python3 tools/exiftool-tables/version_transition_qualification.py \
-    --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
-    --only 11.78-to-12.64
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
+RUN=forward-r1  # choose a new run ID if this one already exists
+python3 tools/exiftool-tables/version_transition_qualification.py \
+  --matrix tools/exiftool-tables/version_transition_matrix.json \
+  --repository "$(git rev-parse --show-toplevel)" \
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only 11.78-to-12.64 \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
 ```
 
 - [ ] **Step 8: Run 12.64 -> 11.78 without intervention**
@@ -2844,13 +2859,19 @@ Apply the same gates and prove removed artifacts are handled only by manifest
 delta. Invoke the same entry point with `--only 12.64-to-11.78`.
 
 ```bash
-python3 "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260917-group1-batch2/locked.py" \
-  "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log" -- \
-  python3 tools/exiftool-tables/version_transition_qualification.py \
-    --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-    --output "${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification" \
-    --only 12.64-to-11.78
+OUT="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/20260919-beta1-functional/version-transition-qualification"
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
+RUN=reverse-r1  # choose a new run ID if this one already exists
+python3 tools/exiftool-tables/version_transition_qualification.py \
+  --matrix tools/exiftool-tables/version_transition_matrix.json \
+  --repository "$(git rev-parse --show-toplevel)" \
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only 12.64-to-11.78 \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
 ```
 
 - [ ] **Step 9: Restore/verify the original caller pin and run all rehearsal tests**
@@ -2909,24 +2930,22 @@ be recomputed from prose or formatted output.
 
 - [ ] **Step 1: Freeze and record the candidate**
 
-After Task 19 is remotely merged, stop all implementation workers and acquire
-the integration merge lease. Fetch both
-`origin/staging/beta1-functional-integration` and
-`origin/refactor/tag-machinery`. Rebase the clean controller-owned integration
-branch onto the exact current `origin/refactor/tag-machinery` SHA, rerun its
-fast structural smoke tests, and update only that controller-owned remote with
-`--force-with-lease` against the previously recorded integration SHA. Record
-the target SHA as `qualified_target_sha`; do not create Task 20 until the
-updated local and remote integration SHAs agree.
+After Task 19 has landed through a reviewed PR into `refactor/tag-machinery`,
+stop implementation workers and serialize integration merges for the
+qualification run. Fetch `origin/refactor/tag-machinery` and record its exact
+commit as `qualified_target_sha`. Verify that the completed Task 19 receipts
+apply to that candidate; a receipt bound to an older source does not qualify
+the new candidate. Record the freeze and active-process reconciliation in the
+handoff. Do not resume or rewrite the historical controller integration branch.
 
-Create the named Task 20 worktree and branch from that exact synchronized
-integration SHA. Record the full SHA, `qualified_target_sha`, clean state,
+Create the named Task 20 worktree and branch from that exact fetched
+target commit. Record the full SHA, `qualified_target_sha`, clean state,
 qualification round, branch, binary path/hash, pin, pinned source hash, Perl
 hash/version, corpus roots/counts, and lock status. Do not run these gates in
 the controller integration mirror.
 
 Round 1 uses the literal paths in this task header and commands. For every
-later positive integer `N`, the controller materializes all of these before
+later positive integer `N`, the release owner allocates all of these before
 launch and refuses a collision:
 
 ```text
@@ -2941,8 +2960,10 @@ process:   $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/process
 receipts:  receipt-index.json key task-20/round-N
 ```
 
-The materializer replaces `N` with the ledger's next integer in every command,
-including `task_slug=final-rN`. Prior-round worktrees, targets, logs, PRDs,
+The release owner records the next unused round number in the recovery handoff
+and replaces `N` with that integer in every command, including
+`task_slug=final-rN`. The retained path names do not require starting the
+historical controller. Prior-round worktrees, targets, logs, PRDs,
 reports, reviews, and receipts become read-only `superseded` evidence; they are
 never deleted, reused, or overwritten before the release is complete.
 
@@ -2980,6 +3001,7 @@ python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
 CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
 python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
   "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/ignored.log" -- \
+  env CARGO_PROFILE_RELEASE_PANIC=unwind \
   cargo test --release --workspace --all-features -- --include-ignored
 CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
 python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
@@ -3087,22 +3109,20 @@ bash "${SUPERPOWERS_SDD_SCRIPTS:?Set the installed Superpowers scripts directory
 
 - [ ] **Step 12: Land the frozen-candidate evidence through its remote PR**
 
-Apply the Local Checkpoint, Remote PR, and Integration Procedure to
-`staging/beta1/frozen-candidate-evidence-r1`. Push the signed checkpoint, open the
-draft PR against `staging/beta1-functional-integration`, attach the authenticated receipt
-index, resolve the final Astra review, wait for every required CI check, and
-squash-merge. Fetch the merge and fast-forward the controller integration
-mirror. Preserve the task worktree and remote branch until the post-merge
-evidence links and target SHA are recorded.
+Push the signed checkpoint for the current qualification round and open its
+draft PR directly against `refactor/tag-machinery`. Attach the authenticated
+receipt index, resolve the final Astra review, and wait for every required CI
+check. Follow the repository's reviewed PR protocol; do not push qualification
+changes into the historical controller branch. Preserve the task worktree and
+remote branch until Step 13 verifies the merge and records its evidence links.
 
-- [ ] **Step 13: Land the reviewed integration branch into the protected target**
+- [ ] **Step 13: Verify and land the reviewed candidate into the protected target**
 
-Open one final PR from `staging/beta1-functional-integration` to
-`refactor/tag-machinery`, attach the complete receipt index, obtain a fresh
-whole-branch Astra review, and wait for every required check. Before marking it
+Use the same candidate PR opened in Step 12, with its complete receipt index,
+fresh whole-branch Astra review, and every required check. Before marking it
 ready, require an atomic GitHub up-to-date guarantee: either strict required
 status checks on `refactor/tag-machinery` or an applicable merge-queue rule.
-The controller verifies one of them live:
+The release owner verifies one of them live:
 
 ```bash
 set -o pipefail
@@ -3120,14 +3140,15 @@ check-then-merge shell sequence.
 Immediately before the final review package and again after required checks,
 fetch `origin/refactor/tag-machinery` and compare it to
 `qualified_target_sha`. If it changed, do not merge: increment the
-qualification round, rebase the controller-owned integration branch onto that
-exact target with a recorded `--force-with-lease`, create
-`staging/beta1/frozen-candidate-evidence-rN`, and repeat Task 20 Steps 1-12 in
-full. Prior corpus, transition, attribution, read-regression, documentation,
+qualification round, create a fresh `staging/beta1/frozen-candidate-evidence-rN`
+branch from that exact target, carry forward the reviewed evidence-documentation
+changes, and repeat Task 20 Steps 1-12 in full. Preserve the previous round and
+close its superseded PR after the replacement is linked. Do not rewrite a
+pushed branch. Prior corpus, transition, attribution, read-regression, documentation,
 and review receipts are stale for the combined tree and may not be reused.
 
 Only when the twice-checked target equals `qualified_target_sha` and the atomic
-guard is live may the controller mark the final PR ready and use GitHub's
+guard is live may the release owner mark the candidate PR ready and use GitHub's
 protected merge/queue path with `--match-head-commit`. Fetch the resulting
 target SHA, verify the PR and merge commit, and only then record the functional
 program complete.

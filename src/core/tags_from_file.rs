@@ -302,6 +302,12 @@ fn is_exif_family_group(key_group: &str) -> bool {
 /// the data itself for a binary value (the source is read with `Binary`,
 /// and a binary value is not print-converted).
 fn copied_value(source_key: &str, occurrence: &TagOccurrence, key: &str) -> Result<TagValue> {
+    // XMP.pm's four coordinate rows copy their packet scalar verbatim when
+    // the destination is the same XMP-exif property. Re-parsing their DMS
+    // PrintConv text would discard the packet's fractional-minute precision.
+    if source_key == key && crate::core::formatters::xmp_gps::is_xmp_exif_coordinate(source_key) {
+        return Ok(occurrence.project(ValueChannel::Stored).into_owned());
+    }
     // An XP string copies as its stored UCS-2 re-packed, which keeps a
     // stored surrogate pair; its printed text cannot say whether a code
     // point above U+FFFF was one (xp_strings::refuse_unknown_provenance).
@@ -959,6 +965,29 @@ pub(crate) fn copy_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_xmp_gps_copy_uses_packet_scalar_and_respects_later_edit() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                exif:GPSLatitude="43,30.4233408N"/>
+            </rdf:RDF>"#;
+        let mut source =
+            crate::parsers::xmp::parse_xmp_file(&crate::test_support::TestReader::from_slice(xml))
+                .unwrap();
+        let key = "XMP-exif:GPSLatitude";
+        let original = source.occurrences_for(key)[0];
+        assert_eq!(
+            copied_value(key, original, key).unwrap(),
+            TagValue::new_string("43,30.4233408N")
+        );
+        *source.get_mut(key).unwrap() = TagValue::new_string("10,15S");
+        let edited = source.occurrences_for(key)[0];
+        assert_eq!(
+            copied_value(key, edited, key).unwrap(),
+            TagValue::new_string("10,15S")
+        );
+    }
 
     #[test]
     fn rehomed_ciff_firmware_is_not_physical_exif_makernote_evidence() {

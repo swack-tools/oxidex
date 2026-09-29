@@ -737,7 +737,7 @@ fn walk_with_policy(
                 // The field's own `Groups{1}` else the table's (ExifTool.pm:
                 // 9236-9244 via `effective_groups`).
                 g1: Some(table.effective_groups(field).1),
-                g2: table.group2,
+                g2: field.groups.g2.unwrap_or(table.group2),
             },
             reporting: Reporting {
                 name: field.name,

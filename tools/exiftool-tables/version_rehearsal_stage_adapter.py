@@ -28,6 +28,8 @@ import generated_tiff_write_matrix as generated_matrix
 import native_write_matrix as native
 import instrument  # noqa: E402 -- scripts/ is on sys.path via native_write_matrix
 import version_rehearsal as rehearsal
+import version_rehearsal_clean_snapshot as clean_snapshot
+import version_rehearsal_raw_maps as raw_maps
 import version_rehearsal_executor as executor
 
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
@@ -356,6 +358,7 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     if _git(checkout, ["status", "--porcelain=v1"], run) != "":
         raise Refused("owned checkout must be clean before sanctioned generation")
     clean_source = _source_tree(checkout)
+    clean_artifact_paths = [item.path for item in artifacts.inventory(checkout)]
     pin = checkout / ".exiftool-version"
     _regular(pin, "owned checkout pin")
     pin.write_text(args.release + "\n", encoding="utf-8")
@@ -390,7 +393,8 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
         raise Refused("second regeneration was not clean and idempotent")
     result = {**_base("generate", args, checkout, identity), "state": "passed", "denominator": 1,
               "generated_artifacts": second_artifacts, "raw_report": raw,
-              "clean_source_before": {"git_status": "clean", "source_tree_sha256": clean_source},
+              "clean_source_before": {"git_status": "clean", "source_tree_sha256": clean_source,
+                                      "artifact_paths": clean_artifact_paths},
               "second_regeneration": {"state": "clean", "first_source_tree_sha256": first_source,
                                       "second_source_tree_sha256": second_source,
                                       "first_pin": first_pin, "second_pin": second_pin,
@@ -981,12 +985,47 @@ def _verify_conformance_scope(data: dict[str, Any], rows: list[dict[str, Any]]) 
         raise Refused("conformance report file count differs from staged fixture manifest")
 
 
+def _verify_conformance_measurement(data: dict[str, Any], snapshot: dict[str, Any],
+                                    executable: Path, binary_sha256: str) -> None:
+    instrument_data = data.get("instrument")
+    if not isinstance(instrument_data, dict) or instrument_data.get("tool") != "conformance.py":
+        raise Refused("conformance report lacks its measurement instrument")
+    repo = instrument_data.get("repo")
+    binary = instrument_data.get("binary")
+    if (not isinstance(repo, dict) or repo.get("root") != snapshot["path"]
+            or repo.get("commit") != snapshot["commit"] or repo.get("tree") != snapshot["tree"]
+            or repo.get("dirty") is not False or repo.get("dirty_files") != []
+            or repo.get("dirty_overridden") is not False):
+        raise Refused("conformance report does not measure the signed clean generated snapshot")
+    if (not isinstance(binary, dict) or binary.get("path") != str(executable.resolve())
+            or binary.get("sha256") != binary_sha256
+            or binary.get("size") != executable.stat().st_size):
+        raise Refused("conformance report does not measure the authenticated build binary")
+
+
 def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
     checkout, target, report, perl, native_source, native_lib, identity = _common(args, run)
     if re.fullmatch(r"[0-9a-f]{64}", args.native_probe_sha256) is None:
         raise Refused("native probe digest is malformed")
     previous = _prior(report, "build", args, identity, checkout)
+    generation = _prior(report, "generate", args, identity, checkout)
     generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
+    before = generation.get("clean_source_before")
+    before_paths = before.get("artifact_paths") if isinstance(before, dict) else None
+    if (not isinstance(before_paths, list) or not before_paths
+            or any(not isinstance(path, str) or not path for path in before_paths)
+            or len(set(before_paths)) != len(before_paths)):
+        raise Refused("generation result lacks original sanctioned artifact paths")
+    sanctioned = set(before_paths) | {row["path"] for row in generated} | {".exiftool-version"}
+    source_digest = previous["source_tree_sha256"]
+    try:
+        if clean_snapshot.source_tree_sha256(checkout) != source_digest:
+            raise Refused("generated source differs from build-stage source proof")
+        snapshot_proof = clean_snapshot.create(checkout, target, args.source_commit, source_digest, sanctioned)
+        measurement_source = clean_snapshot.validate(snapshot_proof, checkout, target, args.source_commit,
+                                                     source_digest, sanctioned)
+    except clean_snapshot.Refused as error:
+        raise Refused(str(error)) from error
     binary = previous.get("binary")
     if not isinstance(binary, dict) or not isinstance(binary.get("path"), str) or not isinstance(binary.get("sha256"), str): raise Refused("build binary proof is malformed")
     executable = _regular(Path(binary["path"]), "built oxidex executable")
@@ -994,12 +1033,26 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     fixtures, fixture_digest, corpus = _fixtures(Path(args.fixture_manifest), target,
                                                   kind=READ_FIXTURE_KIND, subtarget="rehearsal-fixtures")
     comparison = report.parent / "raw" / "read-conformance.json"
-    command = [sys.executable, str(checkout / "tools" / "exiftool-tables" / "conformance.py"), str(corpus), "--recursive", "--exiftool-dir", str(native_source), "--oxidex", str(executable), "--min-files", str(len(fixtures)), "--min-tags", "1", "--json-out", str(comparison)]
-    env = _environment(perl, native_lib, target); env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
-    record = _run(command, cwd=checkout, env=env, run=run); raw = _raw(report, "read", record)
+    command = [sys.executable, str(measurement_source / "tools" / "exiftool-tables" / "conformance.py"), str(corpus), "--recursive", "--exiftool-dir", str(native_source), "--oxidex", str(executable), "--min-files", str(len(fixtures)), "--min-tags", "1", "--json-out", str(comparison)]
+    env = _environment(perl, native_lib, target); env.pop("OXIDEX_ALLOW_DIRTY_TREE", None)
+    record = _run(command, cwd=measurement_source, env=env, run=run); raw = _raw(report, "read", record)
+    try:
+        clean_snapshot.validate(snapshot_proof, checkout, target, args.source_commit, source_digest, sanctioned)
+    except clean_snapshot.Refused as error:
+        raise Refused(str(error)) from error
     if record["state"] != "ok" or not comparison.is_file(): raise Refused("actual conformance.py comparison failed")
     _verify_staged_fixtures(fixtures)
-    data = _json(comparison); _verify_conformance_scope(data, fixtures); per_format = data["per_format"]
+    data = _json(comparison)
+    _verify_conformance_measurement(data, snapshot_proof, executable, binary["sha256"])
+    _verify_conformance_scope(data, fixtures)
+    raw_maps_path = report.parent / "raw" / "read-maps.json"
+    try:
+        captured_maps = raw_maps.capture_authenticated_maps(
+            comparison, fixtures, measurement_source, executable, perl, native_source)
+    except raw_maps.Refused as error:
+        raise Refused(f"authenticated read raw-map capture refused: {error}") from error
+    _atomic(raw_maps_path, captured_maps)
+    per_format = data["per_format"]
     classification_counts = {"matched": 0, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0}
     for format_counts in per_format.values():
         if not isinstance(format_counts, dict): raise Refused("conformance format counts are malformed")
@@ -1010,14 +1063,16 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     matched = classification_counts["matched"]
     mismatched = sum(classification_counts[key] for key in ("value_diff", "missing", "renames", "extra"))
     denominator = matched + mismatched
-    state = "passed" if denominator > 0 and mismatched == 0 else "failed"
+    state = "measured" if denominator > 0 else "failed"
     result = {**_base("read", args, checkout, identity), "state": state, "denominator": denominator,
               "native_release": args.release, "native_probe_sha256": args.native_probe_sha256,
               "comparison": {"kind": "oxidex_vs_native", "native_release": args.release, "matched": matched, "mismatched": mismatched},
               "classification_counts": classification_counts,
-              "generated_artifacts": generated, "binary": {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size},
+              "generated_artifacts": generated, "measurement_snapshot": snapshot_proof,
+              "binary": {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size},
               "fixtures": {"manifest": str(Path(args.fixture_manifest).absolute()), "manifest_sha256": fixture_digest, "entries": fixtures}, "raw_report": raw,
-              "conformance_report": {"path": str(comparison), "sha256": _sha(comparison)}}
+              "conformance_report": {"path": str(comparison), "sha256": _sha(comparison)},
+              "raw_maps": {"path": str(raw_maps_path), "sha256": _sha(raw_maps_path)}}
     _atomic(report, result)
     return result
 

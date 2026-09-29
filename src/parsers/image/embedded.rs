@@ -329,7 +329,7 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
     if std::str::from_utf8(xmp_data).is_err() {
         return false;
     }
-    insert_xmp_packet(metadata, xmp_data, false).is_ok_and(|stored| stored > 0)
+    insert_xmp_packet(metadata, xmp_data, true).is_ok_and(|stored| stored > 0)
 }
 
 /// Synthetic TIFF blocks shared by the tests of every container that hands
@@ -751,5 +751,25 @@ mod tests {
         );
         // The raw packet must not become a tag of its own.
         assert!(!metadata.contains_key("XMP:RawXMP"));
+    }
+
+    #[test]
+    fn embedded_xmp_list_keeps_typed_items_and_group() {
+        let xmp = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <dc:subject><rdf:Bag><rdf:li>first</rdf:li><rdf:li>second</rdf:li></rdf:Bag></dc:subject>
+ </rdf:Description>
+</rdf:RDF>"#;
+        let mut metadata = MetadataMap::new();
+        assert!(parse_embedded_xmp(xmp, &mut metadata));
+        let Some(crate::core::TagValue::Array(items)) = metadata.get("XMP:Subject") else {
+            panic!("embedded subject must remain a typed array");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].as_string(), Some("first"));
+        assert_eq!(items[1].as_string(), Some("second"));
+        let occurrences = metadata.occurrences_for("XMP:Subject");
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(&*occurrences[0].group1, "XMP-dc");
     }
 }

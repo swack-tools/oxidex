@@ -537,11 +537,9 @@ pub struct Ctx {
     pub model: Option<String>,
     /// `$$self{FILE_TYPE}` -- "JPEG" for JPEGs, "TIFF" for NEF and TIFF.
     ///
-    /// The MakerNote parser interface carries no file type, so this is `None`
-    /// in practice and [`Cond::FileType`] is treated as false. That costs the
-    /// three tags ExifTool gates on it (`AEBracketingSteps`,
-    /// `WBBracketingSteps`, `PhotoShootingMenuBank`) rather than risk emitting
-    /// them on the format where ExifTool suppresses them.
+    /// The JPEG and standalone TIFF readers seed this from the file-scoped
+    /// generated session. Detached MakerNotes retain `None`; in that case
+    /// [`Cond::FileType`] fails closed rather than guessing the carrier.
     pub file_type: Option<&'static str>,
 }
 

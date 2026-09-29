@@ -29,6 +29,8 @@ from typing import Any, Callable, Mapping
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
 import version_rehearsal_native_oracle as native_oracle
+import version_rehearsal_clean_snapshot as clean_snapshot
+import version_rehearsal_raw_maps as raw_maps
 import artifacts
 
 SCHEMA = 1
@@ -508,15 +510,121 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
         raise Refused("test result lacks a verified fixture corpus held unchanged across the run")
 
 
+def _require_read_measurement_snapshot(result: Mapping[str, Any], generation: Mapping[str, Any],
+                                       checkout: Path, target: Path, source_commit: str,
+                                       source_tree: Mapping[str, Any]) -> None:
+    before = generation.get("clean_source_before")
+    before_paths = before.get("artifact_paths") if isinstance(before, dict) else None
+    if (not isinstance(before_paths, list) or not before_paths
+            or any(not isinstance(name, str) or not name for name in before_paths)
+            or len(set(before_paths)) != len(before_paths)):
+        raise Refused("read result lacks the original generated artifact path scope")
+    sanctioned = set(before_paths) | {item.path for item in artifacts.inventory(checkout)}
+    sanctioned.add(".exiftool-version")
+    proof = result.get("measurement_snapshot")
+    if not isinstance(proof, dict):
+        raise Refused("read result lacks signed clean measurement snapshot proof")
+    try:
+        clean_snapshot.validate(proof, checkout, target, source_commit,
+                                source_tree["sha256"], sanctioned)
+    except (clean_snapshot.Refused, KeyError) as error:
+        raise Refused(f"read measurement snapshot replay refused: {error}") from error
+    report = result.get("conformance_report")
+    if (not isinstance(report, dict) or not isinstance(report.get("path"), str)
+            or not isinstance(report.get("sha256"), str)):
+        raise Refused("read result lacks conformance report proof")
+    path = _regular(Path(report["path"]), "conformance report")
+    if _sha_file(path) != report["sha256"]:
+        raise Refused("conformance report changed after read measurement")
+    data = _read(path)
+    measurement = data.get("instrument", {})
+    repo = measurement.get("repo", {}) if isinstance(measurement, dict) else {}
+    binary = measurement.get("binary", {}) if isinstance(measurement, dict) else {}
+    result_binary = result.get("binary", {})
+    if (not isinstance(repo, dict) or repo.get("root") != proof["path"]
+            or repo.get("commit") != proof["commit"] or repo.get("tree") != proof["tree"]
+            or repo.get("dirty") is not False or repo.get("dirty_files") != []
+            or repo.get("dirty_overridden") is not False
+            or not isinstance(binary, dict) or binary.get("path") != result_binary.get("path")
+            or binary.get("sha256") != result_binary.get("sha256")):
+        raise Refused("conformance report is not bound to the signed source and build binary")
+
+
+def _require_read_counts(result: Mapping[str, Any]) -> None:
+    """Bind reported read gaps to the authenticated conformance counts."""
+    report = result.get("conformance_report")
+    if not isinstance(report, dict) or not isinstance(report.get("path"), str):
+        raise Refused("read result lacks a conformance count source")
+    data = _read(_regular(Path(report["path"]), "conformance report"))
+    formats = data.get("per_format")
+    if not isinstance(formats, dict) or not formats:
+        raise Refused("read conformance report lacks per-format counts")
+    keys = ("matched", "value_diff", "missing", "renames", "extra")
+    counts = {key: 0 for key in keys}
+    for row in formats.values():
+        if (not isinstance(row, dict)
+                or any(type(row.get(key)) is not int or row[key] < 0 for key in keys)):
+            raise Refused("read conformance report has malformed counts")
+        for key in keys:
+            counts[key] += row[key]
+    transcript = data.get("instrument", {}).get("measurement_transcript")
+    rows = transcript.get("rows") if isinstance(transcript, dict) else None
+    fields = {"matched": "matched_occurrences", "value_diff": "value_occurrences",
+              "missing": "missing_occurrences", "renames": "rename_source_occurrences",
+              "extra": "extra_occurrences"}
+    if (not isinstance(rows, list) or not rows
+            or any(not isinstance(row, dict) for row in rows)
+            or any(type(row.get(field)) is not int or row[field] < 0
+                   for row in rows for field in fields.values())
+            or any(counts[key] != sum(row[field] for row in rows)
+                   for key, field in fields.items())):
+        raise Refused("read conformance counts differ from scored transcript")
+    matched = counts["matched"]
+    mismatched = sum(counts[key] for key in keys if key != "matched")
+    comparison = result.get("comparison")
+    if (result.get("classification_counts") != counts
+            or not isinstance(comparison, dict)
+            or comparison.get("matched") != matched
+            or comparison.get("mismatched") != mismatched
+            or result.get("denominator") != matched + mismatched):
+        raise Refused("read result counts differ from authenticated conformance report")
+
+
+def _require_read_raw_maps(result: Mapping[str, Any], stage_path: Path,
+                           native: tuple[Path, Path, Path], perl: str) -> None:
+    """Replay the saved raw maps against the signed snapshot and read transcript."""
+    proof = result.get("raw_maps")
+    expected = stage_path.parent / "raw" / "read-maps.json"
+    if (not isinstance(proof, dict) or proof.get("path") != str(expected)
+            or not isinstance(proof.get("sha256"), str)):
+        raise Refused("read result lacks the exact authenticated raw-map receipt")
+    saved_path = _regular(expected, "authenticated raw-map receipt")
+    if _sha_file(saved_path) != proof["sha256"]:
+        raise Refused("authenticated raw-map receipt changed after read measurement")
+    saved = _read(saved_path)
+    report = result["conformance_report"]
+    fixtures = result["fixtures"]["entries"]
+    snapshot = result["measurement_snapshot"]
+    binary = result["binary"]
+    try:
+        raw_maps.validate_capture(saved, Path(report["path"]), fixtures,
+                                  Path(snapshot["path"]), Path(binary["path"]),
+                                  Path(perl), native[0])
+    except (raw_maps.Refused, KeyError, TypeError, ValueError) as error:
+        raise Refused(f"authenticated read raw-map replay refused: {error}") from error
+
+
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
                   checkout: Path | None = None, source_commit: str | None = None,
                   source_tree: Mapping[str, Any] | None = None, target: Path | None = None,
                   native: tuple[Path, Path, Path] | None = None, perl: str | None = None) -> dict[str, Any]:
     result = _read(_regular(path, f"{stage} result"))
     if (result.get("schema") != SCHEMA or result.get("kind") != RESULT_KIND or result.get("stage") != stage
-            or result.get("release") != release or result.get("state") != "passed"
+            or result.get("release") != release
+            or result.get("state") != ("measured" if stage == "read" else "passed")
             or type(result.get("denominator")) is not int or result["denominator"] < 1):
-        raise Refused(f"{stage} result lacks a passed state or positive denominator")
+        required = "measured" if stage == "read" else "passed"
+        raise Refused(f"{stage} result lacks a {required} state or positive denominator")
     if native_probe_sha is not None and (result.get("native_release") != release
                                          or result.get("native_probe_sha256") != native_probe_sha):
         raise Refused(f"{stage} result is not bound to this release's native oracle")
@@ -525,7 +633,8 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
         if (not isinstance(comparison, dict) or comparison.get("kind") != "oxidex_vs_native"
                 or comparison.get("native_release") != release
                 or type(comparison.get("matched")) is not int or comparison["matched"] < 0
-                or type(comparison.get("mismatched")) is not int or comparison["mismatched"] != 0
+                or type(comparison.get("mismatched")) is not int or comparison["mismatched"] < 0
+                or (stage == "write" and comparison["mismatched"] != 0)
                 or comparison["matched"] + comparison["mismatched"] != result["denominator"]):
             raise Refused(f"{stage} result lacks attributable OxiDex/native outcomes")
     if checkout is not None and source_commit is not None and source_tree is not None:
@@ -2205,7 +2314,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                stage_guard: Callable[[str, str, str], None] | None = None) -> bool:
     # Journals initialized before the release-test stage existed lack its slot.
     state = journal["releases"][release]["stages"].setdefault(stage, "pending")
-    if state == "passed" or state == "unsupported":
+    if state in {"passed", "unsupported"} or (stage == "read" and state == "measured"):
         return True
     if state != "pending":
         raise Refused(f"{release} {stage} is not safely runnable after interruption or failure")
@@ -2265,6 +2374,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                                checkout, config["execution_source_commit"], after_source, target, native, perl)
         if stage == "read":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
+            generation_report = _read(run_dir / journal["releases"][release]["reports"]["generate"]["path"])
+            _require_read_measurement_snapshot(result, generation_report, checkout, target,
+                                               config["execution_source_commit"], after_source)
             if result.get("binary") != build_report.get("binary"):
                 raise Refused("read result did not use the proven build binary")
             fixture_binding = config["read_fixture_bindings"][release]
@@ -2274,6 +2386,8 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                     or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]
                     or _require_fixture_proof(result) != fixture_binding["fixtures"]):
                 raise Refused("read result did not cover the exact immutable selected fixture scope")
+            _require_read_counts(result)
+            _require_read_raw_maps(result, output, native, perl)
         if stage == "write":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("writer_binary") != build_report.get("writer_binary"):
@@ -2301,11 +2415,15 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
         _event(journal, "stage_failed", release=release, stage=stage, detail=str(exc))
         _store_journal(run_dir, journal)
         return False
-    journal["releases"][release]["stages"][stage] = "passed"
+    stage_status = "measured" if stage == "read" else "passed"
+    journal["releases"][release]["stages"][stage] = stage_status
     journal["releases"][release]["reports"][stage] = {"path": str(output.relative_to(run_dir)), "sha256": _sha_json(result), "denominator": result["denominator"], "command": command_log}
+    if stage == "read":
+        journal["releases"][release]["reports"][stage]["acceptance"] = "pending_pair_policy"
     journal["releases"][release]["source_tree"] = after_source
     journal["active"] = None
-    _event(journal, "stage_passed", release=release, stage=stage, denominator=result["denominator"])
+    _event(journal, "stage_measured" if stage == "read" else "stage_passed",
+           release=release, stage=stage, denominator=result["denominator"])
     _store_journal(run_dir, journal)
     return True
 
@@ -2542,7 +2660,9 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                     if not _run_stage(run_dir, journal, release, stage, owned, target, _native_identity(materialization, source_root, release),
                                       config["perls"][release], native, config, run, stage_guard): return journal
                 statuses = journal["releases"][release]["stages"]
-                journal["releases"][release]["state"] = "passed_with_write_gap" if statuses["write"] == "unsupported" else "passed"
+                journal["releases"][release]["state"] = (
+                    "measured_pending_pair_policy_with_write_gap" if statuses["write"] == "unsupported"
+                    else "measured_pending_pair_policy")
                 _event(journal, "release_completed", release=release, state=journal["releases"][release]["state"])
                 _store_journal(run_dir, journal)
             except OwnedChildCleanupIncomplete:
@@ -2561,12 +2681,12 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                     _store_journal(run_dir, journal)
                 raise
         journal["phase"] = "complete"
+        journal["scope"]["read_acceptance"] = "pending_pair_policy"
         journal["scope"]["write_acceptance"] = "unsupported_for_one_or_more_releases" if any(
             row["stages"]["write"] == "unsupported" for row in journal["releases"].values()) else "passed_per_release"
         journal["scope"]["release_tests"] = "unsupported_for_one_or_more_releases" if any(
             row["stages"].get("test") != "passed" for row in journal["releases"].values()) else "passed_per_release"
-        journal["scope"]["parity"] = "unproven_without_all_per-release_read_and_write_acceptance" if any(
-            row["stages"]["write"] != "passed" for row in journal["releases"].values()) else "per-version-read-write-rehearsed; no-promotion"
+        journal["scope"]["parity"] = "unproven_pending_pair_policy; no-promotion"
         _event(journal, "execution_complete", promotion="forbidden")
         _store_journal(run_dir, journal)
         return journal

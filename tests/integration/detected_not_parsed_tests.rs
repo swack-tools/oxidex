@@ -8,7 +8,17 @@
 //! ExifTool tree's `t/images`.
 
 use crate::fixtures::pinned_fixture_path;
+use chrono::DateTime;
 use oxidex::core::operations::read_metadata;
+
+fn assert_local_time_is(actual: Option<&str>, expected_utc: &str) {
+    let actual = actual.expect("timestamp is present");
+    let parsed = DateTime::parse_from_str(actual, "%Y:%m:%d %H:%M:%S%:z")
+        .expect("timestamp has an explicit numeric offset and second precision");
+    assert_eq!(parsed.format("%Y:%m:%d %H:%M:%S%:z").to_string(), actual);
+    let expected = DateTime::parse_from_rfc3339(expected_utc).expect("fixed UTC instant");
+    assert_eq!(parsed, expected, "{actual} is not {expected_utc}");
+}
 
 /// `t/images/PSP.psp`, a Paint Shop Pro X3 image.
 ///
@@ -45,13 +55,13 @@ fn psp_fixture_matches_pinned_oracle() {
 
     // PSP::Creator, via the hand-ported ProcessExtData walk.
     assert_eq!(metadata.get_string("PSP:Title"), Some("Test Image"));
-    assert_eq!(
+    assert_local_time_is(
         metadata.get_string("PSP:CreateDate"),
-        Some("2010:01:28 14:23:21+00:00")
+        "2010-01-28T14:23:21Z",
     );
-    assert_eq!(
+    assert_local_time_is(
         metadata.get_string("PSP:ModifyDate"),
-        Some("2010:01:28 14:30:26+00:00")
+        "2010-01-28T14:30:26Z",
     );
     assert_eq!(metadata.get_string("PSP:Artist"), Some("Phil Harvey"));
     assert_eq!(

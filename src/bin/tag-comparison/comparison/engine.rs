@@ -34,7 +34,7 @@ pub(crate) fn normalize_family_for_comparison(family: &str) -> &str {
         | "Pentax" | "Samsung" | "Leica" | "Casio" | "Minolta" | "Sigma" | "Ricoh" | "Kodak"
         | "Sanyo" | "JVC" | "Motorola" | "HP" | "DJI" | "Apple" | "Google" | "Reconyx"
         | "Parrot" | "InfiRay" | "Lytro" | "PhaseOne" | "Leaf" | "Red" | "Qualcomm"
-        | "Nintendo" | "GE" | "LG" => "MakerNotes",
+        | "Nintendo" | "GE" | "LG" | "CIFF" => "MakerNotes",
         // Every XMP namespace group (`XMP-<prefix>`, ExifTool's family 1) is
         // family-0 `XMP`: XMP.pm sets group 1 to "$grp0-$ns" for any prefix.
         other if other.starts_with("XMP-") => "XMP",
@@ -240,19 +240,60 @@ fn json_array_elements(value: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Compare JSON numeric elements exactly. A real `1.0` may be emitted as
+/// integer `1` by ExifTool, but conversion through f64 would collapse distinct
+/// 64-bit integers; cross-type equality is limited to exactly representable
+/// integers at or below 2^53.
+fn json_numbers_match(ox: &serde_json::Number, et: &serde_json::Number) -> bool {
+    if !ox.is_f64() && !et.is_f64() {
+        return ox.to_string() == et.to_string();
+    }
+    if ox.is_f64() && et.is_f64() {
+        return ox == et;
+    }
+    const MAX_EXACT_INTEGER: u64 = 1_u64 << 53;
+    let (integer, real) = if ox.is_f64() { (et, ox) } else { (ox, et) };
+    let Some(real) = real.as_f64() else {
+        return false;
+    };
+    let exact_integer = integer
+        .as_i64()
+        .filter(|value| value.unsigned_abs() <= MAX_EXACT_INTEGER)
+        .map(|value| value as f64)
+        .or_else(|| {
+            integer
+                .as_u64()
+                .filter(|value| *value <= MAX_EXACT_INTEGER)
+                .map(|value| value as f64)
+        });
+    exact_integer.is_some_and(|value| value == real)
+}
+
 /// JSON arrays retain their element boundaries when both extractors supplied
 /// them. A joined string is still compared with an array through the legacy
 /// text normalization, since ExifTool's printable output can take that form.
 fn values_match(oxidex: &str, exiftool: &str) -> bool {
-    if let (Some(ox_items), Some(et_items)) =
-        (json_array_elements(oxidex), json_array_elements(exiftool))
-    {
-        return ox_items
-            .iter()
-            .map(|item| normalize_boolean_transport(item))
-            .eq(et_items
-                .iter()
-                .map(|item| normalize_boolean_transport(item)));
+    if let (Ok(ox_items), Ok(et_items)) = (
+        serde_json::from_str::<Vec<serde_json::Value>>(oxidex.trim()),
+        serde_json::from_str::<Vec<serde_json::Value>>(exiftool.trim()),
+    ) {
+        return ox_items.len() == et_items.len()
+            && ox_items.iter().zip(&et_items).all(|(ox, et)| {
+                // ExifTool JSON may serialize an integral real as `1`, while
+                // Rust serializes the same typed XMP real as `1.0`.
+                if let (Some(ox_number), Some(et_number)) = (ox.as_number(), et.as_number()) {
+                    return json_numbers_match(ox_number, et_number);
+                }
+                let ox_text = ox
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| ox.to_string());
+                let et_text = et
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| et.to_string());
+                normalize_boolean_transport(&ox_text) == normalize_boolean_transport(&et_text)
+            });
     }
     normalize_value_for_comparison(oxidex) == normalize_value_for_comparison(exiftool)
 }
@@ -452,6 +493,7 @@ impl ComparisonEngine {
         exiftool_instances: &HashMap<String, Vec<TagInfo>>,
     ) -> FormatComparison {
         let mut comparison = FormatComparison::new(format.to_string(), files_tested);
+        comparison.regressions_assessed = previous.is_some();
         comparison.total_exiftool_tags = exiftool_tags.len();
 
         // Build lookup maps using both original and normalized keys
@@ -831,6 +873,22 @@ mod tests {
     }
 
     #[test]
+    fn numeric_xmp_sequence_matches_pinned_exiftool_json() {
+        // ExifTool 13.59 JSON on an xmpDSA real sequence returns
+        // [0.125,0.5,1]; OxiDex preserves numeric array elements.
+        assert!(values_match("[0.125,0.5,1.0]", "[0.125,0.5,1]"));
+        assert!(!values_match("[0.125,0.5,2.0]", "[0.125,0.5,1]"));
+        assert!(!values_match(
+            "[9223372036854775808]",
+            "[9223372036854775809]"
+        ));
+        assert!(!values_match(
+            "[9223372036854775809]",
+            "[9223372036854775808.0]"
+        ));
+    }
+
+    #[test]
     fn json_array_transport_keeps_commas_inside_values() {
         let binary = "(Binary data 32 bytes, use -b option to extract)";
         let encoded = serde_json::to_string(&[binary, binary]).unwrap();
@@ -971,6 +1029,7 @@ mod tests {
             ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 2, Some(&previous));
 
         // Should have 1 regression (Model is missing)
+        assert!(result.regressions_assessed);
         assert_eq!(result.regressions.len(), 1);
         assert!(result.regressions.contains(&"EXIF:Model".to_string()));
 
@@ -998,7 +1057,8 @@ mod tests {
 
         let result = ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, None);
 
-        // No regressions when there's no previous baseline
+        // No regression assessment without a previous baseline.
+        assert!(!result.regressions_assessed);
         assert_eq!(result.regressions.len(), 0);
     }
 
@@ -1021,6 +1081,7 @@ mod tests {
             ComparisonEngine::compare(oxidex_tags, exiftool_tags, "JPEG", 1, Some(&previous));
 
         // No regressions - we still have Make, and we added Model
+        assert!(result.regressions_assessed);
         assert_eq!(result.regressions.len(), 0);
         assert_eq!(result.matched_tags.len(), 2);
     }

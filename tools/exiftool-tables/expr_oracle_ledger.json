@@ -7,6 +7,7 @@
   },
   "instrument": {
     "build_timeout_seconds": 1800,
+    "convert_file_size_source_sha256": "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
     "et_lib": "/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib",
     "perl": "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
     "perl_version": "v5.38.2",

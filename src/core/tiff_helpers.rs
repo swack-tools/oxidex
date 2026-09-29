@@ -385,6 +385,9 @@ fn parse_ifd_chain_with_optional_options(
     let mut ifd_index = 0;
     let mut visited_ifds = HashSet::new();
     let mut session = Session::new();
+    session
+        .set_member("FILE_TYPE", MemberVal::Str("TIFF".into()))
+        .expect("FILE_TYPE is a declared string member");
     let mut members = HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
 
@@ -1585,6 +1588,27 @@ fn parse_exif_directory_with_session(
                         .copied(),
                 );
                 parse_makernote_with_session(&maker_ctx, byte_order, session, ctx, metadata);
+            }
+
+            // Exif::Main 0x02bc is an XMP subdirectory, even when the
+            // ApplicationNotes edge itself is silent in an ordinary listing.
+            // Route its properties through the same typed occurrence owner as
+            // JPEG APP1 XMP, retaining family-1 identity and value forms.
+            if *tag_id == 0x02bc
+                && let Ok((entries, value_forms, gps_sources)) =
+                    crate::parsers::xmp::rdf_parser::parse_xmp_entries_with_source_forms(bytes)
+            {
+                for (entry, source) in entries.iter().zip(&gps_sources) {
+                    crate::parsers::xmp::rdf_parser::insert_xmp_entry_with_source(
+                        metadata,
+                        entry,
+                        entry.tag_value(true),
+                        source.as_deref(),
+                    );
+                }
+                for (tag_name, form) in value_forms {
+                    metadata.set_value_form(tag_name, form);
+                }
             }
 
             // The InteroperabilityIFDPointer (tag 0xA005), read here: the
@@ -4605,15 +4629,16 @@ fn parse_makernote_with_session(
     // 47037a04).
     if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
         use crate::parsers::xmp::google_hdrp::{
-            HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
+            HDRP_GROUP0, HDRP_GROUP1, decode_hdrp_makernote_bytes, hdrp_tag_priority,
         };
         let mut maker_rows = MetadataMap::new();
         for (tag, value) in decode_hdrp_makernote_bytes(ctx.payload()) {
             let priority = hdrp_tag_priority(&tag);
-            maker_rows.insert_occurrence(
+            maker_rows.insert_occurrence_with_group0(
                 tag,
                 TagValue::String(value),
                 priority,
+                HDRP_GROUP0,
                 HDRP_GROUP1,
                 crate::core::Instance::default(),
             );
@@ -6289,6 +6314,51 @@ mod exif_subifd_tests {
         // An 0x8825 GPSInfo edge misplaced in an ExifIFD: silent too.
         let data = exif_block(&[(0x8825, 4, 1, 0)], &[]);
         assert!(walk_exif(&data, None, exif_main(), &[]).is_empty());
+    }
+
+    #[test]
+    fn application_notes_routes_typed_xmp_without_publishing_edge() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                    xmlns:dc="http://purl.org/dc/elements/1.1/"
+                    xmlns:exif="http://ns.adobe.com/exif/1.0/">
+          <rdf:Description exif:GPSLatitude="43,30N"><dc:subject><rdf:Bag>
+            <rdf:li>one</rdf:li><rdf:li>two</rdf:li>
+          </rdf:Bag></dc:subject></rdf:Description>
+        </rdf:RDF>"#;
+        let data = exif_block(&[(0x02bc, UNDEFINED, xml.len() as u32, tail_at(1))], xml);
+        let metadata = walk_exif(&data, None, exif_main(), &[]);
+        assert!(metadata.get("ExifIFD:ApplicationNotes").is_none());
+        assert_eq!(
+            metadata.get("XMP:Subject"),
+            Some(&TagValue::Array(vec![
+                TagValue::new_string("one"),
+                TagValue::new_string("two"),
+            ]))
+        );
+        let rows = metadata.occurrences_for("XMP:Subject");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(&*rows[0].group1, "XMP-dc");
+        let gps = metadata.occurrences_for("XMP-exif:GPSLatitude");
+        assert_eq!(gps.len(), 1);
+        assert_eq!(&*gps[0].group1, "XMP-exif");
+        assert_eq!(
+            gps[0]
+                .project(crate::core::tag_occurrence::ValueChannel::Stored)
+                .as_ref(),
+            &TagValue::new_string("43,30N"),
+        );
+        assert_eq!(
+            gps[0]
+                .project(crate::core::tag_occurrence::ValueChannel::ValueConv)
+                .as_ref(),
+            &TagValue::new_string("43.5"),
+        );
+        assert_eq!(
+            gps[0]
+                .project(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .as_ref(),
+            &TagValue::new_string("43 deg 30' 0.00\" N"),
+        );
     }
 
     #[test]

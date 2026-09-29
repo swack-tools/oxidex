@@ -19,14 +19,16 @@ ExifTool under an allowlisted environment with pinned fixtures required (the
 release's own `t/images` plus the bootstrap-verified, version-independent
 combined-samples corpus); a
 missing, failed or unparsable test receipt, or one graded by any other
-ExifTool, refuses the side. Until the plan's release-aware test rewrite
-lands, the historical 113 (11.78) and 79 (12.64) lib-test failures mean those
-rows will refuse at this stage, which is the intended outcome.
+ExifTool, refuses the side. The historical 113 (11.78) and 79 (12.64)
+lib-test failures describe earlier rehearsal checkouts. They do not predict
+the repaired candidate's outcome: each row still requires its own
+selected-release test receipt with zero failures and a committed result.
 
-This is not transition qualification. Canonical 11.78 and 12.64 source bundles
-and fixture manifests are not present, and the final runs must use the
-converged post-Task18 candidate. The wrapper therefore fails closed today.
-After those inputs are provisioned and independently reviewed, run same-pin,
+This is not transition qualification. Retained 11.78 and 12.64 source bundles
+and fixture manifests passed the immutable-input recheck in
+`task19-final-launch-readiness/immutable-input-recheck.json`. Input availability
+does not qualify a transition. Qualification requires committed results from
+all three final rows on the converged post-Task18 candidate. Run same-pin,
 forward, then reverse through the entry point's single nonblocking
 `transition.host.lock`, with unique run IDs and complete owner, heartbeat,
 expiry, release, and handoff receipts. Do not use the old fleet-controller or

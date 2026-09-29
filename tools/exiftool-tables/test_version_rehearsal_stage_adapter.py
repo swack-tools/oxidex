@@ -120,6 +120,18 @@ class AdapterTests(unittest.TestCase):
         for item in artifacts.ARTIFACTS:
             path = self.checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(fixture_text(item))
         self.target = self.root / "target"; self.target.mkdir(); self.reports = self.root / "reports"; self.reports.mkdir()
+        # The adapter fixture is a synthetic checkout. A separate real-Git
+        # suite exercises signed snapshot creation and byte-for-byte replay.
+        snapshot_proof = {"schema": 1, "path": str(self.target / "measurement-source"),
+                          "commit": "c" * 40, "tree": "d" * 40}
+        self.snapshot_proof = snapshot_proof
+        snapshot_create = patch.object(adapter.clean_snapshot, "create", return_value=snapshot_proof)
+        snapshot_validate = patch.object(adapter.clean_snapshot, "validate", return_value=self.checkout)
+        snapshot_create.start(); self.addCleanup(snapshot_create.stop)
+        snapshot_validate.start(); self.addCleanup(snapshot_validate.stop)
+        raw_capture = patch.object(adapter.raw_maps, "capture_authenticated_maps",
+                                   return_value={"schema": 1, "kind": "test_authenticated_raw_maps", "rows": []})
+        self.mock_raw_capture = raw_capture.start(); self.addCleanup(raw_capture.stop)
         self.native = self.root / "native"; (self.native / "lib/Image/ExifTool").mkdir(parents=True)
         (self.native / "lib/Image/ExifTool.pm").write_text("$VERSION = '11.78';\n")
         (self.native / "lib/Image/ExifTool/Writer.pl").write_text("package Image::ExifTool; 1;\n")
@@ -291,7 +303,17 @@ class AdapterTests(unittest.TestCase):
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             corpus = Path(argv[2]); fixture = next(corpus.iterdir())
-            output.write_text(json.dumps({"per_format": {"JPEG": {"files": 1, "matched": 2, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0}}, "per_file": {str(fixture): {"format": "JPEG"}}}))
+            executable = Path(argv[argv.index("--oxidex") + 1])
+            output.write_text(json.dumps({
+                "instrument": {"tool": "conformance.py", "repo": {
+                    "root": self.snapshot_proof["path"], "commit": self.snapshot_proof["commit"],
+                    "tree": self.snapshot_proof["tree"], "dirty": False,
+                    "dirty_files": [], "dirty_overridden": False},
+                    "binary": {"path": str(executable.resolve()), "sha256": adapter._sha(executable),
+                               "size": executable.stat().st_size}},
+                "per_format": {"JPEG": {"files": 1, "matched": 2, "value_diff": 0,
+                                          "missing": 0, "renames": 0, "extra": 0}},
+                "per_file": {str(fixture): {"format": "JPEG"}}}))
             return subprocess.CompletedProcess(argv, 0, "compared", "")
         raise AssertionError(argv)
 
@@ -369,12 +391,89 @@ class AdapterTests(unittest.TestCase):
         built = adapter.build(self.args("build"), run=self.fake_run)
         read = adapter.read(self.args("read"), run=self.fake_run)
         self.assertEqual(built["binary"]["sha256"], read["binary"]["sha256"])
-        self.assertEqual(read["state"], "passed"); self.assertEqual(read["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 2, "mismatched": 0})
+        self.assertEqual(read["state"], "measured"); self.assertEqual(read["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 2, "mismatched": 0})
+        maps = self.reports / "raw/read-maps.json"
+        self.assertEqual(read["raw_maps"], {"path": str(maps), "sha256": adapter._sha(maps)})
+        self.assertEqual(json.loads(maps.read_text())["kind"], "test_authenticated_raw_maps")
+        capture_args = self.mock_raw_capture.call_args.args
+        self.assertEqual(capture_args[0], self.reports / "raw/read-conformance.json")
+        self.assertEqual(capture_args[1], read["fixtures"]["entries"])
+        self.assertEqual(capture_args[2], self.checkout)
+        self.assertEqual(capture_args[3], Path(read["binary"]["path"]))
+        self.assertEqual(capture_args[4:], (self.perl.resolve(), self.native.resolve()))
         self.assertEqual(read["classification_counts"], {
             "matched": 2, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
         })
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
+        compared = next(row for row in self.seen if row[0][0] == sys.executable
+                        and "conformance.py" in row[0][1])
+        self.assertNotIn("OXIDEX_ALLOW_DIRTY_TREE", compared[1])
+
+    def test_read_with_standing_gap_is_measured_not_accepted(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+
+        def standing_gap(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable:
+                output = Path(argv[argv.index("--json-out") + 1])
+                data = json.loads(output.read_text())
+                data["per_format"]["JPEG"].update(matched=2, missing=1)
+                output.write_text(json.dumps(data))
+            return result
+
+        read = adapter.read(self.args("read"), run=standing_gap)
+        self.assertEqual(read["state"], "measured")
+        self.assertEqual(read["comparison"]["matched"], 2)
+        self.assertEqual(read["comparison"]["mismatched"], 1)
+        self.assertEqual(read["classification_counts"]["missing"], 1)
+        self.assertEqual(read["denominator"], 3)
+        self.assertTrue(Path(read["raw_maps"]["path"]).is_file())
+
+    def test_read_refuses_unauthenticated_raw_map_capture(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        self.mock_raw_capture.side_effect = adapter.raw_maps.Refused("transcript differs")
+        with self.assertRaisesRegex(adapter.Refused, "authenticated read raw-map capture refused"):
+            adapter.read(self.args("read"), run=self.fake_run)
+        self.assertFalse((self.reports / "read.json").exists())
+        self.assertFalse((self.reports / "raw/read-maps.json").exists())
+
+    def test_read_refuses_a_conformance_receipt_from_a_different_clean_source(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+
+        def changed_source(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable:
+                output = Path(argv[argv.index("--json-out") + 1])
+                data = json.loads(output.read_text())
+                data["instrument"]["repo"]["commit"] = "f" * 40
+                output.write_text(json.dumps(data))
+            return result
+
+        with self.assertRaisesRegex(adapter.Refused, "signed clean generated snapshot"):
+            adapter.read(self.args("read"), run=changed_source)
+
+    def test_read_refuses_a_conformance_receipt_from_a_different_binary(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+
+        def changed_binary(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable:
+                output = Path(argv[argv.index("--json-out") + 1])
+                data = json.loads(output.read_text())
+                data["instrument"]["binary"]["sha256"] = "f" * 64
+                output.write_text(json.dumps(data))
+            return result
+
+        with self.assertRaisesRegex(adapter.Refused, "authenticated build binary"):
+            adapter.read(self.args("read"), run=changed_binary)
 
     def test_release_test_suite_runs_in_isolated_target_and_counts_strictly(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
@@ -892,7 +991,7 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.Refused, "exactly the staged fixture manifest"):
             adapter.read(self.args("read"), run=incomplete)
 
-    def test_nonzero_actual_mismatch_is_a_failed_report_not_a_pass(self):
+    def test_nonzero_actual_mismatch_is_measured_pending_pair_policy(self):
         adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
         original = self.fake_run
         def mismatch(argv, **kwargs):
@@ -901,7 +1000,7 @@ class AdapterTests(unittest.TestCase):
                 output = Path(argv[argv.index("--json-out") + 1]); data = json.loads(output.read_text()); data["per_format"]["JPEG"]["missing"] = 1; output.write_text(json.dumps(data))
             return result
         result = adapter.read(self.args("read"), run=mismatch)
-        self.assertEqual(result["state"], "failed"); self.assertEqual(result["comparison"]["mismatched"], 1)
+        self.assertEqual(result["state"], "measured"); self.assertEqual(result["comparison"]["mismatched"], 1)
 
     def test_changed_fixture_or_binary_refuses_before_comparison(self):
         adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)

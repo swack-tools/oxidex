@@ -48,13 +48,48 @@ fn generate_index(
         report.overall_instance_coverage
     ));
 
-    if report.total_regressions > 0 {
+    let mut unassessed_formats: Vec<_> = report
+        .by_format
+        .iter()
+        .filter(|(_, comparison)| !comparison.regressions_assessed)
+        .map(|(format, _)| format.as_str())
+        .collect();
+    unassessed_formats.sort_unstable();
+    let assessed_formats = report.by_format.len() - unassessed_formats.len();
+    let assessed_regressions: usize = report
+        .by_format
+        .values()
+        .filter(|comparison| comparison.regressions_assessed)
+        .map(|comparison| comparison.regressions.len())
+        .sum();
+    if assessed_formats == 0 {
+        content.push_str(" | **Regressions:** n/a");
+    } else if unassessed_formats.is_empty() {
+        content.push_str(&format!(" | **Regressions:** {}", assessed_regressions));
+    } else {
         content.push_str(&format!(
-            " | **⚠️ Regressions:** {}",
-            report.total_regressions
+            " | **Regressions:** {} (assessed formats)",
+            assessed_regressions
         ));
     }
     content.push_str("\n\n");
+
+    if !unassessed_formats.is_empty() {
+        let missing = if assessed_formats == 0 {
+            "No previous comparison baseline was available for any tested format.".to_string()
+        } else {
+            format!(
+                "No previous comparison baseline was available for {}.",
+                unassessed_formats.join(", ")
+            )
+        };
+        content.push_str(&format!(
+            "::: warning Regression status unassessed\n\
+             {missing} Regression counts are shown only for formats with a \
+             previous comparison; `n/a` means unassessed, not zero.\n\
+             :::\n\n"
+        ));
+    }
 
     content.push_str(&format!(
         "::: warning What this number is, and what it is not\n\
@@ -125,7 +160,8 @@ fn generate_index(
         "`Coverage` is per (file, tag) — matched instances over ExifTool \
          instances. `Names Seen` is the distinct-key inventory described \
          above, shown for breadth only. `Missing`, `Extra` and `Value Diffs` \
-         count distinct keys.\n\n",
+         count distinct keys. `Regressions` is `n/a` where no previous \
+         comparison was available.\n\n",
     );
     content
         .push_str("| Format | Files | Tag Instances | Coverage | Names Seen | Missing | Extra | Value Diffs | Regressions |\n");
@@ -139,7 +175,9 @@ fn generate_index(
     let mut listed_formats: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (format, comp) in formats {
-        let regression_cell = if comp.regressions.is_empty() {
+        let regression_cell = if !comp.regressions_assessed {
+            "n/a".to_string()
+        } else if comp.regressions.is_empty() {
             "0".to_string()
         } else {
             format!("⚠️ {}", comp.regressions.len())
@@ -291,7 +329,14 @@ fn generate_format_page(
         comparison.value_differences.len()
     ));
 
-    if !comparison.regressions.is_empty() {
+    if !comparison.regressions_assessed {
+        content.push_str(
+            "- **Regressions:** n/a — no previous comparison baseline was \
+             available for this format, so regression status was not assessed\n",
+        );
+    } else if comparison.regressions.is_empty() {
+        content.push_str("- **Regressions:** 0\n");
+    } else {
         content.push_str(&format!(
             "- **⚠️ Regressions:** {}\n",
             comparison.regressions.len()
@@ -300,7 +345,7 @@ fn generate_format_page(
     content.push('\n');
 
     // Regressions (most important, show first)
-    if !comparison.regressions.is_empty() {
+    if comparison.regressions_assessed && !comparison.regressions.is_empty() {
         content.push_str("## ⚠️ Regressions\n\n");
         content.push_str("Tags that OxiDex previously extracted but no longer does:\n\n");
         content.push_str("| Tag |\n");
@@ -401,5 +446,87 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         let truncated: String = sanitized.chars().take(max_len).collect();
         format!("{}...", truncated.replace('\n', " "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render(report: &ComparisonReport) -> (tempfile::TempDir, String) {
+        let directory = tempfile::tempdir().unwrap();
+        generate_markdown_reports(report, directory.path()).unwrap();
+        let index = std::fs::read_to_string(directory.path().join("index.md")).unwrap();
+        (directory, index)
+    }
+
+    #[test]
+    fn no_baseline_is_unassessed_in_index_and_format_page() {
+        let mut report = ComparisonReport::new();
+        report.add_format("JPEG".into(), FormatComparison::new("JPEG".into(), 1));
+        report.calculate_overall_coverage();
+
+        let (directory, index) = render(&report);
+        assert!(index.contains("**Regressions:** n/a"));
+        assert!(
+            index.contains("No previous comparison baseline was available for any tested format.")
+        );
+        assert!(index.contains("`n/a` means unassessed, not zero"));
+        assert!(
+            index
+                .lines()
+                .any(|line| line.starts_with("| [JPEG]") && line.ends_with("| n/a |"))
+        );
+        let page = std::fs::read_to_string(directory.path().join("jpeg.md")).unwrap();
+        assert!(page.contains("- **Regressions:** n/a — no previous comparison baseline"));
+    }
+
+    #[test]
+    fn partial_baseline_distinguishes_unassessed_zero_and_real_regression() {
+        let mut report = ComparisonReport::new();
+        let mut jpeg = FormatComparison::new("JPEG".into(), 1);
+        jpeg.regressions_assessed = true;
+        report.add_format("JPEG".into(), jpeg);
+        report.add_format("PNG".into(), FormatComparison::new("PNG".into(), 1));
+        let mut tiff = FormatComparison::new("TIFF".into(), 1);
+        tiff.regressions_assessed = true;
+        tiff.regressions.push("EXIF:Model".into());
+        report.add_format("TIFF".into(), tiff);
+        report.calculate_overall_coverage();
+
+        let (directory, index) = render(&report);
+        assert!(index.contains("**Regressions:** 1 (assessed formats)"));
+        assert!(index.contains("No previous comparison baseline was available for PNG."));
+        for (format, expected) in [("JPEG", "0"), ("PNG", "n/a"), ("TIFF", "⚠️ 1")] {
+            assert!(
+                index.lines().any(|line| {
+                    line.starts_with(&format!("| [{format}]"))
+                        && line.ends_with(&format!("| {expected} |"))
+                }),
+                "{format} regression cell"
+            );
+        }
+        let jpeg_page = std::fs::read_to_string(directory.path().join("jpeg.md")).unwrap();
+        assert!(jpeg_page.contains("- **Regressions:** 0"));
+        let png_page = std::fs::read_to_string(directory.path().join("png.md")).unwrap();
+        assert!(png_page.contains("- **Regressions:** n/a"));
+        let tiff_page = std::fs::read_to_string(directory.path().join("tiff.md")).unwrap();
+        assert!(tiff_page.contains("- **⚠️ Regressions:** 1"));
+        assert!(tiff_page.contains("| `EXIF:Model` |"));
+    }
+
+    #[test]
+    fn assessed_zero_is_reported_without_missing_baseline_warning() {
+        let mut report = ComparisonReport::new();
+        let mut jpeg = FormatComparison::new("JPEG".into(), 1);
+        jpeg.regressions_assessed = true;
+        report.add_format("JPEG".into(), jpeg);
+        report.calculate_overall_coverage();
+
+        let (directory, index) = render(&report);
+        assert!(index.contains("**Regressions:** 0"));
+        assert!(!index.contains("Regression status unassessed"));
+        let page = std::fs::read_to_string(directory.path().join("jpeg.md")).unwrap();
+        assert!(page.contains("- **Regressions:** 0"));
     }
 }

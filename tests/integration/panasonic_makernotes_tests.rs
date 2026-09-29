@@ -6,6 +6,160 @@
 //! - Header validation
 //! - Tag extraction from synthetic test data
 
+const DC_S1M2ES: &str = "Panasonic/PanasonicDC-S1M2ES.jpg";
+const LEICA_D_LUX8: &str = "Leica/LeicaD-Lux8.jpg";
+const LEICA_V_LUX: &str = "Leica/LeicaV-LUX.jpg";
+const LEICA_CAM_DC25: &str = "Leica/LeicaCAM-DC25.jpg";
+const DC_S5M2: &str = "Panasonic/PanasonicDC-S5M2.jpg";
+const PV_DV401_K: &str = "Panasonic/PanasonicPV-DV401-K.jpg";
+
+/// ExifTool 13.59's `Panasonic::TimeInfo` entry 0 is an eight-byte packed BCD
+/// timestamp, not a TIFF date string.  The real fixture covers the omitted
+/// `RawConv` and `ValueConv` path.
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn panasonic_dc_s5m2_reports_packed_datetime() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(DC_S5M2))
+        .expect("Panasonic DC-S5M2 parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:PanasonicDateTime"),
+        Some("2023:01:15 22:30:54.37")
+    );
+}
+
+/// `MakerNotePanasonic2` is a fixed little-endian binary record beginning
+/// `MKE*`, rather than Panasonic's ordinary TIFF-like IFD MakerNote.
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn panasonic_pv_dv401_reports_type2_gain() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(PV_DV401_K))
+        .expect("Panasonic PV-DV401 parses");
+    assert_eq!(metadata.get_string("Panasonic:MakerNoteType"), Some("MKEM"));
+    assert_eq!(metadata.get_integer("Panasonic:Gain"), Some(136));
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn leica_v_lux_reports_binary_output_lut() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(
+        LEICA_V_LUX,
+    ))
+    .expect("Leica V-LUX parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:OutputLUT"),
+        Some("(Binary data 864 bytes, use -b option to extract)")
+    );
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn leica_cam_dc25_reports_lens_type_make() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(
+        LEICA_CAM_DC25,
+    ))
+    .expect("Leica CAM-DC25 parses");
+    assert_eq!(metadata.get_integer("Panasonic:LensTypeMake"), Some(0));
+}
+
+/// Leica's D-Lux 8 uses ExifTool's `MakerNoteLeica10`, which routes its
+/// "LEICA CAMERA AG" MakerNote to Panasonic::Main.  The expected values below
+/// are from the pinned ExifTool 13.59 oracle (`-G1 -s -n`).
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn leica_d_lux8_reports_panasonic_main_late_tags() {
+    use oxidex::core::operations::read_metadata;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(
+        LEICA_D_LUX8,
+    ))
+    .expect("Leica D-Lux 8 parses");
+    assert_eq!(
+        metadata.get_string("Panasonic:WBShiftIntelligentAuto"),
+        Some("0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:WBShiftCreativeControl"),
+        Some("0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:HighlightShadow"),
+        Some("0 0")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:VideoBurstResolution"),
+        Some("Off or 4K")
+    );
+    assert_eq!(metadata.get_string("Panasonic:RedEyeRemoval"), Some("Off"));
+    assert_eq!(metadata.get_string("Panasonic:VideoBurstMode"), Some("Off"));
+    assert_eq!(metadata.get_string("Panasonic:FocusBracket"), Some("0"));
+    assert_eq!(
+        metadata.get_string("Panasonic:LongExposureNRUsed"),
+        Some("No")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:PostFocusMerging"),
+        Some("Post Focus Auto Merging or None")
+    );
+    assert_eq!(metadata.get_string("Panasonic:VideoPreburst"), Some("No"));
+    assert_eq!(
+        metadata.get_string("Panasonic:SensorType"),
+        Some("Multi-aspect")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:MonochromeGrainEffect"),
+        Some("Off")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:TimeLapseShotNumber"),
+        Some("0")
+    );
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn panasonic_dc_s1m2es_reports_late_makernote_tags() {
+    use oxidex::core::operations::read_metadata;
+
+    let fixture = DC_S1M2ES;
+
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(fixture))
+        .expect("Panasonic DC-S1M2ES parses");
+    assert_eq!(metadata.get_string("Panasonic:HybridLogGamma"), Some("Off"));
+    assert_eq!(
+        metadata.get_string("Panasonic:LensTypeModel"),
+        Some("07 40")
+    );
+    assert_eq!(metadata.get_string("Panasonic:MinimumISO"), Some("100"));
+    assert_eq!(
+        metadata.get_string("Panasonic:AFSubjectDetection"),
+        Some("Human Eye/Face/Body")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:DynamicRangeBoost"),
+        Some("Off")
+    );
+    assert_eq!(metadata.get_string("Panasonic:LUT1Name"), Some(""));
+    assert_eq!(metadata.get_string("Panasonic:LUT1Opacity"), Some("0"));
+    assert_eq!(metadata.get_string("Panasonic:LUT2Name"), Some(""));
+    assert_eq!(metadata.get_string("Panasonic:LUT2Opacity"), Some("0"));
+    assert_eq!(
+        metadata.get_string("Panasonic:AFAreaSize"),
+        Some("0.0205078125 0.03125")
+    );
+    assert_eq!(
+        metadata.get_string("Panasonic:NoiseReductionStrength"),
+        Some("0")
+    );
+}
+
 #[test]
 fn test_panasonic_parser_trait() {
     use oxidex::parsers::tiff::makernotes::panasonic::PanasonicParser;

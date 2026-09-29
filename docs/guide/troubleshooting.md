@@ -62,8 +62,9 @@ To make an incomplete read an error, pass `--strict`.
 | `Cannot modify file in read-only mode (--readonly flag set)` | Remove `--readonly` |
 
 OxiDex keeps **no `_original` backup**. Pass `--backup` for a `.bak` copy.
-Only 19 tags are proven to produce the same bytes as ExifTool's own write.
-Anything else may differ, and a report with the file is welcome.
+A historical observation at commit `7a9c7576` proved 19 tags produced
+the same bytes as ExifTool's own write. Final beta write evidence remains
+pending; other tags may differ, and a report with the file is welcome.
 
 ## `-n` did not print raw values
 

@@ -1,5 +1,5 @@
 use crate::fixtures::pinned_fixture_path;
-use oxidex::core::operations::read_metadata;
+use oxidex::core::{TagValue, operations::read_metadata};
 
 const DJI_ZH20N: &str = "DJI/DJI_ZH20N.jpg";
 const DJI_MAVIC2_ENTERPRISE_ADVANCED: &str = "DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg";
@@ -61,5 +61,37 @@ fn dji_mavic2_app4_thermal_params2_matches_exiftool() {
         ("APP4:IDString", "Mini_640"),
     ] {
         assert_eq!(metadata.get_string(tag), later.then_some(value), "{tag}");
+    }
+}
+
+/// ExifTool 13.59 treats this MakerNote payload as a sequence of bracketed
+/// DJI::Info fields. These eleven opaque values must retain their exact byte
+/// counts; their contents are vendor diagnostic blobs, not text metadata.
+#[test]
+#[ignore = "requires pinned combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg"]
+fn dji_mavic2_info_binary_tags_match_exiftool() {
+    let path = crate::fixtures::required_combined_fixture_path(DJI_MAVIC2_ENTERPRISE_ADVANCED);
+    let metadata = read_metadata(&path).expect("DJI Mavic 2 Enterprise Advanced parses");
+
+    for (tag, bytes) in [
+        ("AEDebugInfo", 256),
+        ("AEHistogramInfo", 4096),
+        ("AELocalHistogram", 2048),
+        ("AELiveViewHistogramInfo", 4096),
+        ("AELiveViewLocalHistogram", 2048),
+        ("AWBDebugInfo", 4096),
+        ("AFDebugInfo", 256),
+        ("Histogram", 1024),
+        ("Xidiri", 512),
+        ("ADJDebugInfo", 1024),
+        ("HyperlapsDebugInfo", 8),
+    ] {
+        assert!(
+            matches!(
+                metadata.get(&format!("DJI:{tag}")),
+                Some(TagValue::Binary(value)) if value.len() == bytes
+            ),
+            "{tag} should be a {bytes}-byte binary value"
+        );
     }
 }

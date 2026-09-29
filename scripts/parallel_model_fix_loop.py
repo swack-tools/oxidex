@@ -2984,7 +2984,10 @@ PUBLISH_OK_STATUSES = frozenset({
 # Sweep statuses meaning "there was nothing to publish", as opposed to
 # "publishing was attempted and failed". Only these earn the idle backoff:
 # a failing round should keep its configured cadence so a transient fault
-# is retried promptly.
+# is retried promptly. "duplicate_of_open_pr" belongs here for the same
+# reason as "zero_delta": the round correctly found nothing NEW to publish
+# (this round's content already sits on an earlier round's open PR), so
+# hammering at full cadence just re-discovers the same duplicate.
 IDLE_STATUSES = frozenset({"no_news", "nothing_merged", "zero_delta", "duplicate_of_open_pr"})
 IDLE_ROUND_DELAY_SECONDS = 60.0
 

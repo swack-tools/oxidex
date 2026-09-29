@@ -416,7 +416,8 @@ jobs:
           EXIFTOOL_PERL: perl
         run: |
           set -euo pipefail
-          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          export OXIDEX_PINNED_EXIFTOOL
           cargo test --all-features --lib \
             exiftool_tables::keyed_engine::tests::generated_word_directory_matches_native_probe_v1 \
             -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/word-native-replay.log"
@@ -427,7 +428,8 @@ jobs:
           EXIFTOOL_PERL: perl
         run: |
           set -euo pipefail
-          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          export OXIDEX_PINNED_EXIFTOOL
           cargo test --all-features --test serial_directory_native \
             -- --ignored --nocapture | tee "$RUNNER_TEMP/serial-native-replay.log"
           # Require Real Audio and both Canon autofocus replays; an empty or
@@ -438,7 +440,8 @@ jobs:
           EXIFTOOL_PERL: perl
         run: |
           set -euo pipefail
-          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          export OXIDEX_PINNED_EXIFTOOL
           cargo test --all-features --test cli_group_all_selection \
             apple_pinned_t_images_read_selectors_match_pinned_oracle \
             -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/read-selector-native-replay.log"

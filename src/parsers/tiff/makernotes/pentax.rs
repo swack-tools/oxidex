@@ -210,6 +210,15 @@ const PENTAX_ARTIST: u16 = 0x022E;
 const PENTAX_COPYRIGHT: u16 = 0x022F;
 const PENTAX_FIRMWARE_VERSION_VIDEO: u16 = 0x0230;
 
+// Generated Pentax::Type2 declares these Count=4, Writable=undef values,
+// but the current handwritten headerless directory does not walk that table. Keep
+// their four bytes as text: whitespace is part of ExifTool's raw value.
+const PENTAX_TYPE2_HOMETOWN_CITY_CODE: u16 = 0x1000;
+const PENTAX_TYPE2_DESTINATION_CITY_CODE: u16 = 0x1001;
+// MakerNotePentax3 dispatches Optio 330RS/430RS AOC records to Casio::Type2.
+// Casio's 0x3007 variants are model-dependent; zero is the common Off value.
+const CASIO_TYPE2_BEST_SHOT_MODE: u16 = 0x3007;
+
 // ============================================================================
 // Declarative Decoder Definitions
 // ============================================================================
@@ -1063,6 +1072,8 @@ impl MakerNoteParser for PentaxParser {
             ctx.payload_tiff_offset(),
             model,
             tags,
+            false,
+            None,
             Some(occurrences),
         )?;
 
@@ -1080,6 +1091,41 @@ impl MakerNoteParser for PentaxParser {
     }
 }
 
+/// The dispatcher owns the actual Make string. Keep its Asahi-only table
+/// selection here without changing the public PentaxParser struct shape or
+/// claiming those legacy table rows on direct, Make-less trait calls.
+pub(crate) fn parse_asahi_with_context(
+    ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+    occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+) -> std::result::Result<(), String> {
+    let parser = PentaxParser::default();
+    parser.parse_located_with_occurrences(
+        ctx.window(),
+        byte_order,
+        ctx.payload_tiff_offset(),
+        model,
+        tags,
+        true,
+        Some(value_forms),
+        occurrences,
+    )?;
+    let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
+        ctx.payload_base()
+    } else {
+        ctx.tiff_base()
+    };
+    crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+        tags,
+        base,
+        &["Pentax:PreviewImageStart"],
+    );
+    Ok(())
+}
+
 impl PentaxParser {
     #[allow(clippy::too_many_lines)]
     fn parse_located(
@@ -1090,7 +1136,9 @@ impl PentaxParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, None)
+        self.parse_located_with_occurrences(
+            data, byte_order, data_base, model, tags, false, None, None,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1101,6 +1149,8 @@ impl PentaxParser {
         data_base: Option<u32>,
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
+        asahi_make: bool,
+        value_forms: Option<&mut HashMap<String, String>>,
         mut occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -1149,6 +1199,22 @@ impl PentaxParser {
             0
         };
 
+        // MakerNotes.pm selects Pentax::Type2 for Asahi's non-AOC note,
+        // with no Model test. Its AOC Optio 330RS/430RS branch instead selects
+        // Casio::Type2; the dispatcher passes actual Make into this routine.
+        let legacy_type2 = asahi_make && !is_aoc_header;
+        let legacy_casio_type2 = asahi_make
+            && is_aoc_header
+            && model.is_some_and(|m| {
+                let Some(suffix) = m.trim_end().strip_prefix("PENTAX Optio") else {
+                    return false;
+                };
+                matches!(
+                    suffix.strip_prefix(' ').unwrap_or(suffix),
+                    "330RS" | "430RS"
+                )
+            });
+
         if data.len() <= ifd_offset + 2 {
             return Ok(());
         }
@@ -1185,6 +1251,14 @@ impl PentaxParser {
             .into_iter()
             .map(|entry| right_align_inline_value(entry, byte_order))
             .collect();
+
+        // MakerNotes.pm:782-790 routes a non-AOC Asahi IFD to
+        // Pentax::Type2. None of its ids may reach Pentax::Main's supplement
+        // or match arms: even shared names have different tag ids and values.
+        if legacy_type2 {
+            decode_pentax_type2(&entries, data, value_base, byte_order, tags, value_forms);
+            return Ok(());
+        }
 
         // "AOC\0" MakerNotes declare no Base of their own, so their offsets
         // are read against the enclosing TIFF header -- but real files move
@@ -1232,6 +1306,9 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    if entry.tag_id == PENTAX_FILTER_INFO {
+                        decode_pentax_digital_filters(&record, tags, occurrences.as_deref_mut());
+                    }
                     // `FlashInfo` byte 24 has a second, fractional table key
                     // (`24.1`) which the generated integer-index layout cannot
                     // represent.  Decode that one field from the same record.
@@ -2798,6 +2875,17 @@ impl PentaxParser {
                     }
                 }
 
+                CASIO_TYPE2_BEST_SHOT_MODE if legacy_casio_type2 => {
+                    // Casio::Type2 declares int16u. An unsupported format's
+                    // value_offset may be zero without representing Off.
+                    if entry.field_type == 3
+                        && entry.value_count == 1
+                        && extract_value_as_i32(&entry, byte_order) == 0
+                    {
+                        tags.insert("Casio:BestShotMode".to_string(), "Off".to_string());
+                    }
+                }
+
                 _ => {
                     // Unknown tags are silently ignored
                 }
@@ -2805,6 +2893,82 @@ impl PentaxParser {
         }
 
         Ok(())
+    }
+}
+
+/// Decode only the fields authenticated by Pentax::Type2 in pinned Pentax.pm.
+/// The Asahi Type2 IFD shares several ids with Pentax::Main but assigns
+/// them different meanings, so no Main decoder may run on this path.
+fn decode_pentax_type2(
+    entries: &[IfdEntry],
+    data: &[u8],
+    value_base: i64,
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+    mut value_forms: Option<&mut HashMap<String, String>>,
+) {
+    use crate::exiftool_tables::PrintConv;
+
+    let Some(table) = crate::exiftool_tables::find_ifd_table("Pentax", "Type2") else {
+        return;
+    };
+    for entry in entries {
+        let Some(row) = table.tag(entry.tag_id) else {
+            continue;
+        };
+        if row.omitted.any()
+            || row.subdir.is_some()
+            || row.condition.is_some()
+            || row.raw_conv.is_some()
+            || row.value_conv.is_some()
+            || row.format.is_some()
+        {
+            continue;
+        }
+        let decoded = match entry.tag_id {
+            PENTAX_TYPE2_HOMETOWN_CITY_CODE | PENTAX_TYPE2_DESTINATION_CITY_CODE
+                if entry.field_type == 7
+                    && entry.value_count == 4
+                    && row.count == Some(4)
+                    && row.writable == Some("undef") =>
+            {
+                extract_raw_string_preserve_spaces(entry, data, value_base, byte_order)
+                    .map(|value| (value, None))
+            }
+            0x000a
+                if entry.field_type == 4
+                    && entry.value_count == 1
+                    && row.writable == Some("int32u")
+                    && matches!(row.print_conv, PrintConv::None) =>
+            {
+                entry_components(entry, data, value_base, byte_order)
+                    .first()
+                    .map(|value| (value.to_string(), None))
+            }
+            _ if entry.field_type == 3 && entry.value_count == 1 && row.writable.is_none() => {
+                let PrintConv::IntEnum(values) = row.print_conv else {
+                    continue;
+                };
+                let Some(raw) = entry_components(entry, data, value_base, byte_order)
+                    .first()
+                    .copied()
+                else {
+                    continue;
+                };
+                values
+                    .binary_search_by_key(&raw, |(key, _)| *key)
+                    .ok()
+                    .map(|index| (values[index].1.to_string(), Some(raw.to_string())))
+            }
+            _ => None,
+        };
+        if let Some((value, raw_form)) = decoded {
+            let key = format!("Pentax:{}", row.name);
+            if let (Some(forms), Some(raw)) = (value_forms.as_deref_mut(), raw_form) {
+                forms.insert(key.clone(), raw);
+            }
+            tags.insert(key, value);
+        }
     }
 }
 
@@ -3077,6 +3241,350 @@ fn decode_caf_points(bytes: &[u8], point_count: u32, mask: u8) -> String {
 /// produces nothing here rather than a guess -- `%Pentax` has an
 /// `...Unknown` companion table for exactly those, and ExifTool reports no
 /// named tags from it either.
+
+/// ExifTool 13.59's `Pentax::PrintFilter` (Pentax.pm:6664) for FilterInfo's
+/// generated `DigitalFilterNN` `undef[17]` records. Its list return is kept as JSON so
+/// the compatibility extractor normalizes it exactly like ExifTool `-json`.
+fn decode_pentax_digital_filters(
+    record: &[u8],
+    tags: &mut HashMap<String, String>,
+    structured_rows: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+) {
+    let mut structured_rows = structured_rows;
+    // PrintFilter's 13.59 lookup lists are not yet admitted for historical
+    // releases. The selected generated table owns which physical records
+    // exist; absent or changed layouts are withheld instead of guessed.
+    if crate::exiftool_tables::EXIFTOOL_VERSION != "13.59" {
+        return;
+    }
+    let Some(table) = crate::exiftool_tables::find_table("Pentax", "FilterInfo") else {
+        return;
+    };
+    const FILTERS: [&str; 255] = {
+        let mut names = [""; 255];
+        names[1] = "Base Parameter Adjust";
+        names[2] = "Soft Focus";
+        names[3] = "High Contrast";
+        names[4] = "Color Filter";
+        names[5] = "Extract Color";
+        names[6] = "Monochrome";
+        names[7] = "Slim";
+        names[9] = "Fisheye";
+        names[10] = "Toy Camera";
+        names[11] = "Retro";
+        names[12] = "Pastel";
+        names[13] = "Water Color";
+        names[14] = "HDR";
+        names[16] = "Miniature";
+        names[17] = "Starburst";
+        names[18] = "Posterization";
+        names[19] = "Sketch Filter";
+        names[20] = "Shading";
+        names[21] = "Invert Color";
+        names[23] = "Tone Expansion";
+        names[27] = "Unicolor Bold";
+        names[28] = "Bold Monochrome";
+        names[29] = "Replace Color";
+        names[254] = "Custom Filter";
+        names
+    };
+    const SETTINGS: [&str; 53] = [
+        "",
+        "Brightness",
+        "Saturation",
+        "Hue",
+        "Contrast",
+        "Sharpness",
+        "SoftFocus",
+        "ShadowBlur",
+        "HighContrast",
+        "Color",
+        "Density",
+        "ExtractedColor",
+        "ColorRange",
+        "FilterEffect",
+        "ToningBA",
+        "InvertColor",
+        "Slim",
+        "EffectDensity",
+        "Size",
+        "Angle",
+        "Fisheye",
+        "DistortionType",
+        "DistortionLevel",
+        "ShadingType",
+        "ShadingLevel",
+        "Shading",
+        "Blur",
+        "ToneBreak",
+        "Toning",
+        "FrameComposite",
+        "PastelStrength",
+        "Intensity",
+        "Saturation2",
+        "HDR",
+        "",
+        "FocusPlane",
+        "FocusWidth",
+        "PlaneAngle",
+        "Blur2",
+        "Shape",
+        "Posterization",
+        "Contrast2",
+        "ScratchEffect",
+        "",
+        "",
+        "ToneExpansion",
+        "",
+        "UnicolorBold",
+        "BoldMonochrome",
+        "OriginalColor",
+        "NewColor",
+        "ColorScale",
+        "Toning2",
+    ];
+    for field in table.fields.iter().filter(|field| {
+        field.name.starts_with("DigitalFilter")
+            && field.format == Some(crate::exiftool_tables::Fmt::Undef(17))
+            && field.count == 1
+    }) {
+        let Ok(start) = usize::try_from(field.index) else {
+            continue;
+        };
+        let Some(raw) = start.checked_add(17).and_then(|end| record.get(start..end)) else {
+            continue;
+        };
+        let filter = raw[0];
+        if filter == 0 {
+            continue;
+        }
+        let label = FILTERS.get(usize::from(filter)).copied().unwrap_or("");
+        let mut values = vec![if label.is_empty() {
+            format!("Unknown ({filter})")
+        } else {
+            label.to_string()
+        }];
+        // Pentax.pm's RawConv is unpack("Cc*", $val): only the filter
+        // byte is unsigned; every setting id and value is signed.
+        for pair in raw[1..].chunks_exact(2) {
+            let id = pair[0] as i8;
+            if id == 0 {
+                continue;
+            }
+            let name = usize::try_from(id)
+                .ok()
+                .and_then(|index| SETTINGS.get(index))
+                .copied()
+                .filter(|s| !s.is_empty())
+                .map_or_else(|| format!("Unknown({id})"), str::to_string);
+            values.push(format!(
+                "{name}={}",
+                pentax_filter_setting_value(id, pair[1] as i8)
+            ));
+        }
+        let key = format!("Pentax:{}", field.name);
+        let legacy_print = serde_json::to_string(&values).expect("filter strings serialize");
+        if let Some(rows) = structured_rows.as_deref_mut() {
+            let raw_bytes = raw.to_vec();
+            let numeric = std::iter::once(raw[0].to_string())
+                .chain(raw[1..].iter().map(|byte| (*byte as i8).to_string()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            rows.push((
+                key,
+                crate::core::TagOccurrence {
+                    id: crate::core::TagId::Named(format!("Pentax::FilterInfo::{}", field.name)),
+                    name: crate::core::tag_occurrence::intern(field.name),
+                    group0: crate::core::tag_occurrence::intern("MakerNotes"),
+                    group1: crate::core::tag_occurrence::intern("Pentax"),
+                    group2: Some(crate::core::tag_occurrence::intern(table.group2)),
+                    instance: crate::core::Instance::default(),
+                    raw: crate::core::TagValue::new_string(legacy_print.clone()),
+                    stored: Some(crate::core::TagValue::Binary(raw_bytes)),
+                    value: Some(crate::core::TagValue::new_string(numeric)),
+                    print: Some(crate::core::TagValue::Array(
+                        values
+                            .into_iter()
+                            .map(crate::core::TagValue::new_string)
+                            .collect(),
+                    )),
+                    priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                    is_list: true,
+                    order: 0,
+                    origin: crate::core::Provenance {
+                        module: Some("Pentax"),
+                        table: Some("FilterInfo"),
+                        byte_range: None,
+                    },
+                },
+            ));
+        } else {
+            tags.insert(key, legacy_print);
+        }
+    }
+}
+
+fn pentax_filter_setting_value(id: i8, value: i8) -> String {
+    let mapped = match id {
+        7 | 15 | 42 => match value {
+            0 => Some("Off"),
+            1 => Some("On"),
+            _ => None,
+        },
+        9 | 47 | 49 | 50 => match value {
+            1 => Some("Red"),
+            2 => Some("Magenta"),
+            3 => Some("Blue"),
+            4 => Some("Cyan"),
+            5 => Some("Green"),
+            6 => Some("Yellow"),
+            _ => None,
+        },
+        11 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Magenta"),
+            3 => Some("Blue"),
+            4 => Some("Cyan"),
+            5 => Some("Green"),
+            6 => Some("Yellow"),
+            _ => None,
+        },
+        10 => match value {
+            1 => Some("Light"),
+            2 => Some("Standard"),
+            3 => Some("Dark"),
+            _ => None,
+        },
+        13 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Green"),
+            3 => Some("Blue"),
+            4 => Some("Infrared"),
+            _ => None,
+        },
+        17 => match value {
+            1 => Some("Sparse"),
+            2 => Some("Normal"),
+            3 => Some("Dense"),
+            _ => None,
+        },
+        18 => match value {
+            1 => Some("Small"),
+            2 => Some("Medium"),
+            3 => Some("Large"),
+            _ => None,
+        },
+        19 => match value {
+            0 => Some("0deg"),
+            2 => Some("30deg"),
+            3 => Some("45deg"),
+            4 => Some("60deg"),
+            _ => None,
+        },
+        20 | 30 | 33 => match value {
+            1 => Some("Weak"),
+            2 => Some("Medium"),
+            3 => Some("Strong"),
+            _ => None,
+        },
+        22 => match value {
+            0 => Some("Off"),
+            1 => Some("Weak"),
+            2 => Some("Medium"),
+            3 => Some("Strong"),
+            _ => None,
+        },
+        27 => match value {
+            0 => Some("Off"),
+            1 => Some("Red"),
+            2 => Some("Green"),
+            3 => Some("Blue"),
+            4 => Some("Yellow"),
+            _ => None,
+        },
+        29 => match value {
+            0 => Some("None"),
+            1 => Some("Thin"),
+            2 => Some("Medium"),
+            3 => Some("Thick"),
+            _ => None,
+        },
+        32 => match value {
+            0 => Some("Off"),
+            1 => Some("Low"),
+            2 => Some("Medium"),
+            3 => Some("High"),
+            _ => None,
+        },
+        36 => match value {
+            1 => Some("Narrow"),
+            2 => Some("Middle"),
+            3 => Some("Wide"),
+            _ => None,
+        },
+        37 => match value {
+            0 => Some("Horizontal"),
+            1 => Some("Vertical"),
+            2 => Some("Positive slope"),
+            3 => Some("Negative slope"),
+            _ => None,
+        },
+        39 => match value {
+            1 => Some("Cross"),
+            2 => Some("Star"),
+            3 => Some("Snowflake"),
+            4 => Some("Heart"),
+            5 => Some("Note"),
+            _ => None,
+        },
+        41 | 45 => match value {
+            1 => Some("Low"),
+            2 => Some("Medium"),
+            3 => Some("High"),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(text) = mapped {
+        return text.to_string();
+    }
+    if matches!(
+        id,
+        7 | 15
+            | 42
+            | 9
+            | 47
+            | 49
+            | 50
+            | 11
+            | 10
+            | 13
+            | 17
+            | 18
+            | 19
+            | 20
+            | 30
+            | 33
+            | 22
+            | 27
+            | 29
+            | 32
+            | 36
+            | 37
+            | 39
+            | 41
+            | 45
+    ) {
+        return format!("Unknown({value})");
+    }
+    if matches!(id, 1 | 2 | 3 | 4 | 5 | 12 | 14 | 16 | 24 | 28 | 35 | 52) && value != 0 {
+        format!("{value:+}")
+    } else {
+        value.to_string()
+    }
+}
 
 fn pentax_binary_subdir(
     entry: &IfdEntry,
@@ -4248,6 +4756,91 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asahi_type2_decodes_its_own_ids_in_both_byte_orders() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut data = Vec::new();
+            let word = |value: u16| match order {
+                ByteOrder::LittleEndian => u32::from(value).to_le_bytes(),
+                ByteOrder::BigEndian => (u32::from(value) << 16).to_be_bytes(),
+            };
+            let short = |value: u16| match order {
+                ByteOrder::LittleEndian => value.to_le_bytes(),
+                ByteOrder::BigEndian => value.to_be_bytes(),
+            };
+            data.extend_from_slice(&short(4));
+            for (id, kind, count, bytes) in [
+                (0x0002, 3, 1, word(2)),
+                (0x0003, 3, 1, word(3)),
+                (0x0008, 3, 1, word(1)),
+                (0x1000, 7, 4, *b"NYC "),
+            ] {
+                data.extend_from_slice(&short(id));
+                data.extend_from_slice(&short(kind));
+                let count_bytes = match order {
+                    ByteOrder::LittleEndian => (count as u32).to_le_bytes(),
+                    ByteOrder::BigEndian => (count as u32).to_be_bytes(),
+                };
+                data.extend_from_slice(&count_bytes);
+                data.extend_from_slice(&bytes);
+            }
+            data.extend_from_slice(&[0; 4]);
+            let mut tags = HashMap::new();
+            let mut value_forms = HashMap::new();
+            PentaxParser::default()
+                .parse_located_with_occurrences(
+                    &data,
+                    order,
+                    None,
+                    Some("PENTAX Optio 430"),
+                    &mut tags,
+                    true,
+                    Some(&mut value_forms),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(tags.get("Pentax:Quality").map(String::as_str), Some("Best"));
+            assert_eq!(
+                tags.get("Pentax:FocusMode").map(String::as_str),
+                Some("Auto")
+            );
+            assert_eq!(
+                tags.get("Pentax:HometownCityCode").map(String::as_str),
+                Some("NYC ")
+            );
+            assert_eq!(tags.len(), 3, "Main-only 0x0008 must not be decoded");
+            assert_eq!(
+                value_forms.get("Pentax:Quality").map(String::as_str),
+                Some("2")
+            );
+            assert_eq!(
+                value_forms.get("Pentax:FocusMode").map(String::as_str),
+                Some("3")
+            );
+            assert!(!value_forms.contains_key("Pentax:HometownCityCode"));
+        }
+    }
+
+    #[test]
+    fn non_asahi_pentax_header_keeps_main_table() {
+        let data = pentax_block(&[(PENTAX_QUALITY, 3, 1, 2 << 16)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located_with_occurrences(
+                &data,
+                ByteOrder::LittleEndian,
+                None,
+                None,
+                &mut tags,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(tags.get("Pentax:Quality").map(String::as_str), Some("Best"));
+        assert!(!tags.contains_key("Pentax:RecordingMode"));
+    }
 
     #[test]
     fn caf_point_info_preserves_packed_value_before_print_conv() {
@@ -6664,6 +7257,60 @@ mod tests {
     /// 0x022a is one table read either way round, chosen by `$$self{Make}`
     /// rather than the model (Pentax.pm:3030-3042).
     #[test]
+    fn filter_info_unknown_255_is_bounded_and_source_named() {
+        let mut record = vec![0u8; 22];
+        record[5] = 255;
+        let mut tags = HashMap::new();
+        decode_pentax_digital_filters(&record, &mut tags, None);
+        assert_eq!(
+            tags.get("Pentax:DigitalFilter01").map(String::as_str),
+            Some(r#"["Unknown (255)"]"#),
+        );
+    }
+
+    #[test]
+    fn filter_info_signed_rawconv_and_unknown_enum_follow_cc_star() {
+        let run = |first: [u8; 3]| {
+            let mut record = vec![0u8; 22];
+            record[5..8].copy_from_slice(&first);
+            let mut tags = HashMap::new();
+            let mut rows = Vec::new();
+            decode_pentax_digital_filters(&record, &mut tags, Some(&mut rows));
+            (rows[0].1.clone(), tags)
+        };
+        let (brightness, _) = run([1, 1, 255]);
+        assert_eq!(
+            brightness.value,
+            Some(crate::core::TagValue::new_string(
+                "1 1 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+            ))
+        );
+        assert_eq!(
+            brightness.print,
+            Some(crate::core::TagValue::Array(vec![
+                crate::core::TagValue::new_string("Base Parameter Adjust"),
+                crate::core::TagValue::new_string("Brightness=-1"),
+            ]))
+        );
+        let (enum_unknown, _) = run([10, 27, 255]);
+        assert_eq!(
+            enum_unknown.print,
+            Some(crate::core::TagValue::Array(vec![
+                crate::core::TagValue::new_string("Toy Camera"),
+                crate::core::TagValue::new_string("ToneBreak=Unknown(-1)"),
+            ]))
+        );
+        let (id_unknown, _) = run([10, 255, 255]);
+        assert_eq!(
+            id_unknown.print,
+            Some(crate::core::TagValue::Array(vec![
+                crate::core::TagValue::new_string("Toy Camera"),
+                crate::core::TagValue::new_string("Unknown(-1)=-1"),
+            ]))
+        );
+    }
+
+    #[test]
     fn test_filter_info_byte_order_follows_the_brand() {
         let e = IfdEntry {
             tag_id: PENTAX_FILTER_INFO,
@@ -6684,6 +7331,62 @@ mod tests {
         };
         assert_eq!(order(false), Some(ByteOrder::BigEndian));
         assert_eq!(order(true), Some(ByteOrder::LittleEndian));
+    }
+
+    #[test]
+    fn digital_filters_match_real_k5_filterinfo_records() {
+        // PentaxK-5.jpg 0x022a offsets 0x0005, 0x007c, and 0x0126 from
+        // ExifTool 13.59 `-v3`; 19 and 20 are all-zero/off records.
+        let mut record = vec![0; 345];
+        record[5..22].copy_from_slice(&[10, 25, 2, 26, 2, 27, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        record[5 + 7 * 17..5 + 8 * 17]
+            .copy_from_slice(&[16, 35, 0, 36, 2, 37, 0, 38, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        record[5 + 17 * 17..5 + 18 * 17]
+            .copy_from_slice(&[254, 6, 0, 8, 0, 15, 0, 21, 1, 22, 0, 23, 1, 24, 0, 27, 0]);
+        let mut tags = HashMap::new();
+        decode_pentax_digital_filters(&record, &mut tags, None);
+        assert_eq!(
+            tags["Pentax:DigitalFilter01"],
+            r#"["Toy Camera","Shading=2","Blur=2","ToneBreak=Red"]"#
+        );
+        assert_eq!(
+            tags["Pentax:DigitalFilter08"],
+            r#"["Miniature","FocusPlane=0","FocusWidth=Middle","PlaneAngle=Horizontal","Blur2=2"]"#
+        );
+        assert_eq!(
+            tags["Pentax:DigitalFilter18"],
+            r#"["Custom Filter","SoftFocus=0","HighContrast=0","InvertColor=Off","DistortionType=1","DistortionLevel=Off","ShadingType=1","ShadingLevel=0","ToneBreak=Off"]"#
+        );
+        assert!(!tags.contains_key("Pentax:DigitalFilter19"));
+        let mut rows = Vec::new();
+        decode_pentax_digital_filters(&record, &mut HashMap::new(), Some(&mut rows));
+        let row = &rows
+            .iter()
+            .find(|(key, _)| key == "Pentax:DigitalFilter01")
+            .unwrap()
+            .1;
+        assert_eq!(row.group1.as_ref(), "Pentax");
+        assert_eq!(
+            row.raw,
+            crate::core::TagValue::new_string(
+                r#"["Toy Camera","Shading=2","Blur=2","ToneBreak=Red"]"#
+            )
+        );
+        assert_eq!(
+            row.value,
+            Some(crate::core::TagValue::new_string(
+                "10 25 2 26 2 27 1 0 0 0 0 0 0 0 0 0 0"
+            ))
+        );
+        assert_eq!(
+            row.print,
+            Some(crate::core::TagValue::Array(vec![
+                crate::core::TagValue::new_string("Toy Camera"),
+                crate::core::TagValue::new_string("Shading=2"),
+                crate::core::TagValue::new_string("Blur=2"),
+                crate::core::TagValue::new_string("ToneBreak=Red"),
+            ]))
+        );
     }
 
     /// `combined-samples/Pentax/PentaxK-5.jpg` tag 0x022b: the exact 8 record

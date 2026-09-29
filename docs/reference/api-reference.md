@@ -52,6 +52,12 @@ pub fn read_metadata_with_detector_and_options(
 `MetadataMap` keeps every occurrence of a tag internally, and the map API
 shows the priority winner for each key. It serialises to JSON as
 `{"Group:Tag": {"type": …, "value": …}}`.
+The getters return the winner's stored typed `TagValue`. For ValueConv or
+PrintConv values, use `project_occurrences` with
+`oxidex::core::tag_occurrence::ValueChannel`; it returns each active
+occurrence separately. The CLI's `--no-print-conv` selects ValueConv, while
+ordinary CLI output selects PrintConv. A stored binary value can therefore
+have a printable string in either output channel.
 
 ### `TagValue`
 

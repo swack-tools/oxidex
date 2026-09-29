@@ -18,7 +18,7 @@ use crate::parsers::jpeg::iptc_parser::{
 };
 use crate::parsers::xmp::parse_xmp_history;
 use crate::parsers::xmp::rdf_parser::{
-    insert_grouped_xmp_tag, insert_xmp_entry, parse_xmp_entries,
+    insert_grouped_xmp_tag, insert_xmp_entry_with_source, parse_xmp_entries_with_source_forms,
 };
 
 /// Maximum bytes to read from EPS file for parsing
@@ -259,8 +259,10 @@ impl EPSParser {
                     // ExifTool reports the known list-type tags below as arrays,
                     // so they are re-expanded into TagValue::Array before they
                     // are stored.
-                    if let Ok(entries) = parse_xmp_entries(xmp_data) {
-                        for entry in &entries {
+                    if let Ok((entries, _, gps_sources)) =
+                        parse_xmp_entries_with_source_forms(xmp_data)
+                    {
+                        for (entry, source) in entries.iter().zip(&gps_sources) {
                             let mut value = entry.tag_value(false);
                             if matches!(
                                 entry.key.as_str(),
@@ -277,7 +279,7 @@ impl EPSParser {
                                     value = TagValue::Array(items);
                                 }
                             }
-                            insert_xmp_entry(metadata, entry, value);
+                            insert_xmp_entry_with_source(metadata, entry, value, source.as_deref());
                         }
                     }
 

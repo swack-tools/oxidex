@@ -282,27 +282,37 @@ pub(crate) fn write_public_exif_transaction(
     baseline: &MetadataMap,
     plan: crate::writers::generated_public_write::PublicWritePlan,
 ) -> Result<Vec<u8>> {
+    write_public_exif_transaction_with_proofs(reader, baseline, plan).map(|(bytes, _)| bytes)
+}
+
+pub(crate) fn write_public_exif_transaction_with_proofs(
+    reader: &dyn FileReader,
+    baseline: &MetadataMap,
+    plan: crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<(
+    Vec<u8>,
+    Vec<crate::writers::generated_public_write::GeneratedWriteProof>,
+)> {
     if plan.whole_exif_clear {
-        return transform_exif(reader, |_, _| Ok((Vec::new(), ()))).map(|(bytes, ())| bytes);
+        return transform_exif(reader, |_, _| Ok((Vec::new(), Vec::new())));
     }
     if plan.generated.is_empty() {
         return write_exif_to_jpeg_with_removals(
             reader,
             &plan.legacy_metadata,
             &plan.legacy_removed,
-        );
+        )
+        .map(|bytes| (bytes, Vec::new()));
     }
     transform_exif(reader, |original, head| {
-        rewrite_generated_exif_payload(
+        rewrite_generated_exif_payload_with_proofs(
             original,
             &|| source_raw_properties(head),
             baseline,
             plan,
             crate::writers::exif_surgical::FreshOrder::SetPreferred,
         )
-        .map(|bytes| (bytes, ()))
     })
-    .map(|(bytes, ())| bytes)
 }
 
 /// The EXIF TIFF payload (header onward) a public transaction with a
@@ -323,6 +333,20 @@ pub(crate) fn rewrite_generated_exif_payload(
     plan: crate::writers::generated_public_write::PublicWritePlan,
     fresh: crate::writers::exif_surgical::FreshOrder,
 ) -> Result<Vec<u8>> {
+    rewrite_generated_exif_payload_with_proofs(original, raw_properties, baseline, plan, fresh)
+        .map(|(bytes, _)| bytes)
+}
+
+pub(crate) fn rewrite_generated_exif_payload_with_proofs(
+    original: Option<&[u8]>,
+    raw_properties: &dyn Fn() -> Result<std::collections::BTreeMap<String, i64>>,
+    baseline: &MetadataMap,
+    plan: crate::writers::generated_public_write::PublicWritePlan,
+    fresh: crate::writers::exif_surgical::FreshOrder,
+) -> Result<(
+    Vec<u8>,
+    Vec<crate::writers::generated_public_write::GeneratedWriteProof>,
+)> {
     use crate::writers::mandatory_defaults_runtime as mandatory;
     use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
     // The legacy delta is normally applied by the in-place TIFF payload
@@ -442,9 +466,11 @@ pub(crate) fn rewrite_generated_exif_payload(
     // become NoEdit; only an actual set can trigger directory creation.
     let generated = generated_scalar::plan_resolved_generated_scalars(
         &legacy,
-        plan.generated,
+        plan.generated.clone(),
         &generated_scalar::generated_rules(),
     )?;
+    let proofs =
+        crate::writers::generated_public_write::selected_proofs(&plan.generated, &generated.edits)?;
     let ifd1_entries_before = entry_edits::ifd1_entry_count(&legacy)?;
     let needs_ifd1_defaults = ifd1_entries_before.unwrap_or(0) == 0
         && generated.edits.iter().any(|edit| {
@@ -508,7 +534,7 @@ pub(crate) fn rewrite_generated_exif_payload(
         output
     };
     let (count, next) = tiff_surgical::ifd0_state(&output)?;
-    Ok(if count == 0 && !next {
+    let output = if count == 0 && !next {
         Vec::new()
     } else if restaged {
         // The staged block was laid out by the serializer and the generated
@@ -523,7 +549,8 @@ pub(crate) fn rewrite_generated_exif_payload(
         // Grown in place: a relocated IFD0 lands after the chain it links
         // (`entry_edits::chain_tables_after_ifd0`).
         entry_edits::chain_tables_after_ifd0(&output)?
-    })
+    };
+    Ok((output, proofs))
 }
 
 /// Whether a public plan's legacy delta deletes a tag: an EXIF-family key of

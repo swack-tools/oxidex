@@ -4,8 +4,11 @@
 The library API may still change before 2.0.0. This is pre-tag guidance: the
 v2.0.0-beta.1 signed tag is pending. OxiDex is not published on crates.io (the
 `oxidex` name there belongs to an unrelated crate), so depend on the Git
-repository for development use. The final crates.io decision and signed-tag
-dependency instructions remain pending. The 2.0 API differs from 1.x; see
+repository for development use. This beta will not publish the root crate to
+crates.io; signed-tag dependency instructions remain pending until the tag is
+authorized. The selected no-crates.io policy also covers the separate
+`oxidex-tags-*` crates for this beta.
+The 2.0 API differs from 1.x; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
 :::
 
@@ -45,9 +48,16 @@ under `File:`, such as `File:FileType` and `File:MIMEType`. A lookup by bare
 name, or by the family 0 group (`EXIF:Make`), finds nothing. To see which
 keys a file produces, run `oxidex -j file`.
 
-Values are held as decoded, which is what `oxidex --no-print-conv` prints.
-The CLI applies ExifTool's print conversion (`Flash: 0` → `No Flash`) when
-it formats output. `MetadataMap` accessors:
+`get`, `get_string` and the other typed getters read the winning occurrence's
+legacy `raw` compatibility value (`TagSink::get`), not necessarily its
+`Stored` channel or what the CLI prints. For example, `JVC:CPUVersions` can
+have a `Binary` raw value (so `get_string` returns `None`) while its ValueConv
+form is a displayable string. `Stored` preserves the file's typed value when
+the parser supplies one; `ValueConv` supplies the CLI's `--no-print-conv`
+value, and `PrintConv` supplies ordinary output. To inspect these forms from
+the library, use `project_occurrences` with
+`oxidex::core::tag_occurrence::ValueChannel::{Stored, ValueConv, PrintConv}`;
+this iterates occurrences, including duplicate keys. `MetadataMap` accessors:
 
 | Method | Returns |
 | --- | --- |

@@ -57,10 +57,14 @@ jobs:
             echo "allowed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Verify release version
+        if: github.event_name != 'workflow_dispatch' && steps.ancestry.outputs.allowed == 'true'
+        run: python3 tools/ci/release_version.py --tag "$GITHUB_REF_NAME" --cargo-toml Cargo.toml
+
   build:
     name: Build ${{ matrix.arch }}
     needs: [verify-tag-on-main]
-    if: needs.verify-tag-on-main.outputs.allowed == 'true'
+    if: needs.verify-tag-on-main.result == 'success' && needs.verify-tag-on-main.outputs.allowed == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -127,10 +131,11 @@ jobs:
 
           version=$(docker run --rm "$ref" --version)
           echo "version: $version"
-          case "$version" in
-            oxidex\ *) ;;
-            *) echo "::error::unexpected --version output: $version"; exit 1 ;;
-          esac
+          expected="oxidex ${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$expected" ]; then
+            echo "::error::unexpected --version output: $version (expected $expected)"
+            exit 1
+          fi
 
           out=$(docker run --rm -v "$PWD/tests/fixtures/jpeg:/data:ro" "$ref" sample_with_exif.jpg)
           echo "$out"

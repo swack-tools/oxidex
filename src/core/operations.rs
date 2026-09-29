@@ -41,7 +41,6 @@ use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::exif_surgical::RequestDeletions;
 use crate::writers::pdf_writer::write_pdf_file;
-use crate::writers::png_writer::write_png_metadata_with_removals;
 use std::path::Path;
 
 // ============================================================================
@@ -301,6 +300,12 @@ fn normalize_identity_tags(metadata: &mut MetadataMap) {
     );
     if unnamed && let Some(name) = parser_type.as_ref().and_then(TagValue::as_string) {
         metadata.insert("File:FileType", TagValue::new_string(name));
+    }
+
+    // Parsers and the file-type resolver may both record the same derived
+    // answer. Their separate recordings are not physical duplicate tags.
+    for tag in IDENTITY_TAGS {
+        metadata.retain_only_winner(&format!("File:{tag}"));
     }
 
     debug_assert!(
@@ -1283,6 +1288,15 @@ pub(crate) fn write_metadata_transaction_among(
     removed: &[String],
     siblings: &[String],
 ) -> Result<()> {
+    write_metadata_transaction_among_with_proofs(path, metadata, removed, siblings).map(|_| ())
+}
+
+pub(crate) fn write_metadata_transaction_among_with_proofs(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+    siblings: &[String],
+) -> Result<Vec<crate::writers::generated_public_write::GeneratedWriteProof>> {
     let baseline = read_metadata(path).unwrap_or_default();
     let assigned = metadata.assigned_keys();
     crate::writers::jpeg_multi_exif::refuse_multi_exif_app1_writes(
@@ -1354,21 +1368,25 @@ pub(crate) fn write_metadata_transaction_among(
             first.remove(spelled);
         }
     }
-    write_single_pass(staged.path(), &first, removed)?;
+    let mut proofs = write_single_pass(staged.path(), &first, removed)?;
     // Pass 2: the sets, over what the removals left.
     let mut second = read_metadata(staged.path())?;
     for (key, value) in &resets {
         second.insert(key.clone(), value.clone());
     }
-    write_single_pass(staged.path(), &second, &[])?;
+    proofs.extend(write_single_pass(staged.path(), &second, &[])?);
     staged
         .persist(path)
         .map_err(|error| ExifToolError::from(error.error))?;
-    Ok(())
+    Ok(proofs)
 }
 
 /// One pass of [`write_metadata_transaction`].
-fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) -> Result<()> {
+fn write_single_pass(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<crate::writers::generated_public_write::GeneratedWriteProof>> {
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
@@ -1466,24 +1484,26 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 removed,
             )
         {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let plan = crate::writers::generated_public_write::plan_public_write(
             &original, metadata, removed,
         )?;
-        let mut out = crate::writers::generated_public_write::rewrite_tiff_transaction(
-            file_bytes, &original, plan,
-        )?;
+        let (mut out, proofs) =
+            crate::writers::generated_public_write::rewrite_tiff_transaction_with_proofs(
+                file_bytes, &original, plan,
+            )?;
         crate::writers::tiff_surgical::add_ifd1_mandatory_entries(&mut out, metadata)?;
         // Every removal gone, every set present, before anything is written.
         if !whole_clear {
-            crate::writers::exif_surgical::verify_exif_write(
+            crate::writers::exif_surgical::verify_exif_write_with_proofs(
                 Some(file_bytes),
                 &out,
                 &original,
                 metadata,
                 removed,
                 crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                &proofs,
             )?;
             crate::writers::exif_surgical::verify_dropped_rows_gone(
                 &original,
@@ -1512,7 +1532,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         }
         crate::writers::rw2_ifd0::verify_jpg_from_raw_kept(file_bytes, &out)?;
         write_atomic(path, &out)?;
-        return Ok(());
+        return Ok(proofs);
     }
 
     match format {
@@ -1574,15 +1594,16 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                     if without_ciff.is_some() {
                         write_atomic(path, file_bytes)?;
                     }
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
             }
             let plan = crate::writers::generated_public_write::plan_public_write(
                 &original, metadata, removed,
             )?;
-            let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
-                reader, &original, plan,
-            )?;
+            let (serialized_bytes, proofs) =
+                crate::writers::jpeg_writer::write_public_exif_transaction_with_proofs(
+                    reader, &original, plan,
+                )?;
             let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
             if whole_clear
                 || (crate::writers::exif_surgical::removes_carrier(removed) && after.len() > 1)
@@ -1600,13 +1621,14 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 // Every removal gone, every set present, before anything is
                 // written (`exif_surgical::verify_exif_write`).
                 let before = crate::writers::exif_surgical::jpeg_exif_payload(file_bytes)?;
-                crate::writers::exif_surgical::verify_exif_write(
+                crate::writers::exif_surgical::verify_exif_write_with_proofs(
                     before.as_deref(),
                     after.first().map(Vec::as_slice).unwrap_or_default(),
                     &original,
                     metadata,
                     removed,
                     crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                    &proofs,
                 )?;
                 crate::writers::exif_surgical::verify_dropped_rows_gone(
                     &original,
@@ -1657,6 +1679,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                 ));
             }
             write_atomic(path, &serialized_bytes)?;
+            return Ok(proofs);
         }
         FileFormat::PNG => {
             // The caller's map was derived from `read_metadata`, so judge
@@ -1677,7 +1700,9 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
                     &crate::writers::exif_surgical::changed_makernote_rows(&baseline, metadata),
                 )?;
             }
-            write_png_metadata_with_removals(path, &reader, metadata, &baseline, removed)?
+            return crate::writers::png_writer::write_png_metadata_with_removals_and_proofs(
+                path, &reader, metadata, &baseline, removed,
+            );
         }
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;
@@ -1700,7 +1725,7 @@ fn write_single_pass(path: &Path, metadata: &MetadataMap, removed: &[String]) ->
         }
     }
 
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// Whether this file should go through the surgical whole-file TIFF writer.
@@ -3756,6 +3781,64 @@ mod tests {
         }
         assert_eq!(map.get_string("File:FileType"), Some("TXT"));
         assert_eq!(map.get_string("File:MIMEType"), Some("text/plain"));
+    }
+
+    #[test]
+    fn grouped_file_identity_is_one_derived_occurrence() {
+        let mut map = crate::core::metadata_map::file_rows(|| {
+            let mut map = identity_map(
+                &[("FileType", "DNG"), ("MIMEType", "image/x-adobe-dng")],
+                &[],
+            );
+            map.insert_occurrence_with_forms(
+                "File:FileType",
+                TagValue::new_string("DNG"),
+                TagValue::new_string("value-DNG"),
+                Some(TagValue::new_string("stored-DNG")),
+                1,
+                "File",
+                crate::core::Instance::default(),
+            );
+            map.insert("File:MIMEType", TagValue::new_string("image/x-adobe-dng"));
+            map.insert("EXIF:Make", TagValue::new_string("Canon"));
+            map.insert("EXIF:Make", TagValue::new_string("Other"));
+            map
+        });
+        normalize_identity_tags(&mut map);
+        for key in ["File:FileType", "File:MIMEType"] {
+            assert_eq!(
+                map.keyed_occurrences()
+                    .filter(|(name, _)| *name == key)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(map.get_string("File:FileType"), Some("DNG"));
+        let selected = map
+            .keyed_occurrences()
+            .find(|(name, _)| *name == "File:FileType")
+            .expect("selected identity")
+            .1;
+        assert_eq!(selected.stored, Some(TagValue::new_string("stored-DNG")));
+        assert_eq!(selected.value, Some(TagValue::new_string("value-DNG")));
+        assert_eq!(selected.print, Some(TagValue::new_string("DNG")));
+        let mut exported = MetadataMap::new();
+        exported.merge(map.clone());
+        let copied = exported
+            .keyed_occurrences()
+            .find(|(name, _)| *name == "File:FileType")
+            .expect("copied identity")
+            .1;
+        assert_eq!(copied.stored, selected.stored);
+        assert_eq!(copied.value, selected.value);
+        assert_eq!(copied.print, selected.print);
+        // A real repeated source tag remains repeatable.
+        assert_eq!(
+            map.keyed_occurrences()
+                .filter(|(name, _)| *name == "EXIF:Make")
+                .count(),
+            2
+        );
     }
 
     #[test]

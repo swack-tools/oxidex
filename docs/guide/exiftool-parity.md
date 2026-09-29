@@ -57,8 +57,10 @@ An entry is a **proven read** when the authenticated corpus read receipt
    which ExifTool read it matched. One failure anywhere withholds the credit.
 
 The receipt refuses to run from a dirty checkout, and it records the build,
-the transcripts and the oracle's version and capability. Its result is
-published as `docs/public/measurements/catalog-corpus-observed-13.59.json`.
+the transcripts and the oracle's version and capability. The following table
+is a historical observation at `7a9c7576`, published as
+`docs/public/measurements/catalog-corpus-observed-13.59.json`; it does not
+measure the final beta candidate.
 
 | Measure (instrument) | Value |
 | --- | --- |

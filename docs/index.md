@@ -39,7 +39,7 @@ features:
     linkText: The measurements
   - icon: ✍️
     title: Careful writes
-    details: Atomic writes for JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF. 19 tags are proven byte-for-byte against ExifTool's own writes; the rest is labelled as not yet proven.
+    details: Atomic writes for JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF. A historical observation at 7a9c7576 proved 19 tags byte-for-byte against ExifTool's writes; final beta write evidence is pending.
     link: /guide/writing
     linkText: Write support
   - icon: 🦀

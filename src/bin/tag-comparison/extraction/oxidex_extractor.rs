@@ -387,8 +387,24 @@ impl OxiDexExtractor {
             TagValue::DateTime(dt) => dt.format("%Y:%m:%d %H:%M:%S").to_string(),
             TagValue::Struct(_) => "[Structured data]".to_string(),
             TagValue::Array(arr) => {
-                serde_json::to_string(&arr.iter().map(Self::format_value).collect::<Vec<String>>())
-                    .expect("a vector of strings is JSON-serializable")
+                // Preserve scalar type in structured output. In particular,
+                // XMP real sequences must remain JSON numbers, not strings.
+                fn as_json(value: &TagValue) -> serde_json::Value {
+                    match value {
+                        TagValue::Integer(i) => serde_json::Value::Number((*i).into()),
+                        TagValue::Float(f) => serde_json::Number::from_f64(*f)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or_else(|| {
+                                serde_json::Value::String(OxiDexExtractor::format_value(value))
+                            }),
+                        TagValue::Array(values) => {
+                            serde_json::Value::Array(values.iter().map(as_json).collect())
+                        }
+                        _ => serde_json::Value::String(OxiDexExtractor::format_value(value)),
+                    }
+                }
+                serde_json::to_string(&serde_json::Value::Array(arr.iter().map(as_json).collect()))
+                    .expect("TagValue arrays are JSON-serializable")
             }
         }
     }
@@ -552,7 +568,10 @@ impl OxiDexExtractor {
     /// are namespace peers, not OxiDex emitting one conceptual tag twice, so
     /// they must not trip the duplicate-emission gate used by squad batches.
     fn is_exiftool_family0_xmp_overlap(normalized_key: &str) -> bool {
-        matches!(normalized_key, "XMP:Sharpness" | "XMP:WhiteBalance")
+        matches!(
+            normalized_key,
+            "XMP:NativeDigest" | "XMP:Sharpness" | "XMP:WhiteBalance"
+        )
     }
 
     /// The seven MP Entry tag names repeat once per embedded image, each under
@@ -657,6 +676,11 @@ impl OxiDexExtractor {
         raw_entries.sort_by_key(|(key, _)| *key);
 
         for (key, value) in raw_entries {
+            // ExifTool's family-0 JSON view prefers the EXIF namespace when
+            // both XMP-exif and XMP-tiff provide NativeDigest.
+            if key == "XMP-tiff:NativeDigest" && metadata.get("XMP-exif:NativeDigest").is_some() {
+                continue;
+            }
             if matches!(format, Some("NEF" | "NRW"))
                 && Self::nef_ifd0_field_is_superseded(key, metadata)
             {
@@ -672,14 +696,6 @@ impl OxiDexExtractor {
 
             // Normalize the tag family (core library normalization + comparison-specific)
             let normalized_key = Self::normalize_for_comparison(&normalize_tag_family(key), format);
-
-            // XMP.pm marks tiff:NativeDigest `Avoid => 1` (line 1984): when
-            // the family-0 XMP view would collapse it with exif:NativeDigest,
-            // ExifTool exposes the EXIF digest rather than allowing TIFF's
-            // later schema key to overwrite it. XMP.xmp contains both.
-            if normalized_key == "XMP:NativeDigest" && key == "XMP-tiff:NativeDigest" {
-                continue;
-            }
 
             let family = if let Some(colon_pos) = normalized_key.find(':') {
                 normalized_key[..colon_pos].to_string()
@@ -937,6 +953,18 @@ mod tests {
         let (tags, collisions) = extractor.flatten_metadata(&metadata, None);
         assert_eq!(tags.len(), 0);
         assert!(collisions.is_empty());
+    }
+
+    #[test]
+    fn numeric_xmp_sequence_matches_pinned_json_transport() {
+        // Pinned 13.59 -j -G1 on a Leica xmpDSA RDF Seq returned
+        // [0.125,0.5,1] (main-reconciliation-25745 native receipt).
+        let value = TagValue::Array(vec![
+            TagValue::Float(0.125),
+            TagValue::Float(0.5),
+            TagValue::Float(1.0),
+        ]);
+        assert_eq!(OxiDexExtractor::format_value(&value), "[0.125,0.5,1.0]");
     }
 
     /// The flattener is tag-blind: whatever string the library produced is

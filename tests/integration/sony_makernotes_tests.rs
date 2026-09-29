@@ -5,12 +5,21 @@
 //! with near-identical strings, so an assertion invented to match the
 //! implementation would look exactly like one that matches the camera.
 
+use oxidex::core::operations::read_metadata;
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
 use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use oxidex::parsers::tiff::makernotes::sony::{SonyParser, parse_sony_makernote};
 use oxidex::parsers::tiff::makernotes::sony_lens_database::lookup_lens_name;
 use std::collections::HashMap;
+
+const A900: &str = "Sony/SonyDSLR-A900.jpg";
+const A380: &str = "Sony/SonyDSLR-A380.jpg";
+const A550: &str = "Sony/SonyDSLR-A550.jpg";
+const A580: &str = "Sony/SonyDSLR-A580.jpg";
+const DSC_W370: &str = "Sony/SonyDSC-W370.jpg";
+const DSC_H300: &str = "Sony/SonyDSC-H300.jpg";
+const ZV_E10M2: &str = "Sony/SonyZV-E10M2.jpg";
 
 /// Builds a headerless little-endian Sony MakerNote from `(tag, type, count,
 /// value)` entries, followed by `trailing` bytes for any out-of-line values.
@@ -54,6 +63,100 @@ fn test_sony_lens_database_uses_exiftool_spellings() {
         lookup_lens_name(25501),
         Some("Minolta AF 50mm F1.7".to_string())
     );
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn test_sony_a900_camera_info_matches_exiftool() {
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(A900))
+        .expect("Sony DSLR-A900 parses");
+    // Pinned ExifTool 13.59 reports these from CameraInfo (tag 0x0010,
+    // 5478-byte A900 layout). The AF words use Sony's reversed int16 order.
+    assert_eq!(metadata.get_string("Sony:AFPoint"), Some("Lower-right"));
+    assert_eq!(
+        metadata.get_string("Sony:AFStatusFarRight"),
+        Some("Front Focus (-65)")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:AFStatusTop"),
+        Some("Out of Focus")
+    );
+    assert_eq!(metadata.get_string("Sony:AFMicroAdjMode"), Some("Off"));
+    assert_eq!(
+        metadata.get_string("Sony:AFMicroAdjRegisteredLenses"),
+        Some("0")
+    );
+    // ExtraInfo (0x0116) is a separate, model-gated 30-byte directory.
+    assert_eq!(
+        metadata.get_string("Sony:BatteryTemperature"),
+        Some("46.1 C")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:ExtraInfoVersion"),
+        Some("0.1.0.0")
+    );
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn test_sony_dsc_h300_pic_text_blocks_match_exiftool() {
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(DSC_H300))
+        .expect("Sony DSC-H300 parses");
+    // Pinned ExifTool 13.59's ProcessSonyPIC reports the two text blocks as
+    // binary data (769 and 671 bytes) and extracts `BC:` as this barcode.
+    assert_eq!(
+        metadata.get_string("Sony:TextInfo1"),
+        Some("(Binary data 769 bytes, use -b option to extract)")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:TextInfo2"),
+        Some("(Binary data 671 bytes, use -b option to extract)")
+    );
+    assert_eq!(metadata.get_string("Sony:Barcode"), Some("A0D9P7016135"));
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn test_sony_wave12_distance_more_settings_camera_info_and_pic_match_exiftool() {
+    // Pinned ExifTool 13.59 values.  A380's 128 FocusPosition is the explicit
+    // infinity sentinel; A550's MoreSettings supplies FocusPosition2=190,
+    // FocalLength2=19.2 mm and FlashExposureCompSet2=0; CameraInfo3 on A580
+    // supplies FocalLengthTeleZoom; W370's PIC text supplies BoardTemperature.
+    let a380 = read_metadata(&crate::fixtures::required_combined_fixture_path(A380))
+        .expect("Sony DSLR-A380 parses");
+    assert_eq!(a380.get_string("Composite:FocusDistance"), Some("inf"));
+
+    let a550 = read_metadata(&crate::fixtures::required_combined_fixture_path(A550))
+        .expect("Sony DSLR-A550 parses");
+    assert_eq!(a550.get_string("Sony:FocusPosition2"), Some("190"));
+    assert_eq!(a550.get_string("Sony:FocalLength2"), Some("19.2 mm"));
+    assert_eq!(a550.get_string("Sony:FlashExposureCompSet2"), Some("0"));
+    assert_eq!(a550.get_string("Composite:FocusDistance2"), Some("3.196 m"));
+
+    let a580 = read_metadata(&crate::fixtures::required_combined_fixture_path(A580))
+        .expect("Sony DSLR-A580 parses");
+    assert_eq!(a580.get_string("Sony:FocalLengthTeleZoom"), Some("70.0 mm"));
+
+    let w370 = read_metadata(&crate::fixtures::required_combined_fixture_path(DSC_W370))
+        .expect("Sony DSC-W370 parses");
+    assert_eq!(w370.get_string("Sony:BoardTemperature"), Some("28 C"));
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn test_sony_zv_e10m2_hidden_and_pixel_shift_info_match_exiftool() {
+    // Pinned ExifTool 13.59, SonyZV-E10M2.jpg:
+    //   HiddenDataOffset = 13938688, HiddenDataLength = 53248,
+    //   PixelShiftInfo = n/a.  The first two are the 0x2044 HiddenInfo
+    // int32u pair; PixelShiftInfo is 0x202f's all-zero six-byte sentinel.
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(ZV_E10M2))
+        .expect("Sony ZV-E10M2 parses");
+    assert_eq!(
+        metadata.get_string("Sony:HiddenDataOffset"),
+        Some("13938688")
+    );
+    assert_eq!(metadata.get_string("Sony:HiddenDataLength"), Some("53248"));
+    assert_eq!(metadata.get_string("Sony:PixelShiftInfo"), Some("n/a"));
 }
 
 #[test]
@@ -377,6 +480,26 @@ fn test_sony_pic_text_blocks_follow_process_sony_pic() {
     // The second block's `BarCode:` (truncated to 12) is extracted after the
     // first block's `BC:`; `xBC:` has no word boundary and never matches.
     assert_eq!(tags.get("Sony:Barcode"), Some(&"0123456789AB".to_string()));
+}
+
+#[test]
+#[ignore = "requires pinned ExifTool 13.59 combined-samples"]
+fn test_sony_a580_conditional_maker_note_fields_match_exiftool() {
+    // Pinned ExifTool 13.59 reports these from the model-gated MoreSettings
+    // (0x20 / 0x7c) and ExtraInfo3 (0x14) alternatives. The generated schema
+    // omits those alternatives, so this guards the manual selection against
+    // real camera bytes rather than an invented layout.
+    let metadata = read_metadata(&crate::fixtures::required_combined_fixture_path(A580))
+        .expect("Sony DSLR-A580 parses");
+    assert_eq!(
+        metadata.get_string("Sony:LiveViewAFMethod"),
+        Some("Phase-detect AF")
+    );
+    assert_eq!(
+        metadata.get_string("Sony:FlashActionExternal"),
+        Some("Did not fire")
+    );
+    assert_eq!(metadata.get_string("Sony:ModeDialPosition"), Some("Manual"));
 }
 
 #[test]

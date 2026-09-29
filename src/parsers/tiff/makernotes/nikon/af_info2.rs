@@ -221,6 +221,77 @@ fn model_matches(model: &str, prefixes: &[&str]) -> bool {
     })
 }
 
+/// ExifTool's `PrintAFPointsLeftRight`: zero is an unfocused point, the
+/// middle column is `C`, and all remaining columns are relative to it.
+fn focus_position_left_right(value: u16, divisor: u16, columns: u16) -> String {
+    let column = value / divisor;
+    let center = (columns + 1) / 2;
+    match column.cmp(&center) {
+        std::cmp::Ordering::Equal => "C".to_string(),
+        std::cmp::Ordering::Less if column == 0 => "n/a".to_string(),
+        std::cmp::Ordering::Less => format!("{}L of Center", center - column),
+        std::cmp::Ordering::Greater => format!("{}R of Center", column - center),
+    }
+}
+
+/// ExifTool's `PrintAFPointsUpDown`: zero is an unfocused point, the middle
+/// row is `C`, and all remaining rows are relative to it.
+fn focus_position_up_down(value: u16, divisor: u16, rows: u16) -> String {
+    let row = value / divisor;
+    let center = (rows + 1) / 2;
+    match row.cmp(&center) {
+        std::cmp::Ordering::Equal => "C".to_string(),
+        std::cmp::Ordering::Less if row == 0 => "n/a".to_string(),
+        std::cmp::Ordering::Less => format!("{}U from Center", center - row),
+        std::cmp::Ordering::Greater => format!("{}D from Center", row - center),
+    }
+}
+
+/// The source-backed ValueConv and PrintConv of the V0300 focus fields.
+/// The generated table names these model alternatives but omits their
+/// ValueConv, so the public reader must retain the coordinate and grid index.
+#[derive(Debug, Clone)]
+pub(super) struct FocusPositionForm {
+    pub name: &'static str,
+    pub stored: u16,
+    pub value: u16,
+    pub print: String,
+}
+
+pub(super) fn focus_position_forms(
+    data: &[u8],
+    order: ByteOrder,
+    model: Option<&str>,
+) -> Vec<FocusPositionForm> {
+    if crate::exiftool_tables::EXIFTOOL_VERSION != "13.59"
+        || !(data.starts_with(b"0300") || data.starts_with(b"0301"))
+        || data.get(7) != Some(&1)
+        || !model_matches(model.unwrap_or(""), &["NIKON Z 7", "NIKON Z 7_2"])
+    {
+        return Vec::new();
+    }
+    let mut forms = Vec::new();
+    if let Some(stored) = read_u16(data, 46, order).filter(|value| *value != 0) {
+        let value = stored / 260;
+        forms.push(FocusPositionForm {
+            name: "FocusPositionHorizontal",
+            stored,
+            value,
+            print: focus_position_left_right(stored, 260, 29),
+        });
+    }
+    if let Some(stored) = read_u16(data, 48, order).filter(|value| *value != 0) {
+        let value = stored / 292;
+        forms.push(FocusPositionForm {
+            name: "FocusPositionVertical",
+            stored,
+            value,
+            print: focus_position_up_down(stored, 292, 17),
+        });
+    }
+    forms
+}
+
 /// Walk `Nikon::Main` 0x00b7.
 pub fn parse_af_info2(
     data: &[u8],
@@ -455,6 +526,10 @@ pub fn parse_af_info2(
             if coords == 1 {
                 put_coord(46, "AFAreaXPosition", tags);
                 put_coord(48, "AFAreaYPosition", tags);
+
+                for form in focus_position_forms(data, order, model) {
+                    tags.insert(format!("Nikon:{}", form.name), form.print);
+                }
             }
             put_u16(50, "AFAreaWidth", tags);
             put_u16(52, "AFAreaHeight", tags);

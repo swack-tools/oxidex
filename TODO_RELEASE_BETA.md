@@ -630,15 +630,19 @@ open until it is proven on the final release candidate.
       artifact-name, and release-channel claims; classify every hit.
 - [ ] Keep the root crate `publish = false` unless the crates.io ownership and
       package-size blockers are deliberately resolved.
-- [ ] Record the crates.io decision: transfer name, alternate package name, or
-      no crates.io publication for this beta.
+- [x] Record the root-crate crates.io decision: no `oxidex` publication for
+      this beta (`docs/RELEASE-2.0.0-beta.1.md`; `Cargo.toml` has
+      `publish = false`).
 - [ ] Ensure every installation example matches that decision.
-- [ ] Decide whether tag crates will be published manually; if yes, rehearse
-      the complete dependency order with `cargo publish --dry-run`.
+- [x] Keep the tag crates unpublished for this beta under selected option (c)
+      in `docs/RELEASE-2.0.0-beta.1.md`. A future publication decision requires
+      a separate dependency-order dry run.
 
-Decision:
-
-> Record the crates.io and package-publication decision here.
+Decision: the root `oxidex` crate will not be published to crates.io for
+v2.0.0-beta.1. Rust users will depend on the signed Git tag after it is
+authorized; the current branch dependency is pre-tag development guidance.
+The same selected no-crates.io policy covers the separate `oxidex-tags-*`
+crates for this beta; no manual crate publication is part of this release.
 
 ## 5. Documentation and factual-release audit
 

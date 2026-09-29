@@ -38,6 +38,7 @@ import version_rehearsal_catalog as catalog_stage
 import version_rehearsal_executor as executor
 import version_rehearsal_native_oracle as native_oracle
 import version_rehearsal_stage_adapter as stage_adapter
+import version_transition_read_policy as read_policy
 
 SCHEMA = 1
 KIND = "oxidex_exiftool_version_transition_matrix"
@@ -455,6 +456,77 @@ def _verify_frozen_side(frozen: Mapping[str, Any]) -> None:
         raise Refused(f"selected input changed after qualification preflight: {exc}") from exc
 
 
+def _freeze_read_union(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze both original selections before either generated side can run."""
+    try:
+        return read_policy.freeze_union(
+            _regular_receipt(Path(before["read_manifest"])).read_bytes(),
+            _regular_receipt(Path(after["read_manifest"])).read_bytes(),
+        )
+    except (read_policy.ReadPolicyRefused, OSError) as exc:
+        raise Refused(f"transition read union is invalid: {exc}") from exc
+
+
+def _read_policy_input(path: Path, expected_rows: set[str]) -> tuple[dict[str, Any], dict[str, str]]:
+    path = _evidence_location(path, "Task19 read-policy input")
+    document = _read_object(path, "Task19 read-policy input")
+    floors = document.get("rows")
+    if (set(document) != {"schema", "kind", "policy", "rows"}
+            or document.get("schema") != 1
+            or document.get("kind") != "oxidex_task19_read_policy_input"
+            or document.get("policy") != read_policy.PAIR_SCHEMA
+            or not isinstance(floors, dict) or set(floors) != expected_rows
+            or any(not isinstance(value, dict) or set(value) != set(SIDES)
+                   or any(type(value[side]) is not int or value[side] <= 0 for side in SIDES)
+                   for value in floors.values())):
+        raise Refused("Task19 read-policy floors or policy are not the frozen matrix selection")
+    return document, {"path": str(path), "sha256": _sha_file(path)}
+
+
+def _verify_read_policy_input(binding: Mapping[str, Any], expected_rows: set[str]) -> dict[str, Any]:
+    if not isinstance(binding, dict) or not isinstance(binding.get("path"), str):
+        raise Refused("Task19 read-policy input binding is missing")
+    document, current = _read_policy_input(Path(binding["path"]), expected_rows)
+    if current != binding:
+        raise Refused("Task19 read-policy input changed after preflight")
+    return document
+
+
+def _materialize_read_union(union: Mapping[str, Any], before: Mapping[str, Any],
+                            after: Mapping[str, Any], row_output: Path) -> dict[str, Any]:
+    """Use the same selected carrier bytes and order on both release sides."""
+    row_output = row_output.resolve()
+    if _freeze_read_union(before, after) != union:
+        raise Refused("original transition read selections changed before union materialization")
+    fixtures = union.get("fixtures")
+    if not isinstance(fixtures, list) or not fixtures:
+        raise Refused("transition read union has no carriers")
+    rows = []
+    sidecar = []
+    for fixture in fixtures:
+        source = fixture["sources"]["before"] or fixture["sources"]["after"]
+        path = _regular_receipt(Path(source))
+        digest = _sha_file(path)
+        if digest != fixture["sha256"] or path.stat().st_size != fixture["bytes"]:
+            raise Refused(f"transition read union carrier changed: {path}")
+        rows.append({"path": str(path), "sha256": digest, "bytes": fixture["bytes"]})
+        sidecar.append({"logical_name": fixture["logical_name"], "sha256": digest,
+                        "bytes": fixture["bytes"], "sources": fixture["sources"],
+                        "chosen_source": str(path)})
+    manifest_path = row_output / "read-union-manifest.json"
+    sidecar_path = row_output / "read-union-sidecar.json"
+    _atomic_json(manifest_path, {"schema": 1,
+                "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": rows})
+    _atomic_json(sidecar_path, {"schema": 1, "kind": "task19-read-union-sidecar/v1",
+                "union_sha256": union["union_sha256"], "carriers": sidecar})
+    binding = executor._fixture_binding(
+        str(manifest_path), kind="oxidex_version_rehearsal_fixture_manifest", jpeg_only=False)
+    return {"union": union, "manifest": binding,
+            "original_manifests": {"before": before["read_binding"],
+                                   "after": after["read_binding"]},
+            "sidecar": {"path": str(sidecar_path), "sha256": _sha_file(sidecar_path)}}
+
+
 def _perl(ops_root: Path) -> Path:
     perl = ops_root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
     if perl.is_symlink() or not perl.is_file() or not os.access(perl, os.X_OK):
@@ -492,7 +564,8 @@ def _commands() -> dict[str, Any]:
 
 def _side_config(*, release: str, source_commit: str, perl: Path, read_manifest: Path,
                  write_manifest: Path, native_cases: list[Any], lease: Path,
-                 target: Path) -> dict[str, Any]:
+                 target: Path, verified_input_bundle: Path,
+                 read_policy_input: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {
         "schema": executor.SCHEMA,
         "commands": _commands(),
@@ -504,6 +577,8 @@ def _side_config(*, release: str, source_commit: str, perl: Path, read_manifest:
         "read_fixture_manifests": {release: str(read_manifest)},
         "write_fixture_manifests": {release: str(write_manifest)},
         "target_directories": {release: str(target)},
+        "verified_input_bundle": str(verified_input_bundle),
+        "read_policy_input": dict(read_policy_input) if read_policy_input is not None else None,
     }
 
 
@@ -524,16 +599,24 @@ def _report_for(run_dir: Path, journal: Mapping[str, Any], release: str, stage: 
 
 def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
                   identity: Mapping[str, Any]) -> dict[str, Any]:
-    if journal.get("phase") != "complete" or journal.get("scope", {}).get("write_acceptance") != "passed_per_release":
+    release_row = journal.get("releases", {}).get(release, {})
+    if (journal.get("phase") != "complete"
+            or journal.get("scope", {}).get("write_acceptance") != "passed_per_release"
+            or journal.get("scope", {}).get("read_acceptance") != "pending_pair_policy"
+            or release_row.get("state") != "measured_pending_pair_policy"
+            or release_row.get("stages", {}).get("read") != "measured"):
         raise Refused(f"{release} did not complete mandatory native read/write qualification")
     generate = _report_for(run_dir, journal, release, "generate")
     read = _report_for(run_dir, journal, release, "read")
+    if (read.get("state") != "measured"
+            or release_row.get("reports", {}).get("read", {}).get("acceptance") != "pending_pair_policy"):
+        raise Refused(f"{release} read is not an authenticated pending pair measurement")
     write = _report_for(run_dir, journal, release, "write")
     classification = read.get("classification_counts")
-    if (not isinstance(classification, dict) or classification.get("extra") != 0
+    if (not isinstance(classification, dict)
             or any(type(classification.get(name)) is not int or classification[name] < 0
                    for name in ("matched", "value_diff", "missing", "renames", "extra"))):
-        raise Refused("read proof lacks the explicit zero-EXTRA hand-behavior retention control")
+        raise Refused("read proof lacks its exact nonnegative classification counts")
     native = _report_for(run_dir, journal, release, "native")
     version, docx = native.get("version"), native.get("docx_capability")
     perl_capability = native.get("perl_capability")
@@ -574,6 +657,7 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
         "classification_counts": classification,
         "generated_refusals": refusals,
         "read_report_sha256": rehearsal.sha256_json(read),
+        "raw_maps": read.get("raw_maps"),
         "write_report_sha256": rehearsal.sha256_json(write),
         "execution_journal_sha256": _sha_file(run_dir / "execution-status.json"),
     }
@@ -755,6 +839,60 @@ def _regular_receipt(path: Path) -> Path:
     return path
 
 
+def _replay_read_union(row: Mapping[str, Any], row_output: Path) -> dict[str, Any]:
+    row_output = row_output.resolve()
+    saved = row.get("read_union")
+    if not isinstance(saved, dict):
+        raise Refused("committed transition lacks its frozen read union")
+    originals = saved.get("original_manifests")
+    if not isinstance(originals, dict) or set(originals) != set(SIDES):
+        raise Refused("committed transition lacks both original fixture selections")
+    try:
+        bindings = {side: executor._fixture_binding(
+            originals[side]["path"], kind="oxidex_version_rehearsal_fixture_manifest",
+            jpeg_only=False) for side in SIDES}
+        if bindings != originals:
+            raise Refused("original transition fixture selection changed")
+        union = read_policy.freeze_union(
+            _regular_receipt(Path(originals["before"]["path"])).read_bytes(),
+            _regular_receipt(Path(originals["after"]["path"])).read_bytes())
+    except (executor.Refused, read_policy.ReadPolicyRefused, KeyError, TypeError) as exc:
+        raise Refused(f"original transition read union cannot be replayed: {exc}") from exc
+    if union != saved.get("union"):
+        raise Refused("committed transition read union differs from frozen selections")
+    manifest = saved.get("manifest")
+    sidecar = saved.get("sidecar")
+    if (not isinstance(manifest, dict) or not isinstance(sidecar, dict)
+            or manifest.get("path") != str(row_output / "read-union-manifest.json")
+            or sidecar.get("path") != str(row_output / "read-union-sidecar.json")):
+        raise Refused("committed transition read union path changed")
+    try:
+        current = executor._fixture_binding(
+            manifest["path"], kind="oxidex_version_rehearsal_fixture_manifest",
+            jpeg_only=False)
+        detail = _read_object(Path(sidecar["path"]), "read union sidecar")
+    except (executor.Refused, KeyError, TypeError) as exc:
+        raise Refused(f"committed transition read union is unavailable: {exc}") from exc
+    if current != manifest or _sha_file(Path(sidecar["path"])) != sidecar.get("sha256"):
+        raise Refused("committed transition read union receipt changed")
+    fixtures = union["fixtures"]
+    expected_rows = []
+    expected_sidecar = []
+    for fixture in fixtures:
+        source = fixture["sources"]["before"] or fixture["sources"]["after"]
+        expected_rows.append({"path": str(Path(source).resolve()), "sha256": fixture["sha256"],
+                              "bytes": fixture["bytes"]})
+        expected_sidecar.append({"logical_name": fixture["logical_name"],
+                                 "sha256": fixture["sha256"], "bytes": fixture["bytes"],
+                                 "sources": fixture["sources"], "chosen_source": source})
+    if (current["fixtures"] != expected_rows
+            or detail != {"schema": 1, "kind": "task19-read-union-sidecar/v1",
+                          "union_sha256": union["union_sha256"],
+                          "carriers": expected_sidecar}):
+        raise Refused("committed transition read union mapping changed")
+    return saved
+
+
 def _compare_sides(row: Mapping[str, Any], before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
     before_rows = {item["path"]: item["sha256"] for item in before["generated_artifacts"]}
     after_rows = {item["path"]: item["sha256"] for item in after["generated_artifacts"]}
@@ -769,6 +907,127 @@ def _compare_sides(row: Mapping[str, Any], before: Mapping[str, Any], after: Map
     if comparison == "manifest-delta-with-removals" and not removed:
         raise Refused("reverse transition did not account for any removed artifact by manifest delta")
     return {"policy": comparison, "added": added, "removed": removed, "changed": changed}
+
+
+def _read_policy_ledgers(read_union: Mapping[str, Any], read: Mapping[str, Any]) -> list[dict[str, Any]]:
+    fixture_rows = read.get("fixtures", {}).get("entries")
+    raw_binding = read.get("raw_maps")
+    if (not isinstance(fixture_rows, list) or not isinstance(raw_binding, dict)
+            or not isinstance(raw_binding.get("path"), str)):
+        raise Refused("measured read lacks fixture or authenticated raw-map binding")
+    raw_path = _regular_receipt(Path(raw_binding["path"]))
+    if _sha_file(raw_path) != raw_binding.get("sha256"):
+        raise Refused("measured read raw-map receipt changed")
+    capture = _read_object(raw_path, "authenticated read raw maps")
+    raw_rows = capture.get("rows")
+    carriers = read_union["union"]["fixtures"]
+    if not isinstance(raw_rows, list) or len(raw_rows) != len(carriers) or len(fixture_rows) != len(carriers):
+        raise Refused("authenticated raw maps omit a frozen union carrier")
+    indexed = {item.get("fixture", {}).get("corpus_path"): item for item in raw_rows
+               if isinstance(item, dict)}
+    if len(indexed) != len(carriers) or None in indexed:
+        raise Refused("authenticated raw maps repeat a staged carrier")
+    ledgers = []
+    for carrier, fixture in zip(carriers, fixture_rows, strict=True):
+        staged = fixture.get("corpus_path")
+        chosen = carrier["sources"]["before"] or carrier["sources"]["after"]
+        if (not isinstance(staged, str) or staged not in indexed
+                or fixture.get("source") != chosen
+                or fixture.get("sha256") != carrier["sha256"]
+                or fixture.get("bytes") != carrier["bytes"]):
+            raise Refused("authenticated raw map does not bind frozen union fixture")
+        raw = indexed[staged]
+        if (raw.get("fixture", {}).get("sha256") != carrier["sha256"]
+                or raw.get("fixture", {}).get("source") != str(Path(chosen).resolve())):
+            raise Refused("authenticated raw map source differs from frozen union")
+        try:
+            ledgers.append(read_policy.occurrence_ledger(
+                carrier, raw["oracle_raw_map"], raw["candidate_raw_map"],
+                raw["transcript_row"], native_status=raw["native_status"]))
+        except (read_policy.ReadPolicyRefused, KeyError, TypeError) as exc:
+            raise Refused(f"authenticated occurrence ledger refused: {exc}") from exc
+    return ledgers
+
+
+def _read_policy_classifications(before: list[dict[str, Any]], after: list[dict[str, Any]],
+                                 prior_artifacts: dict[str, str],
+                                 later_artifacts: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    native_evidence = []
+    for old, new in zip(before, after, strict=True):
+        fixture = old["fixture"]
+        if fixture != new["fixture"]:
+            raise Refused("paired occurrence ledgers differ in frozen carrier order")
+        old_native = read_policy._keyed_values(old["native"], old["native_status"])
+        new_native = read_policy._keyed_values(new["native"], new["native_status"])
+        new_classes = read_policy._class_index(new)
+        for oracle_key in sorted(old_native.keys() | new_native.keys()):
+            prior, later = old_native.get(oracle_key), new_native.get(oracle_key)
+            if prior == later:
+                continue
+            reason = "native-version"
+            if prior is None and later is not None:
+                native_row = next(row for row in new["native"] if row["oracle_key"] == oracle_key)
+                member_class = new_classes[(native_row["group"], native_row["name"], later)]
+                if (member_class["matched_count"] < member_class["native_count"]
+                        and read_policy._exact_missing_key(new, native_row) is not None):
+                    reason = "native-new-unread"
+            native_evidence.append({"logical_name": fixture["logical_name"],
+                                    "fixture_sha256": fixture["sha256"],
+                                    "oracle_key": oracle_key, "before": prior,
+                                    "after": later, "reason": reason})
+    artifact_evidence = [{"path": path, "before": prior_artifacts.get(path),
+                          "after": later_artifacts.get(path), "reason": "generated-artifact"}
+                         for path in sorted(prior_artifacts.keys() | later_artifacts.keys())
+                         if prior_artifacts.get(path) != later_artifacts.get(path)]
+    return native_evidence, artifact_evidence
+
+
+def _read_policy_pair_body(row_output: Path, read_union: Mapping[str, Any],
+                           sides: Mapping[str, Any], floors: Mapping[str, Any]) -> dict[str, Any]:
+    ledgers = {}
+    reports = {}
+    for side in SIDES:
+        entry = sides.get(side)
+        if not isinstance(entry, dict) or not isinstance(entry.get("release"), str):
+            raise Refused("transition read pair lacks side identity")
+        run_dir = row_output / side
+        journal = _read_object(run_dir / "execution-status.json", "read side journal")
+        read = _report_for(run_dir, journal, entry["release"], "read")
+        if (entry.get("execution_journal_sha256") != _sha_file(run_dir / "execution-status.json")
+                or entry.get("read_report_sha256") != rehearsal.sha256_json(read)
+                or entry.get("raw_maps") != read.get("raw_maps")):
+            raise Refused("transition read pair differs from authenticated side receipt")
+        ledgers[side] = _read_policy_ledgers(read_union, read)
+        reports[side] = {"read_report_sha256": entry["read_report_sha256"],
+                         "raw_maps": read["raw_maps"]}
+    prior_artifacts = {item["path"]: item["sha256"] for item in sides["before"]["generated_artifacts"]}
+    later_artifacts = {item["path"]: item["sha256"] for item in sides["after"]["generated_artifacts"]}
+    native_evidence, artifact_evidence = _read_policy_classifications(
+        ledgers["before"], ledgers["after"], prior_artifacts, later_artifacts)
+    mode = ("same-pin" if sides["before"]["release"] == sides["after"]["release"]
+            else "historical")
+    try:
+        proof = read_policy.replay_pair(
+            mode=mode, union=read_union["union"], before_ledgers=ledgers["before"],
+            after_ledgers=ledgers["after"], payload_floors=dict(floors),
+            before_artifacts=prior_artifacts, after_artifacts=later_artifacts,
+            native_change_evidence=native_evidence, artifact_change_evidence=artifact_evidence)
+    except read_policy.ReadPolicyRefused as exc:
+        raise Refused(f"transition read pair refused: {exc}") from exc
+    return {"schema": 1, "kind": "oxidex_task19_authenticated_read_pair",
+            "read_union_sha256": read_union["union"]["union_sha256"],
+            "side_reports": reports, "ledgers": ledgers,
+            "native_change_evidence": native_evidence,
+            "artifact_change_evidence": artifact_evidence,
+            "payload_floors": dict(floors), "proof": proof}
+
+
+def _save_read_policy_pair(row_output: Path, read_union: Mapping[str, Any],
+                           sides: Mapping[str, Any], floors: Mapping[str, Any]) -> dict[str, str]:
+    body = _read_policy_pair_body(row_output, read_union, sides, floors)
+    path = row_output / "read-policy-pair.json"
+    _atomic_json(path, body)
+    return {"path": str(path.resolve()), "sha256": _sha_file(path)}
 
 
 class TransitionLease:
@@ -1084,6 +1343,117 @@ def _receipt_manifest(*, owner_receipt: Path, heartbeat_receipt: Path,
     }
 
 
+def _replay_committed_read_snapshot(row: Mapping[str, Any], side: str, root: Path) -> None:
+    entry = row.get(side)
+    if not isinstance(entry, dict) or not isinstance(entry.get("release"), str):
+        raise Refused("committed transition side lacks release identity")
+    release = entry["release"]
+    run_dir = root / row["id"] / side
+    journal_path = run_dir / "execution-status.json"
+    if entry.get("execution_journal_sha256") != _sha_file(_regular_receipt(journal_path)):
+        raise Refused("committed transition execution journal changed")
+    journal = _read_object(journal_path, "committed execution journal")
+    release_state = journal.get("releases", {}).get(release, {})
+    if (journal.get("phase") != "complete"
+            or journal.get("scope", {}).get("read_acceptance") != "pending_pair_policy"
+            or journal.get("scope", {}).get("write_acceptance") != "passed_per_release"
+            or release_state.get("state") != "measured_pending_pair_policy"
+            or release_state.get("stages", {}).get("read") != "measured"):
+        raise Refused("committed read was not measured pending an authenticated pair verdict")
+    config = _read_object(run_dir / "inputs" / "config.json", "committed execution config")
+    instrument_row = entry.get("instrument")
+    if (journal.get("config_sha256") != rehearsal.sha256_json(config)
+            or not isinstance(instrument_row, dict)
+            or config.get("execution_source_commit") != instrument_row.get("source_commit")):
+        raise Refused("committed transition config differs from read source identity")
+    if config.get("read_policy_input") != row.get("read_policy_input"):
+        raise Refused("committed transition side differs from frozen read-policy input")
+    bundle_path = config.get("verified_input_bundle")
+    if not isinstance(bundle_path, str):
+        raise Refused("committed transition lacks its verified input bundle")
+    locations = _read_object(Path(bundle_path) / "locations.json", "verified input locations")
+    if (locations.get("kind") != "oxidex_version_transition_input_locations"
+            or not isinstance(locations.get("archive_cache"), str)
+            or not isinstance(locations.get("source_root"), str)):
+        raise Refused("committed transition input locations are malformed")
+    try:
+        executor._verify_inputs(run_dir, Path(locations["archive_cache"]),
+                                Path(locations["source_root"]))
+    except executor.Refused as error:
+        raise Refused(f"committed transition materialized native source changed: {error}") from error
+    targets = config.get("target_directories")
+    if not isinstance(targets, dict) or not isinstance(targets.get(release), str):
+        raise Refused("committed transition lacks owned measurement target")
+    checkout = run_dir / "checkouts" / executor._safe_name(release)
+    generation = _report_for(run_dir, journal, release, "generate")
+    build = _report_for(run_dir, journal, release, "build")
+    read = _report_for(run_dir, journal, release, "read")
+    read_report_path = run_dir / journal["releases"][release]["reports"]["read"]["path"]
+    if (read.get("state") != "measured"
+            or release_state.get("reports", {}).get("read", {}).get("acceptance") != "pending_pair_policy"):
+        raise Refused("committed read report does not remain pending pair policy")
+    native_report = _report_for(run_dir, journal, release, "native")
+    union = _replay_read_union(row, root / row["id"])
+    fixture_entries = read.get("fixtures", {}).get("entries")
+    carriers = union["union"]["fixtures"]
+    if (read.get("fixtures", {}).get("manifest") != union["manifest"]["path"]
+            or read.get("fixtures", {}).get("manifest_sha256") != union["manifest"]["sha256"]
+            or not isinstance(fixture_entries, list) or len(fixture_entries) != len(carriers)):
+        raise Refused("committed read differs from the common frozen fixture union")
+    for entry_row, carrier in zip(fixture_entries, carriers, strict=True):
+        chosen = carrier["sources"]["before"] or carrier["sources"]["after"]
+        if (entry_row.get("source") != chosen
+                or entry_row.get("sha256") != carrier["sha256"]
+                or entry_row.get("bytes") != carrier["bytes"]):
+            raise Refused("committed read carrier differs from frozen union mapping")
+    if entry.get("read_report_sha256") != rehearsal.sha256_json(read):
+        raise Refused("committed transition read report changed")
+    try:
+        source_tree = executor._source_tree(checkout)
+        target = Path(targets[release])
+        native_identity = read.get("native_identity")
+        if (not isinstance(native_identity, dict)
+                or instrument_row.get("native_identity") != native_identity
+                or build.get("native_identity") != native_identity
+                or native_report.get("probe_sha256") != read.get("native_probe_sha256")
+                or instrument_row.get("native_probe_sha256") != read.get("native_probe_sha256")):
+            raise executor.Refused("read, build and side native identities differ")
+        native_source = native_identity.get("source")
+        native_lib = native_identity.get("lib")
+        native_perl = native_identity.get("perl")
+        if (not isinstance(native_source, dict) or not isinstance(native_lib, dict)
+                or not isinstance(native_perl, dict)
+                or any(not isinstance(part.get("path"), str)
+                       for part in (native_source, native_lib, native_perl))):
+            raise executor.Refused("committed native identity is malformed")
+        native_tuple = (Path(native_source["path"]), Path(native_lib["path"]),
+                        Path(native_source["path"]) / "exiftool")
+        perl_path = native_perl["path"]
+        fixture_row = read.get("fixtures")
+        if (not isinstance(fixture_row, dict)
+                or instrument_row.get("read_fixture_manifest") != fixture_row.get("manifest")
+                or instrument_row.get("read_fixture_manifest_sha256") != fixture_row.get("manifest_sha256")
+                or instrument_row.get("read_fixture_count") != len(fixture_row.get("entries", []))):
+            raise executor.Refused("committed fixture scope differs from side receipt")
+        for stage_result in (build, read):
+            executor._require_source_proof(stage_result, checkout, config["execution_source_commit"], source_tree)
+            executor._require_generated_artifacts(stage_result, checkout)
+            executor._require_binary_proof(stage_result, target)
+            executor._require_native_identity(stage_result, release, native_tuple, perl_path)
+        if read.get("binary") != build.get("binary"):
+            raise executor.Refused("read and build binary identities differ")
+        if instrument_row.get("binary") != read.get("binary"):
+            raise executor.Refused("side receipt binary differs from authenticated read")
+        executor._require_fixture_proof(read)
+        executor._require_read_measurement_snapshot(
+            read, generation, checkout, target,
+            config["execution_source_commit"], source_tree)
+        executor._require_read_counts(read)
+        executor._require_read_raw_maps(read, read_report_path, native_tuple, perl_path)
+    except (executor.Refused, KeyError) as error:
+        raise Refused(f"committed transition read measurement replay refused: {error}") from error
+
+
 def load_committed_result(final_path: Path) -> dict[str, Any]:
     """Accept qualification only through its final marker and exact pending inputs."""
     final = _read_object(final_path, "qualification result")
@@ -1147,6 +1517,13 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
             or release.get("receipt_failures") != []):
         raise Refused("qualification final marker has invalid cleanup or deadline evidence")
     rows = final.get("rows")
+    policy_binding = final.get("read_policy_input")
+    caller = final.get("caller")
+    if not isinstance(caller, dict) or not isinstance(caller.get("pin_version"), str):
+        raise Refused("qualification final marker lacks caller pin identity")
+    expected_policy_rows = {item["id"] for item in load_matrix(
+        Path(matrix["path"]), caller["pin_version"])["rows"]}
+    policy_document = _verify_read_policy_input(policy_binding, expected_policy_rows)
     bound_rows = manifest["row_results"]
     if (not isinstance(rows, list) or not rows or not isinstance(bound_rows, list)
             or len(rows) != len(bound_rows)):
@@ -1166,6 +1543,24 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
                 or row.get("caller_restored") is not True
                 or row.get("promotion") != "forbidden"):
             raise Refused("qualification row receipt is not pending or differs from final")
+        if (row.get("read_policy_input") != policy_binding
+                or row.get("read_payload_floors") != policy_document["rows"].get(row["id"])):
+            raise Refused("qualification row differs from predeclared read-policy floors")
+        _replay_read_union(row, root / row["id"])
+        for side in SIDES:
+            _replay_committed_read_snapshot(row, side, root)
+        saved_pair = row.get("read_policy_pair")
+        expected_pair = root / row["id"] / "read-policy-pair.json"
+        if (not isinstance(saved_pair, dict)
+                or saved_pair.get("path") != str(expected_pair.resolve())
+                or saved_pair.get("sha256") != _sha_file(_regular_receipt(expected_pair))):
+            raise Refused("committed transition read-pair receipt changed")
+        observed_pair = _read_object(expected_pair, "committed transition read pair")
+        replayed_pair = _read_policy_pair_body(
+            root / row["id"], row["read_union"],
+            {side: row[side] for side in SIDES}, row["read_payload_floors"])
+        if observed_pair != replayed_pair:
+            raise Refused("committed transition read-pair policy replay differs")
     return final
 
 
@@ -1174,6 +1569,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                       owner_receipt: Path, heartbeat_receipt: Path,
                       expiry_receipt: Path, release_receipt: Path,
                       handoff_receipt: Path, only: str | None = None,
+                      read_policy_input: Path | None = None,
                       execute: Callable[..., dict[str, Any]] = executor.execute) -> dict[str, Any]:
     _validate_receipt_contract(
         output_root=output_root, run_id=run_id, lease_path=lease_path,
@@ -1197,6 +1593,10 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     rows = [row for row in matrix["rows"] if only is None or row["id"] == only]
     if not rows:
         raise Refused(f"matrix row is not selected: {only}")
+    if read_policy_input is None:
+        raise Refused("Task19 read-policy input must be frozen before transition execution")
+    policy_document, policy_binding = _read_policy_input(
+        read_policy_input, {row["id"] for row in matrix["rows"]})
     source_commit = caller["head"]
     frozen_inputs: dict[str, dict[str, dict[str, Any]]] = {}
     for row in rows:
@@ -1206,6 +1606,9 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             if frozen["identity"]["documents"]["plan"].get("repository_commit") != source_commit:
                 raise Refused("verified transition plan is not bound to the caller execution source commit")
             frozen_inputs[row["id"]][side] = frozen
+    frozen_unions = {row["id"]: _freeze_read_union(frozen_inputs[row["id"]]["before"],
+                                                    frozen_inputs[row["id"]]["after"])
+                     for row in rows}
     perl = _perl(ops_paths.ops_root())
     results: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
@@ -1226,6 +1629,9 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                 if row_output.exists() or row_output.is_symlink() or row_target.exists() or row_target.is_symlink():
                     raise Refused("row output or target already exists; stale reuse is forbidden")
                 row_output.mkdir(parents=True)
+                read_union = _materialize_read_union(
+                    frozen_unions[row["id"]], frozen_inputs[row["id"]]["before"],
+                    frozen_inputs[row["id"]]["after"], row_output)
                 sides: dict[str, dict[str, Any]] = {}
                 for side, release in zip(SIDES, (row["before_version"], row["after_version"]), strict=True):
                     cadence.position(row["id"], side)
@@ -1233,7 +1639,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                     frozen = frozen_inputs[row["id"]][side]
                     _verify_frozen_side(frozen)
                     identity = frozen["identity"]
-                    read_manifest = Path(frozen["read_manifest"])
+                    read_manifest = Path(read_union["manifest"]["path"])
                     write_manifest = Path(frozen["write_manifest"])
                     native_cases = frozen["native_cases"]
                     side_run = row_output / side
@@ -1243,6 +1649,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         release=release, source_commit=source_commit, perl=perl,
                         read_manifest=read_manifest, write_manifest=write_manifest,
                         native_cases=native_cases, lease=lease_path, target=side_target,
+                        verified_input_bundle=Path(identity["bundle"]),
+                        read_policy_input=policy_binding,
                     )
                     executor.initialize_run(
                         side_run, documents["capture"], documents["catalog"], documents["plan"],
@@ -1253,6 +1661,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         try:
                             host_lease.guard()
                             cadence.check()
+                            _verify_read_policy_input(
+                                policy_binding, {item["id"] for item in matrix["rows"]})
                             _verify_frozen_side(selected)
                             host_lease.guard()
                             cadence.check()
@@ -1287,6 +1697,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                                 )
                         raise
                     _verify_frozen_side(frozen)
+                    _verify_read_policy_input(policy_binding,
+                                              {item["id"] for item in matrix["rows"]})
                     sides[side] = _side_receipt(side_run, journal, release, identity)
                     verify_caller(caller)
                     host_lease.heartbeat("side-complete", row["id"], side)
@@ -1297,11 +1709,17 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         "qualification_outcome": "pending",
                     })
                 delta = _compare_sides(row, sides["before"], sides["after"])
+                read_pair = _save_read_policy_pair(
+                    row_output, read_union, sides, policy_document["rows"][row["id"]])
                 host_lease.guard()
                 cadence.check()
                 for frozen in frozen_inputs[row["id"]].values():
                     _verify_frozen_side(frozen)
                 result = {"id": row["id"], "before": sides["before"], "after": sides["after"],
+                          "read_union": read_union,
+                          "read_policy_input": policy_binding,
+                          "read_payload_floors": policy_document["rows"][row["id"]],
+                          "read_policy_pair": read_pair,
                           "artifact_delta": delta, "caller_restored": True,
                           "promotion": "forbidden", "qualification_outcome": "pending"}
                 _atomic_json(row_output / "transition-result.json", result)
@@ -1310,12 +1728,15 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             for row_inputs in frozen_inputs.values():
                 for frozen in row_inputs.values():
                     _verify_frozen_side(frozen)
+            _verify_read_policy_input(policy_binding,
+                                      {item["id"] for item in matrix["rows"]})
             host_lease.guard()
             cadence.check()
             final = {
                 "schema": SCHEMA, "kind": RESULT_KIND, "run_id": run_id,
                 "promotion": "forbidden", "status": "tooling-executed-nonpromoting",
                 "caller": caller, "matrix": matrix_binding, "rows": results, "caller_restored": True,
+                "read_policy_input": policy_binding,
             }
             _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                             "state": "final-validation-complete",
@@ -1393,6 +1814,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-receipt", required=True)
     parser.add_argument("--handoff-receipt", required=True)
     parser.add_argument("--only")
+    parser.add_argument("--read-policy-input")
     return parser
 
 
@@ -1441,6 +1863,7 @@ def main(argv: list[str] | None = None) -> int:
             owner_receipt=Path(args.owner_receipt), heartbeat_receipt=Path(args.heartbeat_receipt),
             expiry_receipt=Path(args.expiry_receipt), release_receipt=Path(args.release_receipt),
             handoff_receipt=Path(args.handoff_receipt), only=args.only,
+            read_policy_input=Path(args.read_policy_input) if args.read_policy_input else None,
         )
     except LeaseRetained as exc:
         print(f"version transition qualification stopped fail-closed: {exc}", file=sys.stderr)

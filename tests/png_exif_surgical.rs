@@ -1424,6 +1424,10 @@ fn an_rw2_edit_passes_the_post_write_check() {
                     Some("x"),
                     "{order:?}"
                 );
+                let written = std::fs::read(&path).unwrap();
+                modify_tag(&path, "IFD0:Artist", TagValue::new_string("x"))
+                    .unwrap_or_else(|e| panic!("{order:?} repeated RW2 Artist: {e}"));
+                assert_eq!(std::fs::read(&path).unwrap(), written, "{order:?}");
             }
             pin => panic!("unreviewed ExifTool pin {pin}"),
         }

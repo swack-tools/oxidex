@@ -172,7 +172,7 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
     }
     // Each occurrence keeps its provenance: a normalized copy of a read map
     // is still the file's rows, and a caller's assignment stays one.
-    for (key, occurrence, assigned) in map.keyed_occurrences_with_provenance() {
+    for (key, occurrence, assigned, eligible) in map.keyed_occurrences_with_selection() {
         let normalized_key = normalize_tag_family(key);
         // An unchanged public key needs no identity reconstruction. In
         // particular, a MakerNote row recorded under a `DJI:` lookup key
@@ -181,9 +181,17 @@ pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::Me
         if normalized_key == key
             || (occurrence.origin.module.is_some() && occurrence.origin.table.is_some())
         {
-            normalized.record_occurrence(normalized_key, occurrence.clone());
+            normalized.record_occurrence_with_eligibility(
+                normalized_key,
+                occurrence.clone(),
+                eligible,
+            );
         } else {
-            normalized.insert_renamed_occurrence(normalized_key, occurrence);
+            normalized.insert_renamed_occurrence_with_eligibility(
+                normalized_key,
+                occurrence,
+                eligible,
+            );
         }
         normalized.set_last_assigned(assigned);
     }

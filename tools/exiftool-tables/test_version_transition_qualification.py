@@ -94,7 +94,8 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
         lease.touch()
         run_id = "live-child"
         receipt_root = output / run_id
-        fixture = root / "fixture.jpg"
+        fixture = root / "t" / "images" / "fixture.jpg"
+        fixture.parent.mkdir(parents=True)
         fixture.write_bytes(b"\xff\xd8fixture")
         binding = {"path": str(fixture), "sha256": qualification._sha_file(fixture),
                    "bytes": fixture.stat().st_size}
@@ -110,6 +111,12 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
             "write": {"tag": "Comment", "operation": "delete", "readback": None},
         }]))
         row_id = f"same-pin-{release}"
+        policy_input = root / "read-policy.json"
+        policy_input.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_task19_read_policy_input",
+            "policy": qualification.read_policy.PAIR_SCHEMA,
+            "rows": {row_id: {"before": 1, "after": 1}},
+        }))
         row = {
             "id": row_id, "before_version": release, "after_version": release,
             "immutable_source_identities": {
@@ -164,6 +171,7 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
             "--expiry-receipt", str(receipt_root / "lease-expiry.json"),
             "--release-receipt", str(receipt_root / "lease-release.json"),
             "--handoff-receipt", str(receipt_root / "handoff.jsonl"),
+            "--read-policy-input", str(policy_input),
         ]
         with patch.object(qualification, "snapshot_caller", return_value=caller), \
              patch.object(qualification, "verify_caller"), \
@@ -171,6 +179,7 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
              patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \
              patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=identity), \
+             patch.object(qualification, "_evidence_location", side_effect=lambda path, _label: Path(path)), \
              patch.object(qualification, "run_qualification",
                           partial(qualification.run_qualification, execute=execute)), \
              patch.object(qualification.executor, "_bounded_timeout_cleanup",
@@ -419,11 +428,20 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "release", "tag_object", "peeled_commit", "source_directory",
                 "source_tree_sha256", "materialization_sha256",
             )}
+            read["state"] = "measured"
             journal = {"phase": "complete", "scope": {"write_acceptance": "passed_per_release",
-                                                      "release_tests": "passed_per_release"}}
+                                                      "read_acceptance": "pending_pair_policy",
+                                                      "release_tests": "passed_per_release"},
+                       "releases": {"13.59": {"state": "measured_pending_pair_policy",
+                                               "stages": {"read": "measured"},
+                                               "reports": {"read": {"acceptance": "pending_pair_policy"}}}}}
             with patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
                  patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
                 side = qualification._side_receipt(run_dir, journal, "13.59", identity)
+                journal["releases"]["13.59"]["reports"]["read"].pop("acceptance")
+                with self.assertRaisesRegex(qualification.Refused, "pending pair measurement"):
+                    qualification._side_receipt(run_dir, journal, "13.59", identity)
+                journal["releases"]["13.59"]["reports"]["read"]["acceptance"] = "pending_pair_policy"
             self.assertEqual(side.get("release_tests"), {
                 "commands": [list(argv) for argv in qualification.stage_adapter.TEST_COMMANDS],
                 "exits": [0], "passed": 8, "failed": 0, "ignored": 2, "measured": 0,
@@ -555,14 +573,26 @@ class SideAndRecoveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(qualification.Refused, "release test suite"):
                     qualification._side_receipt(run_dir, journal, "13.59", identity)
             log.write_text('{"commands": []}')
-            for scope in ({"write_acceptance": "passed_per_release"},
-                          {"write_acceptance": "passed_per_release",
+            paired_scope = {
+                "write_acceptance": "passed_per_release",
+                "read_acceptance": "pending_pair_policy",
+            }
+            paired_releases = {"13.59": {
+                "state": "measured_pending_pair_policy",
+                "stages": {"read": "measured"},
+                "reports": {"read": {"acceptance": "pending_pair_policy"}},
+            }}
+            for scope in (paired_scope,
+                          {**paired_scope,
                            "release_tests": "unsupported_for_one_or_more_releases"}):
                 with self.subTest(scope=scope), \
                      patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
                      patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
                     with self.assertRaisesRegex(qualification.Refused, "release test suite"):
-                        qualification._side_receipt(run_dir, {"phase": "complete", "scope": scope}, "13.59", identity)
+                        qualification._side_receipt(run_dir, {
+                            "phase": "complete", "scope": scope,
+                            "releases": paired_releases,
+                        }, "13.59", identity)
             self.assertEqual(side.get("instrument"), {
                 "source_commit": source_commit,
                 "binary": read["binary"],
@@ -676,6 +706,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                 release="11.78", source_commit="a" * 40, perl=Path(sys.executable).resolve(),
                 read_manifest=read_manifest, write_manifest=manifest,
                 native_cases=[{"name": "case"}], lease=root / "lease", target=root / "target",
+                verified_input_bundle=root / "bundle",
             )
             normalized = qualification.executor._config(config, ["11.78", "12.64"])
             self.assertEqual(normalized["execution_releases"], ["11.78"])
@@ -743,7 +774,7 @@ class SideAndRecoveryTests(unittest.TestCase):
         config = qualification._side_config(
             release=release, source_commit=plan["repository_commit"], perl=Path(sys.executable).resolve(),
             read_manifest=read_manifest, write_manifest=write_manifest, native_cases=[{"name": "case"}],
-            lease=lease_path, target=root / "target",
+            lease=lease_path, target=root / "target", verified_input_bundle=root / "bundle",
         )
         qualification.executor.initialize_run(
             run_dir, capture, catalog, plan, resolution, materialization, config,
@@ -778,6 +809,170 @@ class SideAndRecoveryTests(unittest.TestCase):
             report_path.write_text(json.dumps({"state": "passed", "classification_counts": {"extra": 99}}))
             with self.assertRaisesRegex(qualification.Refused, "journal digest"):
                 qualification._report_for(run_dir, journal, "11.78", "read")
+
+
+class ReadUnionTests(unittest.TestCase):
+    def test_same_pin_pair_replays_two_authenticated_side_reports(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            row = root / "row"
+            row.mkdir()
+            source = root / "t" / "images" / "One.jpg"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"fixture")
+            sha = qualification._sha_file(source)
+            manifest = root / "read.json"
+            manifest.write_text(json.dumps({
+                "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+                "fixtures": [{"path": str(source), "sha256": sha, "bytes": 7}],
+            }))
+            original = {"read_manifest": str(manifest),
+                        "read_binding": qualification.executor._fixture_binding(
+                            str(manifest), kind="oxidex_version_rehearsal_fixture_manifest",
+                            jpeg_only=False)}
+            frozen = qualification._materialize_read_union(
+                qualification._freeze_read_union(original, original), original, original, row)
+            native = {"File:FileType": "JPEG", "EXIF:IFD0:Make": "Acme"}
+            candidate = {"File:FileType": "JPEG", "EXIF:Make": "Acme"}
+            sides = {}
+            for side in qualification.SIDES:
+                run = row / side
+                reports = run / "reports"
+                reports.mkdir(parents=True)
+                staged = run / "staged.jpg"
+                staged.write_bytes(source.read_bytes())
+                transcript = qualification.read_policy.conformance.transcript_row(
+                    str(staged), native, candidate,
+                    qualification.read_policy.conformance.compare(native, candidate))
+                raw_path = reports / "read-maps.json"
+                raw_path.write_text(json.dumps({"rows": [{
+                    "fixture": {"source": str(source.resolve()),
+                                "corpus_path": str(staged), "sha256": sha, "bytes": 7},
+                    "oracle_raw_map": native, "candidate_raw_map": candidate,
+                    "transcript_row": transcript, "native_status": 0,
+                }]}))
+                raw_binding = {"path": str(raw_path),
+                               "sha256": qualification._sha_file(raw_path)}
+                read = {"fixtures": {"entries": [{"source": str(source),
+                        "sha256": sha, "bytes": 7, "corpus_path": str(staged)}]},
+                        "raw_maps": raw_binding}
+                (reports / "read.json").write_text(json.dumps(read))
+                read_sha = qualification.rehearsal.sha256_json(read)
+                journal = {"releases": {"13.59": {"reports": {"read": {
+                    "path": "reports/read.json", "sha256": read_sha}}}}}
+                (run / "execution-status.json").write_text(json.dumps(journal))
+                sides[side] = {"release": "13.59", "generated_artifacts": [
+                    {"path": "generated.json", "sha256": "a" * 64}],
+                    "read_report_sha256": read_sha,
+                    "execution_journal_sha256": qualification._sha_file(run / "execution-status.json"),
+                    "raw_maps": raw_binding}
+            body = qualification._read_policy_pair_body(
+                row, frozen, sides, {"before": 1, "after": 1})
+            self.assertEqual(body["proof"]["status"], "passed")
+            self.assertEqual(body["proof"]["payload_occurrences"],
+                             {"before": 1, "after": 1})
+            sides["after"]["raw_maps"]["sha256"] = "f" * 64
+            with self.assertRaisesRegex(qualification.Refused, "side receipt"):
+                qualification._read_policy_pair_body(
+                    row, frozen, sides, {"before": 1, "after": 1})
+
+    def test_predeclared_payload_floors_cannot_change_after_binding(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "read-policy.json"
+            document = {"schema": 1, "kind": "oxidex_task19_read_policy_input",
+                        "policy": qualification.read_policy.PAIR_SCHEMA,
+                        "rows": {"same-pin-13.59": {"before": 10301, "after": 10301}}}
+            path.write_text(json.dumps(document))
+            with patch.object(qualification, "_evidence_location",
+                              side_effect=lambda value, _label: Path(value)):
+                observed, binding = qualification._read_policy_input(
+                    path, {"same-pin-13.59"})
+                self.assertEqual(observed, document)
+                self.assertEqual(qualification._verify_read_policy_input(
+                    binding, {"same-pin-13.59"}), document)
+                document["rows"]["same-pin-13.59"]["after"] = 1
+                path.write_text(json.dumps(document))
+                with self.assertRaisesRegex(qualification.Refused, "changed after preflight"):
+                    qualification._verify_read_policy_input(binding, {"same-pin-13.59"})
+
+    def test_authenticated_raw_map_is_joined_to_exact_union_carrier(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            carrier = root / "t" / "images" / "One.jpg"
+            carrier.parent.mkdir(parents=True)
+            carrier.write_bytes(b"fixture")
+            sha = qualification._sha_file(carrier)
+            manifest = root / "read.json"
+            manifest.write_text(json.dumps({
+                "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+                "fixtures": [{"path": str(carrier), "sha256": sha, "bytes": 7}],
+            }))
+            original = {"read_manifest": str(manifest),
+                        "read_binding": qualification.executor._fixture_binding(
+                            str(manifest), kind="oxidex_version_rehearsal_fixture_manifest",
+                            jpeg_only=False)}
+            output = root / "row"
+            output.mkdir()
+            frozen = qualification._materialize_read_union(
+                qualification._freeze_read_union(original, original), original, original, output)
+            staged = root / "staged.jpg"
+            staged.write_bytes(carrier.read_bytes())
+            native = {"File:FileType": "JPEG", "EXIF:IFD0:Make": "Acme"}
+            candidate = {"File:FileType": "JPEG", "EXIF:Make": "Acme"}
+            transcript = qualification.read_policy.conformance.transcript_row(
+                str(staged), native, candidate,
+                qualification.read_policy.conformance.compare(native, candidate))
+            raw_path = root / "raw-maps.json"
+            raw_path.write_text(json.dumps({"rows": [{
+                "fixture": {"source": str(carrier.resolve()),
+                            "corpus_path": str(staged), "sha256": sha, "bytes": 7},
+                "oracle_raw_map": native, "candidate_raw_map": candidate,
+                "transcript_row": transcript, "native_status": 0,
+            }]}))
+            read = {"fixtures": {"entries": [{"source": str(carrier),
+                    "sha256": sha, "bytes": 7, "corpus_path": str(staged)}]},
+                    "raw_maps": {"path": str(raw_path),
+                                 "sha256": qualification._sha_file(raw_path)}}
+            ledgers = qualification._read_policy_ledgers(frozen, read)
+            self.assertEqual(len(ledgers), 1)
+            self.assertEqual(ledgers[0]["counts"]["matched"], 2)
+            read["fixtures"]["entries"][0]["sha256"] = "f" * 64
+            with self.assertRaises(qualification.Refused):
+                qualification._read_policy_ledgers(frozen, read)
+
+    def test_changed_carrier_keeps_both_versions_in_one_immutable_union(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frozen = {}
+            for side, payload in (("before", b"old jpeg"), ("after", b"new jpeg")):
+                carrier = root / side / "t" / "images" / "One.jpg"
+                carrier.parent.mkdir(parents=True)
+                carrier.write_bytes(payload)
+                manifest = root / f"{side}.json"
+                manifest.write_text(json.dumps({
+                    "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+                    "fixtures": [{"path": str(carrier),
+                                  "sha256": qualification._sha_file(carrier),
+                                  "bytes": len(payload)}],
+                }))
+                frozen[side] = {
+                    "read_manifest": str(manifest),
+                    "read_binding": qualification.executor._fixture_binding(
+                        str(manifest), kind="oxidex_version_rehearsal_fixture_manifest",
+                        jpeg_only=False),
+                }
+            union = qualification._freeze_read_union(frozen["before"], frozen["after"])
+            self.assertEqual(len(union["fixtures"]), 2)
+            self.assertEqual({row["logical_name"] for row in union["fixtures"]}, {"One.jpg"})
+            output = root / "row"
+            output.mkdir()
+            saved = qualification._materialize_read_union(
+                union, frozen["before"], frozen["after"], output)
+            self.assertEqual(qualification._replay_read_union({"read_union": saved}, output), saved)
+            self.assertEqual(len(saved["manifest"]["fixtures"]), 2)
+            (root / "after" / "t" / "images" / "One.jpg").write_bytes(b"tampered")
+            with self.assertRaises(qualification.Refused):
+                qualification._replay_read_union({"read_union": saved}, output)
 
 
 class LeaseTests(unittest.TestCase):
@@ -982,6 +1177,17 @@ class LeaseTests(unittest.TestCase):
 
 class WrapperCallTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Wrapper orchestration tests synthesize side receipts without Git
+        # checkouts; real committed snapshot replay is tested separately.
+        committed_replay = patch.object(qualification, "_replay_committed_read_snapshot")
+        committed_replay.start()
+        self.addCleanup(committed_replay.stop)
+        # Orchestration fixtures have no measured raw maps; the independent
+        # occurrence policy suite and real raw-map controls test that proof.
+        pair_body = patch.object(qualification, "_read_policy_pair_body",
+                                 return_value={"schema": 1, "status": "paired-fixture"})
+        pair_body.start()
+        self.addCleanup(pair_body.stop)
         # Owned-child and retained-lock state is process-wide by design; a
         # child one test leaves unproven must not fail an unrelated release.
         for name, value in (("_OWNED", qualification.executor._OwnedChildren()),
@@ -1026,7 +1232,9 @@ class WrapperCallTests(unittest.TestCase):
             "durable_output_directory": str(self.row_output),
         }
         (self.root / "read.json").write_text("{}")
-        fixture = self.root / "fixture.jpg"; fixture.write_bytes(b"\xff\xd8fixture")
+        fixture = self.root / "t" / "images" / "fixture.jpg"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_bytes(b"\xff\xd8fixture")
         fixture_row = {"path": str(fixture), "sha256": qualification._sha_file(fixture),
                        "bytes": fixture.stat().st_size}
         (self.root / "read.json").write_text(json.dumps({
@@ -1042,6 +1250,12 @@ class WrapperCallTests(unittest.TestCase):
             "read": {"query": "Comment", "expectation": "native_unsupported"},
             "write": {"tag": "Comment", "operation": "delete", "readback": None},
         }]))
+        self.policy_input = self.root / "read-policy.json"
+        self.policy_input.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_task19_read_policy_input",
+            "policy": qualification.read_policy.PAIR_SCHEMA,
+            "rows": {"same-pin-13.59": {"before": 1, "after": 1}},
+        }))
         self.caller = {"pin_version": "13.59", "head": "a" * 40}
         self.identity = {
             "release": "13.59", "tag_object": "b" * 40, "peeled_commit": "c" * 40,
@@ -1070,13 +1284,15 @@ class WrapperCallTests(unittest.TestCase):
              patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
              patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=self.identity), \
+             patch.object(qualification, "_evidence_location", side_effect=lambda path, _label: Path(path)), \
              patch.object(qualification.executor, "initialize_run", side_effect=initialize), \
              patch.object(qualification, "_side_receipt", return_value=side_receipt):
             result = qualification.run_qualification(
                 matrix_path=matrix_path or qualification.CANONICAL_MATRIX,
                 repository=repository or qualification.REPOSITORY_ROOT,
                 output_root=self.output, target_root=self.target,
-                lease_path=self.lease, run_id=self.run_id, execute=execute, **self.receipts,
+                lease_path=self.lease, run_id=self.run_id, execute=execute,
+                read_policy_input=self.policy_input, **self.receipts,
             )
         return result, configs
 
@@ -1199,9 +1415,54 @@ class WrapperCallTests(unittest.TestCase):
         self.assertEqual(manifest["row_results"], [{
             "path": str(row_result.resolve()), "sha256": qualification._sha_file(row_result),
         }])
-        self.assertEqual(qualification.load_committed_result(
-            self.output / self.run_id / "qualification-result.json"
-        )["run_id"], self.run_id)
+        with (patch.object(qualification, "_evidence_location",
+                           side_effect=lambda path, _label: Path(path)),
+              patch.object(qualification, "load_matrix", return_value={"rows": [self.row]})):
+            self.assertEqual(qualification.load_committed_result(
+                self.output / self.run_id / "qualification-result.json"
+            )["run_id"], self.run_id)
+
+    def test_public_committed_result_refuses_missing_or_malformed_read_pair(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        final_path = self.output / self.run_id / "qualification-result.json"
+        pair_path = self.row_output / "read-policy-pair.json"
+        original = pair_path.read_bytes()
+        with patch.object(qualification, "_evidence_location",
+                          side_effect=lambda path, _label: Path(path)), \
+             patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}):
+            pair_path.unlink()
+            with self.assertRaises(qualification.Refused):
+                qualification.load_committed_result(final_path)
+            pair_path.write_bytes(b"not JSON")
+            with self.assertRaises(qualification.Refused):
+                qualification.load_committed_result(final_path)
+            pair_path.write_bytes(original)
+            self.assertEqual(qualification.load_committed_result(final_path)["run_id"], self.run_id)
+
+    def test_public_committed_result_replays_pair_after_outer_digest_rewrite(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        final_path = self.output / self.run_id / "qualification-result.json"
+        row_path = self.row_output / "transition-result.json"
+        pair_path = self.row_output / "read-policy-pair.json"
+        pair = json.loads(pair_path.read_text())
+        pair["status"] = "forged-pass"
+        pair_path.write_text(json.dumps(pair))
+        row = json.loads(row_path.read_text())
+        row["read_policy_pair"]["sha256"] = qualification._sha_file(pair_path)
+        row_path.write_text(json.dumps(row))
+        final = json.loads(final_path.read_text())
+        final["rows"] = [row]
+        final["receipt_manifest"]["row_results"][0]["sha256"] = qualification._sha_file(row_path)
+        final_path.write_text(json.dumps(final))
+        with patch.object(qualification, "_evidence_location",
+                          side_effect=lambda path, _label: Path(path)), \
+             patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}):
+            with self.assertRaisesRegex(qualification.Refused, "read-pair policy replay differs"):
+                qualification.load_committed_result(final_path)
 
     def test_final_marker_is_not_accepted_after_bound_receipt_changes(self) -> None:
         self.invoke(lambda *_args, **_kwargs: {

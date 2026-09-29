@@ -1,7 +1,7 @@
 # Camera Manufacturers Tag Domain
 
 - Tables: 580
-- Total tags: 8246
+- Total tags: 8245
 
 ## Apple::Main (42 tags)
 
@@ -4064,7 +4064,7 @@
 - `MakerNoteType` — MakerNoteType tag
 - `MakerNoteVersion` — MakerNoteVersion tag
 
-## Nikon::AutoCaptureInfo (15 tags)
+## Nikon::AutoCaptureInfo (14 tags)
 
 - `AutoCapturedFrame` — AutoCapturedFrame tag
 - `AutoCaptureCriteria` — AutoCaptureCriteria tag
@@ -4080,7 +4080,6 @@
 - `AutoCaptureCriteriaMotionSize` — AutoCaptureCriteriaMotionSize tag
 - `AutoCaptureCriteriaSubjectSize` — AutoCaptureCriteriaSubjectSize tag
 - `AutoCaptureCriteriaSubjectType` — AutoCaptureCriteriaSubjectType tag
-- `Vehicle` — Vehicle tag
 
 ## Nikon::BarometerInfo (2 tags)
 

@@ -22,6 +22,7 @@ pub mod numeric_precision;
 pub mod picture_type;
 pub mod scene_type;
 pub mod unit_suffixes;
+pub mod xmp_gps;
 pub mod ycbcr_subsampling;
 
 // Re-export main formatting functions for convenience

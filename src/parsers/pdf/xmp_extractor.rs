@@ -27,7 +27,9 @@
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::parse_xmp_history;
-use crate::parsers::xmp::rdf_parser::{insert_xmp_entry, parse_xmp_entries};
+use crate::parsers::xmp::rdf_parser::{
+    insert_xmp_entry_with_source, parse_xmp_entries_with_source_forms,
+};
 
 /// Searches for and extracts XMP metadata packets from a PDF file.
 ///
@@ -69,9 +71,10 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             Some(xmp_xml) => {
                 // Preserve RDF bags and sequences as lists. Joining them here
                 // loses the structured representation expected by MetadataMap.
-                let xmp_tags = parse_xmp_entries(xmp_xml).map_err(|e| {
-                    ExifToolError::parse_error(format!("XMP parsing failed: {}", e))
-                })?;
+                let (xmp_tags, _, gps_sources) = parse_xmp_entries_with_source_forms(xmp_xml)
+                    .map_err(|e| {
+                        ExifToolError::parse_error(format!("XMP parsing failed: {}", e))
+                    })?;
 
                 // Parse XMP history for forensic metadata
                 let xml_str = std::str::from_utf8(xmp_xml).unwrap_or("");
@@ -81,8 +84,13 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                 let total_tags = xmp_tags.len() + history_tags.len();
                 let mut metadata = MetadataMap::with_capacity(total_tags);
 
-                for entry in &xmp_tags {
-                    insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+                for (entry, source) in xmp_tags.iter().zip(&gps_sources) {
+                    insert_xmp_entry_with_source(
+                        &mut metadata,
+                        entry,
+                        entry.tag_value(true),
+                        source.as_deref(),
+                    );
                 }
 
                 for (key, value) in history_tags {
