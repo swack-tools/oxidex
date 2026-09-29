@@ -27,9 +27,9 @@ selected-release test receipt with zero failures and a committed result.
 This is not transition qualification. Retained 11.78 and 12.64 source bundles
 and fixture manifests passed the immutable-input recheck in
 `task19-final-launch-readiness/immutable-input-recheck.json`. Input availability
-does not qualify a transition. The three final rows remain unrun and must use
-the converged post-Task18 candidate. Run same-pin, forward, then reverse
-through the entry point's single nonblocking
+does not qualify a transition. Qualification requires committed results from
+all three final rows on the converged post-Task18 candidate. Run same-pin,
+forward, then reverse through the entry point's single nonblocking
 `transition.host.lock`, with unique run IDs and complete owner, heartbeat,
 expiry, release, and handoff receipts. Do not use the old fleet-controller or
 outer `locked.py` Task19 examples.
