@@ -310,6 +310,30 @@ mod tests {
     }
 
     #[test]
+    fn keyed_firmware_keeps_ciff_app0_source_provenance() {
+        let mut payload = build_ciff_app0_with_focal_length();
+        let footer = payload.split_off(payload.len() - 4);
+        let directory = u32::from_le_bytes(footer[..4].try_into().unwrap()) as usize + 14;
+        payload[directory..directory + 2].copy_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&(0x080bu16 | 0x4000).to_le_bytes());
+        payload.extend_from_slice(b"FW 1.0\0\0");
+        payload.extend_from_slice(&footer);
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        let row = metadata.occurrences_for("CIFF:CanonFirmwareVersion")[0];
+        assert_eq!(crate::cli::tag_resolution::family0_label(row), "MakerNotes");
+        assert_eq!(row.group1.as_ref(), "CIFF");
+        assert_eq!(row.origin.module, Some("CanonRaw"));
+        assert_eq!(row.origin.table, Some("Main"));
+        assert_eq!(
+            metadata.get_string("CIFF:CanonFirmwareVersion"),
+            Some("FW 1.0")
+        );
+    }
+
+    #[test]
     fn ignores_app0_segments_without_the_ciff_signature() {
         let mut metadata = MetadataMap::new();
         let jfif = b"JFIF\0\x01\x02\x00\x00\x01\x00\x01\x00\x00";

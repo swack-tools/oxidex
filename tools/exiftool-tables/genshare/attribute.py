@@ -87,6 +87,31 @@ TASK8_RUST_BOUNDARY = (
     "src/parsers/tiff/makernotes/sony/binary_data.rs",
 )
 
+# These production functions are the reviewed reachability and bounded
+# projection contract. Any source change requires a fresh review and digest
+# update; a textual call in a comment, dead branch, or another function cannot
+# authenticate the route.
+KEYED_ROUTE_FUNCTION_SHA256 = {
+    "canon_firmware_projection_matches": "7ebda29d9628fbab4202cea00c5dee4ceaa13af49b8344b1099236b726963d5c",
+    "canon_firmware_keyed_table": "a49e24fcb45ed04500233baa22f058e7d55c2489d1f9e843efba5af5e10b8d7d",
+    "canon_firmware_from_keyed_entry": "73239e02e18eb2be717c17f65b1ab451d85a5b68bdb2416c1eaa3afb73858cb8",
+    "decode_ciff_container": "c9a8d44f60050702501dfd44ed64acfbeebbdf8c34c34bb9f01c19015908456f",
+}
+
+
+def _attested_keyed_route(source: str) -> bool:
+    for name, expected in KEYED_ROUTE_FUNCTION_SHA256.items():
+        match = re.search(rf"(?m)^pub\(crate\) fn {name}\(|^fn {name}\(", source)
+        if match is None:
+            return False
+        end = source.find("\n}\n", match.start())
+        if end < 0:
+            return False
+        body = source[match.start() : end + 2]
+        if hashlib.sha256(body.encode()).hexdigest() != expected:
+            return False
+    return True
+
 
 class ReceiptError(ValueError):
     """An input or retained receipt cannot authenticate its claim."""
@@ -1362,6 +1387,13 @@ def _route_ledger(repository: Path, root: Path) -> dict:
 
     serial_calls = external_calls("process_serial_directory", "src/exiftool_tables/serial_engine.rs")
     keyed_calls = external_calls("process_keyed_directory", "src/exiftool_tables/keyed_engine.rs")
+    keyed_source = (repository / "src/parsers/raw/metadata.rs").read_text(encoding="utf-8")
+    if (len(keyed_calls) != 1
+        or keyed_calls[0]["path"] != "src/parsers/raw/metadata.rs"
+        or not _attested_keyed_route(keyed_source)):
+        raise ReceiptError(
+            "keyed route ledger changed: bounded firmware projection or caller is not attested"
+        )
     ledger = {
         "tokens": list(TOKENS),
         "sources": rows,
@@ -1374,8 +1406,6 @@ def _route_ledger(repository: Path, root: Path) -> dict:
         },
         "keyed_note": "CanonRaw CRW/CIFF 0x080b is production reachable; the Task 8 bounded corpus has no CRW and remains unexercised for this token",
     }
-    if len(keyed_calls) != 1 or keyed_calls[0]["path"] != "src/parsers/raw/metadata.rs":
-        raise ReceiptError("keyed route ledger changed: expected only the reviewed CanonRaw carrier")
     path = root / "contracts" / "route-ledger.json"
     write_json(path, ledger)
     return {"artifact": _artifact_record(path), "sha256": canonical_sha256(ledger), **ledger}

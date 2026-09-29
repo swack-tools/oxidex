@@ -373,9 +373,15 @@ struct Planned<'a> {
 /// Decoded MakerNotes rows can suggest the vendor of a physical EXIF block,
 /// but cannot establish that the block exists. CanonRaw.pm:50/ProcessCanonRaw
 /// and KyoceraRaw.pm:27/ProcessRAW describe standalone RAW directories.
+/// The CIFF group is assigned by the JPEG APP0 ProcessCRW adapter to every
+/// re-homed row, including hand-decoded rows without a source module. It is a
+/// carrier marker, not evidence for the JPEG's physical EXIF MakerNote.
 fn has_physical_exif_maker_note(occurrence: &TagOccurrence) -> bool {
     family0_label(occurrence) == "MakerNotes"
-        && !matches!(family1_label(occurrence), "CanonRaw" | "KyoceraRaw")
+        && !matches!(
+            family1_label(occurrence),
+            "CanonRaw" | "KyoceraRaw" | "CIFF"
+        )
 }
 
 /// A decoded maker-note row is not proof of an EXIF block. The source's
@@ -953,6 +959,84 @@ pub(crate) fn copy_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rehomed_ciff_firmware_is_not_physical_exif_makernote_evidence() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            "CIFF:CanonFirmwareVersion",
+            TagValue::new_string("Firmware Version 1.1.1"),
+        );
+        let mut row = metadata.occurrences_for("CIFF:CanonFirmwareVersion")[0].clone();
+        row.group0 = crate::core::tag_occurrence::intern("MakerNotes");
+        row.group1 = crate::core::tag_occurrence::intern("CIFF");
+        row.origin.module = Some("CanonRaw");
+        row.origin.table = Some("Main");
+        assert!(!has_physical_exif_maker_note(&row));
+        row.origin.module = Some("Canon");
+        assert!(!has_physical_exif_maker_note(&row));
+        row.origin.module = Some("Other");
+        assert!(!has_physical_exif_maker_note(&row));
+        row.origin.module = None;
+        assert!(!has_physical_exif_maker_note(&row));
+        row.group1 = crate::core::tag_occurrence::intern("Canon");
+        row.origin.module = Some("Canon");
+        assert!(has_physical_exif_maker_note(&row));
+    }
+
+    #[test]
+    fn uncertain_exif_census_never_turns_app0_ciff_into_a_physical_block() {
+        let directory = tempfile::tempdir().expect("JPEG source directory");
+        let path = directory.path().join("uncertain-exif.jpg");
+        // Exif APP1 has a TIFF header but no IFD offset or directory. Its
+        // physical census is uncertain, which must not promote APP0 CIFF.
+        std::fs::write(&path, b"\xff\xd8\xff\xe1\x00\x0cExif\0\0II*\0\xff\xd9")
+            .expect("write malformed EXIF JPEG");
+        assert!(source_may_have_physical_exif_maker_note(&path));
+
+        let mut template = MetadataMap::new();
+        template.insert("CIFF:Make", TagValue::new_string("Canon"));
+        template.insert(
+            "CIFF:CanonFirmwareVersion",
+            TagValue::new_string("Firmware Version 1.1.1"),
+        );
+        let mut source = MetadataMap::new();
+        for key in ["CIFF:Make", "CIFF:CanonFirmwareVersion"] {
+            let mut row = template.occurrences_for(key)[0].clone();
+            row.group1 = crate::core::tag_occurrence::intern("CIFF");
+            source.record_occurrence(key.to_string(), row);
+        }
+        let selectors = selectors(&["all"]);
+        let rows = maker_note_rows(
+            &source,
+            &path,
+            &selectors,
+            FileFormat::JPEG,
+            false,
+            Some("Canon".into()),
+            |_| true,
+        );
+        assert!(rows.is_empty(), "APP0 CIFF cannot prove a physical block");
+
+        // A separate decoded EXIF MakerNote row remains eligible under the
+        // same uncertain census; excluding CIFF does not hide that source.
+        let mut physical = template.occurrences_for("CIFF:CanonFirmwareVersion")[0].clone();
+        physical.group0 = crate::core::tag_occurrence::intern("Canon");
+        physical.group1 = crate::core::tag_occurrence::intern("Canon");
+        physical.origin.module = Some("Canon");
+        source.record_occurrence("Canon:WhiteBalance".into(), physical);
+        let rows = maker_note_rows(
+            &source,
+            &path,
+            &selectors,
+            FileFormat::JPEG,
+            false,
+            Some("Canon".into()),
+            |_| true,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "Canon");
+    }
 
     #[test]
     fn unwalkable_source_exif_does_not_prove_physical_makernote_absent() {

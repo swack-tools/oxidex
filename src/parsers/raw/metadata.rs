@@ -8785,6 +8785,39 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 /// unmodeled formats and edges. This projection admits only the generated
 /// 0x080b row after checking every property the keyed scalar path consumes.
 /// Absence or changed source facts leaves the existing hand reader in charge.
+fn canon_firmware_projection_matches(
+    source: &KeyedDirectoryTable,
+    tag: &crate::exiftool_tables::KeyedTag,
+) -> bool {
+    source.module == "CanonRaw"
+        && source.table == "Main"
+        && source.group0 == "MakerNotes"
+        && source.group1 == ""
+        && source.group2 == "Camera"
+        && matches!(source.layout, crate::exiftool_tables::KeyedLayout::Ciff10)
+        && tag.raw_id == 0x080b
+        && tag.name == "CanonFirmwareVersion"
+        && tag.groups == crate::exiftool_tables::TagGroups::NONE
+        && tag.format.is_none()
+        && tag.count.is_none()
+        && tag.condition.is_none()
+        && tag.raw_conv.is_none()
+        && tag.value_conv.is_none()
+        && matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
+        && tag.edge.is_none()
+        && !tag.omitted.value_conv
+        && !tag.omitted.raw_conv
+        && !tag.omitted.condition
+        && !tag.omitted.hook
+        && !tag.omitted.subdirectory
+        && !tag.omitted.print_conv
+        && !tag.flags.unknown
+        && !tag.flags.binary
+        && !tag.flags.list
+        && !tag.flags.avoid
+        && tag.flags.priority.is_none()
+}
+
 fn canon_firmware_keyed_table() -> Option<&'static KeyedDirectoryTable> {
     static PROJECTION: std::sync::OnceLock<Option<KeyedDirectoryTable>> =
         std::sync::OnceLock::new();
@@ -8792,26 +8825,7 @@ fn canon_firmware_keyed_table() -> Option<&'static KeyedDirectoryTable> {
         .get_or_init(|| {
             let source = find_keyed_table("CanonRaw", "Main")?;
             let tag = source.tags.iter().find(|tag| tag.raw_id == 0x080b)?;
-            if tag.name != "CanonFirmwareVersion"
-                || tag.format.is_some()
-                || tag.count.is_some()
-                || tag.condition.is_some()
-                || tag.raw_conv.is_some()
-                || tag.value_conv.is_some()
-                || !matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
-                || tag.edge.is_some()
-                || tag.omitted.value_conv
-                || tag.omitted.raw_conv
-                || tag.omitted.condition
-                || tag.omitted.hook
-                || tag.omitted.subdirectory
-                || tag.omitted.print_conv
-                || tag.flags.unknown
-                || tag.flags.binary
-                || tag.flags.list
-                || tag.flags.avoid
-                || tag.flags.priority.is_some()
-            {
+            if !canon_firmware_projection_matches(source, tag) {
                 return None;
             }
             Some(KeyedDirectoryTable {
@@ -8849,6 +8863,7 @@ impl KeyedEmissionSink for CanonFirmwareKeyedSink {
 fn canon_firmware_from_keyed_entry(entry: &CiffEntry<'_>) -> Option<Option<Emitted>> {
     if entry.id != 0x080b
         || entry.raw_tag & 0x3fff != entry.id
+        || entry.value.is_empty()
         || entry.value.len() > 512
         || (entry.raw_tag & 0x4000 != 0 && entry.value.len() != 8)
     {
@@ -12824,6 +12839,31 @@ mod rational_array_tests {
             ..entry
         };
         assert!(canon_firmware_from_keyed_entry(&boundary_entry).is_some());
+        let empty_entry = CiffEntry {
+            value: b"",
+            ..entry
+        };
+        assert!(canon_firmware_from_keyed_entry(&empty_entry).is_none());
+        let empty = build_ciff(&[(0x080b, Vec::new())]);
+        assert!(
+            parse_canon_crw(&empty, RawFormat::CanonCRW)
+                .expect("zero-length CRW")
+                .get_string("CanonRaw:CanonFirmwareVersion")
+                .is_none()
+        );
+        let mut public = empty[..14].to_vec();
+        public[2..6].copy_from_slice(&26u32.to_le_bytes());
+        public.extend_from_slice(&[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        public.extend_from_slice(&empty[14..]);
+        let directory = tempfile::tempdir().expect("CRW temporary directory");
+        let path = directory.path().join("zero-length.crw");
+        std::fs::write(&path, public).expect("write zero-length CRW");
+        let metadata = crate::core::operations::read_metadata(&path).expect("public CRW read");
+        assert!(
+            metadata
+                .occurrences_for("CanonRaw:CanonFirmwareVersion")
+                .is_empty()
+        );
         let over = vec![b'A'; 513];
         let over_entry = CiffEntry {
             value: &over,
@@ -12841,6 +12881,41 @@ mod rational_array_tests {
             ..entry
         };
         assert!(canon_firmware_from_keyed_entry(&mismatched).is_none());
+    }
+
+    #[test]
+    fn keyed_firmware_projection_rejects_changed_source_groups_and_layout() {
+        let source = find_keyed_table("CanonRaw", "Main").expect("generated Main");
+        let tag = source
+            .tags
+            .iter()
+            .find(|tag| tag.raw_id == 0x080b)
+            .expect("generated firmware row");
+        assert!(canon_firmware_projection_matches(source, tag));
+        let mut changed_source = *source;
+        for group in ["", "EXIF"] {
+            changed_source.group0 = group;
+            assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        }
+        changed_source = *source;
+        changed_source.group1 = "CIFF";
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        changed_source = *source;
+        changed_source.group2 = "Image";
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        changed_source = *source;
+        changed_source.layout =
+            crate::exiftool_tables::keyed_tables::KEYED_CANONCUSTOM_FUNCSUNKNOWN.layout;
+        assert!(!canon_firmware_projection_matches(&changed_source, tag));
+        let mut changed_tag = *tag;
+        changed_tag.groups.g0 = Some("EXIF");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
+        changed_tag = *tag;
+        changed_tag.groups.g1 = Some("CIFF");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
+        changed_tag = *tag;
+        changed_tag.groups.g2 = Some("Image");
+        assert!(!canon_firmware_projection_matches(source, &changed_tag));
     }
 
     #[test]

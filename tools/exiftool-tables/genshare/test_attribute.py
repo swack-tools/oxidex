@@ -546,7 +546,12 @@ class RouteLedgerTests(unittest.TestCase):
             for relative in self.EXPECTED_BOUNDARY:
                 path = repository / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+                path.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8")
+                    if relative == "src/parsers/raw/metadata.rs"
+                    else "// exact Task8 boundary fixture\n",
+                    encoding="utf-8",
+                )
             guards = {
                 "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
                 "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
@@ -560,9 +565,6 @@ class RouteLedgerTests(unittest.TestCase):
                     handle.write(source + "\n")
             with (repository / "src/main.rs").open("a", encoding="utf-8") as handle:
                 handle.write("process_serial_directory(input);\n")
-            with (repository / "src/parsers/raw/metadata.rs").open("a", encoding="utf-8") as handle:
-                handle.write("process_keyed_directory(table, block, ctx, sink);\n")
-
             ledger = attribute._route_ledger(repository, run_root)
 
             self.assertEqual(
@@ -572,6 +574,33 @@ class RouteLedgerTests(unittest.TestCase):
             self.assertTrue(all(ledger["guard_sites"][token] for token in attribute.TOKENS))
             self.assertTrue(ledger["production_reachable"]["serial"])
             self.assertTrue(ledger["production_reachable"]["keyed"])
+            route = repository / "src/parsers/raw/metadata.rs"
+            original = route.read_text(encoding="utf-8")
+            call = "let result = process_keyed_directory(table, block, &mut ctx, &mut sink);"
+            self.assertEqual(original.count(call), 1)
+            for replacement in (
+                "// " + call,
+                "if false { " + call + " }",
+                "",
+            ):
+                with self.subTest(replacement=replacement):
+                    changed = original.replace(call, replacement)
+                    if not replacement:
+                        changed += "\n// process_keyed_directory(table, block, &mut ctx, &mut sink);\n"
+                    route.write_text(changed, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        attribute.ReceiptError, "bounded firmware projection or caller"
+                    ):
+                        attribute._route_ledger(repository, run_root)
+            route.write_text(
+                original.replace("canon_firmware_from_keyed_entry(entry)", "None"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                attribute.ReceiptError, "bounded firmware projection or caller"
+            ):
+                attribute._route_ledger(repository, run_root)
+            route.write_text(original, encoding="utf-8")
 
     def test_route_ledger_does_not_hide_production_after_cfg_test_helper(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
@@ -581,7 +610,12 @@ class RouteLedgerTests(unittest.TestCase):
             for relative in self.EXPECTED_BOUNDARY:
                 path = repository / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+                path.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8")
+                    if relative == "src/parsers/raw/metadata.rs"
+                    else "// exact Task8 boundary fixture\n",
+                    encoding="utf-8",
+                )
             guards = {
                 "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
                 "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
@@ -605,8 +639,6 @@ class RouteLedgerTests(unittest.TestCase):
                     "}\n"
                 )
 
-            with (repository / "src/parsers/raw/metadata.rs").open("a", encoding="utf-8") as handle:
-                handle.write("fn production() { process_keyed_directory(table, block, ctx, sink); }\n")
             ledger = attribute._route_ledger(repository, run_root)
 
             self.assertTrue(ledger["production_reachable"]["serial"])
