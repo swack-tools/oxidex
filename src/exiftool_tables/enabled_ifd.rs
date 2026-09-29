@@ -446,6 +446,7 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // selects this IFD for FLIR Systems/Teledyne FLIR, TIFF-relative offsets.
     // Gate A is empty. Keep this line only after pinned native and control/
     // treatment A/B prove emitted groups, values, and no read regression.
+    ("FLIR", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
     // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm
     // (MakerNotes.pm:121-133: header FUJIFILM, OffsetPt '$valuePtr+8', Base
