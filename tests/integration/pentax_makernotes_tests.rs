@@ -31,7 +31,7 @@ fn pentax_type2_preserves_hometown_and_destination_city_codes() {
     );
 }
 
-/// The AOC Type-3 directory in the Optio 430RS uses Casio's 0x3007 field.
+/// The AOC directory in the Optio 430RS selects Casio::Type2's 0x3007 field.
 /// Its zero value is the only model-independent Best Shot rendering: `Off`.
 #[test]
 #[ignore = "requires pinned ExifTool 13.59 combined-samples"]

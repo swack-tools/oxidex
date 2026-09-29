@@ -210,6 +210,15 @@ const PENTAX_ARTIST: u16 = 0x022E;
 const PENTAX_COPYRIGHT: u16 = 0x022F;
 const PENTAX_FIRMWARE_VERSION_VIDEO: u16 = 0x0230;
 
+// Generated Pentax::Type2 declares these Count=4, Writable=undef values,
+// but the current handwritten headerless directory does not walk that table. Keep
+// their four bytes as text: whitespace is part of ExifTool's raw value.
+const PENTAX_TYPE2_HOMETOWN_CITY_CODE: u16 = 0x1000;
+const PENTAX_TYPE2_DESTINATION_CITY_CODE: u16 = 0x1001;
+// MakerNotePentax3 dispatches Optio 330RS/430RS AOC records to Casio::Type2.
+// Casio's 0x3007 variants are model-dependent; zero is the common Off value.
+const CASIO_TYPE2_BEST_SHOT_MODE: u16 = 0x3007;
+
 // ============================================================================
 // Declarative Decoder Definitions
 // ============================================================================
@@ -1063,6 +1072,7 @@ impl MakerNoteParser for PentaxParser {
             ctx.payload_tiff_offset(),
             model,
             tags,
+            false,
             Some(occurrences),
         )?;
 
@@ -1080,6 +1090,39 @@ impl MakerNoteParser for PentaxParser {
     }
 }
 
+/// The dispatcher owns the actual Make string. Keep its Asahi-only table
+/// selection here without changing the public PentaxParser struct shape or
+/// claiming those legacy table rows on direct, Make-less trait calls.
+pub(crate) fn parse_asahi_with_context(
+    ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+    occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+) -> std::result::Result<(), String> {
+    let parser = PentaxParser::default();
+    parser.parse_located_with_occurrences(
+        ctx.window(),
+        byte_order,
+        ctx.payload_tiff_offset(),
+        model,
+        tags,
+        true,
+        occurrences,
+    )?;
+    let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
+        ctx.payload_base()
+    } else {
+        ctx.tiff_base()
+    };
+    crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+        tags,
+        base,
+        &["Pentax:PreviewImageStart"],
+    );
+    Ok(())
+}
+
 impl PentaxParser {
     #[allow(clippy::too_many_lines)]
     fn parse_located(
@@ -1090,7 +1133,7 @@ impl PentaxParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, None)
+        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, false, None)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1101,6 +1144,7 @@ impl PentaxParser {
         data_base: Option<u32>,
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
+        asahi_make: bool,
         mut occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
@@ -1148,6 +1192,22 @@ impl PentaxParser {
             // No header, IFD starts immediately
             0
         };
+
+        // MakerNotes.pm selects Pentax::Type2 for Asahi's headerless note,
+        // with no Model test. Its AOC Optio 330RS/430RS branch instead selects
+        // Casio::Type2; the dispatcher passes actual Make into this routine.
+        let legacy_type2 = asahi_make && !is_aoc_header;
+        let legacy_casio_type2 = asahi_make
+            && is_aoc_header
+            && model.is_some_and(|m| {
+                let Some(suffix) = m.trim_end().strip_prefix("PENTAX Optio") else {
+                    return false;
+                };
+                matches!(
+                    suffix.strip_prefix(' ').unwrap_or(suffix),
+                    "330RS" | "430RS"
+                )
+            });
 
         if data.len() <= ifd_offset + 2 {
             return Ok(());
@@ -2798,6 +2858,36 @@ impl PentaxParser {
                         extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
                     {
                         tags.insert("Pentax:FirmwareVersion".to_string(), value);
+                    }
+                }
+
+                PENTAX_TYPE2_HOMETOWN_CITY_CODE | PENTAX_TYPE2_DESTINATION_CITY_CODE
+                    if legacy_type2 && entry.field_type == 7 && entry.value_count == 4 =>
+                {
+                    let Some(table) = crate::exiftool_tables::find_ifd_table("Pentax", "Type2")
+                    else {
+                        continue;
+                    };
+                    let Some(row) = table.tags.iter().find(|row| row.id == entry.tag_id) else {
+                        continue;
+                    };
+                    if row.count != Some(4) || row.writable != Some("undef") {
+                        continue;
+                    }
+                    if let Some(value) =
+                        extract_raw_string_preserve_spaces(&entry, data, value_base, byte_order)
+                    {
+                        tags.insert(format!("Pentax:{}", row.name), value);
+                    }
+                }
+                CASIO_TYPE2_BEST_SHOT_MODE if legacy_casio_type2 => {
+                    // Casio::Type2 declares int16u. An unsupported format's
+                    // value_offset may be zero without representing Off.
+                    if entry.field_type == 3
+                        && entry.value_count == 1
+                        && extract_value_as_i32(&entry, byte_order) == 0
+                    {
+                        tags.insert("Casio:BestShotMode".to_string(), "Off".to_string());
                     }
                 }
 
