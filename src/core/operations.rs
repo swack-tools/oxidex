@@ -2892,7 +2892,7 @@ pub fn copy_metadata_report(
     dest: &Path,
     tags: Option<&[String]>,
 ) -> Result<CopyReport> {
-    copy_metadata_report_retaining(src, dest, tags, |_| true, None, &[])
+    copy_metadata_report_retaining(src, dest, tags, |_| true, None, &[], &mut Vec::new())
 }
 
 /// Resolves and validates the copy, retaining only destination sets that
@@ -2906,6 +2906,7 @@ pub(crate) fn copy_metadata_report_retaining(
     // means a later request deletes Make; `None` means use this copy's result.
     final_make_override: Option<Option<String>>,
     siblings: &[String],
+    copied_values: &mut Vec<(String, TagValue)>,
 ) -> Result<CopyReport> {
     let source_metadata = read_metadata(src)?;
     // The public Option is semantic: CLI's bare -TagsFromFile maps its empty
@@ -2922,6 +2923,7 @@ pub(crate) fn copy_metadata_report_retaining(
         retain,
         final_make_override,
         siblings,
+        copied_values,
     )
 }
 

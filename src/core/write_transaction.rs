@@ -153,6 +153,8 @@ pub(crate) struct AppliedWrite {
     pub(crate) outcome: WriteOutcome,
     pub(crate) sets: usize,
     pub(crate) caller_fields: Vec<(String, String)>,
+    /// Proven destinations with their original typed request values.
+    pub(crate) caller_values: Vec<(String, TagValue)>,
     pub(crate) original: Option<SourceIdentity>,
     pub(crate) written: Option<SourceIdentity>,
 }
@@ -171,7 +173,7 @@ pub(crate) fn apply_tag_changes_counted_among(
     path: &Path,
     changes: &[TagChange],
     siblings: &[String],
-) -> Result<(WriteOutcome, usize, Vec<String>)> {
+) -> Result<(WriteOutcome, usize, Vec<String>, Vec<(String, TagValue)>)> {
     let original = super::filesystem_metadata::open_destination(path)?;
     let receipt = apply_on_opened_with_hook(path, changes, original, siblings, || {})?;
     Ok((
@@ -182,6 +184,7 @@ pub(crate) fn apply_tag_changes_counted_among(
             .into_iter()
             .map(|(_, key)| key)
             .collect(),
+        receipt.caller_values,
     ))
 }
 
@@ -237,17 +240,19 @@ fn apply_on_opened_with_hook(
             outcome: WriteOutcome::Unchanged,
             sets: 0,
             caller_fields: Vec::new(),
+            caller_values: Vec::new(),
             original: original_identity,
             written: original_identity,
         });
     }
     let mut proven_sets = 0;
     let mut caller_fields = Vec::new();
+    let mut caller_values = Vec::new();
     let (outcome, written) = transact_opened_with(
         path,
         original,
         |scratch| {
-            (proven_sets, caller_fields) = execute_plan(scratch, &plan, siblings)?;
+            (proven_sets, caller_fields, caller_values) = execute_plan(scratch, &plan, siblings)?;
             Ok(())
         },
         || Ok(()),
@@ -257,6 +262,7 @@ fn apply_on_opened_with_hook(
         outcome,
         sets: proven_sets,
         caller_fields,
+        caller_values,
         original: original_identity,
         written,
     })
@@ -1034,7 +1040,7 @@ fn execute_plan(
     path: &Path,
     plan: &Plan<'_>,
     protected: &[String],
-) -> Result<(usize, Vec<(String, String)>)> {
+) -> Result<(usize, Vec<(String, String)>, Vec<(String, TagValue)>)> {
     let mut siblings: Vec<String> = plan
         .steps
         .iter()
@@ -1155,7 +1161,15 @@ fn execute_plan(
         .filter(|request| request.value.is_some())
         .map(|request| (request.requested.to_owned(), request.key.clone()))
         .collect();
-    Ok((caller_fields.len(), caller_fields))
+    let caller_values = proven
+        .iter()
+        .filter_map(|request| {
+            request
+                .value
+                .map(|value| (request.key.clone(), value.clone()))
+        })
+        .collect();
+    Ok((caller_fields.len(), caller_fields, caller_values))
 }
 
 /// A format writer's own refusal of one key (`exif_surgical`,

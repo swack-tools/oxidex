@@ -282,3 +282,276 @@ fn rejected_date_alias_shift_does_not_conflict_with_real_date_set() {
         "-CreateDate",
     );
 }
+
+#[test]
+fn family_deletion_across_copy_preserves_surviving_ifd0_assignments() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for (name, suffix) in [("ExifTool.tif", "tif"), ("Writer.jpg", "jpg")] {
+        let Some(source) = fixtures::pinned_t_images_fixture_path(name) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let copy_source = dir.path().join(format!("source.{suffix}"));
+        std::fs::copy(&source, &copy_source).unwrap();
+        let setup = run(oracle
+            .command()
+            .args([
+                "-overwrite_original",
+                "-Make=source maker",
+                "-IFD0:FocalLength=40",
+            ])
+            .arg(&copy_source));
+        assert!(setup.status.success(), "{setup:?}");
+        for directory in ["IFD0", "ifd0", "ExifIFD"] {
+            for pre_first in [false, true] {
+                let native = dir
+                    .path()
+                    .join(format!("native-{directory}-{pre_first}.{suffix}"));
+                let ours = dir
+                    .path()
+                    .join(format!("ours-{directory}-{pre_first}.{suffix}"));
+                std::fs::copy(&source, &native).unwrap();
+                let setup = run(oracle
+                    .command()
+                    .args([
+                        "-overwrite_original",
+                        "-IFD0:FocalLength=25",
+                        "-ExifIFD:FocalLength=35",
+                    ])
+                    .arg(&native));
+                assert!(setup.status.success(), "{setup:?}");
+                std::fs::copy(&native, &ours).unwrap();
+                let assignment = format!("-{directory}:FocalLength=50");
+                let mut args = Vec::new();
+                if pre_first {
+                    args.push(assignment.as_str());
+                } else {
+                    args.push("-EXIF:FocalLength=");
+                }
+                args.push("-TagsFromFile");
+                let source_name = copy_source.to_str().unwrap();
+                args.push(source_name);
+                args.push("-Make");
+                if pre_first {
+                    args.push("-EXIF:FocalLength=");
+                } else {
+                    args.push(assignment.as_str());
+                }
+                let native_out = run(oracle
+                    .command()
+                    .arg("-overwrite_original")
+                    .args(&args)
+                    .arg(&native));
+                assert!(
+                    native_out.status.success(),
+                    "native {args:?}: {native_out:?}"
+                );
+                let ours_out = run(Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                    .args(&args)
+                    .arg(&ours));
+                assert!(ours_out.status.success(), "ours {args:?}: {ours_out:?}");
+                assert_eq!(
+                    oracle_rows(oracle, &ours, "-FocalLength"),
+                    oracle_rows(oracle, &native, "-FocalLength"),
+                    "{name} {args:?}"
+                );
+                assert_eq!(
+                    oracle_rows(oracle, &ours, "-Make"),
+                    oracle_rows(oracle, &native, "-Make"),
+                    "{name} {args:?}"
+                );
+            }
+        }
+        // The copied IFD0 assignment is also a pending destination. A
+        // following family deletion removes other copies but keeps it.
+        let native = dir.path().join(format!("copied-native.{suffix}"));
+        let ours = dir.path().join(format!("copied-ours.{suffix}"));
+        std::fs::copy(&source, &native).unwrap();
+        std::fs::copy(&native, &ours).unwrap();
+        let args = [
+            "-TagsFromFile",
+            copy_source.to_str().unwrap(),
+            "-IFD0:FocalLength",
+            "-EXIF:FocalLength=",
+        ];
+        let native_out = run(oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(args)
+            .arg(&native));
+        assert!(native_out.status.success(), "{native_out:?}");
+        let ours_out = run(Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(args)
+            .arg(&ours));
+        assert!(ours_out.status.success(), "{ours_out:?}");
+        assert_eq!(
+            oracle_rows(oracle, &ours, "-FocalLength"),
+            oracle_rows(oracle, &native, "-FocalLength"),
+            "{name} copied IFD0"
+        );
+        // A copied value for the same physical destination replaces the
+        // earlier typed value before the later family deletion is evaluated.
+        let native = dir.path().join(format!("replaced-native.{suffix}"));
+        let ours = dir.path().join(format!("replaced-ours.{suffix}"));
+        std::fs::copy(&source, &native).unwrap();
+        std::fs::copy(&native, &ours).unwrap();
+        let args = [
+            "-IFD0:FocalLength=50",
+            "-TagsFromFile",
+            copy_source.to_str().unwrap(),
+            "-IFD0:FocalLength",
+            "-EXIF:FocalLength=",
+        ];
+        let native_out = run(oracle
+            .command()
+            .arg("-overwrite_original")
+            .args(args)
+            .arg(&native));
+        assert!(native_out.status.success(), "{native_out:?}");
+        let ours_out = run(Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .args(args)
+            .arg(&ours));
+        assert!(ours_out.status.success(), "{ours_out:?}");
+        assert_eq!(
+            oracle_rows(oracle, &ours, "-FocalLength"),
+            oracle_rows(oracle, &native, "-FocalLength"),
+            "{name} replaced IFD0"
+        );
+    }
+}
+
+#[test]
+fn family_set_across_copy_uses_its_canonical_exif_ifd_destination() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for (name, suffix) in [("ExifTool.tif", "tif"), ("Writer.jpg", "jpg")] {
+        let Some(source) = fixtures::pinned_t_images_fixture_path(name) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let copy_source = dir.path().join(format!("source.{suffix}"));
+        std::fs::copy(&source, &copy_source).unwrap();
+        let setup = run(oracle
+            .command()
+            .args([
+                "-overwrite_original",
+                "-Make=source maker",
+                "-IFD0:FocalLength=40",
+            ])
+            .arg(&copy_source));
+        assert!(setup.status.success(), "{setup:?}");
+        for copied in [false, true] {
+            let native = dir.path().join(format!("native-{copied}.{suffix}"));
+            let ours = dir.path().join(format!("ours-{copied}.{suffix}"));
+            std::fs::copy(&source, &native).unwrap();
+            std::fs::copy(&native, &ours).unwrap();
+            let source_name = copy_source.to_str().unwrap();
+            let args = if copied {
+                vec![
+                    "-TagsFromFile",
+                    source_name,
+                    "-IFD0:FocalLength",
+                    "-EXIF:FocalLength=60",
+                ]
+            } else {
+                vec![
+                    "-IFD0:FocalLength=50",
+                    "-TagsFromFile",
+                    source_name,
+                    "-Make",
+                    "-EXIF:FocalLength=60",
+                ]
+            };
+            let native_out = run(oracle
+                .command()
+                .arg("-overwrite_original")
+                .args(&args)
+                .arg(&native));
+            assert!(
+                native_out.status.success(),
+                "native {args:?}: {native_out:?}"
+            );
+            let ours_out = run(Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .args(&args)
+                .arg(&ours));
+            assert!(ours_out.status.success(), "ours {args:?}: {ours_out:?}");
+            assert_eq!(
+                oracle_rows(oracle, &ours, "-FocalLength"),
+                oracle_rows(oracle, &native, "-FocalLength"),
+                "{name} {args:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn absolute_date_set_after_copy_preserves_other_directory_assignment() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        return;
+    };
+    for (name, suffix) in [("ExifTool.tif", "tif"), ("Writer.jpg", "jpg")] {
+        let Some(source) = fixtures::pinned_t_images_fixture_path(name) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let copy_source = dir.path().join(format!("source.{suffix}"));
+        std::fs::copy(&source, &copy_source).unwrap();
+        let setup = run(oracle
+            .command()
+            .args([
+                "-overwrite_original",
+                "-IFD0:CreateDate=2020:01:02 03:04:05",
+                "-Make=source maker",
+            ])
+            .arg(&copy_source));
+        assert!(setup.status.success(), "{setup:?}");
+        for copied in [false, true] {
+            for set in [
+                "-CreateDate=2022:03:04 05:06:07",
+                "-AllDates=2022:03:04 05:06:07",
+            ] {
+                let native = dir
+                    .path()
+                    .join(format!("native-{copied}-{}.{suffix}", set.len()));
+                let ours = dir
+                    .path()
+                    .join(format!("ours-{copied}-{}.{suffix}", set.len()));
+                std::fs::copy(&source, &native).unwrap();
+                std::fs::copy(&native, &ours).unwrap();
+                let source_name = copy_source.to_str().unwrap();
+                let args = if copied {
+                    vec!["-TagsFromFile", source_name, "-IFD0:CreateDate", set]
+                } else {
+                    vec![
+                        "-IFD0:CreateDate=2020:01:02 03:04:05",
+                        "-TagsFromFile",
+                        source_name,
+                        "-Make",
+                        set,
+                    ]
+                };
+                let native_out = run(oracle
+                    .command()
+                    .arg("-overwrite_original")
+                    .args(&args)
+                    .arg(&native));
+                assert!(
+                    native_out.status.success(),
+                    "native {args:?}: {native_out:?}"
+                );
+                let ours_out = run(Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                    .args(&args)
+                    .arg(&ours));
+                assert!(ours_out.status.success(), "ours {args:?}: {ours_out:?}");
+                assert_eq!(
+                    oracle_rows(oracle, &ours, "-CreateDate"),
+                    oracle_rows(oracle, &native, "-CreateDate"),
+                    "{name} {args:?}"
+                );
+            }
+        }
+    }
+}
