@@ -2918,6 +2918,7 @@ pub(crate) fn copy_metadata_report_retaining(
     let selectors = crate::core::tags_from_file::CopySelectors::parse(tags.unwrap_or(&[]))?;
     crate::core::tags_from_file::copy_tags(
         &source_metadata,
+        src,
         dest,
         &selectors,
         retain,
