@@ -38,7 +38,7 @@ if (!BASE.startsWith('/') || !BASE.endsWith('/')) {
   throw new Error(`DOCS_BASE must start and end with '/', got '${BASE}'`)
 }
 
-const STABLE_VERSION = 'v1.2.1'
+const CURRENT_VERSION = 'v2.0.0-beta.1'
 const PREVIEW_BRANCH = 'refactor/tag-machinery'
 const REPO_URL = 'https://github.com/swack-tools/oxidex'
 const STABLE_URL = process.env.DOCS_STABLE_URL || 'https://oxidex.net/'
@@ -95,7 +95,7 @@ const BANNER_CSS = `
 const versionItems = {
   text: 'Versions',
   items: [
-    { text: `${STABLE_VERSION} (stable)`, link: STABLE_URL, target: '_self', noIcon: true },
+    { text: `${CURRENT_VERSION} (beta)`, link: STABLE_URL, target: '_self', noIcon: true },
     { text: `branch: ${PREVIEW_BRANCH} (preview)`, link: PREVIEW_URL, target: '_self', noIcon: true }
   ]
 }

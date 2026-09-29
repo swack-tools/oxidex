@@ -1,9 +1,9 @@
 # Migrating from 1.x to 2.0
 
-2.0 moves OxiDex's output much closer to ExifTool's. Almost every breaking
-change below is a place where 1.x differed from ExifTool 13.59 and 2.0 no
-longer does. The full list, with the PR or commit behind each entry, is in
-the [changelog](/changelog).
+2.0 aims to align OxiDex's output more closely with ExifTool 13.59. The
+changes below include that alignment and other compatibility changes; not
+every entry has been checked against a v1.2.1 build. The full list, with the
+PR or commit behind each entry, is in the [changelog](/changelog).
 
 ::: warning v2.0.0-beta.1
 This guide covers v1.2.1 → v2.0.0-beta.1. It is a beta, so output and API
