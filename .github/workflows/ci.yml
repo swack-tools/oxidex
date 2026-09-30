@@ -513,7 +513,7 @@ jobs:
   # an admin adds it to branch protection.
   read-regression-gate:
     name: Corpus Read Regression Gate
-    runs-on: ubicloud-standard-8
+    runs-on: oxidex-m4air
     timeout-minutes: 30
     env:
       # The receipt's build command is fixed (`cargo build --release --bin
@@ -612,7 +612,7 @@ jobs:
   # passed as an artifact so every dependent job checks the same bytes.
   verify-tables-capture:
     name: Verify Generated Tables / capture
-    runs-on: ubicloud-standard-8
+    runs-on: oxidex-m4air
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
