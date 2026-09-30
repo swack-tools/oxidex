@@ -303,6 +303,7 @@ impl EPSParser {
                                     metadata,
                                     "XMP:About",
                                     "XMP-rdf",
+                                    "about",
                                     TagValue::new_string(about),
                                 );
                             }
@@ -315,6 +316,7 @@ impl EPSParser {
                                     metadata,
                                     "XMP:XMPToolkit",
                                     "XMP-x",
+                                    "xmptk",
                                     TagValue::new_string(toolkit),
                                 );
                             }
@@ -326,6 +328,7 @@ impl EPSParser {
                                     metadata,
                                     "XMP:JobRefName",
                                     "XMP-xmpBJ",
+                                    "JobRefName",
                                     TagValue::new_string(job_name),
                                 );
                             }

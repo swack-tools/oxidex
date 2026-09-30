@@ -13612,6 +13612,297 @@ pub static NIKON_MENUINFOZ7II: BinaryTable = BinaryTable {
     variants: &[],
 };
 
+/// `Image::ExifTool::Nikon::MenuInfoZ8` -- 0 fields,
+/// 1 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static NIKON_MENUINFOZ8: BinaryTable = BinaryTable {
+    module: "Nikon",
+    table: "MenuInfoZ8",
+    group0: "MakerNotes",
+    group1: "Nikon",
+    group2: "Camera",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    fields: &[],
+    variants: &[VariantGroup {
+        index: 16,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "02.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ8v1",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    condition: Some(Cond::And(
+                        &Cond::MemberTruthy {
+                            member: "FirmwareVersion",
+                            negate: false,
+                        },
+                        &Cond::MemberStrCmp {
+                            member: "FirmwareVersion",
+                            op: StrCmpOp::Lt,
+                            value: "02.00",
+                        },
+                    )),
+                    raw_conv: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                        print_conv: false,
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ8v1",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Ge,
+                        value: "02.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ8v2",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    condition: Some(Cond::And(
+                        &Cond::MemberTruthy {
+                            member: "FirmwareVersion",
+                            negate: false,
+                        },
+                        &Cond::MemberStrCmp {
+                            member: "FirmwareVersion",
+                            op: StrCmpOp::Ge,
+                            value: "02.00",
+                        },
+                    )),
+                    raw_conv: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                        print_conv: false,
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ8v2",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+        ],
+    }],
+};
+
+/// `Image::ExifTool::Nikon::MenuInfoZ9` -- 0 fields,
+/// 1 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static NIKON_MENUINFOZ9: BinaryTable = BinaryTable {
+    module: "Nikon",
+    table: "MenuInfoZ9",
+    group0: "MakerNotes",
+    group1: "Nikon",
+    group2: "Camera",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    fields: &[],
+    variants: &[VariantGroup {
+        index: 16,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "03.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    condition: Some(Cond::And(
+                        &Cond::MemberTruthy {
+                            member: "FirmwareVersion",
+                            negate: false,
+                        },
+                        &Cond::MemberStrCmp {
+                            member: "FirmwareVersion",
+                            op: StrCmpOp::Lt,
+                            value: "03.00",
+                        },
+                    )),
+                    raw_conv: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                        print_conv: false,
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "04.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9v3",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    condition: Some(Cond::And(
+                        &Cond::MemberTruthy {
+                            member: "FirmwareVersion",
+                            negate: false,
+                        },
+                        &Cond::MemberStrCmp {
+                            member: "FirmwareVersion",
+                            op: StrCmpOp::Lt,
+                            value: "04.00",
+                        },
+                    )),
+                    raw_conv: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                        print_conv: false,
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9v3",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9v4",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    condition: None,
+                    raw_conv: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                        print_conv: false,
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9v4",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+        ],
+    }],
+};
+
 /// `Image::ExifTool::Nikon::MenuSettingsD850` -- 1 fields,
 /// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
@@ -23040,7 +23331,11 @@ pub static NIKON_PORTRAITINFOZ7II: BinaryTable = BinaryTable {
         format: Some(Fmt::Int8u),
         count: 2,
         mask: None,
-        condition: None,
+        condition: Some(Cond::MemberStrCmp {
+            member: "FirmwareVersion",
+            op: StrCmpOp::Ge,
+            value: "01.30",
+        }),
         raw_conv: None,
         omitted: Omitted {
             value_conv: false,
@@ -23205,7 +23500,18 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
             format: None,
             count: 1,
             mask: None,
-            condition: None,
+            condition: Some(Cond::And(
+                &Cond::MemberStrEq {
+                    member: "Model",
+                    value: "NIKON D5",
+                    negate: false,
+                },
+                &Cond::MemberStrCmp {
+                    member: "FirmwareVersion",
+                    op: StrCmpOp::Ge,
+                    value: "1.40",
+                },
+            )),
             raw_conv: None,
             omitted: Omitted {
                 value_conv: false,
@@ -23228,7 +23534,18 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
             format: None,
             count: 1,
             mask: None,
-            condition: None,
+            condition: Some(Cond::And(
+                &Cond::MemberStrEq {
+                    member: "Model",
+                    value: "NIKON D5",
+                    negate: false,
+                },
+                &Cond::MemberStrCmp {
+                    member: "FirmwareVersion",
+                    op: StrCmpOp::Ge,
+                    value: "1.40",
+                },
+            )),
             raw_conv: None,
             omitted: Omitted {
                 value_conv: false,

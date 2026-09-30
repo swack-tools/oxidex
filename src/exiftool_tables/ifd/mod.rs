@@ -49,7 +49,7 @@ pub const IFD_EXIFTOOL_VERSION: &str = "13.59";
 // given run constructs depends on the pinned tree, not on this file's logic,
 // so a conditional `use` would be generator-output nondeterminism.
 #[allow(unused_imports)]
-use super::cond::{CmpOp, Cond, EffectSource};
+use super::cond::{CmpOp, Cond, EffectSource, StrCmpOp};
 #[allow(unused_imports)]
 use super::ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag,

@@ -188,6 +188,8 @@ STATIC_ARTIFACTS = (
     Artifact("geotiff", 2, "gen_geotiff_printconv", "src/parsers/tiff/geotiff_printconv.rs"),
     Artifact("dicom", 2, "gen_dicom_dict", "src/parsers/specialized/dicom_dict.rs"),
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
+    Artifact("xmp-priority-capture", 2, "capture_xmp_priorities", "tools/exiftool-tables/fixtures/xmp_priorities.json"),
+    Artifact("xmp-priority-rust", 2, "xmp_priority_specs", "src/parsers/xmp/generated_priorities.rs"),
     Artifact("xmp-lens-maps", 2, "gen_xmp_lens_maps", "src/composite/xmp_lens_maps.rs"),
     Artifact("tag-exists", 2, "tag_exists_codegen", "src/writers/generated_tag_exists.rs"),
     Artifact("copy-targets", 2, "copy_targets_codegen", "src/writers/generated_copy_targets.rs"),

@@ -226,7 +226,7 @@ fn record_dispatched_row(
     group1_override: &str,
 ) {
     let mut row = crate::core::TagOccurrence::from_insert_shim(key, display, 0);
-    row.priority = priority;
+    row.priority = priority.into();
     if let Some(value) = value {
         row.print = Some(row.raw.clone());
         row.value = Some(value);

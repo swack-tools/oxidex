@@ -1455,7 +1455,7 @@ impl LeicaMakerNoteParser {
                                 value: Some(TagValue::String(raw_text.clone())),
                                 print: Some(TagValue::String(raw_text)),
                                 stored: Some(stored),
-                                priority,
+                                priority: priority.into(),
                                 is_list: false,
                                 order: 0,
                                 origin: Provenance {

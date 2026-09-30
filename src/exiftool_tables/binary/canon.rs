@@ -13,7 +13,7 @@
 use super::*;
 
 /// `Image::ExifTool::Canon::AFConfig` -- 26 fields,
-/// 0 `_variants` groups (Step 23).
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     module: "Canon",
@@ -26,11 +26,7 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[
-            ("other_unregistered", 1),
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
+        blocked_by: &[("other_unregistered", 1)],
     },
     fields: &[
         Field {
@@ -564,7 +560,69 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
             groups: TagGroups::NONE,
         },
     ],
-    variants: &[],
+    variants: &[VariantGroup {
+        index: 7,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "EOS R[0-9]",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "USMLensElectronicMF",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    condition: Some(Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "EOS R[0-9]",
+                        ignore_case: false,
+                        negate: false,
+                    }),
+                    raw_conv: None,
+                    omitted: Omitted::NONE,
+                    value_conv: None,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Disable After One-Shot"),
+                        (1, "One-Shot -> Enabled"),
+                        (2, "One-Shot -> Enabled (magnify)"),
+                        (3, "Disable in AF Mode"),
+                    ]),
+                    subdir: None,
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "USMLensElectronicMF",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    condition: None,
+                    raw_conv: None,
+                    omitted: Omitted::NONE,
+                    value_conv: None,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Enable After AF"),
+                        (1, "Disable After AF"),
+                        (2, "Disable in AF Mode"),
+                    ]),
+                    subdir: None,
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+        ],
+    }],
 };
 
 /// `Image::ExifTool::Canon::AFMicroAdj` -- 2 fields,

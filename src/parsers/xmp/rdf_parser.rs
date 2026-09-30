@@ -195,19 +195,13 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 /// namespace group: `XMP-<prefix>:Name` for the ten namespaces it mapped
 /// (dc and xmp excluded), `XMP:Name` for everything else and for every
 /// structure field. `group1` is the tag's real family-1 group (`XMP-dc`).
-/// Storing under the legacy key with `group1` beside it keeps exactly the
-/// pre-existing winners -- which tags a listing without `-a` shows, and
-/// which one a request returns -- while `-G1` and `-a` show the true groups.
+/// Storing under the legacy key with `group1` beside it keeps the public
+/// lookup shape while the occurrence sink arbitrates by source priority.
 ///
 /// `shadowed` marks a tag the reader used to drop because an earlier tag
 /// already had its legacy key (XMP6.xmp's `tmp0:Test` next to `xxxx:Test`);
-/// it is stored after the others at priority 0, so it is visible with `-a`
-/// but never replaces a winner.
-///
-/// This keeps the pre-existing, not ExifTool's, choice among same-named XMP
-/// tags: ExifTool's FoundTag priorities (per-tag Priority/Avoid, table
-/// PRIORITY, QuickTime's PRIORITY_DIR) are not modelled here; that work is
-/// tracked on the `staging/xmp-exact-priority` branch.
+/// it is stored after the others, retaining its source priority and family-1
+/// group so `-a` can report it and bare-name resolution can arbitrate it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct XmpEntry {
     /// The key the tag is stored under.
@@ -218,10 +212,13 @@ pub struct XmpEntry {
     pub group1: String,
     pub value: XmpValue,
     pub shadowed: bool,
+    /// FoundXMP/FoundTag priority of this exact source property, including
+    /// signed tag-level priorities. The display name is never its lookup key.
+    pub priority: i16,
 }
 
 impl XmpEntry {
-    fn new(legacy_key: &str, tag: &str, value: XmpValue, shadowed: bool) -> Self {
+    fn new(legacy_key: &str, tag: &str, value: XmpValue, shadowed: bool, priority: i16) -> Self {
         Self {
             key: legacy_key.to_string(),
             tag: tag.to_string(),
@@ -231,6 +228,7 @@ impl XmpEntry {
                 .to_string(),
             value,
             shadowed,
+            priority,
         }
     }
 
@@ -243,6 +241,7 @@ impl XmpEntry {
             group1: String::new(),
             value,
             shadowed: false,
+            priority: 1,
         }
     }
 
@@ -325,29 +324,67 @@ pub fn insert_xmp_packet(
     xml_bytes: &[u8],
     typed: bool,
 ) -> Result<usize> {
-    let (entries, _, gps_sources) = parse_xmp_entries_with_source_forms(xml_bytes)?;
+    insert_xmp_packet_in_directory(metadata, xml_bytes, typed, false)
+}
+
+/// QuickTime.pm gives XMP its priority directory outside HEIC. FoundTag
+/// promotes a zero-priority incoming property to one only in that directory.
+pub(crate) fn insert_xmp_packet_in_directory(
+    metadata: &mut crate::core::MetadataMap,
+    xml_bytes: &[u8],
+    typed: bool,
+    priority_directory: bool,
+) -> Result<usize> {
+    insert_xmp_packet_with_context(metadata, xml_bytes, typed, priority_directory, false)
+}
+
+/// The Photoshop IRB reader uses `low_default` only in a nonstandard JPEG
+/// parent directory (Photoshop.pm:1043-1116). It affects defaults while
+/// preserving explicit tag/table Priority and Avoid.
+pub(crate) fn insert_xmp_packet_with_context(
+    metadata: &mut crate::core::MetadataMap,
+    xml_bytes: &[u8],
+    typed: bool,
+    priority_directory: bool,
+    low_default: bool,
+) -> Result<usize> {
+    let (_, entries, _, gps_sources) = parse_xmp_packet_in_directory(xml_bytes, low_default)?;
     for (entry, source) in entries.iter().zip(&gps_sources) {
-        insert_xmp_entry_with_source(metadata, entry, entry.tag_value(typed), source.as_deref());
+        if priority_directory && entry.priority == 0 && entry.group1.starts_with("XMP") {
+            let mut promoted = entry.clone();
+            promoted.priority = 1;
+            insert_xmp_entry_with_source(
+                metadata,
+                &promoted,
+                entry.tag_value(typed),
+                source.as_deref(),
+            );
+        } else {
+            insert_xmp_entry_with_source(
+                metadata,
+                entry,
+                entry.tag_value(typed),
+                source.as_deref(),
+            );
+        }
     }
     Ok(entries.len())
 }
 
-/// Stores one XMP tag found outside the RDF parser under `key` (`XMP:Title`)
-/// with its family-1 group (`XMP-dc`) and the key's usual priority.
+/// Stores one XMP property found outside the RDF parser. Its case-sensitive
+/// table ID is supplied separately from the printed key so dc:Title stays
+/// distinct from dc:title even though both print as Title. A flattened
+/// focused field supplies its complete table ID (for example JobRefName).
 pub fn insert_grouped_xmp_tag(
     metadata: &mut crate::core::MetadataMap,
     key: &str,
     group1: &str,
+    raw_local: &str,
     value: crate::core::TagValue,
 ) {
-    let group0 = key.split_once(':').map_or("", |(group, _)| group);
-    metadata.insert_occurrence(
-        key,
-        value,
-        crate::core::tag_occurrence::shim_group_priority(group0),
-        group1,
-        crate::core::Instance::default(),
-    );
+    let namespace = group1.strip_prefix("XMP-").unwrap_or("");
+    let priority = super::priority::table_entry_priority(namespace, raw_local);
+    metadata.insert_xmp_occurrence(key, value, None, None, priority.into(), group1);
 }
 
 /// Stores one [`XmpEntry`] with `value` (the caller's `TagValue` for it).
@@ -370,7 +407,7 @@ pub(crate) fn insert_xmp_entry_with_source(
         metadata.insert(entry.key.clone(), value);
         return;
     }
-    let priority = if entry.shadowed || entry.group1 == "XMP" {
+    let priority = if entry.group1 == "XMP" {
         // The bare `XMP` group is a property no XMP table defines: one with
         // no namespace, or in one of ExifTool's own `-X` static-group
         // namespaces (`namespace_resolver::group_for_prefix`). FoundXMP gives
@@ -379,19 +416,17 @@ pub(crate) fn insert_xmp_entry_with_source(
         // same-named tag already found: `t/images/XMP.xml`'s bare
         // `-FileType` is the file's own `XMP`, not the `JPEG` its RDF/XML
         // records for the image it was written from.
-        0
+        entry.priority
     } else if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
-        super::google_hdrp::hdrp_tag_priority(&entry.key)
+        super::google_hdrp::hdrp_tag_priority(&entry.key).into()
     } else {
-        crate::core::tag_occurrence::shim_group_priority(
-            entry.key.split_once(':').map_or("", |(group, _)| group),
-        )
+        entry.priority
     };
     if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
         metadata.insert_occurrence_with_group0(
             entry.key.clone(),
             value,
-            priority,
+            super::google_hdrp::hdrp_tag_priority(&entry.key),
             super::google_hdrp::HDRP_GROUP0,
             &entry.group1,
             crate::core::Instance::default(),
@@ -401,22 +436,22 @@ pub(crate) fn insert_xmp_entry_with_source(
     if let Some((source, forms)) =
         source.and_then(|raw| convert_xmp_gps(&entry.tag, raw).map(|forms| (raw, forms)))
     {
-        metadata.insert_occurrence_with_forms(
+        metadata.insert_xmp_occurrence(
             entry.key.clone(),
             value,
-            crate::core::TagValue::new_string(forms.value),
+            Some(crate::core::TagValue::new_string(forms.value)),
             Some(crate::core::TagValue::new_string(source.to_owned())),
             priority,
             &entry.group1,
-            crate::core::Instance::default(),
         );
     } else {
-        metadata.insert_occurrence(
+        metadata.insert_xmp_occurrence(
             entry.key.clone(),
             value,
+            None,
+            None,
             priority,
             &entry.group1,
-            crate::core::Instance::default(),
         );
     }
 }
@@ -427,11 +462,54 @@ pub(crate) fn insert_xmp_entry_with_source(
 #[derive(Default)]
 struct LegacyResults {
     /// `(legacy key, reported key, raw value)` in emission order.
-    entries: Vec<(String, String, String)>,
+    entries: Vec<(
+        String,
+        String,
+        String,
+        i16,
+        Option<super::struct_flatten::RawPath>,
+    )>,
     /// How many of `entries` carry each legacy key.
     counts: std::collections::HashMap<String, usize>,
     /// Every emission's legacy key, first seen per `(reported key, value)`.
     seen: std::collections::HashMap<(String, String), String>,
+    priorities: std::collections::HashMap<(String, String), i16>,
+    source_paths: std::collections::HashSet<(super::struct_flatten::RawPath, String)>,
+}
+
+/// One reported emission, with the collection and source that produced it.
+/// Reported names can collide across distinct raw XMP properties, so neither
+/// a tag name nor its comma-joined print value identifies a list occurrence.
+struct ResultOccurrence {
+    tag: String,
+    value: String,
+    elements: Option<Vec<String>>,
+    path: Option<super::struct_flatten::RawPath>,
+}
+
+impl ResultOccurrence {
+    fn scalar(tag: String, value: String) -> Self {
+        Self {
+            tag,
+            value,
+            elements: None,
+            path: None,
+        }
+    }
+
+    fn list(tag: String, elements: Vec<String>) -> Self {
+        Self {
+            tag,
+            value: elements.join(", "),
+            elements: Some(elements),
+            path: None,
+        }
+    }
+
+    fn with_path(mut self, path: super::struct_flatten::RawPath) -> Self {
+        self.path = Some(path);
+        self
+    }
 }
 
 impl LegacyResults {
@@ -439,36 +517,50 @@ impl LegacyResults {
         self.counts.get(legacy_key).is_some_and(|count| *count > 0)
     }
 
-    fn push(&mut self, legacy_key: &str, tag: &str, value: &str) {
+    fn push_priority(&mut self, legacy_key: &str, tag: &str, value: &str, priority: i16) {
         self.seen
             .entry((tag.to_string(), value.to_string()))
             .or_insert_with(|| legacy_key.to_string());
+        self.priorities
+            .entry((tag.to_string(), value.to_string()))
+            .or_insert(priority);
         *self.counts.entry(legacy_key.to_string()).or_default() += 1;
-        self.entries
-            .push((legacy_key.to_string(), tag.to_string(), value.to_string()));
+        self.entries.push((
+            legacy_key.to_string(),
+            tag.to_string(),
+            value.to_string(),
+            priority,
+            None,
+        ));
+    }
+
+    fn push_priority_with_path(
+        &mut self,
+        legacy_key: &str,
+        tag: &str,
+        value: &str,
+        priority: i16,
+        path: super::struct_flatten::RawPath,
+    ) {
+        self.source_paths.insert((path.clone(), tag.to_string()));
+        self.push_priority(legacy_key, tag, value, priority);
+        self.entries.last_mut().expect("just pushed").4 = Some(path);
     }
 
     fn remove(&mut self, legacy_key: &str) {
         if self.has(legacy_key) {
-            self.entries.retain(|(key, _, _)| key != legacy_key);
+            self.entries.retain(|(key, _, _, _, _)| key != legacy_key);
             self.counts.remove(legacy_key);
         }
     }
 
     /// Keeps only the emissions `keep(reported key, raw value)` accepts.
     fn retain(&mut self, mut keep: impl FnMut(&str, &str) -> bool) {
-        self.entries.retain(|(_, tag, value)| keep(tag, value));
+        self.entries
+            .retain(|(_, tag, value, _, _)| keep(tag, value));
         self.counts.clear();
-        for (key, _, _) in &self.entries {
+        for (key, _, _, _, _) in &self.entries {
             *self.counts.entry(key.clone()).or_default() += 1;
-        }
-    }
-
-    fn dedup(&mut self) {
-        let mut kept = std::collections::HashSet::new();
-        self.entries.retain(|(key, _, _)| kept.insert(key.clone()));
-        for count in self.counts.values_mut() {
-            *count = (*count).min(1);
         }
     }
 
@@ -477,6 +569,46 @@ impl LegacyResults {
             .get(&(tag.to_string(), value.to_string()))
             .cloned()
             .unwrap_or_else(|| generic_legacy_key(tag))
+    }
+
+    fn priority_for(&self, tag: &str, value: &str) -> i16 {
+        self.priorities
+            .get(&(tag.to_string(), value.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn reorder_raw_copies(
+        &mut self,
+        raw_order: &std::collections::HashMap<super::struct_flatten::RawPath, usize>,
+    ) {
+        let mut groups: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (index, (_, tag, _, _, path)) in self.entries.iter().enumerate() {
+            if path.is_some() {
+                groups.entry(tag.clone()).or_default().push(index);
+            }
+        }
+        for indices in groups.values() {
+            if indices.len() < 2 {
+                continue;
+            }
+            let mut copies: Vec<_> = indices
+                .iter()
+                .map(|index| self.entries[*index].clone())
+                .collect();
+            copies.sort_by_key(|entry| {
+                entry
+                    .4
+                    .as_ref()
+                    .and_then(|path| raw_order.get(path))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+            for (index, copy) in indices.iter().zip(copies) {
+                self.entries[*index] = copy;
+            }
+        }
     }
 }
 
@@ -528,12 +660,72 @@ fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> St
     format!("{family}:{name}")
 }
 
+/// Resolve the source QName before its binding can be replaced by a later
+/// packet scope. FoundXMP looks up the raw ID, never the displayed tag name.
+fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_default: bool) -> i16 {
+    let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+    let group = resolver.group_for_prefix(prefix);
+    let namespace = group.strip_prefix("XMP-").unwrap_or("");
+    super::priority::simple_property_priority_in_directory(
+        namespace,
+        NamespaceResolver::extract_local_name(qname),
+        low_default,
+    )
+    .into()
+}
+
+/// Preserve the namespace and case-sensitive local ID at the point where a
+/// focused structure walker sees the property. Reported FlatName is never a
+/// safe lookup key: distinct raw paths may print the same name.
+fn raw_property(qname: &str, resolver: &NamespaceResolver) -> (String, String) {
+    let group = resolver.group_for_qname(qname);
+    let namespace = group.strip_prefix("XMP-").unwrap_or("");
+    (
+        namespace.to_string(),
+        NamespaceResolver::extract_local_name(qname).to_string(),
+    )
+}
+
+fn raw_path_priority(path: &[(String, String)], low_default: bool) -> i16 {
+    let path: Vec<_> = path
+        .iter()
+        .map(|(namespace, local)| super::priority::PathProperty::new(namespace, local))
+        .collect();
+    super::priority::property_priority_in_directory(&path, low_default).into()
+}
+
+fn known_path_priority(path: &[(&str, &str)], low_default: bool) -> i16 {
+    let path: Vec<_> = path
+        .iter()
+        .map(|(namespace, local)| super::priority::PathProperty::new(namespace, local))
+        .collect();
+    super::priority::property_priority_in_directory(&path, low_default).into()
+}
+
+fn known_raw_path(path: &[(&str, &str)]) -> super::struct_flatten::RawPath {
+    path.iter()
+        .map(|(namespace, local)| (namespace.to_string(), local.to_string()))
+        .collect()
+}
+
 /// The packet parse behind every entry point: the tags keyed by their
 /// family-1 group (what [`parse_xmp_typed`] reports), the entries readers
 /// store, and the rational forms.
 #[allow(clippy::type_complexity)]
 fn parse_xmp_packet(
     xml_bytes: &[u8],
+) -> Result<(
+    Vec<(String, XmpValue)>,
+    Vec<XmpEntry>,
+    Vec<(String, String)>,
+    Vec<Option<String>>,
+)> {
+    parse_xmp_packet_in_directory(xml_bytes, false)
+}
+
+fn parse_xmp_packet_in_directory(
+    xml_bytes: &[u8],
+    low_default: bool,
 ) -> Result<(
     Vec<(String, XmpValue)>,
     Vec<XmpEntry>,
@@ -547,7 +739,7 @@ fn parse_xmp_packet(
     reader.config_mut().trim_text(false);
 
     let mut resolver = NamespaceResolver::new();
-    let mut results: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<ResultOccurrence> = Vec::new();
     // A namespace with no selected ExifTool table gives its properties
     // `IsDefault`. Capture that at the property's source element, before
     // prefixes may be rebound later in the packet.
@@ -555,10 +747,6 @@ fn parse_xmp_packet(
     // The same emissions under the keys this reader used before XMP tags
     // carried their namespace group -- see `LegacyResults`.
     let mut legacy = LegacyResults::default();
-    // Tags whose value came from a multi-entry Bag/Seq, with their elements
-    // kept apart. Recorded beside `results` rather than replacing it so that
-    // every focused pass below keeps working on plain strings.
-    let mut list_elements: Vec<(String, Vec<String>)> = Vec::new();
     let mut buf = Vec::new();
 
     // State tracking. `description_depth` is a COUNT, not a flag: RDF allows a
@@ -577,6 +765,8 @@ fn parse_xmp_packet(
     let mut current_default_namespace = false;
     // ... and its legacy key, resolved at the same time.
     let mut current_legacy = String::new();
+    let mut current_priority = 0i16;
+    let mut current_path = Vec::new();
     let mut current_value = String::new();
     let mut after_collection_close = false;
     let mut depth = 0;
@@ -613,7 +803,7 @@ fn parse_xmp_packet(
 
                 // Check for x:xmpmeta element and extract XMPToolkit
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy, low_default)?;
                 }
                 // Check if this is an rdf:Description element
                 else if is_rdf_description(&tag_name, &resolver) {
@@ -628,6 +818,7 @@ fn parse_xmp_packet(
                         &mut results,
                         &mut legacy,
                         &mut default_namespace_tags,
+                        low_default,
                     )?;
                 } else if description_depth > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
@@ -637,6 +828,9 @@ fn parse_xmp_packet(
                         current_default_namespace =
                             has_unregistered_namespace(&tag_name, &resolver);
                         current_legacy = legacy_simple_key(&tag_name, &resolver, &current_tag);
+                        current_priority =
+                            source_property_priority(&tag_name, &resolver, low_default);
+                        current_path = vec![raw_property(&tag_name, &resolver)];
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         after_collection_close = false;
@@ -718,25 +912,32 @@ fn parse_xmp_packet(
                                     default_namespace_tags.insert(tag.clone());
                                 }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
-                                if !legacy.has(&legacy_tag) {
-                                    legacy.push(&legacy_tag, &tag, value);
-                                }
-                                if !results.iter().any(|(t, _)| *t == tag) {
-                                    results.push((tag, value.clone()));
+                                legacy.push_priority(&legacy_tag, &tag, value, current_priority);
+                                if !results.iter().any(|result| result.tag == tag) {
+                                    results.push(
+                                        ResultOccurrence::scalar(tag, value.clone())
+                                            .with_path(current_path.clone()),
+                                    );
                                 }
                             }
                         } else {
-                            // Output collection as comma-separated list
-                            if collection_values.len() > 1 {
-                                list_elements
-                                    .push((prefixed_name.clone(), collection_values.clone()));
-                            }
-                            legacy.push(
+                            // Keep this collection's elements on its own source occurrence.
+                            legacy.push_priority_with_path(
                                 &legacy_name,
                                 &prefixed_name,
                                 &collection_values.join(", "),
+                                current_priority,
+                                current_path.clone(),
                             );
-                            results.push((prefixed_name, collection_values.join(", ")));
+                            let result = if collection_values.len() > 1 {
+                                ResultOccurrence::list(prefixed_name, collection_values.clone())
+                            } else {
+                                ResultOccurrence::scalar(
+                                    prefixed_name,
+                                    collection_values.join(", "),
+                                )
+                            };
+                            results.push(result.with_path(current_path.clone()));
                         }
                     } else {
                         // Default properties reach FoundXMP with decoded
@@ -750,8 +951,17 @@ fn parse_xmp_packet(
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
                         // only content is an empty Bag/Seq/Alt -- is still
                         // reported by ExifTool as an empty value.
-                        legacy.push(&legacy_name, &prefixed_name, value);
-                        results.push((prefixed_name, value.to_string()));
+                        legacy.push_priority_with_path(
+                            &legacy_name,
+                            &prefixed_name,
+                            value,
+                            current_priority,
+                            current_path.clone(),
+                        );
+                        results.push(
+                            ResultOccurrence::scalar(prefixed_name, value.to_string())
+                                .with_path(current_path.clone()),
+                        );
                     }
                     current_property = None;
                     current_value.clear();
@@ -762,6 +972,7 @@ fn parse_xmp_packet(
                     inside_collection = false;
                     property_is_struct = false;
                     current_default_namespace = false;
+                    current_path.clear();
                 }
                 depth -= 1;
             }
@@ -789,7 +1000,7 @@ fn parse_xmp_packet(
 
                 // Handle self-closing x:xmpmeta
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy, low_default)?;
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
@@ -799,6 +1010,7 @@ fn parse_xmp_packet(
                         &mut results,
                         &mut legacy,
                         &mut default_namespace_tags,
+                        low_default,
                     )?;
                 } else if current_property.is_some()
                     && is_collection_container(&tag_name, &resolver)
@@ -853,6 +1065,18 @@ fn parse_xmp_packet(
         buf.clear();
     }
 
+    // The focused passes below keep their own source paths. This generic walk
+    // handles the remaining flattened fields by their exact RDF path.
+    let flattened = super::struct_flatten::extract_flattened_struct_fields_with_identity(
+        xml_bytes,
+        low_default,
+    )?;
+    let raw_order: std::collections::HashMap<super::struct_flatten::RawPath, usize> = flattened
+        .iter()
+        .enumerate()
+        .map(|(index, (_, _, _, path))| (path.clone(), index))
+        .collect();
+
     // AboutCvTerm is an IPTC Extension bag of structures. ExifTool flattens
     // fields from every structure into list-valued AboutCvTerm tags.
     let (about_cv_term_cv_ids, about_cv_term_names) = extract_about_cv_term_values(xml_bytes)?;
@@ -861,12 +1085,23 @@ fn parse_xmp_packet(
 
         // Avoid duplicate output if generic structured-property support is
         // added later.
-        results.retain(|(tag, _)| tag != TAG);
-        list_elements.retain(|(tag, _)| tag != TAG);
-        list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
+        results.retain(|result| result.tag != TAG);
         legacy.remove("XMP:AboutCvTermCvId");
-        legacy.push("XMP:AboutCvTermCvId", TAG, &about_cv_term_cv_ids.join(", "));
-        results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
+        legacy.push_priority_with_path(
+            "XMP:AboutCvTermCvId",
+            TAG,
+            &about_cv_term_cv_ids.join(", "),
+            known_path_priority(
+                &[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvId")],
+                low_default,
+            ),
+            known_raw_path(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvId")]),
+        );
+        results.push(
+            ResultOccurrence::list(TAG.to_string(), about_cv_term_cv_ids.clone()).with_path(
+                known_raw_path(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvId")]),
+            ),
+        );
     }
 
     if !about_cv_term_names.is_empty() {
@@ -874,12 +1109,23 @@ fn parse_xmp_packet(
 
         // Avoid duplicate output if generic structured-property support is
         // added later.
-        results.retain(|(tag, _)| tag != TAG);
-        list_elements.retain(|(tag, _)| tag != TAG);
-        list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
+        results.retain(|result| result.tag != TAG);
         legacy.remove("XMP:AboutCvTermName");
-        legacy.push("XMP:AboutCvTermName", TAG, &about_cv_term_names.join(", "));
-        results.push((TAG.to_string(), about_cv_term_names.join(", ")));
+        legacy.push_priority_with_path(
+            "XMP:AboutCvTermName",
+            TAG,
+            &about_cv_term_names.join(", "),
+            known_path_priority(
+                &[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvTermName")],
+                low_default,
+            ),
+            known_raw_path(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvTermName")]),
+        );
+        results.push(
+            ResultOccurrence::list(TAG.to_string(), about_cv_term_names.clone()).with_path(
+                known_raw_path(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvTermName")]),
+            ),
+        );
     }
 
     // ArtworkTitle is an IPTC Extension bag of ArtworkOrObject structures.
@@ -889,10 +1135,19 @@ fn parse_xmp_packet(
     for (tag, value) in &artwork_titles {
         let legacy_tag = generic_legacy_key(tag);
         if !legacy.has(&legacy_tag) {
-            legacy.push(&legacy_tag, tag, value);
+            legacy.push_priority_with_path(
+                &legacy_tag,
+                tag,
+                value,
+                known_path_priority(
+                    &[("iptcExt", "ArtworkOrObject"), ("iptcExt", "AOTitle")],
+                    low_default,
+                ),
+                known_raw_path(&[("iptcExt", "ArtworkOrObject"), ("iptcExt", "AOTitle")]),
+            );
         }
-        if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
+        if !results.iter().any(|result| &result.tag == tag) {
+            results.push(ResultOccurrence::scalar(tag.clone(), value.clone()));
         }
     }
 
@@ -904,27 +1159,45 @@ fn parse_xmp_packet(
         // Remove the generic container once, before the x-default value is
         // installed under this same family/name. Doing this inside the loop
         // made the following language delete the freshly written default.
-        results.retain(|(existing, _)| existing != "XMP-plus:Custom1");
+        results.retain(|result| result.tag != "XMP-plus:Custom1");
         legacy.remove("XMP-plus:Custom1");
     }
     for (tag, values) in custom1_language_values {
-        results.retain(|(existing, _)| existing != &tag);
+        results.retain(|result| result.tag != tag);
         // Custom1 already had its namespace group before.
         legacy.remove(&tag);
-        legacy.push(&tag, &tag, &values.join(", "));
-        list_elements.retain(|(existing, _)| existing != &tag);
-        list_elements.push((tag.clone(), values.clone()));
-        results.push((tag, values.join(", ")));
+        legacy.push_priority_with_path(
+            &tag,
+            &tag,
+            &values.join(", "),
+            known_path_priority(&[("plus", "Custom1")], low_default),
+            known_raw_path(&[("plus", "Custom1")]),
+        );
+        results.push(
+            ResultOccurrence::list(tag, values).with_path(known_raw_path(&[("plus", "Custom1")])),
+        );
     }
 
     // ResourceRef fields may use element or RDF attribute shorthand. Handle
     // both forms, including a nested rdf:Description (XMP.xmp).
     for (tag, value) in extract_derived_from_ids(xml_bytes)? {
-        results.retain(|(existing, _)| existing != &tag);
         let legacy_tag = generic_legacy_key(&tag);
-        legacy.remove(&legacy_tag);
-        legacy.push(&legacy_tag, &tag, &value);
-        results.push((tag, value));
+        let raw_field = if tag.ends_with("DocumentID") {
+            "documentID"
+        } else {
+            "instanceID"
+        };
+        legacy.push_priority_with_path(
+            &legacy_tag,
+            &tag,
+            &value,
+            known_path_priority(
+                &[("xmpMM", "DerivedFrom"), ("stRef", raw_field)],
+                low_default,
+            ),
+            known_raw_path(&[("xmpMM", "DerivedFrom"), ("stRef", raw_field)]),
+        );
+        results.push(ResultOccurrence::scalar(tag, value));
     }
 
     // Flatten top-level `rdf:parseType="Resource"` structures into
@@ -932,14 +1205,18 @@ fn parse_xmp_packet(
     // ("$tag .= ucfirst($nm)", XMP.pm). This is what produces e.g.
     // exif:Flash/exif:Mode -> FlashMode and test:BareStruct/test:Item1 ->
     // BareStructItem1.
-    let struct_fields = extract_top_level_struct_values(xml_bytes)?;
-    for (tag, value) in &struct_fields {
+    let struct_fields = extract_top_level_struct_values_in_directory(xml_bytes, low_default)?;
+    for (tag, value, priority, path) in &struct_fields {
         let legacy_tag = generic_legacy_key(tag);
-        if !legacy.has(&legacy_tag) {
-            legacy.push(&legacy_tag, tag, value);
+        if !legacy.source_paths.contains(&(path.clone(), tag.clone())) {
+            legacy.push_priority_with_path(&legacy_tag, tag, value, *priority, path.clone());
         }
-        if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
+        if !results
+            .iter()
+            .any(|result| &result.tag == tag && &result.value == value)
+        {
+            results
+                .push(ResultOccurrence::scalar(tag.clone(), value.clone()).with_path(path.clone()));
         }
     }
 
@@ -949,10 +1226,23 @@ fn parse_xmp_packet(
     for (tag, value) in &copyright_owner {
         let legacy_tag = generic_legacy_key(tag);
         if !legacy.has(&legacy_tag) {
-            legacy.push(&legacy_tag, tag, value);
+            let (container, field) = match tag.as_str() {
+                "XMP-plus:CopyrightOwnerName" => ("CopyrightOwner", "CopyrightOwnerName"),
+                "XMP-plus:ImageCreatorName" => ("ImageCreator", "ImageCreatorName"),
+                "XMP-plus:ImageSupplierName" => ("ImageSupplier", "ImageSupplierName"),
+                "XMP-plus:LicensorName" => ("Licensor", "LicensorName"),
+                _ => unreachable!("PLUS sequence walker emits only its four declared fields"),
+            };
+            legacy.push_priority_with_path(
+                &legacy_tag,
+                tag,
+                value,
+                known_path_priority(&[("plus", container), ("plus", field)], low_default),
+                known_raw_path(&[("plus", container), ("plus", field)]),
+            );
         }
-        if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
+        if !results.iter().any(|result| &result.tag == tag) {
+            results.push(ResultOccurrence::scalar(tag.clone(), value.clone()));
         }
     }
 
@@ -962,15 +1252,28 @@ fn parse_xmp_packet(
     // JobRef tag ExifTool never emits.
     let job_ref_fields = extract_job_ref_fields(xml_bytes)?;
     if !job_ref_fields.is_empty() {
-        results.retain(|(tag, _)| tag != "XMP-xmpBJ:JobRef");
+        results.retain(|result| result.tag != "XMP-xmpBJ:JobRef");
         legacy.remove("XMP:JobRef");
         for (tag, value) in &job_ref_fields {
             let legacy_tag = generic_legacy_key(tag);
             if !legacy.has(&legacy_tag) {
-                legacy.push(&legacy_tag, tag, value);
+                let field = if tag.ends_with("Id") {
+                    "id"
+                } else if tag.ends_with("Url") {
+                    "url"
+                } else {
+                    "name"
+                };
+                legacy.push_priority_with_path(
+                    &legacy_tag,
+                    tag,
+                    value,
+                    known_path_priority(&[("xmpBJ", "JobRef"), ("stJob", field)], low_default),
+                    known_raw_path(&[("xmpBJ", "JobRef"), ("stJob", field)]),
+                );
             }
-            if !results.iter().any(|(t, _)| t == tag) {
-                results.push((tag.clone(), value.clone()));
+            if !results.iter().any(|result| &result.tag == tag) {
+                results.push(ResultOccurrence::scalar(tag.clone(), value.clone()));
             }
         }
     }
@@ -979,26 +1282,38 @@ fn parse_xmp_packet(
     // LocationCreated, Manifest, MWG keyword hierarchies. Appended last so the
     // focused passes above, which know their schemas' FlatName overrides, keep
     // precedence over this one's plain path concatenation.
-    let list_structs = extract_list_struct_values(xml_bytes)?;
-    for (tag, values) in &list_structs {
+    let list_structs = extract_list_struct_values_in_directory(xml_bytes, low_default)?;
+    for (tag, values, priority, path) in &list_structs {
         let legacy_tag = generic_legacy_key(tag);
-        if !legacy.has(&legacy_tag) {
-            legacy.push(&legacy_tag, tag, &values.join(", "));
+        let same_raw_path = legacy.source_paths.contains(&(path.clone(), tag.clone()));
+        if !same_raw_path {
+            legacy.push_priority_with_path(
+                &legacy_tag,
+                tag,
+                &values.join(", "),
+                *priority,
+                path.clone(),
+            );
         }
-        // A nested `rdf:Description` / `rdf:parseType="Resource"` item can
-        // leave an earlier pass with only the first `rdf:li` as a scalar
-        // (SamsungGalaxyS25Ultra.jpg's GContainer:Directory). Keep the list
-        // transport even then (origin/main a5fdaf48).
-        // If results already has this tag from extract_artwork_title_values (a
-        // LangAlt property), it must remain a scalar string in each language,
-        // never a list of all languages.
+        // A nested structure can leave an earlier pass with only the first
+        // item as a scalar. Upgrade that exact raw source occurrence.
         let is_artwork_title = tag.starts_with("XMP-iptcExt:ArtworkTitle");
-        if values.len() > 1 && !is_artwork_title {
-            list_elements.retain(|(existing, _)| existing != tag);
-            list_elements.push((tag.clone(), values.clone()));
-        }
-        if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), values.join(", ")));
+        if same_raw_path {
+            if values.len() > 1 && !is_artwork_title {
+                if let Some(result) = results
+                    .iter_mut()
+                    .find(|result| result.tag == *tag && result.path.as_ref() == Some(path))
+                {
+                    result.elements = Some(values.clone());
+                }
+            }
+        } else if values.len() > 1 && !is_artwork_title {
+            results
+                .push(ResultOccurrence::list(tag.clone(), values.clone()).with_path(path.clone()));
+        } else {
+            results.push(
+                ResultOccurrence::scalar(tag.clone(), values.join(", ")).with_path(path.clone()),
+            );
         }
     }
 
@@ -1006,48 +1321,51 @@ fn parse_xmp_packet(
     // XMP.pm's GetXMPTagID. Appended last so every focused pass above, each of
     // which knows its own schema's FlatName overrides and value formatting,
     // keeps precedence over this one's plain concatenation.
-    let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
-    for (tag, values) in flattened {
-        let legacy_tag = generic_legacy_key(&tag);
-        if !legacy.has(&legacy_tag) {
-            legacy.push(&legacy_tag, &tag, &values.join(", "));
-        }
-        if results.iter().any(|(t, _)| *t == tag) {
+    for (tag, values, priority, path) in flattened {
+        if legacy.source_paths.contains(&(path.clone(), tag.clone())) {
             continue;
         }
-        if values.len() > 1 {
-            list_elements.retain(|(existing, _)| existing != &tag);
-            list_elements.push((tag.clone(), values.clone()));
-        }
-        results.push((tag, values.join(", ")));
+        let legacy_tag = generic_legacy_key(&tag);
+        legacy.push_priority_with_path(
+            &legacy_tag,
+            &tag,
+            &values.join(", "),
+            priority,
+            path.clone(),
+        );
+        let result = if values.len() > 1 {
+            ResultOccurrence::list(tag, values)
+        } else {
+            ResultOccurrence::scalar(tag, values.join(", "))
+        };
+        results.push(result.with_path(path));
     }
 
     // RDF blank nodes (`rdf:nodeID`), which no tree walk can resolve on its own
     // because the fields of one node are spread across several places in the
     // document.
-    let blank_nodes = super::struct_flatten::extract_blank_node_fields(xml_bytes)?;
-    for (tag, value) in blank_nodes {
-        results.retain(|(existing, _)| *existing != tag);
+    let blank_nodes =
+        super::struct_flatten::extract_blank_node_fields_with_identity(xml_bytes, low_default)?;
+    for (tag, value, priority, path) in blank_nodes {
         let legacy_tag = generic_legacy_key(&tag);
-        legacy.remove(&legacy_tag);
-        legacy.push(&legacy_tag, &tag, &value);
-        results.push((tag, value));
+        if legacy.source_paths.contains(&(path.clone(), tag.clone())) {
+            continue;
+        }
+        legacy.push_priority_with_path(&legacy_tag, &tag, &value, priority, path.clone());
+        results.push(ResultOccurrence::scalar(tag, value).with_path(path));
     }
 
-    // The passes above can report the same tag more than once; keep the first
-    // emission rather than letting a downstream MetadataMap insertion
-    // silently overwrite it. Distinct namespaces no longer collide here: a
-    // rebound prefix gets its own group (XMP6.xmp: `XMP-xxxx:Test` trout and
-    // `XMP-tmp0:Test` tabby, as ExifTool reports).
-    let mut emitted_tags = std::collections::HashSet::new();
-    results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
-    legacy.dedup();
+    // Distinct raw property IDs can print under the same family/name (for
+    // example dc:Title and dc:title). FoundTag retains both occurrences for
+    // -a, then arbitrates their signed priorities for the bare name. Focused
+    // passes guard their own duplicate projections above.
 
     // A `DJI::XMP` coordinate whose text is not a clean number is withheld
     // in every channel rather than printed as ExifTool's Perl numification
     // would guess it (see `drone_dji_dms_degrees`).
-    results.retain(|(tag, value)| drone_dji_dms_publishable(tag, value));
+    results.retain(|result| drone_dji_dms_publishable(&result.tag, &result.value));
     legacy.retain(|tag, value| drone_dji_dms_publishable(tag, value));
+    legacy.reorder_raw_copies(&raw_order);
 
     // Google's `GCamera:HdrPlusMakernote` property carries a base64,
     // encrypted, gzipped Protobuf blob (Google.pm's `ProcessHDRP`). ExifTool
@@ -1062,14 +1380,15 @@ fn parse_xmp_packet(
     // (`Google::ShotLogData`, `IsProtobuf`). Ported from origin/main ed2982e1.
     let raw_hdrp_makernote = results
         .iter()
-        .find(|(tag, _)| {
-            tag == "XMP-GCamera:HDRPlusMakerNote" || tag == "XMP-GCamera:HDRPMakerNote"
+        .find(|result| {
+            result.tag == "XMP-GCamera:HDRPlusMakerNote"
+                || result.tag == "XMP-GCamera:HDRPMakerNote"
         })
-        .map(|(_, value)| value.clone());
+        .map(|result| result.value.clone());
     let raw_hdrp_shot_log = results
         .iter()
-        .find(|(tag, _)| tag == "XMP-GCamera:ShotLogData")
-        .map(|(_, value)| value.clone());
+        .find(|result| result.tag == "XMP-GCamera:ShotLogData")
+        .map(|result| result.value.clone());
 
     // Tactical carriage for Canon.pm:10145-10175's CalcSensorDiag: the
     // unreduced `n/d` text of FocalPlaneXResolution/FocalPlaneYResolution,
@@ -1078,23 +1397,8 @@ fn parse_xmp_packet(
     // on this function.
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
-    // Formats one reported value; a tag with collected list elements stays
-    // a List.
+    // Format scalar values separately from each occurrence's list elements.
     let mut format_value = |tag: &str, value: &str, record_forms: bool| -> XmpValue {
-        if let Some((_, elements)) = list_elements.iter().find(|(t, _)| t == tag) {
-            return XmpValue::List(
-                elements
-                    .iter()
-                    .map(|element| {
-                        format_xmp_value_with_default(
-                            tag,
-                            element,
-                            default_namespace_tags.contains(tag),
-                        )
-                    })
-                    .collect(),
-            );
-        }
         if let Some(forms) = convert_xmp_gps(tag, value) {
             return XmpValue::Scalar(forms.print);
         }
@@ -1142,7 +1446,25 @@ fn parse_xmp_packet(
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
         .iter()
-        .map(|(tag, value)| (tag.clone(), format_value(tag, value, true)))
+        .map(|result| {
+            let value = if let Some(elements) = &result.elements {
+                XmpValue::List(
+                    elements
+                        .iter()
+                        .map(|element| {
+                            format_xmp_value_with_default(
+                                &result.tag,
+                                element,
+                                default_namespace_tags.contains(&result.tag),
+                            )
+                        })
+                        .collect(),
+                )
+            } else {
+                format_value(&result.tag, &result.value, true)
+            };
+            (result.tag.clone(), value)
+        })
         .collect();
 
     // What callers store: every tag the reader used to report under its
@@ -1153,23 +1475,34 @@ fn parse_xmp_packet(
     // Unclaimed `results` indices per (tag, value), earliest first.
     let mut unclaimed: std::collections::HashMap<(&str, &str), std::collections::VecDeque<usize>> =
         std::collections::HashMap::new();
-    for (index, (tag, value)) in results.iter().enumerate() {
+    for (index, result) in results.iter().enumerate() {
         unclaimed
-            .entry((tag.as_str(), value.as_str()))
+            .entry((result.tag.as_str(), result.value.as_str()))
             .or_default()
             .push_back(index);
     }
-    for (legacy_key, tag, value) in &legacy.entries {
-        if let Some(index) = unclaimed
+    for (legacy_key, tag, value, priority, path) in &legacy.entries {
+        let matched = unclaimed
             .get_mut(&(tag.as_str(), value.as_str()))
-            .and_then(std::collections::VecDeque::pop_front)
-        {
+            .and_then(|candidates| {
+                if let Some(path) = path {
+                    if let Some(position) = candidates
+                        .iter()
+                        .position(|index| results[*index].path.as_ref() == Some(path))
+                    {
+                        return candidates.remove(position);
+                    }
+                }
+                candidates.pop_front()
+            });
+        if let Some(index) = matched {
             claimed[index] = true;
             entries.push(XmpEntry::new(
                 legacy_key,
                 tag,
                 formatted[index].1.clone(),
                 false,
+                *priority,
             ));
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         } else {
@@ -1178,19 +1511,22 @@ fn parse_xmp_packet(
                 tag,
                 format_value(tag, value, false),
                 false,
+                *priority,
             ));
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         }
     }
-    for (index, (tag, value)) in results.iter().enumerate() {
+    for (index, result) in results.iter().enumerate() {
         if !claimed[index] {
             entries.push(XmpEntry::new(
-                &legacy.key_for(tag, value),
-                tag,
+                &legacy.key_for(&result.tag, &result.value),
+                &result.tag,
                 formatted[index].1.clone(),
                 true,
+                legacy.priority_for(&result.tag, &result.value),
             ));
-            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
+            gps_sources
+                .push(convert_xmp_gps(&result.tag, &result.value).map(|_| result.value.clone()));
         }
     }
 
@@ -1911,11 +2247,32 @@ fn upsert_string_result(results: &mut Vec<(String, String)>, tag: &str, value: S
 /// as `ParentField-<lang>`, with `x-default` emitted under the bare name --
 /// matching ExifTool's `GetLangInfo` naming.
 fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    Ok(extract_top_level_struct_values_with_priority(xml_bytes)?
+        .into_iter()
+        .map(|(tag, value, _)| (tag, value))
+        .collect())
+}
+
+fn extract_top_level_struct_values_with_priority(
+    xml_bytes: &[u8],
+) -> Result<Vec<(String, String, i16)>> {
+    Ok(
+        extract_top_level_struct_values_in_directory(xml_bytes, false)?
+            .into_iter()
+            .map(|(tag, value, priority, _)| (tag, value, priority))
+            .collect(),
+    )
+}
+
+fn extract_top_level_struct_values_in_directory(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, String, i16, super::struct_flatten::RawPath)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
-    let mut results: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<(String, String, i16, super::struct_flatten::RawPath)> = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
 
@@ -1926,8 +2283,10 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     // field under the namespace of the first property contributing to the
     // tag name (XMP.pm GetXMPTagID), i.e. the struct's own.
     let mut struct_group = String::new();
+    let mut struct_raw = None;
     let mut field_depth: Option<usize> = None;
     let mut field_name = String::new();
+    let mut field_raw = None;
     let mut field_text = String::new();
     let mut li_depth: Option<usize> = None;
     let mut li_lang: Option<String> = None;
@@ -1956,6 +2315,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     struct_depth = Some(depth);
                     struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                     struct_group = resolver.group_for_qname(&tag_name);
+                    struct_raw = Some(raw_property(&tag_name, &resolver));
                 } else if let Some(sd) = struct_depth {
                     if field_depth.is_none()
                         && depth == sd + 1
@@ -1963,6 +2323,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     {
                         field_depth = Some(depth);
                         field_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        field_raw = Some(raw_property(&tag_name, &resolver));
                         field_text.clear();
                         lang_values.clear();
                     } else if field_depth.is_some() && nested_depth.is_none() {
@@ -2005,10 +2366,20 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                 if field_depth == Some(depth) {
                     let flat_id = format!("{struct_name}{field_name}");
                     let reported = exiftool_flat_tag_name(&flat_id);
+                    let source_path = match (&struct_raw, &field_raw) {
+                        (Some(parent), Some(field)) => vec![parent.clone(), field.clone()],
+                        _ => Vec::new(),
+                    };
+                    let priority = raw_path_priority(&source_path, low_default);
                     if lang_values.is_empty() {
                         let value = field_text.trim().to_string();
                         if !value.is_empty() {
-                            results.push((format!("{struct_group}:{reported}"), value));
+                            results.push((
+                                format!("{struct_group}:{reported}"),
+                                value,
+                                priority,
+                                source_path.clone(),
+                            ));
                         }
                     } else {
                         for (lang, value) in &lang_values {
@@ -2022,12 +2393,16 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                             // BTestTagField1); emitting the tag twice would
                             // just be a duplicate emission here, so first
                             // wins.
-                            if !results.iter().any(|(t, _)| *t == tag) {
-                                results.push((tag, value.clone()));
+                            if !results
+                                .iter()
+                                .any(|(t, _, _, path)| *t == tag && *path == source_path)
+                            {
+                                results.push((tag, value.clone(), priority, source_path.clone()));
                             }
                         }
                     }
                     field_depth = None;
+                    field_raw = None;
                     field_text.clear();
                     lang_values.clear();
                     nested_depth = None;
@@ -2036,6 +2411,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                 if struct_depth == Some(depth) {
                     struct_depth = None;
                     struct_name.clear();
+                    struct_raw = None;
                 }
 
                 if description_depth == Some(depth) {
@@ -2122,6 +2498,25 @@ const LIST_STRUCT_REPEAT_SCHEMAS: [&str; 10] = [
 /// `RegionsRegionList...` this concatenation builds. Emitting those would trade
 /// missing tags for wrong ones.
 fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
+    Ok(extract_list_struct_values_with_priority(xml_bytes)?
+        .into_iter()
+        .map(|(tag, values, _)| (tag, values))
+        .collect())
+}
+
+fn extract_list_struct_values_with_priority(
+    xml_bytes: &[u8],
+) -> Result<Vec<(String, Vec<String>, i16)>> {
+    Ok(extract_list_struct_values_in_directory(xml_bytes, false)?
+        .into_iter()
+        .map(|(tag, values, priority, _)| (tag, values, priority))
+        .collect())
+}
+
+fn extract_list_struct_values_in_directory(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, Vec<String>, i16, super::struct_flatten::RawPath)>> {
     const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -2138,6 +2533,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // Family-1 group of the container property (the first property that
     // contributes to every flattened name below it).
     let mut container_group = String::new();
+    let mut container_raw = None;
     // ExifTool has `List` declarations for registered XMP schemas, but an
     // unknown schema is handled generically: repeated flattened fields keep
     // the first value (XMP4.xmp's test:StructList2Item1/Item2).  Track this
@@ -2157,19 +2553,31 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
+    let mut path_raw: Vec<(String, String)> = Vec::new();
     let mut text = String::new();
     // (flattened id, values, property, resource entry, literal collection)
     // in first-seen order.
-    let mut collected: Vec<(String, Vec<String>, usize, Option<usize>, Option<usize>)> = Vec::new();
+    let mut collected: Vec<(
+        String,
+        Vec<String>,
+        usize,
+        Option<usize>,
+        Option<usize>,
+        i16,
+        super::struct_flatten::RawPath,
+    )> = Vec::new();
 
     let mut push_value = |flat_id: String,
                           value: String,
                           property: usize,
                           repeat_struct_field: bool,
                           resource_entry: Option<usize>,
-                          literal_collection: Option<usize>| {
-        if let Some((_, values, first_property, previous_entry, first_collection)) =
-            collected.iter_mut().find(|(id, _, _, _, _)| *id == flat_id)
+                          literal_collection: Option<usize>,
+                          priority: i16,
+                          raw_path: super::struct_flatten::RawPath| {
+        if let Some((_, values, first_property, previous_entry, first_collection, _, _)) = collected
+            .iter_mut()
+            .find(|(id, _, _, _, _, _, path)| *id == flat_id && *path == raw_path)
         {
             let same_collection =
                 literal_collection.is_some_and(|id| Some(id) == *first_collection);
@@ -2190,6 +2598,8 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                 property,
                 resource_entry,
                 literal_collection,
+                priority,
+                raw_path,
             ));
         }
     };
@@ -2218,6 +2628,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
                         container_group = resolver.group_for_qname(&tag_name);
+                        container_raw = Some(raw_property(&tag_name, &resolver));
                         container_allows_repeated_fields =
                             NamespaceResolver::extract_prefix(&tag_name)
                                 .and_then(|prefix| resolver.resolve_prefix(prefix))
@@ -2228,6 +2639,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                             local
                         };
                         path.clear();
+                        path_raw.clear();
                         text.clear();
                     }
                 } else if is_rdf_namespace(&tag_name, &resolver) {
@@ -2248,6 +2660,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     }
                 } else {
                     path.push(ucfirst(NamespaceResolver::extract_local_name(&tag_name)));
+                    path_raw.push(raw_property(&tag_name, &resolver));
                     text.clear();
                 }
             }
@@ -2270,6 +2683,8 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     container_name.clear();
                     container_allows_repeated_fields = false;
                     path.clear();
+                    path_raw.clear();
+                    container_raw = None;
                     text.clear();
                 } else if container_depth.is_some() {
                     let value = text.trim().to_string();
@@ -2293,6 +2708,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     {
                         let flat_id =
                             format!("{}:{}{}", container_group, container_name, path.join(""));
+                        let source_path = container_raw.as_ref().map_or_else(Vec::new, |parent| {
+                            let mut raw = Vec::with_capacity(1 + path_raw.len());
+                            raw.push(parent.clone());
+                            raw.extend(path_raw.iter().cloned());
+                            raw
+                        });
+                        let priority = raw_path_priority(&source_path, low_default);
                         push_value(
                             flat_id,
                             value,
@@ -2300,11 +2722,14 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                             container_allows_repeated_fields,
                             resource_entry_depth.map(|_| resource_entry_index),
                             literal_collection,
+                            priority,
+                            source_path,
                         );
                     }
                     text.clear();
                     if !is_rdf_namespace(&tag_name, &resolver) {
                         path.pop();
+                        path_raw.pop();
                     }
                 }
 
@@ -2340,9 +2765,14 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values, _, _, _)| {
+        .map(|(flat_id, values, _, _, _, priority, source_path)| {
             let (group, id) = flat_id.split_once(':').unwrap_or(("XMP", &flat_id));
-            (format!("{group}:{}", exiftool_flat_tag_name(id)), values)
+            (
+                format!("{group}:{}", exiftool_flat_tag_name(id)),
+                values,
+                priority,
+                source_path,
+            )
         })
         .collect())
 }
@@ -3350,8 +3780,9 @@ fn is_xmpmeta(tag_name: &str) -> bool {
 /// `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Image::ExifTool 12.46">`
 fn extract_xmpmeta_attributes(
     element: &BytesStart,
-    results: &mut Vec<(String, String)>,
+    results: &mut Vec<ResultOccurrence>,
     legacy: &mut LegacyResults,
+    low_default: bool,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -3368,8 +3799,17 @@ fn extract_xmpmeta_attributes(
 
             // Only add non-empty XMPToolkit values
             if !value.trim().is_empty() {
-                legacy.push("XMP:XMPToolkit", "XMP-x:XMPToolkit", value.trim());
-                results.push(("XMP-x:XMPToolkit".to_string(), value.trim().to_string()));
+                legacy.push_priority(
+                    "XMP:XMPToolkit",
+                    "XMP-x:XMPToolkit",
+                    value.trim(),
+                    super::priority::table_entry_priority_in_directory("x", "xmptk", low_default)
+                        .into(),
+                );
+                results.push(ResultOccurrence::scalar(
+                    "XMP-x:XMPToolkit".to_string(),
+                    value.trim().to_string(),
+                ));
             }
         }
     }
@@ -3391,9 +3831,10 @@ fn extract_xmpmeta_attributes(
 fn extract_description_attributes(
     element: &BytesStart,
     resolver: &NamespaceResolver,
-    results: &mut Vec<(String, String)>,
+    results: &mut Vec<ResultOccurrence>,
     legacy: &mut LegacyResults,
     default_namespace_tags: &mut std::collections::HashSet<String>,
+    low_default: bool,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -3421,8 +3862,17 @@ fn extract_description_attributes(
             // An empty rdf:about is the "no subject URI" default every writer
             // emits; ExifTool reports no About tag for it.
             if !value.trim().is_empty() {
-                legacy.push("XMP:About", "XMP-rdf:About", value.trim());
-                results.push(("XMP-rdf:About".to_string(), value.trim().to_string()));
+                legacy.push_priority(
+                    "XMP:About",
+                    "XMP-rdf:About",
+                    value.trim(),
+                    super::priority::table_entry_priority_in_directory("rdf", "about", low_default)
+                        .into(),
+                );
+                results.push(ResultOccurrence::scalar(
+                    "XMP-rdf:About".to_string(),
+                    value.trim().to_string(),
+                ));
             }
             continue;
         }
@@ -3460,8 +3910,16 @@ fn extract_description_attributes(
             // Keep decoded property whitespace. FoundXMP applies its Binary
             // length rule to the untrimmed value, and also prints short values
             // with their original leading and trailing spaces.
-            legacy.push(&legacy_name, &prefixed_name, &decoded);
-            results.push((prefixed_name, decoded));
+            legacy.push_priority(
+                &legacy_name,
+                &prefixed_name,
+                &decoded,
+                source_property_priority(key, resolver, low_default),
+            );
+            results.push(
+                ResultOccurrence::scalar(prefixed_name, decoded)
+                    .with_path(vec![raw_property(key, resolver)]),
+            );
         }
     }
     Ok(())
@@ -3883,6 +4341,12 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 /// tables, not guessed from a displayed property name. Short GMask:Data text
 /// remains ordinary text.
 fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> String {
+    // Dublin Core's lowercase raw `date` is declared with `%dateTimeInfo`
+    // (XMP.pm) and prints through ConvertDateTime, including when carried
+    // inside an SVG RDF packet. The reported name is capitalized to `Date`.
+    if tag == "XMP-dc:Date" {
+        return format_xmp_date_time(value);
+    }
     if is_default && value.len() > 65536 {
         return format!(
             "(Binary data {} bytes, use -b option to extract)",
@@ -7562,14 +8026,15 @@ mod entry_tests {
             group1: "XMP-exif".into(),
             value: XmpValue::Scalar("43 deg 30' 0.00\" N".into()),
             shadowed: false,
+            priority: 0,
         };
         assert_eq!(entry.group1, "XMP-exif");
     }
 
     #[test]
     fn gps_sources_stay_aligned_with_emitted_packet_entries() {
-        // The existing RDF parser keeps the first repeated property. Each
-        // distinct emitted coordinate still needs its own original scalar.
+        // Every retained copy needs its own source text, including a later
+        // property with the same reported name.
         let xml = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:Description exif:GPSLatitude="43,30.123456N" exif:GPSDestLatitude="42,1.654321S"/><rdf:Description exif:GPSLatitude="44,15.987654S"/></rdf:RDF>"#;
         let (entries, _, sources) = parse_xmp_entries_with_source_forms(xml.as_bytes()).unwrap();
         assert_eq!(entries.len(), sources.len());
@@ -7589,19 +8054,31 @@ mod entry_tests {
             [
                 ("XMP-exif:GPSLatitude", Some("43,30.123456N")),
                 ("XMP-exif:GPSDestLatitude", Some("42,1.654321S")),
+                ("XMP-exif:GPSLatitude", Some("44,15.987654S")),
             ]
         );
 
         let mut metadata = MetadataMap::new();
         insert_xmp_packet(&mut metadata, xml.as_bytes(), true).unwrap();
-        for (tag, source) in gps {
-            let stored = metadata.occurrences_for(tag);
-            assert_eq!(stored.len(), 1, "{tag}");
-            assert_eq!(
-                stored[0].stored.as_ref().and_then(TagValue::as_string),
-                source
-            );
-        }
+        let latitudes = metadata.occurrences_for("XMP-exif:GPSLatitude");
+        assert_eq!(latitudes.len(), 2);
+        assert_eq!(
+            latitudes[0].stored.as_ref().and_then(TagValue::as_string),
+            Some("43,30.123456N")
+        );
+        assert_eq!(
+            latitudes[1].stored.as_ref().and_then(TagValue::as_string),
+            Some("44,15.987654S")
+        );
+        let destinations = metadata.occurrences_for("XMP-exif:GPSDestLatitude");
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0]
+                .stored
+                .as_ref()
+                .and_then(TagValue::as_string),
+            Some("42,1.654321S")
+        );
     }
 
     #[test]
@@ -7699,7 +8176,7 @@ mod entry_tests {
         assert!(!tests[0].shadowed);
         assert_eq!(tests[1].key, "XMP:Test");
         assert_eq!(tests[1].group1, "XMP-b");
-        assert!(tests[1].shadowed);
+        assert!(!tests[1].shadowed);
 
         let mut metadata = MetadataMap::new();
         for entry in &entries {
@@ -7712,6 +8189,267 @@ mod entry_tests {
             .map(|occurrence| occurrence.group1.to_string())
             .collect();
         assert_eq!(groups, ["XMP-a", "XMP-b"]);
+    }
+
+    #[test]
+    fn source_priorities_choose_bare_winners_and_preserve_all_copies() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        // These inputs are byte-for-byte copies of the pinned 13.59 oracle
+        // probes in the recovery evidence directory. The two Title cases
+        // differ only in the raw spelling of dc's property ID.
+        for (xml, name, expected, priorities) in [
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/pdf-negative-priority.xmp")
+                    .as_slice(),
+                "Keywords",
+                "AAA",
+                vec![-1, 0, 0],
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/rating-known-later.xmp")
+                    .as_slice(),
+                "Rating",
+                "5",
+                vec![0, 1],
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/title-known-later.xmp")
+                    .as_slice(),
+                "Title",
+                "DC",
+                vec![0, 1],
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/title-case-unknown.xmp")
+                    .as_slice(),
+                "Title",
+                "AAA",
+                vec![0, 0],
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/unknown-tie.xmp").as_slice(),
+                "Foo",
+                "A",
+                vec![0, 0],
+            ),
+        ] {
+            let entries = parse_xmp_entries(xml).unwrap();
+            let matching: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag.ends_with(&format!(":{name}")))
+                .collect();
+            assert_eq!(
+                matching
+                    .iter()
+                    .map(|entry| entry.priority)
+                    .collect::<Vec<_>>(),
+                priorities,
+                "{name}"
+            );
+            let mut metadata = MetadataMap::new();
+            for entry in &entries {
+                insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+            }
+            let winner =
+                crate::cli::tag_resolution::resolve_requested_tag(&metadata, name).unwrap();
+            assert_eq!(winner.raw.as_string(), Some(expected), "{name}");
+            assert_eq!(
+                metadata
+                    .occurrences()
+                    .filter(|row| row.name.as_ref() == name)
+                    .count(),
+                matching.len()
+            );
+        }
+    }
+
+    #[test]
+    fn same_group_raw_ids_keep_both_copies_and_choose_known_title() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let entries = parse_xmp_entries(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/same-group.xmp"
+        ))
+        .unwrap();
+        let titles: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.tag == "XMP-dc:Title")
+            .collect();
+        assert_eq!(titles.len(), 2, "{entries:?}");
+        assert_eq!(
+            titles
+                .iter()
+                .map(|entry| entry.priority)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        let mut metadata = MetadataMap::new();
+        for entry in &entries {
+            insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+        }
+        assert_eq!(metadata.occurrences_for("XMP:Title").len(), 2);
+        assert_eq!(
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "Title")
+                .and_then(|winner| winner.raw.as_string()),
+            Some("KNOWN")
+        );
+    }
+
+    #[test]
+    fn subject_list_occurrences_keep_their_source_values() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let unknown_list = "<dc:Subject><rdf:Bag><rdf:li>OLD-A</rdf:li><rdf:li>OLD-B</rdf:li></rdf:Bag></dc:Subject>";
+        let known_list = "<dc:subject><rdf:Bag><rdf:li>NEW-X</rdf:li><rdf:li>NEW-Y</rdf:li></rdf:Bag></dc:subject>";
+        let unknown_scalar = "<dc:Subject>OLD-SCALAR</dc:Subject>";
+        let known_scalar = "<dc:subject>NEW-SCALAR</dc:subject>";
+        let unknown_same_join =
+            "<dc:Subject><rdf:Bag><rdf:li>A, B</rdf:li><rdf:li>C</rdf:li></rdf:Bag></dc:Subject>";
+        let known_same_join =
+            "<dc:subject><rdf:Bag><rdf:li>A</rdf:li><rdf:li>B, C</rdf:li></rdf:Bag></dc:subject>";
+
+        for (unknown, known, known_first, expected_unknown, expected_known) in [
+            (
+                unknown_list,
+                known_list,
+                false,
+                XmpValue::List(vec!["OLD-A".into(), "OLD-B".into()]),
+                XmpValue::List(vec!["NEW-X".into(), "NEW-Y".into()]),
+            ),
+            (
+                unknown_list,
+                known_list,
+                true,
+                XmpValue::List(vec!["OLD-A".into(), "OLD-B".into()]),
+                XmpValue::List(vec!["NEW-X".into(), "NEW-Y".into()]),
+            ),
+            (
+                unknown_scalar,
+                known_list,
+                false,
+                XmpValue::Scalar("OLD-SCALAR".into()),
+                XmpValue::List(vec!["NEW-X".into(), "NEW-Y".into()]),
+            ),
+            (
+                unknown_scalar,
+                known_list,
+                true,
+                XmpValue::Scalar("OLD-SCALAR".into()),
+                XmpValue::List(vec!["NEW-X".into(), "NEW-Y".into()]),
+            ),
+            (
+                unknown_list,
+                known_scalar,
+                true,
+                XmpValue::List(vec!["OLD-A".into(), "OLD-B".into()]),
+                XmpValue::Scalar("NEW-SCALAR".into()),
+            ),
+            (
+                unknown_list,
+                known_scalar,
+                false,
+                XmpValue::List(vec!["OLD-A".into(), "OLD-B".into()]),
+                XmpValue::Scalar("NEW-SCALAR".into()),
+            ),
+            (
+                unknown_same_join,
+                known_same_join,
+                false,
+                XmpValue::List(vec!["A, B".into(), "C".into()]),
+                XmpValue::List(vec!["A".into(), "B, C".into()]),
+            ),
+            (
+                unknown_same_join,
+                known_same_join,
+                true,
+                XmpValue::List(vec!["A, B".into(), "C".into()]),
+                XmpValue::List(vec!["A".into(), "B, C".into()]),
+            ),
+        ] {
+            let body = if known_first {
+                format!("{known}{unknown}")
+            } else {
+                format!("{unknown}{known}")
+            };
+            let xml = packet(&body, r#"xmlns:dc="http://purl.org/dc/elements/1.1/""#);
+            let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+            let subjects: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag == "XMP-dc:Subject")
+                .collect();
+            assert_eq!(subjects.len(), 2, "{body}: {entries:?}");
+            let expected = if known_first {
+                [(1, &expected_known), (0, &expected_unknown)]
+            } else {
+                [(0, &expected_unknown), (1, &expected_known)]
+            };
+            for (entry, (priority, value)) in subjects.iter().zip(expected) {
+                assert_eq!(entry.priority, priority, "{body}: {entries:?}");
+                assert_eq!(&entry.value, value, "{body}: {entries:?}");
+            }
+            let mut metadata = MetadataMap::new();
+            for entry in &entries {
+                insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+            }
+            assert_eq!(metadata.occurrences_for("XMP:Subject").len(), 2);
+            assert_eq!(
+                crate::cli::tag_resolution::resolve_requested_tag(&metadata, "Subject")
+                    .map(|winner| winner.raw.clone()),
+                Some(match expected_known {
+                    XmpValue::Scalar(value) => TagValue::new_string(value),
+                    XmpValue::List(values) =>
+                        TagValue::new_array(values.into_iter().map(TagValue::new_string).collect(),),
+                }),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn focused_structure_preserves_equal_priority_raw_paths_with_one_printed_name() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let entries = parse_xmp_entries(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/focused-same-name.xmp"
+        ))
+        .unwrap();
+        let fields: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.tag == "XMP-xmpMM:DerivedFromDocumentID")
+            .collect();
+        assert_eq!(fields.len(), 2, "{entries:?}");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|entry| entry.value.clone().into_joined())
+                .collect::<Vec<_>>(),
+            ["UNKNOWN", "KNOWN"]
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .map(|entry| entry.priority)
+                .collect::<Vec<_>>(),
+            [1, 1]
+        );
+        let mut metadata = MetadataMap::new();
+        for entry in &entries {
+            insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+        }
+        assert_eq!(
+            metadata.occurrences_for("XMP:DerivedFromDocumentID").len(),
+            2
+        );
+        assert_eq!(
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "DerivedFromDocumentID")
+                .and_then(|winner| winner.raw.as_string()),
+            Some("KNOWN")
+        );
     }
 
     /// The namespaces the reader always keyed by their own group keep that

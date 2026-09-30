@@ -155,7 +155,7 @@ Explicitly refused, with a recorded reason (4): `InverseDateTime`, `ValidateImag
 
 ### Generated artifacts
 
-**271** files are regenerated from ExifTool's source (tier 1: 244, tier 2: 27; 244 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
+**273** files are regenerated from ExifTool's source (tier 1: 244, tier 2: 29; 245 of them Rust). Source: the output inventory in [`artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), the same list `artifacts.py paths` prints.
 
 ## Generated share of correct output
 
@@ -232,7 +232,7 @@ The machine-readable form of this page is [`/measurements/status.json`](/measure
 | Source | sha256 |
 | --- | --- |
 | [`docs/public/measurements/catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) | `033e4094bf409c89` |
-| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `7d13b736d209026e` |
+| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `a2d38c03e38ddbe6` |
 | [`docs/public/measurements/generated-share-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/generated-share-13.59.json) | `81e3168524d85cd1` |
 | [`tools/ci/parity_floors.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/ci/parity_floors.json) | `92505e25021bfbd4` |
 
