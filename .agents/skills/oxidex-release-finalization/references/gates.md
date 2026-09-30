@@ -233,14 +233,21 @@ The local acceptance JSON must contain `schema_version: 1`, `status: accepted`,
 `--output-last-message` path matching the result. The findings JSON must bind
 the same identity, have `status: reviewed`, an array of individually disposed
 findings (`resolved` or `not_actionable` with reasons), and zero unresolved
-actionable findings. The authorization JSON is a structured grant with `schema_version: 1`,
-`decision: approved`, `scope: local_review_fallback`, `authorized_by`,
-`authorized_at`, and absolute `source_path`/`source_sha256` binding the retained
-original user instruction. Every severity-bearing line in the raw review
-result must appear verbatim as a `review_line` in the findings ledger; the
-ledger also binds `review_result_sha256`. This acceptance is an independent
-assessment of the review; `completed` and process exit zero alone are not
-approval.
+actionable findings. The authorization JSON is the canonical structured authorization source:
+`schema_version: 1`, `decision: approved`, `scope: local_review_fallback`,
+`assessment: affirmative_in_scope`, `authorized_by`, `authorized_at`,
+`assessed_by`, and `assessed_at`. Its absolute `original_instruction_path` and
+`original_instruction_sha256` bind the retained raw user instruction;
+`assessed_instruction_sha256` must equal that exact digest. An independent
+assessor records that this instruction affirmatively grants the stated scope.
+The gate checks the structured source and provenance consistency, while the
+natural-language interpretation remains an independent assessment, not a
+mechanically proven fact. The evidence producer must be trusted; a local
+attestation cannot prevent its author from making a false claim. Every
+severity-bearing line in the raw review result must appear verbatim as a
+`review_line` in the findings ledger, which also binds
+`review_result_sha256`. This acceptance is an independent assessment of the
+review; `completed` and process exit zero alone are not approval.
 
 Require successful current required checks, a complete review-thread page,
 and zero unresolved non-outdated review threads under either route. The gate

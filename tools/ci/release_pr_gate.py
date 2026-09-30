@@ -136,13 +136,20 @@ def _local_review(
         or authorization.get("schema_version") != 1
         or authorization.get("decision") != "approved"
         or authorization.get("scope") != "local_review_fallback"
+        or authorization.get("assessment") != "affirmative_in_scope"
         or not isinstance(authorization.get("authorized_by"), str)
         or not authorization["authorized_by"].strip()
         or not isinstance(authorization.get("authorized_at"), str)
         or not authorization["authorized_at"].strip()
+        or not isinstance(authorization.get("assessed_by"), str)
+        or not authorization["assessed_by"].strip()
+        or not isinstance(authorization.get("assessed_at"), str)
+        or not authorization["assessed_at"].strip()
+        or authorization.get("assessed_instruction_sha256")
+        != authorization.get("original_instruction_sha256")
     ):
-        raise PrGateError("local-review.authorization: missing affirmative scoped grant")
-    _, source = _bound_file(authorization, "source")
+        raise PrGateError("local-review.authorization: missing consistent affirmative source")
+    _, source = _bound_file(authorization, "original_instruction")
     if (
         not isinstance(source, dict)
         or not isinstance(source.get("authorization"), str)

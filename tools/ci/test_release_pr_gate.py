@@ -38,10 +38,12 @@ class ReleasePrGateTests(unittest.TestCase):
             },
             "authorization": {
                 "schema_version": 1, "decision": "approved",
-                "scope": "local_review_fallback", "authorized_by": "maintainer",
-                "authorized_at": "2026-09-30T00:00:00Z",
-                "source_path": str(source_path),
-                "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                "scope": "local_review_fallback", "assessment": "affirmative_in_scope",
+                "authorized_by": "maintainer", "authorized_at": "2026-09-30T00:00:00Z",
+                "assessed_by": "independent reviewer", "assessed_at": "2026-09-30T00:01:00Z",
+                "original_instruction_path": str(source_path),
+                "original_instruction_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                "assessed_instruction_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
             },
         }
         acceptance = {
@@ -216,8 +218,11 @@ class ReleasePrGateTests(unittest.TestCase):
         for mutation, message in (
             ("unlisted_p1", "raw review findings"),
             ("not_review_command", "expected review of exact base"),
-            ("denied_grant", "affirmative scoped grant"),
-            ("wrong_scope", "affirmative scoped grant"),
+            ("denied_grant", "affirmative source"),
+            ("wrong_scope", "affirmative source"),
+            ("inconsistent_assessment", "affirmative source"),
+            ("missing_assessor", "affirmative source"),
+            ("tamper_original_source", "original_instruction.*SHA-256"),
             ("missing_grant", "authorization"),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
@@ -243,12 +248,21 @@ class ReleasePrGateTests(unittest.TestCase):
                     record["command"] = ["codex", "--output-last-message", str(root / "review_result.md")]
                     receipt.write_text(json.dumps(record), encoding="utf-8")
                     acceptance["review_receipt_sha256"] = hashlib.sha256(receipt.read_bytes()).hexdigest()
-                elif mutation in ("denied_grant", "wrong_scope"):
+                elif mutation == "tamper_original_source":
+                    (root / "original-user-instruction.json").write_text(
+                        json.dumps({"authorization": "User: changed instruction"}), encoding="utf-8"
+                    )
+                elif mutation in ("denied_grant", "wrong_scope", "inconsistent_assessment", "missing_assessor"):
                     grant = root / "authorization.json"
                     record = json.loads(grant.read_text())
-                    record["decision" if mutation == "denied_grant" else "scope"] = (
-                        "denied" if mutation == "denied_grant" else "another_scope"
-                    )
+                    if mutation == "denied_grant":
+                        record["decision"] = "denied"
+                    elif mutation == "wrong_scope":
+                        record["scope"] = "another_scope"
+                    elif mutation == "inconsistent_assessment":
+                        record["assessed_instruction_sha256"] = "0" * 64
+                    else:
+                        record["assessed_by"] = ""
                     grant.write_text(json.dumps(record), encoding="utf-8")
                     acceptance["authorization_sha256"] = hashlib.sha256(grant.read_bytes()).hexdigest()
                 else:
