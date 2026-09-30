@@ -65,7 +65,7 @@ jobs:
     name: Build ${{ matrix.arch }}
     needs: [verify-tag-on-main]
     if: needs.verify-tag-on-main.result == 'success' && needs.verify-tag-on-main.outputs.allowed == 'true'
-    runs-on: docker
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

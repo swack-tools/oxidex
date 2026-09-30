@@ -48,7 +48,7 @@ jobs:
   build-linux:
     name: Build Linux (${{ matrix.target }})
     needs: verify-version
-    runs-on: spot
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -152,7 +152,7 @@ jobs:
   build-macos:
     name: Build and Sign macOS (universal)
     needs: verify-version
-    runs-on: spot
+    runs-on: macos-15
     permissions:
       contents: read
     steps:
@@ -489,7 +489,7 @@ jobs:
   verify-release-assets:
     name: Verify downloaded release assets
     needs: [verify-version, create-release]
-    runs-on: spot
+    runs-on: macos-15
     permissions:
       contents: read
       actions: read

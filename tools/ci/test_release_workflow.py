@@ -641,6 +641,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('rustup target list --installed --toolchain 1.97.1', block)
         self.assertIn('test -d "$SYSROOT/lib/rustlib/$target/lib"', block)
 
+    def test_release_platform_specific_jobs_keep_native_runners(self):
+        for job in ("build-macos", "verify-release-assets"):
+            with self.subTest(job=job):
+                self.assertRegex(
+                    job_block(self.text, job), r"(?m)^    runs-on: macos-15$"
+                )
+        linux = job_block(self.text, "build-linux")
+        self.assertRegex(linux, r"(?m)^    runs-on: \$\{\{ matrix\.os \}\}$")
+        self.assertIn("target: aarch64-unknown-linux-musl", linux)
+        self.assertIn("os: ubuntu-24.04-arm", linux)
+
     def test_universal_macos_asset_name_is_shared_by_release_contract_surfaces(self):
         expected = "oxidex-universal-apple-darwin"
         legacy = "oxidex-aarch64-apple-darwin"
@@ -960,6 +971,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
 class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
     GATE = "enable=${{ !contains(github.ref_name, '-') }}"
+
+    def test_docker_build_keeps_native_matrix_runners(self):
+        build = job_block(self.text, "build")
+        self.assertRegex(build, r"(?m)^    runs-on: \$\{\{ matrix\.runner \}\}$")
+        self.assertIn('"runner":"ubuntu-latest"', build)
+        self.assertIn('"runner":"ubuntu-24.04-arm"', build)
+        self.assertIn("docker run --rm", build)
+        self.assertNotIn("setup-qemu-action@", build)
 
     def test_publishing_requires_matching_package_and_image_versions(self):
         verify = job_block(self.text, "verify-tag-on-main")
