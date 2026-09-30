@@ -594,6 +594,11 @@ def _report_for(run_dir: Path, journal: Mapping[str, Any], release: str, stage: 
     value = _read_object(run_dir / relative, f"{release} {stage} report")
     if rehearsal.sha256_json(value) != report["sha256"]:
         raise Refused(f"{release} {stage} report differs from its execution journal digest")
+    if stage in {"generate", "build", "test", "read", "write"}:
+        try:
+            executor._require_raw_report(value)
+        except executor.Refused as error:
+            raise Refused(f"{release} {stage} {error}") from error
     return value
 
 
@@ -1388,6 +1393,10 @@ def _replay_committed_read_snapshot(row: Mapping[str, Any], side: str, root: Pat
     generation = _report_for(run_dir, journal, release, "generate")
     build = _report_for(run_dir, journal, release, "build")
     read = _report_for(run_dir, journal, release, "read")
+    # The final marker must still be backed by the release-test and write
+    # command transcripts, even though read-pair replay uses only read data.
+    _report_for(run_dir, journal, release, "test")
+    _report_for(run_dir, journal, release, "write")
     read_report_path = run_dir / journal["releases"][release]["reports"]["read"]["path"]
     if (read.get("state") != "measured"
             or release_state.get("reports", {}).get("read", {}).get("acceptance") != "pending_pair_policy"):
