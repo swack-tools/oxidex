@@ -232,7 +232,7 @@ The machine-readable form of this page is [`/measurements/status.json`](/measure
 | Source | sha256 |
 | --- | --- |
 | [`docs/public/measurements/catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) | `033e4094bf409c89` |
-| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `7d13b736d209026e` |
+| [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `a2d38c03e38ddbe6` |
 | [`docs/public/measurements/generated-share-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/generated-share-13.59.json) | `81e3168524d85cd1` |
 | [`tools/ci/parity_floors.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/ci/parity_floors.json) | `92505e25021bfbd4` |
 

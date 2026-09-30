@@ -57,15 +57,13 @@ class ClassifyVariantsTests(unittest.TestCase):
         self.assertIn("outside conds.py's closed grammar", delta.note)
 
     def test_lt_ge_string_compare_is_refused_and_named(self):
-        # `lt`/`ge` string comparisons are one of the named grammar gaps
-        # (Step 23's landing note: 11 of 12 refusals in the pinned corpus
-        # were OR chains / lt-ge compares / \d-class regexes; slice I-3
-        # took the OR chains, the other two remain).
+        # String ordering outside the source-proven firmware domain must
+        # remain refused, even though firmware version ordering now compiles.
         variants = [{"Condition": '$$self{Model} lt "Z"', "Name": "Weird", "Format": "int16u"}]
         delta = triage_bump.classify_variants("Test", "Tbl", "1", variants, "added")
 
         self.assertEqual(delta.bucket, triage_bump.COND)
-        self.assertIn("unrecognised condition atom", delta.note)
+        self.assertIn("string ordering outside the source-proven firmware domain", delta.note)
 
     def test_nested_variants_alternative_is_refused_outright(self):
         variants = [{"_variants": [{"Name": "Inner"}]}]
