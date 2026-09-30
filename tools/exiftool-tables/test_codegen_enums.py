@@ -32,6 +32,33 @@ def _enum_tag(mapping, print_hex=False):
 
 
 class PlainHashPrintConv(unittest.TestCase):
+    def test_exe_macho_cpu_type_uses_source_map_only_for_exact_closure(self):
+        mapping = {"-1": "Any", "7": "x86", "12": "ARM", "18": "PowerPC"}
+        tag = {
+            "Name": "CPUType",
+            "Format": "int32s",
+            "PrintConv": {
+                "kind": "enum_partial",
+                "map": mapping,
+                "directives": {
+                    "OTHER": {"__perl": "CODE", "__deparse": others._EXE_MACHO_CPU_ABI64}
+                },
+            },
+        }
+        src, refused = codegen.conv_for(tag, _stats(), "num", set())
+        self.assertFalse(refused)
+        self.assertEqual(
+            src,
+            'PrintConv::PartialEnumInt { exact: &[(-1, "Any"), (7, "x86"), (12, "ARM"), (18, "PowerPC")], other: Some(OtherId::ExeMachoCpuAbi64), print_hex: false }',
+        )
+
+        tag["PrintConv"]["directives"]["OTHER"]["__deparse"] += " changed"
+        drift_stats = _stats()
+        src, refused = codegen.conv_for(tag, drift_stats, "num", set())
+        self.assertFalse(refused)
+        self.assertEqual(src, "PrintConv::None")
+        self.assertEqual(drift_stats["other_unregistered"], 1)
+
     def test_int_hash_without_printhex_is_an_int_enum(self):
         stats = _stats()
         src, refused = codegen.conv_for(_enum_tag({"1": "One", "2": "Two"}), stats, "num", set())
