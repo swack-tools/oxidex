@@ -540,7 +540,17 @@ class CleanSnapshotTests(unittest.TestCase):
         reports.mkdir(parents=True)
         generate_path, read_path = reports / "generate.json", reports / "read.json"
         build_path = reports / "build.json"
+        test_path, write_path = reports / "test.json", reports / "write.json"
         native_path = reports / "native.json"
+        commands = run_dir / "raw"
+        commands.mkdir()
+        release_test, write = {}, {}
+        for stage, result in (("generate", generation), ("build", build),
+                              ("read", read), ("test", release_test), ("write", write)):
+            command_path = commands / f"{stage}.json"
+            command_path.write_text('{"status":"ok"}')
+            result["raw_report"] = {"path": str(command_path),
+                                    "sha256": hashlib.sha256(command_path.read_bytes()).hexdigest()}
         config_path = run_dir / "inputs" / "config.json"
         config_path.parent.mkdir(parents=True)
         bundle = self.root / "verified-input-bundle"
@@ -560,6 +570,8 @@ class CleanSnapshotTests(unittest.TestCase):
         def update_outer_receipts() -> dict:
             generate_path.write_text(json.dumps(generation))
             build_path.write_text(json.dumps(build))
+            test_path.write_text(json.dumps(release_test))
+            write_path.write_text(json.dumps(write))
             native_path.write_text(json.dumps(native_probe))
             read_path.write_text(json.dumps(read))
             journal = {"config_sha256": qualification.rehearsal.sha256_json(config),
@@ -572,6 +584,10 @@ class CleanSnapshotTests(unittest.TestCase):
                                         "sha256": qualification.rehearsal.sha256_json(generation)},
                            "build": {"path": "reports/build.json",
                                      "sha256": qualification.rehearsal.sha256_json(build)},
+                           "test": {"path": "reports/test.json",
+                                    "sha256": qualification.rehearsal.sha256_json(release_test)},
+                           "write": {"path": "reports/write.json",
+                                     "sha256": qualification.rehearsal.sha256_json(write)},
                            "native": {"path": "reports/native.json",
                                       "sha256": qualification.rehearsal.sha256_json(native_probe)},
                            "read": {"path": "reports/read.json",
