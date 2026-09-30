@@ -252,21 +252,62 @@ def free_mem_gb() -> float:
     return -1.0
 
 
-def live_pgids() -> set:
-    """Process groups alive on this host, by listing -- the instrument is
-    `ps -eo pgid=`, never pgrep."""
+class ProcessListingUnavailable(RuntimeError):
+    """A process listing cannot prove either presence or absence."""
+
+
+def _ps_lines(argv: list, *, env: Optional[dict] = None) -> list[str]:
+    """Return a successful, nonempty ps listing or refuse to infer absence."""
     try:
-        out = subprocess.run(
-            ["ps", "-eo", "pgid=,stat="], capture_output=True, text=True, errors="replace", timeout=10
-        ).stdout
-        pgids = set()
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].isdigit() and not parts[1].startswith("Z"):
-                pgids.add(int(parts[0]))
-        return pgids
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              errors="replace", timeout=10, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProcessListingUnavailable(f"ps could not run: {exc}") from exc
+    if proc.returncode != 0:
+        raise ProcessListingUnavailable(
+            f"ps exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+    if not isinstance(proc.stdout, str):
+        raise ProcessListingUnavailable("ps returned no text listing")
+    lines = proc.stdout.splitlines()
+    if not lines or any(not line.strip() for line in lines):
+        raise ProcessListingUnavailable("ps returned an empty or malformed listing")
+    try:
+        own = os.getpgrp()
+    except (AttributeError, OSError) as exc:
+        raise ProcessListingUnavailable("cannot verify own process group") from exc
+    if not any(line.split()[0] == str(own) for line in lines):
+        raise ProcessListingUnavailable(f"ps omitted this runner's own group {own}")
+    return lines
+
+
+def _ps_fields(line: str, count: int) -> list[str]:
+    parts = line.split(None, count - 1)
+    if len(parts) != count or any(not part for part in parts):
+        raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}")
+    try:
+        numbers = [int(part) for part in parts[:-1]]
+    except ValueError as exc:
+        raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}") from exc
+    # macOS ps may include kernel_task with pgid/pid 0, and some system
+    # identities have uid -2. Reject negative process identities here;
+    # consumers exclude zero before treating a row as a live candidate.
+    if numbers[0] < 0 or (count == 4 and numbers[1] < 0):
+        raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}")
+    return parts
+
+
+def live_pgids() -> set:
+    """Non-zombie process groups from a complete, checked `ps` listing."""
+    pgids = set()
+    for line in _ps_lines(["ps", "-eo", "pgid=,stat="]):
+        pgid, state = _ps_fields(line, 2)
+        if len(state.split()) != 1 or not (state[0].isalpha() or state[0] == "?"):
+            raise ProcessListingUnavailable(f"malformed ps state: {line[:120]!r}")
+        if int(pgid) != 0 and not state.startswith("Z"):
+            pgids.add(int(pgid))
+    if os.getpgrp() not in pgids:
+        raise ProcessListingUnavailable("ps reported this runner's group only as a zombie")
+    return pgids
 
 # --------------------------------------------------------------------- #
 # Gate workers
@@ -393,27 +434,19 @@ def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
     if scope_token is None:
         return None
     markers = tuple(markers) if markers else worker_markers()
-    try:
-        out = subprocess.run(
-            ["ps", "-wweo", "pgid=,uid=,command="],
-            capture_output=True, text=True, errors="replace", timeout=10,
-            env=_ps_env(),
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,command="], env=_ps_env())
     try:
         uid = os.getuid()
     except AttributeError:
         uid = None
-    for line in out.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) < 3 or not (parts[0].isdigit() and parts[1].isdigit()):
+    rows = [_ps_fields(line, 4) for line in lines]
+    for spgid, spid, suid, command in rows:
+        if int(spgid) == 0 or int(spid) == 0:
             continue
-        if int(parts[0]) != pgid:
+        if int(spgid) != pgid:
             continue
-        if uid is not None and int(parts[1]) != uid:
+        if uid is not None and int(suid) != uid:
             continue
-        command = parts[2]
         if any(m in command for m in markers) and scope_token in command:
             return command
     return None
@@ -444,27 +477,18 @@ def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
     matcher that fires on `rustc` command lines.
     """
     markers = tuple(markers) if markers else worker_markers()
-    try:
-        out = subprocess.run(
-            ["ps", "-wweo", "pgid=,pid=,uid=,command="],
-            capture_output=True, text=True, errors="replace", timeout=10,
-            env=_ps_env(),
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
+    lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,command="], env=_ps_env())
     try:
         uid = os.getuid()
     except AttributeError:
         uid = None
     found: dict = {}
-    for line in out.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) < 4:
-            continue
+    rows = [_ps_fields(line, 4) for line in lines]
+    for parts in rows:
         spgid, spid, suid, command = parts
-        if not (spgid.isdigit() and spid.isdigit() and suid.isdigit()):
-            continue
         pgid, pid, puid = int(spgid), int(spid), int(suid)
+        if pgid == 0 or pid == 0:
+            continue
         if uid is not None and puid != uid:
             continue
         if pid != pgid:
@@ -571,24 +595,21 @@ def fleetd_marker_in_group(pgid: int, exclude_pid: Optional[int] = None,
     """
     markers = (marker,) if isinstance(marker, str) else tuple(marker)
     try:
-        out = subprocess.run(
-            ["ps", "-eo", "pgid=,pid=,uid=,command="],
-            capture_output=True, text=True, errors="replace", timeout=10,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
+        lines = _ps_lines(["ps", "-eo", "pgid=,pid=,uid=,command="])
+    except ProcessListingUnavailable:
         return "<ps listing unavailable -- refusing to declare pgid %d dead>" % pgid
     try:
         uid = os.getuid()
     except AttributeError:
         uid = None
-    for line in out.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) < 4:
-            continue
-        spgid, spid, suid, command = parts
-        if not (spgid.isdigit() and spid.isdigit() and suid.isdigit()):
-            continue
+    try:
+        rows = [_ps_fields(line, 4) for line in lines]
+    except ProcessListingUnavailable:
+        return "<ps listing malformed -- refusing to declare pgid %d dead>" % pgid
+    for spgid, spid, suid, command in rows:
         rpgid, rpid, ruid = int(spgid), int(spid), int(suid)
+        if rpgid == 0 or rpid == 0:
+            continue
         if rpgid != pgid:
             continue
         if uid is not None and ruid != uid:
@@ -703,7 +724,13 @@ def kill_process_group(
 
     deadline = time.time() + grace
     while time.time() < deadline:
-        if not alive(pgid):
+        try:
+            still_alive = alive(pgid)
+        except ProcessListingUnavailable:
+            # The lost lease or proved orphan justified the signal. An
+            # unavailable verification cannot prove that SIGTERM finished it.
+            still_alive = True
+        if not still_alive:
             return "exited on SIGTERM"
         time.sleep(poll)
 
@@ -1720,7 +1747,7 @@ def run_daemon(
     try:
         adoption = adopt_workers(hub, host, workers)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
-    except HubError as e:
+    except (HubError, ProcessListingUnavailable) as e:
         # An unreachable hub at startup is not a reason to run with an
         # empty worker list -- that is the state that starts duplicate
         # gates. Refuse to start; the supervisor will retry.
