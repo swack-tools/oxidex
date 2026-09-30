@@ -37,6 +37,12 @@ def selected_source(perl: str, tree: Path) -> dict:
         "Canon", "Nikon", "Pentax", "Sony", "Sigma", "Samsung", "Leica"
     ]:
         raise ValueError("XMP maker dispatch order changed")
+    adapter = data.get("sony_adapter_high_bytes")
+    if (not isinstance(adapter, list) or not adapter
+            or any(type(value) is not int or value <= 0 or value > 0xff00
+                   or value & 0xff for value in adapter)
+            or adapter != sorted(set(adapter))):
+        raise ValueError("invalid selected Sony adapter high-byte set")
     return data
 
 
@@ -99,6 +105,12 @@ def render(data: dict) -> str:
     for m in data["makers"]:
         parts.append(f"        XmpLensMaker::{m['make']} => &{m['make'].upper()}_ROWS,\n")
     parts += ["    }\n", "}\n\n"]
+    parts.append("/// Minolta::metabonesID high bytes selected by Exif::PrintLensID.\n")
+    parts.append("/// These require dynamic Canon adapter conversion before labeling.\n")
+    parts.append("pub static SONY_ADAPTER_HIGH_BYTES: &[u32] = &[\n")
+    for value in data["sony_adapter_high_bytes"]:
+        parts.append(f"    0x{value:04x},\n")
+    parts.append("];\n\n")
     for m in data["makers"]:
         name = m["make"].upper()
         parts.append(f"/// {m['module']}::{m['table']}: {len(m['rows'])} literal "

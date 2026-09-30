@@ -27,6 +27,12 @@ pub fn rows(maker: XmpLensMaker) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// Minolta::metabonesID high bytes selected by Exif::PrintLensID.
+/// These require dynamic Canon adapter conversion before labeling.
+pub static SONY_ADAPTER_HIGH_BYTES: &[u32] = &[
+    0x7700, 0x7800, 0x7900, 0x8700, 0xbc00, 0xbd00, 0xbe00, 0xcc00, 0xef00, 0xf000, 0xf100, 0xff00,
+];
+
 /// Canon::canonLensTypes: 535 literal rows (239 base, 296 fractional).
 /// Source module version: 5.07.
 #[rustfmt::skip]

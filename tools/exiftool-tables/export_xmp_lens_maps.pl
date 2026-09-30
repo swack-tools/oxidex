@@ -38,7 +38,7 @@ my @spec = (
     [Leica   => 'Panasonic','leicaLensTypes'],
 );
 my @modules = ('Image/ExifTool.pm', 'Image/ExifTool/XMP.pm', 'Image/ExifTool/Exif.pm',
-               'Image/ExifTool/Sigma.pm',
+               'Image/ExifTool/Sigma.pm', 'Image/ExifTool/Minolta.pm',
                map { "Image/ExifTool/$_->[1].pm" } @spec);
 my (%seen, %source);
 unshift @INC, $lib;
@@ -73,6 +73,22 @@ for my $fragment ('qw(Canon Nikon Pentax Sony Sigma Samsung Leica)',
     die "XMP.pm selected-table contract changed: $fragment\n"
         unless index($xmp_source, $fragment) >= 0;
 }
+open my $exif_fh, '<:raw', "$lib/Image/ExifTool/Exif.pm" or die "cannot read Exif.pm: $!\n";
+my $exif_source = do { local $/; <$exif_fh> };
+close $exif_fh;
+for my $fragment ('$lensType != 0xff00', '$Image::ExifTool::Minolta::metabonesID{$lensType & 0xff00}') {
+    die "Exif.pm Sony adapter contract changed: $fragment\n"
+        unless index($exif_source, $fragment) >= 0;
+}
+
+my @sony_adapter_high_bytes;
+no warnings 'once';
+for my $key (sort { $a <=> $b } keys %Image::ExifTool::Minolta::metabonesID) {
+    die "Minolta::metabonesID has unsupported key '$key'\n"
+        unless $key =~ /^\d+\z/ && $key > 0 && $key <= 0xff00 && ($key & 0xff) == 0;
+    push @sony_adapter_high_bytes, 0 + $key;
+}
+die "Minolta::metabonesID unexpectedly empty\n" unless @sony_adapter_high_bytes;
 
 sub text_value {
     my ($maker, $key, $value) = @_;
@@ -150,4 +166,5 @@ for my $entry (@spec) {
 }
 binmode STDOUT, ':encoding(UTF-8)';
 print JSON::PP->new->canonical->encode({ schema => 'xmp_lens_maps_v1',
-    exiftool_version => $pin, source => \%source, makers => \@makers });
+    exiftool_version => $pin, source => \%source, makers => \@makers,
+    sony_adapter_high_bytes => \@sony_adapter_high_bytes });

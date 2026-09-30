@@ -741,7 +741,7 @@ pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
             let value = id.parse::<u32>().ok()?;
             let high = value & 0xff00;
             if value == 65535
-                || matches!(high, 0xef00 | 0xbc00 | 0x7700)
+                || (value != 0xff00 && xmp_lens_maps::SONY_ADAPTER_HIGH_BYTES.contains(&high))
                 || (0x4900..=0x590a).contains(&value)
             {
                 return None;
@@ -775,7 +775,7 @@ pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
             parts = [None; 4];
         }
     }
-    if truthy(max_av).is_some() && maker != XmpLensMaker::Sony {
+    if truthy(max_av).is_some() {
         parts[2] = None;
     }
     let lens_model = get(4).filter(|s| !s.is_empty());
