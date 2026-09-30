@@ -1,7 +1,7 @@
 """Generate the facts ExifTool's XMP read path uses to give a property its priority.
 
 Input is capture_xmp_priorities.pl's JSON for the pinned tree (committed as
-fixtures/xmp_priorities_13_59.json). Output is src/parsers/xmp/generated_priorities.rs:
+fixtures/xmp_priorities.json). Output is src/parsers/xmp/generated_priorities.rs:
 
 - XMP_TABLES: for every %Image::ExifTool::XMP::Main key that names a tag table
   (the namespace prefix after %stdXlatNS -- FoundXMP's table lookup key), the
@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PIN = (ROOT / ".exiftool-version").read_text().strip()
-FIXTURE = ROOT / f"tools/exiftool-tables/fixtures/xmp_priorities_{PIN.replace('.', '_')}.json"
+FIXTURE = ROOT / "tools/exiftool-tables/fixtures/xmp_priorities.json"
 RUST = ROOT / "src/parsers/xmp/generated_priorities.rs"
 SCHEMA_KEYS = {"exiftool_version", "namespaces", "xmp_ns", "special_tables"}
 NAMESPACE_KEYS = {"table", "namespace", "table_priority", "table_avoid", "tags"}
