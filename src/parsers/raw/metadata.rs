@@ -1659,7 +1659,10 @@ fn extract_rw2_embedded_exif_tags(
     // Where the preview's TIFF header sits in the RW2 itself. ThumbnailOffset
     // is stored relative to that header but reported by ExifTool as a
     // position in the physical file.
-    let tiff_base_in_file = jpeg_file_offset.saturating_add(tiff_start_in_jpeg);
+    let tiff_base_in_file = jpeg_file_offset
+        .checked_add(tiff_start_in_jpeg)
+        .and_then(|offset| i64::try_from(offset).ok())
+        .ok_or_else(|| ExifToolError::parse_error("RW2 preview TIFF file offset overflow"))?;
 
     let byte_order = detect_byte_order(tiff_data)?;
     let first_ifd_bytes = tiff_data
@@ -1668,20 +1671,6 @@ fn extract_rw2_embedded_exif_tags(
     let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
     let reader = SliceReader::new(tiff_data);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
-
-    let exif_ifd_offset =
-        ifd0_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            });
-    let Some(exif_ifd_offset) = exif_ifd_offset else {
-        return Ok(());
-    };
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         let bytes = raw_bytes.as_ref();
@@ -1776,20 +1765,132 @@ fn extract_rw2_embedded_exif_tags(
         metadata.insert(tag_name, tag_value);
     }
 
-    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order)?;
+    // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
+    // Its 0x0201/0x0202 values are stored relative to this embedded TIFF
+    // header; ExifTool reports ThumbnailOffset as a position in the physical
+    // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
+    // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
+    let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
+    let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
+        first_ifd_offset
+            .checked_add(2)?
+            .checked_add(entry_count.checked_mul(12)?)
+    });
+    let thumbnail_ifd_offset = next_ifd_position
+        .and_then(|offset| reader.read(offset, 4).ok())
+        .map(|bytes| u64::from(read_u32(bytes, byte_order)));
+
+    if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
+        && thumbnail_ifd_offset != 0
+        && let Ok(thumbnail_tags) = parse_ifd(&reader, thumbnail_ifd_offset, byte_order)
+    {
+        let mut thumbnail_offset = None;
+        let mut thumbnail_length = None;
+        for (tag_id, field_type, value_count, raw_bytes) in thumbnail_tags {
+            if field_type != 4 || value_count != 1 {
+                continue;
+            }
+            match tag_id {
+                // Exif.pm 0x0201: JPEGInterchangeFormat.
+                0x0201 => {
+                    thumbnail_offset = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                // Exif.pm 0x0202: JPEGInterchangeFormatLength.
+                0x0202 => {
+                    thumbnail_length = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(offset) = thumbnail_offset
+            && let Some(absolute) = i64::from(offset).checked_add(tiff_base_in_file)
+        {
+            metadata.insert(
+                "EXIF:ThumbnailOffset".to_string(),
+                TagValue::new_integer(absolute),
+            );
+        }
+        if let Some(length) = thumbnail_length {
+            metadata.insert(
+                "EXIF:ThumbnailLength".to_string(),
+                TagValue::new_integer(i64::from(length)),
+            );
+        }
+        if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
+            && let (Ok(offset), Ok(length)) = (usize::try_from(offset), usize::try_from(length))
+            && let Some(end) = offset.checked_add(length)
+            && let Some(image) = tiff_data.get(offset..end)
+        {
+            metadata.insert(
+                "EXIF:ThumbnailImage".to_string(),
+                TagValue::Binary(image.to_vec()),
+            );
+        }
+    }
+
+    let exif_ifd_offset =
+        ifd0_tags
+            .iter()
+            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
+                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
+                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
+                } else {
+                    None
+                }
+            });
+    let Some(exif_ifd_offset) = exif_ifd_offset else {
+        return Ok(());
+    };
+
+    // A malformed optional ExifIFD must not discard IFD0 or IFD1 values.
+    let Ok(exif_tags) = parse_ifd(&reader, exif_ifd_offset, byte_order) else {
+        return Ok(());
+    };
 
     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
         let (tag_id, field_type, value_count) = (*tag_id, *field_type, *value_count);
+        // Exif.pm:3006-3014 (13.59): these are scalar int16u entries with
+        // generated No/Yes PrintConv hashes. Keep this preview path tied to
+        // those source rows, including the hash's Unknown (N) fallback.
+        if matches!(tag_id, 0xA411 | 0xA412) {
+            if field_type != 3 || value_count != 1 {
+                continue;
+            }
+            let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
+                .and_then(|table| table.tag(tag_id))
+                .filter(|row| {
+                    row.writable == Some("int16u")
+                        && row.omitted == crate::exiftool_tables::Omitted::NONE
+                        && row.condition.is_none()
+                        && row.raw_conv.is_none()
+                        && row.value_conv.is_none()
+                        && row.subdir.is_none()
+                        && matches!(
+                            row.print_conv,
+                            crate::exiftool_tables::PrintConv::IntEnum(_)
+                        )
+                })
+            else {
+                continue;
+            };
+            let Some(raw) = read_tiff_u16(raw_bytes.as_ref(), byte_order) else {
+                continue;
+            };
+            let Some(display) = crate::exiftool_tables::runtime::render(
+                row.print_conv,
+                &crate::exiftool_tables::DecodedValue::Integer(i64::from(raw)),
+            ) else {
+                continue;
+            };
+            metadata.insert(
+                format!("ExifIFD:{}", row.name),
+                TagValue::new_string(display),
+            );
+            continue;
+        }
         // Filter to the exact set of EXIF tags that ExifTool extracts from
         // the RW2 JpgFromRaw preview EXIF IFD.
-        //
-        // NOTE (2026-07-27): 0xA411/0xA412/0xA413 were previously listed here
-        // as HighISOMultiplierRed/Green/Blue. No such EXIF tags exist -- those
-        // ids appear nowhere in ExifTool 13.55 (`grep -n '0xa411' *.pm` over
-        // .../Image/ExifTool/ returns nothing). The real HighISOMultiplier
-        // tags are PanasonicRaw.pm IFD0 0x18/0x19/0x1a and are handled on the
-        // outer IFD0 path. The invented ids are dropped so they cannot emit a
-        // hex-named oxidex-only tag if some file happens to carry them.
         if !matches!(
             tag_id,
             0x9101 // ComponentsConfiguration
@@ -1905,68 +2006,6 @@ fn extract_rw2_embedded_exif_tags(
             })
     {
         extract_interop_index(&reader, interop_offset, byte_order, metadata);
-    }
-
-    // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
-    // Its 0x0201/0x0202 values are stored relative to this embedded TIFF
-    // header; ExifTool reports ThumbnailOffset as a position in the physical
-    // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
-    // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
-    let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
-    let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
-        first_ifd_offset
-            .checked_add(2)?
-            .checked_add(entry_count.checked_mul(12)?)
-    });
-    let thumbnail_ifd_offset = next_ifd_position
-        .and_then(|offset| reader.read(offset, 4).ok())
-        .map(|bytes| u64::from(read_u32(bytes, byte_order)));
-
-    if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
-        && thumbnail_ifd_offset != 0
-        && let Ok(thumbnail_tags) = parse_ifd(&reader, thumbnail_ifd_offset, byte_order)
-    {
-        let mut thumbnail_offset = None;
-        let mut thumbnail_length = None;
-        for (tag_id, field_type, value_count, raw_bytes) in thumbnail_tags {
-            if field_type != 4 || value_count != 1 {
-                continue;
-            }
-            match tag_id {
-                // Exif.pm 0x0201: JPEGInterchangeFormat.
-                0x0201 => {
-                    thumbnail_offset = read_tiff_u32(raw_bytes.as_ref(), byte_order);
-                }
-                // Exif.pm 0x0202: JPEGInterchangeFormatLength.
-                0x0202 => {
-                    thumbnail_length = read_tiff_u32(raw_bytes.as_ref(), byte_order);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(offset) = thumbnail_offset {
-            metadata.insert(
-                "EXIF:ThumbnailOffset".to_string(),
-                TagValue::new_integer(i64::from(offset) + tiff_base_in_file as i64),
-            );
-        }
-        if let Some(length) = thumbnail_length {
-            metadata.insert(
-                "EXIF:ThumbnailLength".to_string(),
-                TagValue::new_integer(i64::from(length)),
-            );
-        }
-        if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
-            && let (Ok(offset), Ok(length)) = (usize::try_from(offset), usize::try_from(length))
-            && let Some(end) = offset.checked_add(length)
-            && let Some(image) = tiff_data.get(offset..end)
-        {
-            metadata.insert(
-                "EXIF:ThumbnailImage".to_string(),
-                TagValue::Binary(image.to_vec()),
-            );
-        }
     }
 
     Ok(())
@@ -11177,6 +11216,125 @@ mod rw2_embedded_exif_printconv_tests {
         extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
             .expect("synthetic RW2 preview EXIF must parse");
         metadata
+    }
+
+    /// IFD0, PrintIM and IFD1 remain readable with no ExifIFD, a valid
+    /// ExifIFD, or a pointer outside the APP1 TIFF. The real RW2 mutations
+    /// were checked against pinned 13.59 on 2026-09-30.
+    fn preview_with_independent_ifds(
+        big_endian: bool,
+        exif_pointer: Option<u32>,
+    ) -> (Vec<u8>, u32) {
+        let count = if exif_pointer.is_some() { 3u16 } else { 2u16 };
+        let ifd1 = 8 + 2 + 12 * u32::from(count) + 4;
+        let date = ifd1 + 2 + 2 * 12 + 4;
+        let print_im = date + 20;
+        let thumbnail = print_im + 16;
+        let exif_ifd = thumbnail + 4;
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(if big_endian { b"MM\0*" } else { b"II*\0" });
+        tiff.extend_from_slice(&u32b(8, big_endian));
+        tiff.extend_from_slice(&u16b(count, big_endian));
+        let entry = |tiff: &mut Vec<u8>, id: u16, field_type: u16, value_count: u32, value: u32| {
+            tiff.extend_from_slice(&u16b(id, big_endian));
+            tiff.extend_from_slice(&u16b(field_type, big_endian));
+            tiff.extend_from_slice(&u32b(value_count, big_endian));
+            tiff.extend_from_slice(&u32b(value, big_endian));
+        };
+        entry(&mut tiff, 0x0132, 2, 20, date);
+        if let Some(pointer) = exif_pointer {
+            entry(
+                &mut tiff,
+                0x8769,
+                4,
+                1,
+                if pointer == 0 { exif_ifd } else { pointer },
+            );
+        }
+        entry(&mut tiff, 0xC4A5, 7, 16, print_im);
+        tiff.extend_from_slice(&u32b(ifd1, big_endian));
+        assert_eq!(tiff.len(), ifd1 as usize);
+        tiff.extend_from_slice(&u16b(2, big_endian));
+        entry(&mut tiff, 0x0201, 4, 1, thumbnail);
+        entry(&mut tiff, 0x0202, 4, 1, 4);
+        tiff.extend_from_slice(&u32b(0, big_endian));
+        assert_eq!(tiff.len(), date as usize);
+        tiff.extend_from_slice(b"2008:08:06 15:21:56\0");
+        tiff.extend_from_slice(b"PrintIM\0");
+        tiff.extend_from_slice(b"0250\0\0");
+        tiff.extend_from_slice(&u16b(0, big_endian));
+        tiff.extend_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+        assert_eq!(tiff.len(), exif_ifd as usize);
+        if exif_pointer == Some(0) {
+            tiff.extend_from_slice(&u16b(0, big_endian));
+            tiff.extend_from_slice(&u32b(0, big_endian));
+        }
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&u16::try_from(8 + tiff.len()).unwrap().to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        (jpeg, thumbnail)
+    }
+
+    #[test]
+    fn rw2_preview_ifd0_print_im_and_ifd1_do_not_require_exif_ifd() {
+        for big_endian in [false, true] {
+            for pointer in [None, Some(0), Some(u32::MAX)] {
+                let (jpeg, thumbnail) = preview_with_independent_ifds(big_endian, pointer);
+                let mut metadata = MetadataMap::new();
+                extract_rw2_embedded_exif_tags(&jpeg, 1000, &mut metadata).unwrap();
+                assert_eq!(
+                    metadata.get_string("IFD0:ModifyDate"),
+                    Some("2008:08:06 15:21:56"),
+                    "big_endian={big_endian}, pointer={pointer:?}"
+                );
+                assert_eq!(metadata.get_string(PRINT_IM_VERSION_TAG), Some("0250"));
+                assert_eq!(
+                    metadata.get("EXIF:ThumbnailOffset"),
+                    Some(&TagValue::new_integer(1012 + i64::from(thumbnail)))
+                );
+                assert_eq!(metadata.get_integer("EXIF:ThumbnailLength"), Some(4));
+                assert_eq!(
+                    metadata.get("EXIF:ThumbnailImage"),
+                    Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rw2_preview_a411_a412_use_generated_exif_main_print_conv() {
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        for (id, name) in [(0xA411, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
+            let row = table.tag(id).unwrap();
+            assert_eq!(row.name, name);
+            assert_eq!(row.writable, Some("int16u"));
+            assert_eq!(row.omitted, crate::exiftool_tables::Omitted::NONE);
+            assert!(row.condition.is_none());
+            assert!(row.raw_conv.is_none());
+            assert!(row.value_conv.is_none());
+            assert!(row.subdir.is_none());
+            let crate::exiftool_tables::PrintConv::IntEnum(values) = row.print_conv else {
+                panic!("{name} must use the generated integer PrintConv");
+            };
+            assert_eq!(values, &[(0, "No"), (1, "Yes")]);
+            for big_endian in [false, true] {
+                for (raw, expected) in [(0, "No"), (1, "Yes"), (2, "Unknown (2)")] {
+                    let payload = short(raw, big_endian);
+                    let metadata = extract(&[(id, 3, 1, &payload)], big_endian);
+                    assert_eq!(
+                        metadata.get_string(&format!("ExifIFD:{name}")),
+                        Some(expected)
+                    );
+                }
+                let payload = short(1, big_endian);
+                assert!(
+                    extract(&[(id, 3, 2, &payload)], big_endian)
+                        .get(&format!("ExifIFD:{name}"))
+                        .is_none()
+                );
+            }
+        }
     }
 
     fn short(value: u16, big_endian: bool) -> Vec<u8> {
