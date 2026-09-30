@@ -167,6 +167,11 @@ fn thumbnail_guard_follows_only_exif_pointer_shapes_processed_by_exiftool() {
         (4, 0, true),
         (4, 1, false),
         (4, 2, true),
+        (8, 1, false),
+        (9, 1, false),
+        (9, 2, true),
+        (13, 1, false),
+        (13, 2, true),
     ] {
         let mut data = original.clone();
         data[pointer + 2..pointer + 4].copy_from_slice(&field_type.to_le_bytes());
@@ -177,6 +182,98 @@ fn thumbnail_guard_follows_only_exif_pointer_shapes_processed_by_exiftool() {
             metadata.get_integer("IFD1:ThumbnailOffset"),
             thumbnail_expected.then_some(11976),
             "Exif pointer type={field_type} count={value_count}"
+        );
+    }
+}
+
+#[test]
+fn thumbnail_guard_uses_first_out_of_line_gps_or_interop_pointer() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let exif_pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, exif_pointer + 8) as usize;
+    let interop_pointer = entry(&original, exif_ifd, 0xA005);
+    let count = usize::from(read_u16(&original, ifd0));
+    let array = ifd0 + 2 + count * 12;
+    assert_eq!(read_u32(&original, array), 10310);
+    let array_offset = u32::try_from(array - tiff).unwrap();
+
+    for (is_gps, pointer) in [(true, exif_pointer), (false, interop_pointer)] {
+        for (field_type, value_count) in [(3u16, 3u32), (8, 3), (4, 2), (9, 2), (13, 2)] {
+            let mut data = original.clone();
+            if is_gps {
+                data[pointer..pointer + 2].copy_from_slice(&0x8825u16.to_le_bytes());
+            }
+            data[pointer + 2..pointer + 4].copy_from_slice(&field_type.to_le_bytes());
+            data[pointer + 4..pointer + 8].copy_from_slice(&value_count.to_le_bytes());
+            data[pointer + 8..pointer + 12].copy_from_slice(&array_offset.to_le_bytes());
+            let metadata = parse(&data);
+            assert_eq!(
+                metadata.get_integer("IFD1:ThumbnailOffset"),
+                None,
+                "{} type={field_type} count={value_count}",
+                if is_gps { "GPS" } else { "Interop" }
+            );
+        }
+    }
+}
+
+#[test]
+fn thumbnail_guard_ignores_negative_and_truncated_subdirectory_pointers() {
+    let original = source();
+    let (_, ifd0) = preview_ifd0(&original);
+    let pointer = entry(&original, ifd0, 0x8769);
+    for (field_type, value_count, stored) in [
+        (8u16, 1u32, 0xffffu32),
+        (9, 1, u32::MAX),
+        (4, 2, u32::MAX),
+        (3, 3, u32::MAX),
+    ] {
+        let mut data = original.clone();
+        data[pointer + 2..pointer + 4].copy_from_slice(&field_type.to_le_bytes());
+        data[pointer + 4..pointer + 8].copy_from_slice(&value_count.to_le_bytes());
+        data[pointer + 8..pointer + 12].copy_from_slice(&stored.to_le_bytes());
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_integer("IFD1:ThumbnailOffset"),
+            Some(11976),
+            "type={field_type} count={value_count} stored={stored}"
+        );
+    }
+}
+
+#[test]
+fn thumbnail_guard_accepts_byte_subdirectory_pointer_when_ifd1_is_nearby() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let count = usize::from(read_u16(&original, ifd0));
+    let next_pointer = ifd0 + 2 + count * 12;
+    let ifd1 = tiff + read_u32(&original, next_pointer) as usize;
+    let ifd1_len = 2 + usize::from(read_u16(&original, ifd1)) * 12 + 4;
+    let exif_pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, exif_pointer + 8) as usize;
+    let interop_pointer = entry(&original, exif_ifd, 0xA005);
+
+    for (group, pointer) in [
+        ("Exif", exif_pointer),
+        ("GPS", exif_pointer),
+        ("Interop", interop_pointer),
+    ] {
+        let mut data = original.clone();
+        let original_ifd1 = data[ifd1..ifd1 + ifd1_len].to_vec();
+        data[tiff + 170..tiff + 170 + ifd1_len].copy_from_slice(&original_ifd1);
+        data[next_pointer..next_pointer + 4].copy_from_slice(&170u32.to_le_bytes());
+        if group == "GPS" {
+            data[pointer..pointer + 2].copy_from_slice(&0x8825u16.to_le_bytes());
+        }
+        data[pointer + 2..pointer + 4].copy_from_slice(&1u16.to_le_bytes());
+        data[pointer + 4..pointer + 8].copy_from_slice(&1u32.to_le_bytes());
+        data[pointer + 8..pointer + 12].copy_from_slice(&170u32.to_le_bytes());
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_integer("IFD1:ThumbnailOffset"),
+            None,
+            "{group}"
         );
     }
 }

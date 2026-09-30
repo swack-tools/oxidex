@@ -3238,25 +3238,89 @@ fn next_ifd_offset(
     }
 }
 
-/// Decode only pointer shapes that ExifTool processes as subdirectories.
-/// Pinned ExifTool 13.59 differs by tag for a SHORT pair: ExifOffset refuses
-/// it, while GPSInfo and InteropOffset use the first SHORT.
+/// Decode one IFD entry as an ExifTool-followed directory address. ExifOffset
+/// needs one value; GPSInfo and InteropOffset use the first of a value list.
+/// The raw entry is required because `parse_ifd` drops TIFF type 13 (IFD).
 fn followed_subifd_offset(
+    reader: &dyn FileReader,
     tag_id: u16,
-    field_type: u16,
-    count: u32,
-    raw_bytes: &[u8],
+    entry: &[u8],
     byte_order: ByteOrder,
 ) -> Option<u64> {
-    // ExifTool follows a scalar SHORT/LONG ExifOffset. GPSInfo and
-    // InteropOffset also accept a pair of SHORTs and use the first. Other
-    // count/type combinations are data, not an already-processed directory.
-    match (field_type, count) {
-        (3, 1) => Some(u64::from(read_u16(raw_bytes.get(..2)?, byte_order))),
-        (3, 2) if tag_id != 0x8769 => Some(u64::from(read_u16(raw_bytes.get(..2)?, byte_order))),
-        (4, 1) => Some(u64::from(read_u32(raw_bytes.get(..4)?, byte_order))),
-        _ => None,
+    let field_type = read_u16(entry.get(2..4)?, byte_order);
+    let count = read_u32(entry.get(4..8)?, byte_order);
+    if count == 0 || (tag_id == 0x8769 && count != 1) {
+        return None;
     }
+    // Exif.pm:82-132 names these integral TIFF formats. Types 16-18 are
+    // rejected in classic TIFF at Exif.pm:6464; other types are not offsets.
+    let width = match field_type {
+        1 | 6 => 1u64,   // BYTE, SBYTE
+        3 | 8 => 2,      // SHORT, SSHORT
+        4 | 9 | 13 => 4, // LONG, SLONG, IFD
+        _ => return None,
+    };
+    let size = width.checked_mul(u64::from(count))?;
+    let bytes = if size <= 4 {
+        entry.get(8..8 + usize::try_from(width).ok()?)?
+    } else {
+        // Exif.pm:6502-6680 dereferences array values and rejects truncated
+        // spans before any SubDirectory is processed.
+        let start = u64::from(read_u32(entry.get(8..12)?, byte_order));
+        if start.checked_add(size)? > reader.size() {
+            return None;
+        }
+        reader.read(start, usize::try_from(width).ok()?).ok()?
+    };
+    let value = match field_type {
+        1 => i64::from(bytes[0]),
+        6 => i64::from(bytes[0] as i8),
+        3 => i64::from(read_u16(bytes, byte_order)),
+        8 => i64::from(read_u16(bytes, byte_order) as i16),
+        4 | 13 => i64::from(read_u32(bytes, byte_order)),
+        9 => i64::from(read_u32(bytes, byte_order) as i32),
+        _ => unreachable!(),
+    };
+    u64::try_from(value).ok().filter(|value| *value != 0)
+}
+
+/// Enumerate only parseable subdirectories that ExifTool would actually enter.
+fn followed_subdirectories(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    pointer_tags: &[u16],
+) -> Vec<(u16, u64)> {
+    if parse_ifd(reader, ifd_offset, byte_order).is_err() {
+        return Vec::new();
+    }
+    let Some(count) = ifd_entry_count(reader, ifd_offset, byte_order) else {
+        return Vec::new();
+    };
+    let mut followed = Vec::new();
+    for index in 0..u64::from(count) {
+        let Some(entry_offset) = ifd_offset.checked_add(2).and_then(|start| {
+            index
+                .checked_mul(12)
+                .and_then(|delta| start.checked_add(delta))
+        }) else {
+            break;
+        };
+        let Ok(entry) = reader.read(entry_offset, 12) else {
+            break;
+        };
+        let tag_id = read_u16(entry, byte_order);
+        if !pointer_tags.contains(&tag_id) {
+            continue;
+        }
+        let Some(target) = followed_subifd_offset(reader, tag_id, entry, byte_order) else {
+            continue;
+        };
+        if parse_ifd(reader, target, byte_order).is_ok() {
+            followed.push((tag_id, target));
+        }
+    }
+    followed
 }
 
 /// Collects the offsets of the EXIF directories that have already been walked
@@ -3281,37 +3345,27 @@ fn visited_directory_offsets(
     const GPS_IFD_POINTER: u16 = 0x8825;
 
     let mut visited = vec![ifd0_offset];
-    let Ok(ifd0) = parse_ifd(reader, ifd0_offset, byte_order) else {
-        return visited;
-    };
-
-    for (tag_id, field_type, count, raw_bytes) in &ifd0 {
-        if !matches!(*tag_id, EXIF_IFD_POINTER | GPS_IFD_POINTER) {
+    for (tag_id, sub_offset) in followed_subdirectories(
+        reader,
+        ifd0_offset,
+        byte_order,
+        &[EXIF_IFD_POINTER, GPS_IFD_POINTER],
+    ) {
+        if visited.contains(&sub_offset) {
             continue;
         }
-        let Some(sub_offset) =
-            followed_subifd_offset(*tag_id, *field_type, *count, raw_bytes, byte_order)
-        else {
-            continue;
-        };
-        let Ok(sub_ifd) = parse_ifd(reader, sub_offset, byte_order) else {
-            continue;
-        };
         visited.push(sub_offset);
 
-        if *tag_id != EXIF_IFD_POINTER {
+        if tag_id != EXIF_IFD_POINTER {
             continue;
         }
-        for (sub_tag, sub_type, sub_count, sub_bytes) in &sub_ifd {
-            if *sub_tag != INTEROPERABILITY_IFD_POINTER {
-                continue;
-            }
-            let Some(interop_offset) =
-                followed_subifd_offset(*sub_tag, *sub_type, *sub_count, sub_bytes, byte_order)
-            else {
-                continue;
-            };
-            if parse_ifd(reader, interop_offset, byte_order).is_ok() {
+        for (_, interop_offset) in followed_subdirectories(
+            reader,
+            sub_offset,
+            byte_order,
+            &[INTEROPERABILITY_IFD_POINTER],
+        ) {
+            if !visited.contains(&interop_offset) {
                 visited.push(interop_offset);
             }
         }
