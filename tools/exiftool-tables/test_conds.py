@@ -214,6 +214,21 @@ class DefinedTests(unittest.TestCase):
 
 
 class RegexSpellingTests(unittest.TestCase):
+    def test_canon_byte_model_digit_condition(self):
+        # Canon.pm:9381 matches a digit in the byte-valued Exif Model.
+        self.assertEqual(
+            conds.compile_cond(r"$$self{Model} =~ /EOS R\d/"),
+            'Cond::MemberRegex { member: "Model", pattern: "EOS R[0-9]", '
+            'ignore_case: false, negate: false }',
+        )
+        # Do not expand the accepted regex language to other data members or
+        # arbitrary shorthand classes without independent Perl proof.
+        self.assertIsNone(conds.compile_cond(r"$$self{FirmwareVersion} =~ /EOS R\d/"))
+        self.assertIsNone(conds.compile_cond(r"$$self{Model} =~ /EOS R\w/"))
+        self.assertIsNone(conds.compile_cond(r"$$self{Model} =~ /^EOS R\d/"))
+        self.assertIsNone(conds.compile_cond(r"$$self{Model} =~ /EOS R\d+/"))
+        self.assertIsNone(conds.compile_cond(r"$$self{Model} !~ /EOS R\d/"))
+
     def test_m_slash_is_the_match_operator(self):
         # Olympus.pm:3467 (FocusInfo 0x31b), trailing space included.
         self.assertEqual(conds.compile_cond("$$self{Model} =~ m/^E-M|^OM-/ "),
@@ -313,8 +328,7 @@ class RefusalTests(unittest.TestCase):
         # docstring says a parenthesised group is.
         self.assertRefused("$$self{A} xor $$self{B}", "unrecognised condition atom")
         self.assertRefused('GetByteOrder() eq "MM"', "unrecognised condition atom")
-        self.assertRefused('$$self{FirmwareVersion} lt "02.00"', "unrecognised condition atom")
-        self.assertRefused("$$self{Model} =~ /EOS R\\d/", "outside the vetted subset")
+        self.assertRefused('$$self{Model} lt "02.00"', "outside the source-proven firmware domain")
         # `and`/`or` are connectives only with a space on both sides, so a
         # trailing one is part of an (unrecognisable) atom; `||`/`&&` need
         # no spaces, so a trailing one dangles.
@@ -322,6 +336,17 @@ class RefusalTests(unittest.TestCase):
         self.assertRefused("$$self{A} ||", "dangling connective")
         self.assertRefused("$$self{A} &&", "dangling connective")
         self.assertRefused("or $$self{A}", "unrecognised condition atom")
+
+    def test_nikon_firmware_uses_lexical_comparison(self):
+        for op, expected in (("lt", "Lt"), ("le", "Le"), ("gt", "Gt"), ("ge", "Ge")):
+            with self.subTest(op=op):
+                self.assertEqual(
+                    conds.compile_cond(f'$$self{{FirmwareVersion}} {op} "02.00"'),
+                    'Cond::MemberStrCmp { member: "FirmwareVersion", '
+                    f'op: StrCmpOp::{expected}, value: "02.00" }}',
+                )
+        self.assertIsNone(conds.compile_cond('$$self{FirmwareVersion} gt "é"'))
+        self.assertIsNone(conds.compile_cond('$$self{FirmwareVersion} ge "02\\x00"'))
 
     def test_refusal_reason_is_none_for_a_compiling_condition(self):
         self.assertIsNone(conds.refusal_reason("$$self{A} || $$self{B}"))
