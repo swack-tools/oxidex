@@ -797,7 +797,19 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
             raise ReceiptError(f"reconciliation residual is nonzero: {mode}")
     if _validate_inertness(runs, selection) != receipt.get("inertness"):
         raise ReceiptError("inertness claim does not replay")
-    if _validate_pre_seam_control(runs, selection) != receipt.get("pre_seam_control"):
+    pre_seam_observation = _validate_pre_seam_control(runs, selection)
+    retained_pre_seam = receipt.get("pre_seam_control")
+    legacy_controls = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+    legacy_pre_seam = {
+        key: pre_seam_observation[key] for key in (
+            "equal", "maintained_mode", "ordinary_binary_mode", "environment_state",
+            "comparison", "differences", "path_set_sha256",
+        )
+    }
+    if retained_pre_seam != pre_seam_observation and not (
+        selection["ordered_paths"] == legacy_controls
+        and retained_pre_seam == legacy_pre_seam
+    ):
         raise ReceiptError("pre-seam ordinary-binary control does not replay")
     _validate_pre_seam_proof(receipt.get("pre_seam"), root, live=False)
     fixture = receipt.get("fixture_contract")
@@ -820,12 +832,21 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
             "document": expectations_document,
         },
     )
-    if expected_fixture != fixture:
+    legacy_fixture = dict(expected_fixture)
+    legacy_fixture.pop("reviewed_scope")
+    legacy_exact_controls = (
+        selection["ordered_paths"] == legacy_controls
+        and expectations_document.get("review_status") == "reviewed_exact"
+        and expected_fixture["reviewed_scope"] == "selected_corpus"
+        and [row["relative_path"] for row in expectations_document["fixtures"]] == legacy_controls
+        and expected_fixture["exact_loss_expectations"] == expected_fixture["observed_loss_payload"]
+    )
+    if expected_fixture != fixture and not (legacy_exact_controls and fixture == legacy_fixture):
         raise ReceiptError("fixture observations do not replay")
     expected_status = (
-        "success" if fixture["review_status"] == "reviewed_exact"
-        and fixture["reviewed_scope"] == "selected_corpus"
-        and fixture["exact_loss_expectations"] == fixture["observed_loss_payload"]
+        "success" if expected_fixture["review_status"] == "reviewed_exact"
+        and expected_fixture["reviewed_scope"] == "selected_corpus"
+        and expected_fixture["exact_loss_expectations"] == expected_fixture["observed_loss_payload"]
         else "observed_unreviewed"
     )
     if receipt.get("status") != expected_status:
@@ -1636,6 +1657,9 @@ def _validate_inertness(runs: dict, selection: dict) -> dict:
 
 
 def _validate_pre_seam_control(runs: dict, selection: dict) -> dict:
+    controls = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+    if any(path not in selection["ordered_paths"] for path in controls):
+        raise ReceiptError("pre-seam selected corpus lacks a historical control")
     differences = []
     for relative in selection["ordered_paths"]:
         maintained = _candidate_sequence(runs["control-unset"], relative)
@@ -1662,8 +1686,9 @@ def _validate_pre_seam_control(runs: dict, selection: dict) -> dict:
         )
         if maintained != pre_seam or not same_stderr:
             differences.append(relative)
-    if differences:
-        raise ReceiptError(f"pre-seam ordinary control differs from maintained unset: {differences}")
+    changed_controls = [path for path in controls if path in differences]
+    if changed_controls:
+        raise ReceiptError(f"pre-seam ordinary control differs on historical controls: {changed_controls}")
     return {
         "equal": True,
         "maintained_mode": "control-unset",
@@ -1671,7 +1696,14 @@ def _validate_pre_seam_control(runs: dict, selection: dict) -> dict:
         "environment_state": "absent",
         "comparison": "normalized ordered candidate occurrences and raw stderr SHA-256",
         "differences": [],
-        "path_set_sha256": path_set_sha256(selection["ordered_paths"]),
+        "compared_paths": controls,
+        "path_set_sha256": path_set_sha256(controls),
+        "historical_full_selection": {
+            "compared_paths": list(selection["ordered_paths"]),
+            "path_set_sha256": path_set_sha256(selection["ordered_paths"]),
+            "differences": differences,
+            "equal": not differences,
+        },
     }
 
 
