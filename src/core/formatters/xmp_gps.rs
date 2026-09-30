@@ -182,7 +182,21 @@ mod tests {
         let cases = [
             ("-43,30S", "42.5", "42 deg 30' 0.00\" N"),
             ("43,30s", "-43.5", "43 deg 30' 0.00\" S"),
-            ("43,30 South", "-43.5", "43 deg 30' 0.00\" S"),
+            // ExifTool 11.78 accepts only a single-letter suffix. Its
+            // full-word South input remains positive; later pins accept it.
+            (
+                "43,30 South",
+                if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" {
+                    "43.5"
+                } else {
+                    "-43.5"
+                },
+                if crate::exiftool_tables::EXIFTOOL_VERSION == "11.78" {
+                    "43 deg 30' 0.00\" N"
+                } else {
+                    "43 deg 30' 0.00\" S"
+                },
+            ),
             ("-43,30", "-42.5", "42 deg 30' 0.00\" S"),
             ("0S", "0", "0 deg 0' 0.00\" N"),
             ("1e+2N", "100", "100 deg 0' 0.00\" N"),

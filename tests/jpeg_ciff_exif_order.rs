@@ -78,8 +78,15 @@ fn compare_with_native(oracle: &Oracle, original: &[u8], args: &[&str]) {
 
     let native_bytes = fs::read(&native).unwrap();
     let ours_bytes = fs::read(&ours).unwrap();
-    assert_eq!(exif_and_ciff_offsets(&native_bytes), (2, 294));
-    assert_eq!(exif_and_ciff_offsets(&ours_bytes), (2, 294));
+    // The pinned 11.78/12.64 native writes place CIFF at 346; 13.59 places
+    // it at 294. All three still require EXIF to precede the late CIFF.
+    let expected_offsets = match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => (2, 346),
+        "13.59" => (2, 294),
+        other => panic!("unreviewed ExifTool release {other}"),
+    };
+    assert_eq!(exif_and_ciff_offsets(&native_bytes), expected_offsets);
+    assert_eq!(exif_and_ciff_offsets(&ours_bytes), expected_offsets);
     // Only the EXIF segment may change: the late CIFF and image bytes remain.
     let preserved = if original.starts_with(&[0xff, 0xd8, 0xff, 0xe1]) {
         without_first_exif(original)

@@ -24,6 +24,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
+#[derive(Clone, Copy)]
 struct Case {
     file: &'static str,
     tag: &'static str,
@@ -246,14 +247,43 @@ fn grade(cases: &[Case]) {
     );
 }
 
+fn cases_for_release(cases: &[Case]) -> Vec<Case> {
+    match exiftool_oracle::repo_pin() {
+        "13.59" => cases.to_vec(),
+        "11.78" | "12.64" => cases
+            .iter()
+            .map(|case| match (case.file, case.tag) {
+                // Google.jpg was introduced after the historical t/images
+                // releases. A historical PDF has two physical CreateDate groups and
+                // proves the same bare-name arbitration on those sources.
+                ("Google.jpg", "CreateDate") => Case {
+                    file: "PDF.pdf",
+                    tag: "CreateDate",
+                    rule: "ExifIFD:CreateDate wins over PDF:CreateDate",
+                },
+                // The historical XMP.svg has only XMP-dc:Title; its later
+                // JSON/JUMBF copy is absent. This historical EPS has both
+                // PostScript:Title and XMP-dc:Title instead.
+                ("XMP.svg", "Title") => Case {
+                    file: "PostScript.eps",
+                    tag: "Title",
+                    rule: "XMP-dc:Title wins over PostScript:Title",
+                },
+                _ => *case,
+            })
+            .collect(),
+        other => panic!("unreviewed ExifTool release {other}"),
+    }
+}
+
 #[test]
 fn reported_bare_names_answer_as_exiftool_does() {
-    grade(REPORTED);
+    grade(&cases_for_release(REPORTED));
 }
 
 #[test]
 fn breadth_sample_bare_names_answer_as_exiftool_does() {
-    grade(BREADTH);
+    grade(&cases_for_release(BREADTH));
 }
 
 /// ExifTool reads a rational with a zero denominator as `inf` (non-zero

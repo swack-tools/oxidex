@@ -7262,6 +7262,12 @@ mod tests {
         record[5] = 255;
         let mut tags = HashMap::new();
         decode_pentax_digital_filters(&record, &mut tags, None);
+        if crate::exiftool_tables::EXIFTOOL_VERSION != "13.59" {
+            // The hand PrintFilter conversion is source-admitted only for
+            // 13.59. Historical releases must withhold even unknown enums.
+            assert!(tags.is_empty());
+            return;
+        }
         assert_eq!(
             tags.get("Pentax:DigitalFilter01").map(String::as_str),
             Some(r#"["Unknown (255)"]"#),
@@ -7270,6 +7276,18 @@ mod tests {
 
     #[test]
     fn filter_info_signed_rawconv_and_unknown_enum_follow_cc_star() {
+        if crate::exiftool_tables::EXIFTOOL_VERSION != "13.59" {
+            for first in [[1, 1, 255], [10, 27, 255], [10, 255, 255]] {
+                let mut record = vec![0u8; 22];
+                record[5..8].copy_from_slice(&first);
+                let mut tags = HashMap::new();
+                let mut rows = Vec::new();
+                decode_pentax_digital_filters(&record, &mut tags, Some(&mut rows));
+                assert!(tags.is_empty(), "historical PrintFilter is unmodelled");
+                assert!(rows.is_empty(), "historical PrintFilter has no occurrence");
+            }
+            return;
+        }
         let run = |first: [u8; 3]| {
             let mut record = vec![0u8; 22];
             record[5..8].copy_from_slice(&first);
@@ -7345,6 +7363,13 @@ mod tests {
             .copy_from_slice(&[254, 6, 0, 8, 0, 15, 0, 21, 1, 22, 0, 23, 1, 24, 0, 27, 0]);
         let mut tags = HashMap::new();
         decode_pentax_digital_filters(&record, &mut tags, None);
+        if crate::exiftool_tables::EXIFTOOL_VERSION != "13.59" {
+            assert!(tags.is_empty(), "historical PrintFilter is unmodelled");
+            let mut rows = Vec::new();
+            decode_pentax_digital_filters(&record, &mut HashMap::new(), Some(&mut rows));
+            assert!(rows.is_empty(), "historical PrintFilter has no occurrence");
+            return;
+        }
         assert_eq!(
             tags["Pentax:DigitalFilter01"],
             r#"["Toy Camera","Shading=2","Blur=2","ToneBreak=Red"]"#
