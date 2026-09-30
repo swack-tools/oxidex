@@ -65,7 +65,7 @@ jobs:
     name: Build ${{ matrix.arch }}
     needs: [verify-tag-on-main]
     if: needs.verify-tag-on-main.result == 'success' && needs.verify-tag-on-main.outputs.allowed == 'true'
-    runs-on: spot
+    runs-on: docker
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -169,7 +169,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' && needs.verify-tag-on-main.outputs.allowed == 'true' && needs.build.result == 'success'
     # No image build happens here -- this downloads two digest stubs and
     # calls `buildx imagetools create`, which is registry I/O end to end.
-    runs-on: spot
+    runs-on: docker
     timeout-minutes: 10
     steps:
       - name: Download digests

@@ -31,3 +31,5 @@ self-hosted-runner:
     - oxidex-spot-7x27
     - oxidex
     - spot
+    # Docker-capable runners with the host Docker socket mounted.
+    - docker
