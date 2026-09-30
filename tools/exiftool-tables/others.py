@@ -29,7 +29,8 @@ is reused across many sibling tag definitions. Five of those 25 bodies
 account for 328 of the 353 occurrences (92.9%) and are registered below;
 each was checked against ExifTool's own `.pm` source (not just the
 deparse) before being trusted -- see the citation on every entry. The
-remaining 20 bodies were left unregistered because they are either
+CPUType in EXE.pm adds one registered body that reads its source-generated
+exact map. The remaining 19 bodies are left unregistered because they are either
 non-scalar (return an array ref, e.g. Pentax's `PrintFilter`), reach into
 external lookup hashes this generator has no static view of (Minolta's
 `%metabonesID`, Nikon's `GetAFPointGrid`), or operate on a
@@ -42,7 +43,22 @@ unregistered residue by (truncated) body so the next entry to add is
 visible, not guessed at.
 """
 
-# --- the five registered closures --------------------------------------
+# --- source-bound registered closures ----------------------------------
+
+# EXE.pm's MachO CPUType OTHER sub. The direct architecture names remain in
+# the source-generated PrintConv map; only this control flow is ported:
+#     my $v = $val & 0xfeffffff;
+#     return $conv->{$v} ? "$conv->{$v} 64-bit" : "Unknown ($val)";
+# Unlike the previously registered scalar-only closures, this one must
+# consult the exact map from its own PrintConv hash. The full deparse key
+# keeps a source edit from silently reusing the old translation.
+_EXE_MACHO_CPU_ABI64 = (
+    "{\n    package Image::ExifTool::EXE;\n    use strict;\n"
+    "    (my($val, $inv, $conv) = @_);\n"
+    "    (my($v) = ($val & 4278190079));\n"
+    '    (return ($conv->{$v} ? ("$conv->{$v} 64-bit") : ("Unknown ($val)")));\n'
+    "}"
+)
 
 # Minolta.pm:648-658's `%afStatusInfo` OTHER sub (used by every AFStatus*
 # field in Minolta::CameraInfoA100 -- 204 occurrences, all sharing this one
@@ -148,6 +164,7 @@ OLYMPUS_STACKED_IMAGE_OTHER = (
 
 # deparse text (exact, verbatim) -> Rust `OtherId` variant name.
 OTHER_REGISTRY = {
+    _EXE_MACHO_CPU_ABI64: "ExeMachoCpuAbi64",
     _MINOLTA_AF_STATUS_FOCUS: "MinoltaAfStatusFocus",
     _CANON_SHIFT_IDENTITY: "Identity",
     _SONY_SHIFT_IDENTITY: "Identity",
@@ -181,9 +198,9 @@ def translate_other(deparse_text):
 RUST_SUPPORT = '''
 /// Step 25's OTHER registry (`tools/exiftool-tables/others.py`): a hand-
 /// verified Rust port of an ExifTool PrintConv hash's `OTHER => sub {...}`
-/// closure, keyed by the closure's exact deparsed text. Only closures that
-/// are pure functions of the raw scalar value are eligible -- see the
-/// module doc in others.py for what was left out and why.
+/// closure, keyed by the closure's exact deparsed text. Each translation
+/// may use only the raw value and its source-generated exact conversion map.
+/// See the module doc in others.py for what was left out and why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OtherId {
     /// `sub { shift }` / `sub { return $_[0] }` (Canon.pm, Sony.pm:2603,
@@ -200,11 +217,14 @@ pub enum OtherId {
     /// Minolta.pm:648-658's `%afStatusInfo` OTHER sub: `"Front Focus
     /// ($val)"` for a negative value, `"Back Focus (+$val)"` otherwise.
     MinoltaAfStatusFocus,
+    /// EXE.pm's MachO CPUType OTHER: remove the ABI64 bit and append its
+    /// suffix only when the resulting key exists in this tag's generated map.
+    ExeMachoCpuAbi64,
 }
 
 impl OtherId {
     /// Apply this closure to the raw value. Every currently-registered
-    /// variant always returns `Some` (none of the five source closures this
+/// variant always returns `Some` (none of the registered source closures this
     /// enum ports have a code path that returns Perl `undef`), so
     /// `PrintConv::PartialEnumInt`'s `"Unknown ($val)"` fallback is never
     /// reached through any of them today -- but the `Option` return stays,
@@ -212,7 +232,7 @@ impl OtherId {
     /// and `PartialEnumInt::apply`'s fallback chain must stay correct for
     /// one that is not.
     #[must_use]
-    pub fn apply(self, val: i64) -> Option<String> {
+    pub fn apply(self, val: i64, exact: &[(i64, &str)]) -> Option<String> {
         match self {
             OtherId::Identity => Some(val.to_string()),
             OtherId::ExifPrintParameter => Some(if val > 0 {
@@ -229,6 +249,13 @@ impl OtherId {
             } else {
                 format!("Back Focus (+{val})")
             }),
+            OtherId::ExeMachoCpuAbi64 => {
+                let base = val & 0xfeff_ffff;
+                Some(exact.binary_search_by_key(&base, |(key, _)| *key)
+                    .ok()
+                    .map(|index| format!("{} 64-bit", exact[index].1))
+                    .unwrap_or_else(|| format!("Unknown ({val})")))
+            }
         }
     }
 }

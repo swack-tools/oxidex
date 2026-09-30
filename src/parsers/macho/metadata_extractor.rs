@@ -4,6 +4,7 @@
 //! converting parsed structures into a unified MetadataMap.
 
 use crate::core::{MetadataMap, TagValue};
+use crate::exiftool_tables::find_ifd_table;
 
 use super::dylib_parser::{DylibStats, get_dylib_names, get_dylib_paths};
 use super::load_command_parser::LoadCommand;
@@ -162,11 +163,11 @@ fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut Metadat
 
 /// Extract metadata from the Mach-O header
 fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
-    // CPU type
-    metadata.insert(
-        "EXE:CPUType".to_string(),
-        TagValue::String(exiftool_cpu_type(header)),
-    );
+    // Withhold the display tag if source generation refused a changed
+    // conversion; reporting the raw number under CPUType would be misleading.
+    if let Some(cpu_type) = exiftool_cpu_type(header) {
+        metadata.insert("EXE:CPUType".to_string(), TagValue::String(cpu_type));
+    }
 
     // CPU type raw value
     metadata.insert(
@@ -739,44 +740,12 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
 // Helper: Populate MachOInfo from Load Commands
 // =============================================================================
 
-/// ExifTool 13.59 `EXE::MachO` tag 3 `CPUType` PrintConv.
-///
-/// The generated IFD table marks this Perl conversion as omitted. Keep its
-/// complete direct table here, then apply its OTHER rule to ABI64 values.
-fn exiftool_cpu_type(header: &MachHeader) -> String {
-    const ABI64: i32 = 0x0100_0000;
-
-    let name = |code| match code {
-        -1 => Some("Any"),
-        1 => Some("VAX"),
-        2 => Some("ROMP"),
-        4 => Some("NS32032"),
-        5 => Some("NS32332"),
-        6 => Some("MC680x0"),
-        7 => Some("x86"),
-        8 => Some("MIPS"),
-        9 => Some("NS32532"),
-        10 => Some("MC98000"),
-        11 => Some("HPPA"),
-        12 => Some("ARM"),
-        13 => Some("MC88000"),
-        14 => Some("SPARC"),
-        15 => Some("i860 big endian"),
-        16 => Some("i860 little endian"),
-        17 => Some("RS6000"),
-        18 => Some("PowerPC"),
-        255 => Some("VEO"),
-        _ => None,
-    };
-
-    let code = header.cputype;
-    if let Some(direct) = name(code) {
-        return direct.to_string();
-    }
-    if let Some(base) = name(code & !ABI64) {
-        return format!("{base} 64-bit");
-    }
-    format!("Unknown ({code})")
+/// ExifTool 13.59 `EXE::MachO` tag 3 `CPUType` PrintConv, including its
+/// source-derived direct labels and source-bound ABI64 fallback.
+fn exiftool_cpu_type(header: &MachHeader) -> Option<String> {
+    find_ifd_table("EXE", "MachO")
+        .and_then(|table| table.tag(3))
+        .and_then(|tag| tag.print_conv.apply(i64::from(header.cputype)))
 }
 
 /// ExifTool's `CPUSubtype` naming (EXE.pm, `EXE::MachO` tag 4).
@@ -1041,6 +1010,23 @@ mod tests {
 
     #[test]
     fn macho_cpu_type_follows_exiftool_table_and_abi64_conversion() {
+        use crate::exiftool_tables::{OtherId, PrintConv};
+
+        let generated = find_ifd_table("EXE", "MachO")
+            .and_then(|table| table.tag(3))
+            .expect("pinned MachO CPUType row");
+        assert!(!generated.omitted.print_conv);
+        let PrintConv::PartialEnumInt { exact, other, .. } = generated.print_conv else {
+            panic!("CPUType must retain the generated direct hash and OTHER rule");
+        };
+        assert_eq!(exact.len(), 19);
+        assert_eq!(other, Some(OtherId::ExeMachoCpuAbi64));
+        assert_eq!(
+            generated.print_conv.apply(0x0100_000c),
+            Some("ARM 64-bit".into())
+        );
+        assert_eq!(generated.print_conv.apply(-2), Some("Unknown (-2)".into()));
+
         // EXE.pm 13.59, EXE::MachO tag 3: direct table entries, then OTHER
         // masks 0x01000000 and appends the 64-bit suffix for a known base code.
         for (code, expected) in [

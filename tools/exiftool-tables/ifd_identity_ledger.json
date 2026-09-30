@@ -1,8 +1,8 @@
 {
   "counts": {
     "emitted": 6117,
-    "reader_eligible": 4314,
-    "reader_omitted": 1803,
+    "reader_eligible": 4315,
+    "reader_omitted": 1802,
     "refused": 11734,
     "rows": 17851
   },
@@ -188030,11 +188030,9 @@
       "full_name": "Image::ExifTool::EXE::MachO",
       "module": "EXE",
       "name": "CPUType",
-      "omissions": [
-        "print_conv"
-      ],
+      "omissions": [],
       "raw_key": "3",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "59c5c4993a4d07840d0722bcc0a7f5b6dd0b99c0cb031f5869ba84ad5457105b",
       "state": "emitted",
@@ -369540,7 +369538,7 @@
   "source": {
     "expr_ledger_sha256": "4fa899fb2309a4903d7b182f93627c0207cd4a9323bf47d2695b6fa28384b37e",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
-    "ifd_rust_sha256": "4ca0e7caa4fc1f02639dd4e7272ba34a37e1a95c70bda41141535ba6f29bdd3b",
+    "ifd_rust_sha256": "9dde186035eaa56a65fbd64eb53bcd336f01bc621c2c1ff76dea25b7fea4a241",
     "tables_json_sha256": "002b1f70711db04f411287256a69d57744841eeacfacf6c4d6fffda060f0d8ea"
   }
 }
