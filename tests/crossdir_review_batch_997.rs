@@ -243,9 +243,15 @@ fn first_entry_in_existing_empty_exif_ifd_seeds_mandatory_tags() {
         .arg(arg)
         .arg(&ours));
     assert!(out.status.success(), "{out:?}");
-    let expected = [0x9000, 0x9004, 0x9101, 0xa001];
-    assert_eq!(exif_ids(&native), expected);
-    assert_eq!(exif_ids(&ours), expected);
+    // WriteExif.pl 11.78/12.64 make FlashpixVersion mandatory. The 13.59
+    // EXIF 3.0 source marks it optional, so the created directory omits it.
+    let expected: &[u16] = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => &[0x9000, 0x9004, 0x9101, 0xa000, 0xa001],
+        "13.59" => &[0x9000, 0x9004, 0x9101, 0xa001],
+        other => panic!("unreviewed ExifTool release {other}"),
+    };
+    assert_eq!(exif_ids(&native), expected.to_vec());
+    assert_eq!(exif_ids(&ours), expected.to_vec());
 }
 
 #[test]

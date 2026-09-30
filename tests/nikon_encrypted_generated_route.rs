@@ -20,6 +20,16 @@ use std::io::Write;
 /// next-directory pointer is cleared because its thumbnail was removed.
 const D810_EXIF: &[u8] = include_bytes!("fixtures/nikon/d810-exif.nef");
 
+fn encrypted_lens_source_covered() -> bool {
+    match oxidex::exiftool_oracle::repo_pin() {
+        // The generated 11.78 roots explicitly omit partial
+        // DecryptLen/DecryptMore; the reader refuses those records.
+        "11.78" => false,
+        "12.64" | "13.59" => true,
+        other => panic!("unreviewed ExifTool release {other}"),
+    }
+}
+
 #[test]
 fn preview_ifd_base_public_api_keeps_six_arguments() {
     let mut decoder_context =
@@ -277,6 +287,11 @@ fn older_encrypted_lens_data_and_generated_0204_keep_both_physical_owners() {
                         matches!(row.origin.table, Some("LensData01" | "LensData0204"))
                     })
                     .collect();
+                if !encrypted_lens_source_covered() {
+                    assert!(lens_rows.is_empty(), "historical encrypted rows withheld");
+                    assert_eq!(rows.len(), usize::from(name == "LensFStops"));
+                    continue;
+                }
                 assert_eq!(lens_rows.len(), 2, "{version:?} {older_last} {name}");
                 let (first_table, first_id, first_print, second_table, second_id, second_print) =
                     if older_last {
@@ -333,6 +348,10 @@ fn conditional_0800_old_lens_data_survives_generated_0204() {
                         *candidate == key && row.origin.table == Some("LensData0800")
                     })
                     .collect();
+                if !encrypted_lens_source_covered() {
+                    assert!(rows.is_empty(), "historical encrypted 0800 withheld");
+                    continue;
+                }
                 assert_eq!(rows.len(), 1, "{version:?} {older_last} {name}");
                 assert_eq!(rows[0].1.id, TagId::Numeric(old_id));
                 assert_eq!(rows[0].2.as_ref(), &TagValue::String(old_print.to_owned()));
@@ -347,6 +366,50 @@ fn conditional_0800_old_lens_data_survives_generated_0204() {
                 .collect();
             assert!(focus.is_empty(), "0800 has no hand FocusPosition row");
         }
+    }
+}
+
+#[test]
+fn omitted_1264_0800_fields_reach_non_occurrence_makernote_api() {
+    if oxidex::exiftool_oracle::repo_pin() != "12.64" {
+        return;
+    }
+    for older_last in [false, true] {
+        let exif = d810_mixed_encrypted(b"0800", older_last);
+        let nikon = exif
+            .windows(10)
+            .position(|window| window == b"Nikon\0\x02\x11\0\0")
+            .expect("Nikon MakerNote signature");
+        let context = MakerNoteContext::detached(&exif[nikon..]);
+        let mut session = Session::new();
+        let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+        let mut condition = Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        NikonParser
+            .parse_with_context_and_values_and_session(
+                &context,
+                ByteOrder::LittleEndian,
+                Some("NIKON D810"),
+                &mut session,
+                &mut condition,
+                &mut tags,
+                &mut value_forms,
+            )
+            .expect("parse non-occurrence Nikon MakerNote");
+        assert_eq!(
+            tags.get("Nikon:ExitPupilPosition").map(String::as_str),
+            Some("97.5 mm")
+        );
+        assert_eq!(
+            tags.get("Nikon:AFAperture").map(String::as_str),
+            Some("2.8")
+        );
+        assert_eq!(
+            tags.get("Nikon:LensFStops").map(String::as_str),
+            Some(if older_last { "4.58" } else { "6.00" }),
+            "last physical LensData entry wins the legacy flat map"
+        );
     }
 }
 
@@ -389,6 +452,29 @@ fn plaintext_and_generated_overlap_keep_both_physical_owners() {
                 .project_occurrences(ValueChannel::PrintConv)
                 .filter(|(key, _, _)| *key == "Nikon:LensFStops")
                 .collect();
+            if !encrypted_lens_source_covered() {
+                assert_eq!(rows.len(), 2, "Main and plaintext retain distinct owners");
+                assert!(rows.iter().any(|(_, row, printed)| {
+                    row.origin.table == Some("Main")
+                        && printed.as_ref() == &TagValue::String("6.00".to_owned())
+                }));
+                assert!(rows.iter().any(|(_, row, printed)| {
+                    row.origin.table
+                        == Some(if version == b"0100" {
+                            "LensData00"
+                        } else {
+                            "LensData01"
+                        })
+                        && printed.as_ref() == &TagValue::String("5.33".to_owned())
+                        && row.stored == Some(TagValue::Integer(64))
+                }));
+                assert!(
+                    rows.iter()
+                        .all(|(_, row, _)| row.origin.table != Some("LensData0204"))
+                );
+                assert_eq!(metadata.get_string("Nikon:LensFStops"), Some("5.33"));
+                continue;
+            }
             assert_eq!(rows.len(), 3, "{version:?} plaintext_last={plaintext_last}");
             let expected = if plaintext_last {
                 ["6.00", "6.00", "5.33"]
@@ -460,6 +546,14 @@ fn standalone_lens_fstops_survives_generated_ownership_in_physical_order() {
                 .project_occurrences(ValueChannel::PrintConv)
                 .filter(|(key, _, _)| *key == "Nikon:LensFStops")
                 .collect();
+            if !encrypted_lens_source_covered() {
+                assert_eq!(rows.len(), 1, "only standalone Main survives");
+                assert_eq!(rows[0].1.id, TagId::Numeric(0x008b));
+                assert_eq!(rows[0].1.origin.table, Some("Main"));
+                assert_eq!(rows[0].2.as_ref(), &TagValue::String("7.00".to_owned()));
+                assert_eq!(metadata.get_string("Nikon:LensFStops"), Some("7.00"));
+                continue;
+            }
             assert_eq!(
                 rows.len(),
                 2,
@@ -522,6 +616,15 @@ fn standalone_lens_fstops_cli_matches_native_order_winner_and_silence() {
             } else {
                 ["7", "6"]
             };
+            if !encrypted_lens_source_covered() {
+                assert_eq!(run(true, false, false), ["7.00"], "{extension} Main");
+                assert_eq!(run(true, true, false), ["7"], "{extension} Main numeric");
+                assert_eq!(run(false, false, false), ["7.00"], "{extension} winner");
+                if extension != ".jpg" {
+                    assert_eq!(run(false, false, true), ["7.00"], "{extension} silence");
+                }
+                continue;
+            }
             assert_eq!(run(true, false, false), ordered, "{extension} -a order");
             assert_eq!(
                 run(true, true, false),
@@ -557,6 +660,11 @@ fn d810_encrypted_lens_data_has_generated_occurrences() {
                 *candidate == key && row.origin.table == Some("LensData0204")
             })
             .collect();
+        if !encrypted_lens_source_covered() {
+            assert!(rows.is_empty(), "11.78 must not attribute encrypted data");
+            assert!(metadata.get_string(&key).is_none() || name == "LensFStops");
+            continue;
+        }
         assert_eq!(rows.len(), 1, "{key}: exactly one generated occurrence");
         let (_, row, print) = &rows[0];
         assert_eq!(row.id, TagId::Numeric(source_index), "{key}: source index");
@@ -578,7 +686,11 @@ fn d810_encrypted_lens_data_has_generated_occurrences() {
 
     // The route is narrow: an uncredited field is still provided by the
     // established hand reader and carries no false generated attribution.
-    assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
+    if encrypted_lens_source_covered() {
+        assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
+    } else {
+        assert!(!metadata.contains_key("Nikon:MinFocalLength"));
+    }
     assert!(
         metadata
             .project_occurrences(ValueChannel::PrintConv)
@@ -592,6 +704,15 @@ fn d810_encrypted_lens_data_has_generated_occurrences() {
         .map(|(_, row, _)| row.name.to_string())
         .collect();
     credited.sort();
+    if !encrypted_lens_source_covered() {
+        assert!(
+            credited.is_empty(),
+            "11.78 has no encrypted generated owner"
+        );
+        assert_eq!(metadata.get_string("Nikon:LensFStops"), Some("6.00"));
+        assert!(!metadata.contains_key("Nikon:MinFocalLength"));
+        return;
+    }
     assert_eq!(
         credited,
         [
@@ -619,6 +740,14 @@ fn nef_and_nrw_lens_data_use_the_same_generated_owner_as_jpeg() {
                 .project_occurrences(ValueChannel::PrintConv)
                 .filter(|(candidate, _, _)| *candidate == key)
                 .collect();
+            if !encrypted_lens_source_covered() {
+                assert_eq!(rows.len(), usize::from(name == "LensFStops"));
+                assert!(
+                    rows.iter()
+                        .all(|(_, row, _)| row.origin.table == Some("Main"))
+                );
+                continue;
+            }
             let expected_count = if name == "LensFStops" { 2 } else { 1 };
             assert_eq!(
                 rows.len(),
@@ -640,7 +769,11 @@ fn nef_and_nrw_lens_data_use_the_same_generated_owner_as_jpeg() {
             }
             assert_eq!(metadata.get_string(&key), Some(printed));
         }
-        assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
+        if encrypted_lens_source_covered() {
+            assert_eq!(metadata.get_string("Nikon:MinFocalLength"), Some("24.5 mm"));
+        } else {
+            assert!(!metadata.contains_key("Nikon:MinFocalLength"));
+        }
     }
 }
 
@@ -673,7 +806,11 @@ fn engine_silence_suppresses_raw_generated_fields_without_hiding_residuals() {
             );
         }
         assert_eq!(row["Nikon:LensFStops"], 6.0, "standalone 0x008b survives");
-        assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
+        if encrypted_lens_source_covered() {
+            assert_eq!(row["Nikon:MinFocalLength"], "24.5 mm");
+        } else {
+            assert!(row.get("Nikon:MinFocalLength").is_none());
+        }
     }
 }
 
@@ -694,6 +831,11 @@ fn encrypted_field_respects_cli_request_and_numeric_projection() {
         String::from_utf8(output.stdout).expect("utf8 CLI output")
     };
     let print = run(false);
+    if !encrypted_lens_source_covered() {
+        assert!(print.is_empty(), "11.78 must not print encrypted field");
+        assert!(run(true).is_empty(), "11.78 must not project numeric field");
+        return;
+    }
     assert!(print.contains("ExitPupilPosition"));
     assert!(print.contains("97.5 mm"));
     assert!(
@@ -755,10 +897,14 @@ fn generated_0204_silence_preserves_separate_0201_hand_occurrences() {
                     candidate == &key && row.origin.table == Some("LensData0204")
                 })
                 .collect();
-            assert_eq!(older.len(), 1, "{name} older_last={older_last}");
+            assert_eq!(
+                older.len(),
+                usize::from(encrypted_lens_source_covered()),
+                "{name} older_last={older_last}"
+            );
             assert_eq!(
                 generated.len(),
-                usize::from(!silenced),
+                usize::from(!silenced && encrypted_lens_source_covered()),
                 "{name} older_last={older_last}"
             );
         }
@@ -824,7 +970,8 @@ fn engine_silence_does_not_resurrect_hand_copies_on_real_d810() {
             .iter()
             .filter(|(candidate, _)| candidate == &key)
             .collect();
-        let expected = usize::from(!silenced) + usize::from(name == "LensFStops");
+        let expected = usize::from(!silenced && encrypted_lens_source_covered())
+            + usize::from(name == "LensFStops");
         assert_eq!(
             selected.len(),
             expected,
@@ -838,7 +985,7 @@ fn engine_silence_does_not_resurrect_hand_copies_on_real_d810() {
     }
     assert_eq!(
         tags.get("Nikon:MinFocalLength").map(String::as_str),
-        Some("24.5 mm")
+        encrypted_lens_source_covered().then_some("24.5 mm")
     );
 
     if !silenced {
