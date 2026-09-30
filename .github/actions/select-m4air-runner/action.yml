@@ -52,11 +52,12 @@ runs:
         fi
 
         if jq -e '
-          [.[].runners[]
-            | select(any(.labels[]; .name == "oxidex-m4air"))
-            | select(.status == "online")] as $online
-          | (($online | length) > 0)
-            and all($online[]; .busy == false)
+          any(.[].runners[];
+            .status == "online"
+            and .busy == false
+            and ((["self-hosted", "Linux", "ARM64", "oxidex-m4air"]
+              - ((.labels // []) | map(.name))) | length == 0)
+          )
         ' <<<"$runners" >/dev/null; then
           echo 'runs_on=["self-hosted","Linux","ARM64","oxidex-m4air"]' >> "$GITHUB_OUTPUT"
           echo "::notice::M4 Air runner is online and idle; selecting oxidex-m4air"
